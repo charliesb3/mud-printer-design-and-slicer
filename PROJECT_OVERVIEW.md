@@ -365,16 +365,14 @@ manual control of linear actuator
 Extrusion:
 independently controlled external pumping system
 
-The new Mud Printer Software repository is at its initial architecture and planning stage.
+### Pi Interface — Milestone 1 Software Complete (Mac)
 
-No new application code has yet been created in this repository.
+The Raspberry Pi Printer Interface Milestone 1 has been fully implemented
+in software and is passing all tests on Mac.
 
-Current work is establishing:
+The software is ready for Pi deployment and physical machine testing.
 
-- project architecture
-- persistent project memory
-- boundaries between software responsibilities
-- development workflow
+See `pi-interface/PROJECT_MEMORY.md` for full details.
 
 ---
 
@@ -384,7 +382,7 @@ Important unresolved questions currently include:
 
 ### Design + Toolpath
 
-- What should the Design + Toolpath environment ultimatel like?
+- What should the Design + Toolpath environment ultimately look like?
 - Is stacked 2D vector geometry the correct fundamental representation?
 - How should transformations and keyframes be represented?
 - What mud/adobe-specific printability rules should the software understand?
@@ -394,10 +392,9 @@ Important unresolved questions currently include:
 
 ### Raspberry Pi / Printer Interface
 
-- What technology stack should be used for the Raspberry Pi application?
-- What should the browser/operator interface look like?
-- How should jobs be stored and streamed?
-- How should printer state, errors, interruptions, and recovery be handled?
+- What is the correct jog speed for this machine's scale? (Must be validated physically)
+- Does the Pi need to act as a Wi-Fi access point for offline field use?
+- Should the interface support job recovery after power failure?
 - How should local/offline networking be implemented?
 
 ### Arduino / GRBL
@@ -442,24 +439,9 @@ Allow the architecture to evolve as the machine and software become better under
 
 ---
 
-## Immediate Next Step
-
-Establish persistent memory for the three current subprojects:
-
-- Design + Toolpath
-- Raspberry Pi / Printer Interface
-- Arduino / GRBL Motion Control
-
-After those memories are established, choose the first subproject to develop and define its first concrete development milestone.
-
----
-
 ## Last Updated
 
 2026-10-03
 
-Initial project overview created during project setup.
-
-The physical printer already exists and has previously printed using GRBL + UGS.
-
-No new application code has yet been written in this repository.
+Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
+Design + Toolpath and Arduino/GRBL subprojects not yet started.

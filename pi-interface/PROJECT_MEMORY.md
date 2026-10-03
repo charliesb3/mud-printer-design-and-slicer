@@ -6,231 +6,267 @@ Develop a printer-specific higher-level control system that runs on a Raspberry 
 
 The goal is not merely to clone UGS.
 
-The goal is to build a simpler and more appropriate interface around the actual workflow of this large-scale mud printer.
-
-The Raspberry Pi should become the persistent computer associated with the physical printer.
+The goal is a simpler, more appropriate interface specifically designed around the actual workflow of this large-scale mud printer.
 
 ---
 
-## Current Existing Workflow
+## Technology Stack — Decided
 
-The printer currently operates approximately as:
+- **Runtime**: Python 3.9+ on Raspberry Pi (Mac for development)
+- **Web framework**: FastAPI (native async WebSocket support)
+- **ASGI server**: uvicorn
+- **Serial**: pyserial in a background reader thread; asyncio.Queue bridges thread→async
+- **Frontend**: Vanilla HTML/CSS/JS (no framework, no CDN, no build step)
+- **Testing**: pytest + pytest-asyncio (asyncio_mode=auto)
 
-computer running UGS
-        ↓
-USB / serial
-        ↓
-Arduino Mega running GRBL
-        ↓
-X/Y machine motion
-
-This workflow has already successfully operated the printer.
-
-The new Pi interface should therefore be developed as an incremental replacement for a known working system.
+Rationale: simple, offline-capable, no Node.js toolchain, minimal surface area,
+Pi-deployable, easy to maintain.
 
 ---
 
-## Intended Architecture
+## Architecture — Implemented
 
-The likely architecture is:
+### Communication Layer
 
-laptop / tablet client
-        ↓
-browser
-        ↓
-local network / Wi-Fi
-        ↓
-Raspberry Pi
-        ↓
-printer-control application
-        ↓
-USB / serial
-        ↓
-Arduino Mega / GRBL
+```
+Serial port (pyserial thread)
+    → asyncio.Queue (via call_soon_threadsafe)
+    → GRBLCommunicator._read_loop (asyncio task)
+    → AppState updates + Future resolution
+```
 
-The Raspberry Pi should run the actual printer-control process.
+**GRBLCommunicator** owns:
+- `_send_lock`: ensures one command/response pair at a time
+- `_pending_future`: resolved by ok/error; rejected by alarm/reset
+- `send_command(cmd, timeout)`: acquires lock, creates future, writes,
+  awaits `asyncio.wait_for(asyncio.shield(future), timeout)`
+- `send_realtime(data: bytes)`: bypasses lock entirely (for !, ~, 0x85, 0x18, ?)
 
-The laptop/tablet should primarily act as a user interface.
+### Job Runner
 
-The client device should not need to remain continuously connected for the printer to continue executing an active job.
+`JobRunner` is an `asyncio.Task` created by the server on job start.
+It is **independent of any WebSocket session** — it survives browser
+disconnect/reconnect.
 
----
+Streaming: send line → await ok → send next (conservative, no char counting).
+Hold: busy-poll on job.state every 50ms while state=="held".
+Stop: task.cancel() from the HTTP handler; CancelledError propagates out.
+End: job.state="completed" when all lines sent or M2/M30/% encountered.
 
-## Intended Capabilities
+### WebSocket
 
-Potential capabilities include:
+- `ConnectionManager` broadcasts to all connected clients
+- On connect: full state snapshot sent immediately (supports reconnection)
+- Broadcast loop: every 200ms unconditionally
+- Client-side: auto-reconnect with 1.5s delay
 
-- connect to GRBL
-- load G-code files
-- send/stream G-code
-- jog the machine
-- home the machine where appropriate
-- start jobs
-- pause jobs
-- resume jobs
-- stop jobs
-- display machine position
-- display GRBL state
-- display alarms/errors
-- display job progress
-- manage print files/jobs
-- expose printer-specific controls
-- eventually interact with the future Z-control system
-- provide a browser-based interface
-- run automatically when the Raspberry Pi/printer starts
-- operate without internet access
-- work over an existinork when one is available
-- provide or participate in a local network when no infrastructure exists
+### Dead-Man Jog
 
----
+Jog sends incremental `$J=G91 {axis}{step_mm:.3f} F{speed}` commands in a loop.
+`step_mm = JOG_SPEED_MM_MIN * JOG_SEND_INTERVAL_S / 60`
 
-## Offline / Local Operation
+The jog loop terminates if:
+- The browser sends `jog_stop`
+- The last heartbeat is older than `JOG_TIMEOUT_S` (0.3s default)
 
-Offline operation is an important requirement.
+On exit, the loop sends `b"\x85"` (GRBL jog cancel real-time byte).
 
-The physical printer may be used at remote or undeveloped sites where internet service and network infrastructure are unavailable.
-
-Core printer operation must not depend on:
-
-- cloud services
-- external servers
-- an internet connection
-
-A user should ultimately be able to arrive with a laptop or tablet, connect locally to the printer, open the interface, and operate the machine.
+**Safety invariant**: if the browser closes, crashes, or loses Wi-Fi while a
+jog button is held, motion stops within one `JOG_TIMEOUT_S` interval.
+This is the fail-safe requirement. It does NOT rely on the browser successfully
+sending a release message.
 
 ---
 
-## Job Ownership
+## File Layout
 
-The Raspberry Pi should own or stream the active print job.
-
-The browser/client is a control and monitoring interface.
-
-An active print should not inherently stop because:
-
-- the browser is closed
-- the laptop sleeps
-- the tablet disconnects
-- Wi-Fi temporarily drops
-- the user leaves the interface
-
-The exact behavior for reconnection, interruption, and recovery remains to be designed.
-
----
-
-## Relationship to Real-Time Motion Control
-
-The Raspberry Pi handles higher-level printer operation.
-
-The Arduino/GRBL layer handles timing-critical motion control for the axes under its control.
-
-Do not implement software-timed step pulses or similar real-time motion behavior on the Raspberry Pi unless the architecture is deliberately reconsidered.
-
-Where practical:
-
-Raspberry Pi determines WHAT commands should be sent.
-
-GRBL determines HOW commanded motion is executed in real time.
-
----
-
-## Z Control
-
-Z is currently a manually controlled linear actuator.
-
-Future automatic Z control is a project goal.
-
-The Pi interface will likely need some way to command and display Z behavior once the Z architecture is established.
-
-However, the actual control architecture has NOT been selected.
-
-Do not assume that the Raspberry Pi will directly drive the Z actuator.
-
-Do not assume that GRBL will control Z.
-
-Treat the implementation of automatic Z as an open architectural question.
-
-Manual Z control should remain available.
+```
+pi-interface/
+├── app/
+│   ├── config.py           # All settings, loaded from .env
+│   ├── state.py            # AppState + JobInfo dataclasses
+│   ├── main.py             # FastAPI app, lifespan, background loops
+│   ├── grbl/
+│   │   ├── parser.py       # Pure GRBL response parsing (no I/O)
+│   │   ├── transport.py    # GRBLTransport ABC + SerialTransport
+│   │   └── communicator.py # GRBLCommunicator (lock + future + loops)
+│   ├── jobs/
+│   │   ├── current_job.py  # CurrentJob dataclass + load_job_from_file()
+│   │   └── runner.py       # JobRunner (asyncio task, server-owned)
+│   ├── api/
+│   │   ├── ws.py           # ConnectionManager (broadcast to all clients)
+│   │   └── http.py         # All HTTP + WebSocket route handlers
+│   └── static/
+│       ├── index.html      # Single-page app
+│       ├── style.css       # Dark touch-first theme
+│       └── app.js          # WS client, jog events, stop hold-to-confirm
+├── tests/
+│   ├── mock_transport.py   # MockTransport + wait_until_sent helper
+│   ├── test_parser.py      # 34 tests
+│   ├── test_communicator.py # 18 tests
+│   ├── test_runner.py      # 13 tests
+│   └── test_api.py         # 13 tests
+├── docs/
+│   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
+│   ├── deployment.md              # Pi OS, systemd, kiosk, networking
+│   └── acceptance-test.md         # Physical machine acceptance criteria
+├── .env.example
+├── requirements.txt
+├── requirements-dev.txt
+└── pytest.ini
+```
 
 ---
 
-## Extrusion
+## Configuration (.env)
 
-The external mud/adobe pumping system is independently controlled.
+All settings in `.env`. Key values:
 
-This software does not need to control extrusion.
+| Variable | Default | Notes |
+|---|---|---|
+| `SERIAL_PORT` | `/dev/ttyUSB0` | Set per machine |
+| `BAUD_RATE` | `115200` | Standard GRBL baud |
+| `JOG_SPEED_MM_MIN` | `0` | **0 = jogging disabled**. Must be validated on machine before enabling |
+| `JOG_SEND_INTERVAL_S` | `0.15` | Interval between incremental jog commands |
+| `JOG_TIMEOUT_S` | `0.3` | Dead-man timeout — motion stops if no heartbeat |
+| `STATUS_POLL_INTERVAL_S` | `0.2` | How often `?` is sent to GRBL |
+| `HOST` | `0.0.0.0` | Bind address |
+| `PORT` | `8000` | HTTP port |
 
-Do not add extrusion-rate, pump, or material-flow controls unless the project requirements explicitly change.
+---
+
+## Key Decisions
+
+### Dead-man jog — incremental commands + heartbeat timeout
+Jogging uses short incremental `$J=` moves sent in a loop. The loop dies if
+the browser stops sending heartbeats. A separate jog cancel byte (0x85) is sent
+on loop exit. This guarantees machine stop on browser disconnect without relying
+on a release message arriving.
+
+Previous approach considered and rejected: one large jog move that requires a
+separate stop message. Rejected because browser disconnect during jog would
+leave the machine running.
+
+### Server-owned job runner
+The job runner is an asyncio.Task on the server. Browser connect/disconnect has
+no effect on it. This is a hard requirement from the user.
+
+### Conservative streaming (line-at-a-time)
+Send one line, wait for ok, send next. No character-counting buffer. Simpler,
+safe, appropriate for this machine scale. Can revisit if throughput becomes a
+bottleneck (unlikely for large-scale printing with slow moves).
+
+### GRBL configuration must not be modified
+The Pi interface communicates through the GRBL serial protocol only.
+It never sends `$$=` or `$N=` commands. Existing machine settings are preserved.
+
+### Z is out of scope for Milestone 1
+Z is a manually controlled linear actuator. No Z commands, no Z jog UI,
+no Z architecture decisions made. Future automatic Z control method is TBD.
+
+### Extrusion is out of scope
+The external pumping system is independently controlled. Not addressed here.
+
+### Homing / limit switches not required for Milestone 1
+No homing commands in the UI. No assumption about limit switch configuration.
+
+### Physical E-stop is the real emergency stop
+Software Stop is a convenience. The physical hardwired E-stop is the machine's
+actual safety device. This is explicitly displayed in the UI.
+
+### JOG_SPEED_MM_MIN=0 default
+Jogging is disabled by default until the speed is validated on the actual
+machine. The UI shows a warning if jogging is disabled.
+
+### asyncio.shield() in send_command
+The pending future is shielded from task cancellation. This prevents a cancelled
+runner task from corrupting the communicator's internal state, which must remain
+usable after the task ends.
+
+### Lazy asyncio.Queue in MockTransport
+Queue is created on first access within a running event loop. This avoids
+Python 3.9 event-loop binding issues when the object is constructed in a
+synchronous fixture context.
+
+### FastAPI lifespan context manager (not on_event)
+`@app.on_event("startup")` is deprecated in current FastAPI. Using the
+`@asynccontextmanager lifespan` pattern instead.
+
+---
+
+## Test Strategy
+
+Tests use `MockTransport` — an in-memory transport that captures all writes
+and lets the test inject GRBL responses via `inject()`.
+
+Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
+is created **before** `write_line()` appends to `sent_lines`. Therefore,
+`wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
+
+78 tests total, all passing on Python 3.9 (Mac development environment).
 
 ---
 
 ## Current State
 
-No Raspberry Pi printer-interface application has been written yet.
+**Milestone 1 software implementation is complete on Mac.**
 
-The current working printer interface is UGS running on a conventional computer.
+All application code has been written:
+- GRBL parsing, transport, communicator
+- Job loading, runner
+- WebSocket connection manager
+- HTTP + WebSocket route handlers
+- Touch-first single-page frontend
+- Full test suite (78 tests, all passing)
+- Deployment docs, GRBL capture checklist, acceptance test procedure
 
-A Raspberry Pi is intended to become the dedicated printer-side computer.
-
-The technology stack for the Pi application has not yet been selected.
-
----
-
-## Decisions Made
-
-- Use a Raspberry Pi as the persistent higher-level printer computer.
-- Develop a printer-specific alternative to the current UGS workflow.
-- Prefer a browser-based client interface.
-- Keep core operation local and offline-capable.
-- The Pi should own/stream active jobs rather than relying on the browser/client to do so.
-- Preserve the Arduino/GRBL controller for real-time motion control unless a concrete reason emerges to change it.
-- Do not assume a solution for automatic Z control yet.
-- Do not control the external extrusion pump from this software.
+**Not yet complete:**
+- Physical machine testing on the Pi (hardware not yet available)
+- Pi deployment and systemd configuration (depends on hardware)
+- Jog speed validation on the physical machine
+- Wi-Fi access point setup for offline field use
 
 ---
 
 ## Open Questions
 
-- What software stack should the Raspberry Pi application use?
-- What should run as the backend/server?
-- What should be used for the browser UI?
-- How should serial communication with GRBL be implemented?
-- How should G-code streaming and flow control work?
-- How should job progress be represented?
-- How should pause/resume work?
-- How should errors and GRBL alarms be handled?
-- What should happen after a power failure or interrupted print?
-- How should reconnection work?
-- How should job files be stored?
-- How should the Pi create or join local networks?
-- How should the interface discover/connect to the printer?
-- How should future Z control integrate with the interface?
-- Which UGS features are actually needed?
-- Which UGS features are unnecessary for this machine?
-- What printer-specific controls would improve operation?
-
----
-
-## Completed Work
-
-- Raspberry Pi identified as the dedicated higher-level printer computer.
-- Browser-based local interface identified as the preferred general direction.
-- Offline/local operation established as a requirement.
-- Responsibility boundary between Pi and GRBL established.
-- Active-job ownership assigned conceptually to the Raspberry Pi.
-
-No application implementation has yet been completed.
+- What is the correct JOG_SPEED_MM_MIN for this machine's scale?
+  (Must be established by physical testing before jogging is enabled)
+- What serial port does the Arduino appear as on the Pi (ttyUSB0 or ttyACM0)?
+- Is a udev rule needed to assign a stable symlink to the Arduino port?
+- Does the Pi need to act as a Wi-Fi access point for field use?
+  If so, hostapd + dnsmasq setup is needed (not yet done).
+- Will the current GRBL firmware support all required jog and job operations?
+  (Expected yes, but unverified on hardware)
+- After a power failure mid-print, should the interface offer job recovery?
+  (Not implemented in Milestone 1 — open question for future milestones)
 
 ---
 
 ## Next Steps
 
-1. Define the smallest useful replacement for the current UGS workflow.
-2. Identify the exact UGS functions currently used when operating the printer.
-3. Choose an initial Raspberry Pi software stack.
-4. Establish basic serial communication with GRBL.
-5. Build a minimal interface capable of connecting to GRBL and reporting machine state.
-6. Add functionality incrementally while preserving the ability to operate the printer using the existing UGS workflow during development.
+1. Complete GRBL configuration capture (grbl-capture-checklist.md) on the
+   existing working machine before any Pi connection.
+2. Deploy the Pi interface on the Raspberry Pi (docs/deployment.md).
+3. Run the physical machine acceptance test (docs/acceptance-test.md).
+4. Validate and set JOG_SPEED_MM_MIN in .env.
+5. If field offline use is needed, configure Wi-Fi access point.
+6. After Milestone 1 is verified on hardware, define Milestone 2.
+
+---
+
+## Completed Work
+
+- Milestone 1 software architecture designed and approved
+- Technology stack selected: Python, FastAPI, pyserial, vanilla JS
+- All application modules implemented
+- Touch-first browser UI implemented
+- Dead-man jog implemented and tested
+- Server-owned job runner implemented and tested
+- Full test suite: 78 tests passing
+- Deployment documentation written
+- GRBL capture checklist written
+- Acceptance test procedure written
 
 ---
 
@@ -238,4 +274,5 @@ No application implementation has yet been completed.
 
 2026-10-03
 
-Initial subproject memory created during repository setup.
+Milestone 1 software implementation complete on Mac.
+Physical machine testing pending.

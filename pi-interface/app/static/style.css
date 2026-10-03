@@ -1,0 +1,443 @@
+/* ============================================================
+   Mud Printer Interface — Touch-first stylesheet
+   Designed for Pi 7" touchscreen (800×480) and Mac browser.
+   ============================================================ */
+
+/* --- Reset & custom properties --- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #111;
+  --surface: #1e1e1e;
+  --surface2: #2a2a2a;
+  --border: #333;
+  --text: #e8e8e8;
+  --text-muted: #888;
+  --green: #4ade80;
+  --blue: #60a5fa;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --gray: #6b7280;
+
+  --btn-bg: #2d3748;
+  --btn-hover: #3d4a5e;
+  --btn-active: #4a5568;
+
+  --jog-bg: #1a2a3a;
+  --jog-hover: #243a50;
+  --jog-active: #2e4a62;
+
+  --hold-bg: #78350f;
+  --hold-hover: #92400e;
+  --resume-bg: #14532d;
+  --resume-hover: #166534;
+  --stop-bg: #7f1d1d;
+  --stop-hover: #991b1b;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+/* --- Base --- */
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.4;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+/* --- Status bar --- */
+#status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+  min-height: 52px;
+  flex-shrink: 0;
+}
+
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.status-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.status-right .pos-val {
+  color: var(--text);
+  font-family: var(--font-mono);
+  min-width: 52px;
+  text-align: right;
+}
+
+.status-right .pos-label {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.badge-connected { background: #052e16; color: var(--green); }
+.badge-disconnected { background: #1a1a1a; color: var(--gray); border: 1px solid var(--border); }
+
+.state-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 1em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  min-width: 80px;
+  text-align: center;
+}
+.state-idle        { background: #052e16; color: var(--green); }
+.state-run         { background: #1e3a5f; color: var(--blue); }
+.state-jog         { background: #1e3a5f; color: var(--blue); }
+.state-hold        { background: #451a03; color: var(--amber); }
+.state-alarm       { background: #450a0a; color: var(--red); }
+.state-disconnected{ background: #1a1a1a; color: var(--gray); }
+.state-other       { background: #1a1a1a; color: var(--text-muted); }
+
+/* --- Main layout --- */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+#main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* --- Sections --- */
+.section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.section-title {
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* --- Jog pad --- */
+.jog-warning {
+  background: #2d1500;
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  color: var(--amber);
+  font-size: 0.82em;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  display: none;
+}
+.jog-warning.visible { display: block; }
+
+.jog-pad {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  gap: 8px;
+  aspect-ratio: 3/2;
+  max-height: 220px;
+  max-width: 330px;
+  margin: 0 auto;
+}
+
+.jog-btn {
+  background: var(--jog-bg);
+  border: 2px solid #2a4a6a;
+  border-radius: 8px;
+  color: var(--blue);
+  font-size: 1.3em;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  transition: background 0.1s, transform 0.1s;
+  min-height: 60px;
+}
+.jog-btn:active, .jog-btn.pressing {
+  background: var(--jog-active);
+  transform: scale(0.97);
+}
+.jog-btn:disabled {
+  background: var(--surface2);
+  border-color: var(--border);
+  color: var(--gray);
+  cursor: not-allowed;
+}
+
+.jog-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* --- Operational controls --- */
+.controls-row {
+  display: flex;
+  gap: 10px;
+}
+
+.ctrl-btn {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 1em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 16px 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.1s, transform 0.1s;
+  min-height: 60px;
+  position: relative;
+  overflow: hidden;
+}
+.ctrl-btn:active { transform: scale(0.97); }
+.ctrl-btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+.btn-hold   { background: var(--hold-bg); }
+.btn-hold:not(:disabled):hover { background: var(--hold-hover); }
+.btn-resume { background: var(--resume-bg); }
+.btn-resume:not(:disabled):hover { background: var(--resume-hover); }
+.btn-stop   { background: var(--stop-bg); }
+.btn-stop:not(:disabled):hover { background: var(--stop-hover); }
+
+/* Stop-button hold-to-confirm fill */
+.stop-fill {
+  position: absolute;
+  left: 0; top: 0;
+  width: 0%;
+  height: 100%;
+  background: rgba(255, 80, 80, 0.35);
+  pointer-events: none;
+  transition: none;
+}
+.btn-stop.holding .stop-fill {
+  width: 100%;
+  transition: width 2.5s linear;
+}
+
+.estop-note {
+  text-align: center;
+  font-size: 0.72em;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+/* --- Job section --- */
+.job-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.job-filename {
+  flex: 1;
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-filename.empty { color: var(--text-muted); }
+
+.job-meta {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  min-height: 1.3em;
+}
+
+.progress-bar-wrap {
+  background: var(--surface2);
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  display: none;
+}
+.progress-bar-wrap.visible { display: block; }
+.progress-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 4px;
+  transition: width 0.3s;
+  width: 0%;
+}
+
+.job-actions-row {
+  display: flex;
+  gap: 10px;
+}
+
+.upload-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--btn-bg);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.9em;
+  font-weight: 600;
+  padding: 14px 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.1s;
+  min-height: 52px;
+  text-align: center;
+  flex: 1;
+}
+.upload-label:hover { background: var(--btn-hover); }
+.upload-label input { display: none; }
+
+.btn-start { background: #1e3a5f; flex: 1; }
+.btn-start:not(:disabled):hover { background: #243a6e; }
+
+/* --- Console section --- */
+.console-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+  width: 100%;
+  touch-action: manipulation;
+}
+.console-toggle:hover { color: var(--text); }
+
+.console-body {
+  margin-top: 10px;
+}
+
+.console-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  height: 140px;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  margin-bottom: 8px;
+}
+
+.console-line { line-height: 1.5; }
+.console-line.tx { color: #93c5fd; }
+.console-line.rx { color: #d1d5db; }
+.console-line.rx.ok { color: #4ade80; }
+.console-line.rx.err { color: var(--red); }
+
+.console-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.console-input-row input {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 10px 12px;
+  outline: none;
+}
+.console-input-row input:focus { border-color: var(--blue); }
+
+.console-input-row button {
+  background: var(--btn-bg);
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.9em;
+  font-weight: 600;
+  padding: 10px 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.1s;
+}
+.console-input-row button:hover { background: var(--btn-hover); }
+
+/* --- Upload status message --- */
+#upload-status {
+  font-size: 0.82em;
+  min-height: 1.2em;
+  margin-top: 4px;
+}
+.upload-ok  { color: var(--green); }
+.upload-err { color: var(--red); }
+
+/* --- Connection overlay --- */
+#ws-status {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  text-align: right;
+  padding: 2px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+/* --- Scrollbar --- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

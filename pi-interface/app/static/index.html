@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Mud Printer</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Status bar -->
+  <div id="status-bar">
+    <div class="status-left">
+      <span class="badge badge-disconnected" id="conn-badge">DISCONNECTED</span>
+      <span class="state-badge state-disconnected" id="grbl-state">—</span>
+    </div>
+    <div class="status-right">
+      <span class="pos-label">X</span>
+      <span class="pos-val" id="pos-x">—</span>
+      <span class="pos-label">Y</span>
+      <span class="pos-val" id="pos-y">—</span>
+      <span class="pos-label">F</span>
+      <span class="pos-val" id="feed-rate">—</span>
+    </div>
+  </div>
+
+  <!-- WebSocket connection indicator -->
+  <div id="ws-status">● connecting…</div>
+
+  <div id="main-content">
+
+    <!-- Jog section -->
+    <div class="section">
+      <div class="section-title">Manual Jog (X / Y)</div>
+      <div class="jog-warning" id="jog-warning"></div>
+      <div class="jog-pad">
+        <div></div>
+        <button class="jog-btn" id="jog-yp" data-axis="Y" data-dir="1">Y+</button>
+        <div></div>
+        <button class="jog-btn" id="jog-xm" data-axis="X" data-dir="-1">X−</button>
+        <div class="jog-center">JOG</div>
+        <button class="jog-btn" id="jog-xp" data-axis="X" data-dir="1">X+</button>
+        <div></div>
+        <button class="jog-btn" id="jog-ym" data-axis="Y" data-dir="-1">Y−</button>
+        <div></div>
+      </div>
+    </div>
+
+    <!-- Operational controls -->
+    <div class="section">
+      <div class="section-title">Controls</div>
+      <div class="controls-row">
+        <button class="ctrl-btn btn-hold" id="btn-hold">HOLD</button>
+        <button class="ctrl-btn btn-resume" id="btn-resume">RESUME</button>
+        <button class="ctrl-btn btn-stop" id="btn-stop" title="Hold for 2.5 s to stop">
+          <span>STOP</span>
+          <div class="stop-fill" id="stop-fill"></div>
+        </button>
+      </div>
+      <p class="estop-note">
+        Software controls only — use the physical E-STOP for emergencies.
+      </p>
+    </div>
+
+    <!-- Job section -->
+    <div class="section">
+      <div class="section-title">Current Job</div>
+      <div class="job-file-row">
+        <div class="job-filename empty" id="job-filename">No job loaded</div>
+        <span class="state-badge" id="job-state-badge" style="display:none"></span>
+      </div>
+      <div class="job-meta" id="job-meta"></div>
+      <div class="progress-bar-wrap" id="progress-wrap">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+      <div id="upload-status"></div>
+      <div class="job-actions-row" style="margin-top:8px">
+        <label class="upload-label">
+          Upload G-code
+          <input type="file" id="file-input" accept=".nc,.gcode,.g,.txt,.ngc" />
+        </label>
+        <button class="ctrl-btn btn-start" id="btn-start" disabled>START JOB</button>
+      </div>
+    </div>
+
+    <!-- Console (collapsed by default) -->
+    <div class="section">
+      <button class="console-toggle" id="console-toggle">Advanced / Console ▾</button>
+      <div class="console-body" id="console-body" style="display:none">
+        <div class="console-log" id="console-log"></div>
+        <div class="console-input-row">
+          <input type="text" id="console-cmd" placeholder="GRBL command (e.g. $$, $G, G0 X0)" />
+          <button id="console-send-btn">Send</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- #main-content -->
+</div><!-- #app -->
+
+<script src="/app.js"></script>
+</body>
+</html>
