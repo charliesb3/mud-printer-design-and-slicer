@@ -107,7 +107,9 @@ Before declaring a substantive task complete:
 
 10. Verify that important decisions made during the task have been recorded.
 
-11. Only after this check should the task be considered complete.
+11. Follow the Git Commit Procedure (Section 3) to stage, commit, and verify the completed unit of work.
+
+12. Only after this check should the task be considered complete.
 
 This operating loop is mandatory.
 
@@ -129,6 +131,10 @@ Before declaring any substantive task complete, silently check:
 - Does Current State still describe reality?
 - Are Next Steps still accurate?
 - Did anything change that belongs in `PROJECT_OVERVIEW.md`?
+- Did I follow the Git Commit Procedure?
+- Did I stage only changes belonging to this task?
+- Did I verify the commit succeeded?
+- Did I report the commit hash?
 
 Do not print this checklist after every task unless doing so is useful to the user.
 
@@ -136,7 +142,91 @@ The purpose of the checklist is verification, not additional conversational outp
 
 ---
 
-# 3. MEMORY ARCHITECTURE
+# 3. GIT COMMIT PROCEDURE
+
+Local Git commits are part of the normal completion process for substantive units of work.
+
+A commit should represent a coherent, meaningful, verified unit of work — not every individual file edit or action.
+
+Before declaring a substantive unit of work complete:
+
+1. Complete the requested work.
+2. Perform whatever verification or testing is appropriate for that work.
+3. Update the relevant PROJECT_MEMORY.md file(s) if persistent project state changed.
+4. Update PROJECT_OVERVIEW.md only if overall system-level state changed.
+5. Run `git status`.
+6. Review the relevant `git diff`.
+7. Determine which changed files belong to the currt task.
+8. Check for unrelated, unexpected, or user-created changes.
+9. Stage only the files or portions of files that belong to the completed task.
+10. Create a local Git commit with a concise, descriptive commit message explaining the meaningful unit of work that was completed.
+11. Verify that the commit succeeded.
+12. Report the resulting commit hash when reporting task completion.
+
+## Commit Safety Rules
+
+- Do not commit after every action or every file edit.
+- Prefer one commit per coherent, working unit of development.
+- Do not create meaningless micro-commits merely because a file changed.
+- Do not use `git add .`, `git add -A`, or an equivalent indiscriminate staging command without first verifying that every included change belongs to the current task.
+- Never silently include unrelated changes in a commit.
+- Never discard, overwrite, revert, reset, or otherwise destroy unrelated or user-created changes in order to make the working tree clean.
+- If unrelated changes are present, leave them untouched and commit only the changes belonging to the current task when they can be safely separated.
+- If the task's changes cannot be safely separated from unrelated changes, stop and ask the user rather than guessing.
+- Do not commit work that is known to be broken or incomplete as though it were completed.
+- If a checkpoint commit for incomplete work would be useful, only create one when explicitly requested by the user, and clearly identify it as a checkpoint/WIP commit.
+- Do not amend, squash, rebase, reset, force-push, or otherwise rewrite Git history unless explicitly requested by the user.
+- Do not push commits to GitHub or any other remote repository automatically.
+- A local commit and a remote push are separate actions.
+- Only push when explicitly requested by the user.
+- Do not create or switch branches automatically unless the task requires it or the user requests it.
+
+## Relationship to the Memory System
+
+For substantive project work, the preferred completion sequence is:
+
+work
+→ verify/test
+→ up persistent memory if needed
+→ review Git changes
+→ commit the coherent unit of work
+→ report completion
+
+The codebase is authoritative for current implementation.
+Git records implementation history.
+PROJECT_OVERVIEW.md and PROJECT_MEMORY.md preserve project intent, decisions, state, and reasoning.
+
+These systems should reinforce one another.
+
+## What Counts as a Substantive Unit of Work
+
+Use judgment.
+
+Examples that generally SHOULD result in a commit:
+
+- implementing a feature
+- fixing a bug
+- completing a meaningful refactor
+- changing project architecture
+- adding or changing persistent project documentation
+- completing a configuration change
+- completing a tested development milestone
+
+Examples that generally SHOULD NOT independently trigger a commit:
+
+- reading files
+- investigating a problem without changing anything
+- answering a question
+- running a test
+- inspecting logs
+- temporary debugging experiments that are reverted
+- an individual edit that is only one step within an unfinished large
+
+When uncertain whether the current work constitutes a coherent completed unit, prefer finishing and verifying the logical unit before committing rather than producing unnecessary micro-commits.
+
+---
+
+# 4. MEMORY ARCHITECTURE
 
 This repository represents the overall Mud Printer Software system.
 
@@ -169,7 +259,7 @@ The structure may be split, merged, renamed, or reorganized later if the actual 
 
 ---
 
-# 4. PROJECT_OVERVIEW.md
+# 5. PROJECT_OVERVIEW.md
 
 `PROJECT_OVERVIEW.md` is the canonical high-level memory for the entire Mud Printer Software system.
 
@@ -194,7 +284,7 @@ Only update it when something meaningful changes at the overall-system level.
 
 ---
 
-# 5. SUBPROJECT 1 — DESIGN + TOOLPATH
+# 6. SUBPROJECT 1 — DESIGN + TOOLPATH
 
 Memory location:
 
@@ -230,7 +320,7 @@ Do not assume that Design and Toolpath must remain combined permanently.
 
 ---
 
-# 6. SUBPROJECT 2 — RASPBERRY PI / PRINTER INTERFACE
+# 7. SUBPROJECT 2 — RASPBERRY PI / PRINTER INTERFACE
 
 Memory location:
 
@@ -272,7 +362,7 @@ It should not be assumed to perform timing-critical motion control that belongs 
 
 ---
 
-# 7. SUBPROJECT 3 — ARDUINO / GRBL MOTION CONTROL
+# 8. SUBPROJECT 3 — ARDUINO / GRBL MOTION CONTROL
 
 Memory location:
 
@@ -311,7 +401,7 @@ Do not move timing-critical motion-control responsibilities to the Raspberry Pi 
 
 ---
 
-# 8. MEMORY MAINTENANCE RULES
+# 9. MEMORY MAINTENANCE RULES
 
 Persistent memory should optimize for useful future orientation, not exhaustive history.
 
@@ -354,7 +444,7 @@ Record:
 
 ---
 
-# 9. SOURCE-OF-TRUTH HIERARCHY
+# 10. SOURCE-OF-TRUTH HIERARCHY
 
 Different sources serve different purposes.
 
@@ -390,7 +480,7 @@ If conversation produces a consequential decision or project-state change, persi
 
 ---
 
-# 10. HANDLING CONFLICTS
+# 11. HANDLING CONFLICTS
 
 If sources appear to conflict:
 
@@ -414,7 +504,7 @@ If the correct interpretation is still uncertain, ask the user rather than rewri
 
 ---
 
-# 11. INSTRUCTION PRIORITY
+# 12. INSTRUCTION PRIORITY
 
 The following rules are mandatory:
 
@@ -432,7 +522,7 @@ If this file becomes larger over time, preserve the visibility and priority of t
 
 ---
 
-# 12. KEEP THE MEMORY SYSTEM MAINTAINABLE
+# 13. KEEP THE MEMORY SYSTEM MAINTAINABLE
 
 Do not allow the memory system itself to grow without purpose.
 
