@@ -231,19 +231,69 @@ Basic overrides: pin start, pin end, reverse direction, component order.
 
 ---
 
-## Current State
+## Foundational Design Decisions (Established in Design Interview)
+
+### PATHS ARE THE DESIGN
+
+Every printable element is a path (nozzle trace). This is a foundational decision, not a preference for the first prototype.
+
+Design tools create, modify, relate, and generate paths. The toolpath system determines how those paths are traversed. The final physical result is produced directly from those paths.
+
+Non-printing visual elements (guides, reference geometry, annotations) are permitted but must be visually distinguished. The path-first principle means printable geometry is always paths.
+
+### SOURCE GEOMETRY IS NON-DESTRUCTIVE
+
+Treatments, generators, and Z conditions derive *effective print geometry* from source geometry. Source geometry is never altered, split, or destroyed.
+
+Effective Print Geometry pipeline:
+
+```
+SOURCE DESIGN GEOMETRY
+    ↓  [treatments / generators / Z conditions]
+EFFECTIVE PRINT GEOMETRY
+    ↓  [routing / traversal]
+TOOLPATH (ordered moves)
+```
+
+Offset inner walls, lattice webs, and other derived geometry exist only in Effective Print Geometry. The source path that generated them remains unchanged and editable.
+
+### PRIMITIVE IDENTITY PRESERVATION
+
+Line, Circle, Ellipse, and Rectangle are distinct parametric types. Each samples to a common path representation for rendering, offset, lattice, and routing. Converting to editable points destroys parametric identity and must be an explicit designer action.
+
+### PATH SECTIONS
+
+A path section is a range `[t_start, t_end]` on a path (arc-length parameterized). Different treatments can apply to different sections without splitting underlying source geometry. Sections are included in the prototype.
+
+### PARAMETERS vs VARIATIONS
+
+**Parameters** are deliberately specified properties. Changing a parameter changes what was requested.
+
+**Variations** are discrete alternative solutions to the same parameter set. Selecting a different variation does not alter parameters. These are strictly separate concepts.
+
+This applies to lattice generators: same amplitude/wavelength/frequency can have multiple valid arrangements (phase choice, which wall connects to which). Variations expose those alternatives.
+
+### ROUTING OVERRIDES ARE CONSTRAINTS
+
+Start point, direction, component order, and other routing overrides are stored as constraints on the traversal. The router recomputes when constraints change. These are never implemented as mutations to source geometry.
+
+### PROGRESSIVE DISCLOSURE
+
+The simplest valid design (draw one path → route it → done) must remain simple. Complexity is revealed only as the designer needs it. Offset panels, lattice, sections, overrides — all optional, none required for basic use.
+
+---
+
+## Prototype Strategy
 
 ### Phase 2 — Toolpath / Graph Prototype — COMPLETE
 
 Location: `design-toolpath/toolpath_proto/`
 
-Built and tested. 57 tests passing.
+Built and tested. 65 tests passing (57 routing/geometry + 8 app integration).
 
-Key result: the graph-based routing approach works correctly for all five test geometries.
+Key result: graph-based Eulerian routing works correctly for all five test geometries.
 
-**Most important finding:** Geometry D (closed wall perimeter + internal zigzag web) produces exactly 2 odd-degree nodes in the print graph, which means a single Eulerian path traverses the entire geometry — wall perimeter AND web — with zero travel moves and zero retracing. This confirms the core hypothesis that designed internal geometry can enable fully continuous printing.
-
-**Summary of test case results:**
+**Most important finding:** Geometry D (wall perimeter + internal zigzag web) produces exactly 2 odd-degree nodes → single Eulerian path, zero travel moves, 100% continuous printing. This validates the core hypothesis that designed internal geometry enables fully continuous printing.
 
 | Case | Description | Components | Odd nodes | Travel moves | % Printing |
 |------|-------------|-----------|-----------|--------------|------------|
@@ -253,28 +303,98 @@ Key result: the graph-based routing approach works correctly for all five test g
 | D | Wall + internal web | 1 | 2 | 0 | 100% |
 | E | Awkward / T-junction | 3 | mixed | 2+ | ~85–95% |
 
+### Phase 3 — Design Canvas Prototype — IN PROGRESS
+
+Location: `design-toolpath/design_proto/`
+
+**Goal:** Test whether the path-first design model + live parametric treatments + overlay toolpath visualization works as an interactive design environment.
+
+**Scope** (13 implementation steps, in order):
+
+1. Data model — effective-print-geometry pipeline (Path, Section, Offset, Lattice, PrintLayer)
+2. Blank canvas + source-path drawing/editing (freehand polyline, move nodes, close path)
+3. Primitives: Line, Circle, Ellipse, Rectangle (parametric identity preserved)
+4. Non-destructive sections (split points, per-section properties)
+5. Live offset treatment (offset distance, side; regenerates when source changes)
+6. Assemble effective PrintLayer → connect existing routing engine from toolpath_proto
+7. Toolpath overlay (toggle direction arrows, sequence numbers, start/end, travel moves)
+8. Zigzag lattice generator (amplitude, wavelength, connection nodes, variation index)
+9. Generator variations (discrete alternative arrangements for same parameters)
+10. Routing overrides as constraints (start point, direction, component order)
+11. Live dependency/regeneration (geometry change → effective layer recompute → toolpath update)
+12. Wave lattice generator (extensibility test: confirms generator architecture is correct)
+13. UX cleanup + integration testing
+
+**Physical-Z keyframes are deliberately deferred.** This prototype works at a single Z slice. Architecture must not make keyframes hard to add later.
+
+**Routing engine reuse:** `graph.py` and `geometry.py` from `toolpath_proto/` are reused directly. No duplication.
+
+**Generator architecture:**
+```python
+class LatticeGenerator:
+    def parameters(self) -> list[ParameterSpec]: ...
+    def generate(self, path_a, path_b, params, variation_index=0) -> list[Path]: ...
+```
+
+**Data model (top level):**
+```
+Path          — source geometry (open or closed, parametric or explicit points)
+  PathSection — range [t_start, t_end] on a path, with own properties
+OffsetTreatment  — derives an offset path from a source path
+LatticeGenerator — derives lattice paths between two source paths
+PrintLayer    — assembles effective print geometry from all sources + treatments
+               → fed to route_layer() for traversal
+```
+
 ### Phase 1 — Form / Keyframe Prototype — NOT YET BUILT
+
+---
+
+## Current State
+
+### Phase 2 — Toolpath / Graph Prototype — COMPLETE
+
+Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
+
+### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps)
+
+Location: `design-toolpath/design_proto/`. 65 tests passing.
+
+Files:
+- `model.py` — full data model: Vec2, Path subtypes, OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
+- `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
+- `static/index.html` — design canvas UI
+- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides
+- `tests/test_model.py` — 47 unit tests covering model layer
+- `tests/test_app.py` — 18 integration tests covering API and static assets
+
+**Default seed:** Loads Case D geometry (wall perimeter + zigzag web) on startup to demonstrate zero-travel-move routing immediately.
+
+**Known limitations / deferred:**
+- Node-drag editing for Circle/Ellipse primitives is approximate (resamples rather than adjusting radius parametrically from drag)
+- Path sections (split points / per-section properties) are in the model but have no UI yet
+- Multi-layer / physical-Z keyframes deferred (as planned)
 
 ---
 
 ## Algorithms and References
 
-Most relevant existing work:
-- **Eulerian path / Chinese Postman (Route Inspection)**: primary toolpath routing algorithm
-- **Arc-length parameterization**: for shape morphing between compatible paths
-- **Medial axis / Voronoi skeleton**: for positioning lattice geometry between walls
-- **Offset curves**: for generating inner wall from outer wall at specified thickness
+- **Eulerian path / Chinese Postman (Route Inspection)**: primary toolpath routing
+- **Arc-length parameterization**: path sections and shape morphing
+- **Medial axis / Voronoi skeleton**: lattice positioning between walls (future)
+- **Offset curves**: generating inner wall from outer wall
+- **Catmull-Rom splines**: curved drawn paths (through-points, simpler than Bezier)
+- **NetworkX**: graph construction, matching (`nx.min_weight_matching`)
 
 ---
 
 ## Open Questions
 
-- Does the graph routing model produce good results in practice for the wall+lattice geometry? (Phase 2 will answer this)
-- Does the keyframe model produce the forms the designer imagines? (Phase 1 will answer this)
-- How should topological transitions (cell count changes, path splits/merges) be represented and edited?
-- How should the lattice generator accept continuity hints from the toolpath planner without violating the geometry/toolpath separation?
-- How should the seam position be managed and optimized across layers?
+- How should topological transitions (cell count changes, path splits/merges) be represented?
+- How should the lattice generator accept continuity hints without violating geometry/toolpath separation?
+- How should seam position be managed and optimized across layers?
 - What is the right output format for the Pi Interface to consume?
+- Does the keyframe model produce the forms the designer imagines? (Phase 1 will answer)
 
 ---
 
@@ -282,4 +402,4 @@ Most relevant existing work:
 
 2026-10-03
 
-Design direction consolidated. Phase 2 (Toolpath / Graph) prototype in active development.
+Phase 3 design canvas prototype complete. 65 tests passing. Both Phase 2 and Phase 3 suites at 65 tests each, all green.

@@ -376,15 +376,28 @@ See `pi-interface/PROJECT_MEMORY.md` for full details.
 
 ### Design + Toolpath — Phase 2 (Toolpath) Prototype Complete
 
-The graph-based toolpath prototype has been built and all 57 tests pass.
+The graph-based toolpath prototype is complete. 65 tests passing.
 
 Location: `design-toolpath/toolpath_proto/`
 
-The prototype validates that Eulerian/Chinese Postman routing correctly
-produces continuity-first traversals for all five test geometries.
-The key result: geometry D (wall perimeter + internal web) routes as a
-single continuous path with zero travel moves, confirming the conceptual
-model works for the core architectural case.
+Validates Eulerian/Chinese Postman routing for five test geometries.
+Key result: Case D (wall perimeter + internal web) = single continuous path,
+zero travel moves.
+
+### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete
+
+The interactive design canvas prototype is complete. 65 tests passing.
+
+Location: `design-toolpath/design_proto/`
+
+Implements the full path-first design model:
+- Parametric primitives (Line, Circle, Ellipse, Rectangle) + drawn ExplicitPaths
+- Non-destructive OffsetTreatment (inner/outer wall from source path)
+- ZigzagGenerator + WaveGenerator with variations
+- PrintLayer assembles effective geometry → feeds routing engine
+- Toolpath overlay toggle (direction arrows, sequence numbers, start/end)
+- Routing overrides stored as TraversalConstraints (not geometry mutations)
+- Seeded with Case D geometry to demonstrate zero-travel routing on launch
 
 See `design-toolpath/PROJECT_MEMORY.md` for full details.
 
@@ -458,4 +471,5 @@ Allow the architecture to evolve as the machine and software become better under
 2026-10-03
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath and Arduino/GRBL subprojects not yet started.
+Design + Toolpath Phase 2 and Phase 3 prototypes both complete and tested.
+Arduino/GRBL subproject not yet started.
