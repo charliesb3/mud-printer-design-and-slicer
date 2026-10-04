@@ -109,9 +109,7 @@ function drawNumber(x, y, n, color) {
   const h = 13;
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
-  ctx.beginPath();
-  ctx.roundRect(x - w / 2, y - h / 2, w, h, 2);
-  ctx.fill();
+  ctx.fillRect(x - w / 2, y - h / 2, w, h);
   ctx.fillStyle = color;
   ctx.font = '9px monospace';
   ctx.textAlign = 'center';
