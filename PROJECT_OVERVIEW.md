@@ -374,6 +374,20 @@ The software is ready for Pi deployment and physical machine testing.
 
 See `pi-interface/PROJECT_MEMORY.md` for full details.
 
+### Design + Toolpath — Phase 2 (Toolpath) Prototype Complete
+
+The graph-based toolpath prototype has been built and all 57 tests pass.
+
+Location: `design-toolpath/toolpath_proto/`
+
+The prototype validates that Eulerian/Chinese Postman routing correctly
+produces continuity-first traversals for all five test geometries.
+The key result: geometry D (wall perimeter + internal web) routes as a
+single continuous path with zero travel moves, confirming the conceptual
+model works for the core architectural case.
+
+See `design-toolpath/PROJECT_MEMORY.md` for full details.
+
 ---
 
 ## Major Open Questions

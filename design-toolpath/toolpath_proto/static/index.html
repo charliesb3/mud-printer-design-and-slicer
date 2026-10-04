@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mud Printer — Toolpath Prototype</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      background: #1a1a1a;
+      color: #d0d0d0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 10px 16px;
+      background: #111;
+      border-bottom: 1px solid #333;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e0e0e0;
+      letter-spacing: 0.05em;
+    }
+
+    .case-buttons {
+      display: flex;
+      gap: 6px;
+    }
+
+    .case-btn {
+      padding: 4px 12px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      color: #aaa;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      border-radius: 3px;
+      transition: all 0.1s;
+    }
+
+    .case-btn:hover { background: #333; color: #ddd; }
+    .case-btn.active { background: #2a4a6a; border-color: #4a7aaa; color: #9ac; }
+
+    .label { color: #888; font-size: 11px; }
+
+    .main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .canvas-area {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: #1e1e1e;
+    }
+
+    canvas {
+      background: #252525;
+      border: 1px solid #333;
+      border-radius: 4px;
+    }
+
+    .sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      background: #161616;
+      border-left: 1px solid #2a2a2a;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      color: #666;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      border-bottom: 1px solid #222;
+    }
+
+    .metric-label { color: #888; }
+    .metric-value { color: #ccc; font-weight: 600; }
+    .metric-value.good { color: #5c9; }
+    .metric-value.warn { color: #c95; }
+    .metric-value.bad { color: #c55; }
+
+    .graph-stat { padding: 2px 0; color: #777; }
+    .graph-stat span { color: #aaa; }
+
+    .legend {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #888;
+    }
+
+    .swatch {
+      width: 24px;
+      height: 3px;
+      border-radius: 2px;
+    }
+    .swatch.print  { background: #4a9eff; }
+    .swatch.travel { background: #ff6644; border-top: 2px dashed #ff6644; height: 0; }
+    .swatch.retrace { background: #ffaa44; }
+
+    .swatch-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+    }
+    .swatch-dot.start { background: #3c3; }
+    .swatch-dot.end   { background: #c33; }
+
+    #case-label {
+      font-size: 11px;
+      color: #666;
+      font-style: italic;
+    }
+
+    .euler-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+    .euler-badge.circuit { background: #1a3a1a; color: #5c9; border: 1px solid #3a6a3a; }
+    .euler-badge.path    { background: #1a2a3a; color: #69c; border: 1px solid #3a5a7a; }
+    .euler-badge.augmented { background: #3a2a1a; color: #c95; border: 1px solid #6a5a3a; }
+    .euler-badge.multi   { background: #2a1a2a; color: #a6a; border: 1px solid #5a3a5a; }
+
+    .move-counter {
+      font-size: 20px;
+      font-weight: 600;
+      color: #4a9eff;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>TOOLPATH PROTOTYPE</h1>
+  <div class="case-buttons" id="case-buttons"></div>
+  <span id="case-label"></span>
+</header>
+
+<div class="main">
+  <div class="canvas-area">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="sidebar">
+
+    <div>
+      <div class="panel-title">Routing</div>
+      <div id="euler-badge-container" style="margin-bottom:8px;"></div>
+      <div class="metric-row">
+        <span class="metric-label">Print runs</span>
+        <span class="metric-value" id="m-runs">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Travel moves</span>
+        <span class="metric-value" id="m-travel">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">% printing</span>
+        <span class="metric-value" id="m-pct">—</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Distances</div>
+      <div class="metric-row">
+        <span class="metric-label">Print</span>
+        <span class="metric-value" id="m-pdist">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Travel</span>
+        <span class="metric-value" id="m-tdist">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Retrace</span>
+        <span class="metric-value" id="m-rdist">—</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Graph</div>
+      <div class="graph-stat">Nodes: <span id="g-nodes">—</span></div>
+      <div class="graph-stat">Edges: <span id="g-edges">—</span></div>
+      <div class="graph-stat">Components: <span id="g-comps">—</span></div>
+      <div class="graph-stat">Odd-degree nodes: <span id="g-odd">—</span></div>
+    </div>
+
+    <div>
+      <div class="panel-title">Legend</div>
+      <div class="legend">
+        <div class="legend-item"><div class="swatch print"></div> Print move</div>
+        <div class="legend-item"><div class="swatch travel"></div> Travel (non-print)</div>
+        <div class="legend-item"><div class="swatch retrace"></div> Retrace (augmented)</div>
+        <div class="legend-item"><div class="swatch-dot start"></div> Start</div>
+        <div class="legend-item"><div class="swatch-dot end"></div> End</div>
+      </div>
+    </div>
+
+    <div style="font-size:10px; color:#555; line-height:1.5;">
+      Direction arrows at midpoint of each segment.<br>
+      Move sequence numbers shown in order of traversal.
+    </div>
+
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
