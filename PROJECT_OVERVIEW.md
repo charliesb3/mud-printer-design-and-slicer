@@ -384,9 +384,9 @@ Validates Eulerian/Chinese Postman routing for five test geometries.
 Key result: Case D (wall perimeter + internal web) = single continuous path,
 zero travel moves.
 
-### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete
+### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete + UX Pass
 
-The interactive design canvas prototype is complete. 65 tests passing.
+The interactive design canvas prototype is complete. 75 tests passing.
 
 Location: `design-toolpath/design_proto/`
 
@@ -395,9 +395,10 @@ Implements the full path-first design model:
 - Non-destructive OffsetTreatment (inner/outer wall from source path)
 - ZigzagGenerator + WaveGenerator with variations
 - PrintLayer assembles effective geometry → feeds routing engine
-- Toolpath overlay toggle (direction arrows, sequence numbers, start/end)
+- Auto-routing when Toolpath ON (no manual Route button)
+- Sparse direction arrows, print-run numbering, seam markers on closed loops
+- Offset: Inside/Outside/Left/Right direction + positive distance
 - Routing overrides stored as TraversalConstraints (not geometry mutations)
-- Seeded with Case D geometry to demonstrate zero-travel routing on launch
 
 See `design-toolpath/PROJECT_MEMORY.md` for full details.
 
@@ -468,8 +469,8 @@ Allow the architecture to evolve as the machine and software become better under
 
 ## Last Updated
 
-2026-10-03
+2026-10-04
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath Phase 2 and Phase 3 prototypes both complete and tested.
+Design + Toolpath Phase 2 (65 tests) and Phase 3 (75 tests) both complete.
 Arduino/GRBL subproject not yet started.

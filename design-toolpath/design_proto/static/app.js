@@ -4,16 +4,17 @@
 // State
 // ---------------------------------------------------------------------------
 
-let tool = 'select';
+let tool = 'edit';
 let drawPts = [];
 let selectedId = null;
+let _mousePosW = null;       // current mouse world-coords (for snap-to-first preview)
 
 let showToolpath = true;
 let showArrows = true;
 let showNumbers = true;
 
 let routeResult = null;
-let derivedPaths = [];       // populated by /api/effective_paths on model change
+let derivedPaths = [];       // populated by effective_paths or route on model change
 let _refreshTimer = null;
 
 // Drag state
@@ -99,7 +100,7 @@ function getHandles(path) {
         { key: 'bl', wx: path.x,           wy: path.y + path.h,  shape: 'square' },
       ];
     default: {
-      // ExplicitPath — only the user-placed control points
+      // ExplicitPath — only user-placed control points
       const pts = path.control_points || path.points || [];
       return pts.map((pt, i) => ({ key: `pt${i}`, wx: pt[0], wy: pt[1], shape: 'point' }));
     }
@@ -146,7 +147,6 @@ function applyHandleDrag(path, handleKey, wx, wy, orig) {
       break;
     }
     default: {
-      // ExplicitPath
       const idx = parseInt(handleKey.replace('pt', ''), 10);
       if (!isNaN(idx)) {
         const pts = path.control_points || path.points;
@@ -196,7 +196,6 @@ function applyBodyDrag(path, dx, dy, orig) {
   _computePrimitivePoints(path);
 }
 
-// Sync sidebar number inputs after drag, without rebuilding the panel
 function syncPropPanel(path) {
   if (!path || path.id !== selectedId) return;
   const fields = {};
@@ -338,6 +337,21 @@ function drawHandle(wx, wy, shape) {
   ctx.restore();
 }
 
+function drawSeamMarker(cx, cy) {
+  const r = 5;
+  ctx.save();
+  ctx.strokeStyle = '#ffdd00';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.lineTo(cx + r, cy);
+  ctx.lineTo(cx, cy + r);
+  ctx.lineTo(cx - r, cy);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
 // ---------------------------------------------------------------------------
 // Repaint
 // ---------------------------------------------------------------------------
@@ -379,7 +393,6 @@ function _pathCanvasPts(path) {
 }
 
 function drawEffectivePaths() {
-  // Source paths
   for (const p of layer.source_paths) {
     if (!p.visible) continue;
     const pts = _pathCanvasPts(p);
@@ -392,7 +405,6 @@ function drawEffectivePaths() {
     }
   }
 
-  // Derived paths (offset, lattice) — populated by fetchEffectivePaths
   for (const p of derivedPaths) {
     const pts = _pathCanvasPts(p);
     if (pts.length < 2) continue;
@@ -401,42 +413,133 @@ function drawEffectivePaths() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Toolpath drawing — runs / sparse arrows / seam markers
+// ---------------------------------------------------------------------------
+
+function buildPrintRuns(moves) {
+  const runs = [];
+  let current = null;
+  for (const m of moves) {
+    if (m.kind === 'print' || m.kind === 'retrace') {
+      if (!current) current = { moves: [], startPos: m.start };
+      current.moves.push(m);
+    } else {
+      if (current) {
+        current.endPos = current.moves[current.moves.length - 1].end;
+        runs.push(current);
+        current = null;
+      }
+    }
+  }
+  if (current) {
+    current.endPos = current.moves[current.moves.length - 1].end;
+    runs.push(current);
+  }
+  return runs;
+}
+
 function drawToolpath(moves) {
-  for (let i = 0; i < moves.length; i++) {
-    const m = moves[i];
+  if (!moves || moves.length === 0) return;
+
+  // Pass 1: draw all move lines
+  for (const m of moves) {
     const [x0, y0] = worldToCanvas(m.start[0], m.start[1]);
     const [x1, y1] = worldToCanvas(m.end[0], m.end[1]);
     const color = MOVE_COLORS[m.kind] || MOVE_COLORS.print;
     const dashed = m.kind === 'travel';
-    drawLine(x0, y0, x1, y1, color, m.kind === 'travel' ? 1.2 : 2.0, dashed);
+    const width = m.kind === 'travel' ? 1.2 : (m.kind === 'retrace' ? 1.5 : 2.0);
+    drawLine(x0, y0, x1, y1, color, width, dashed);
+  }
 
-    if (showArrows) {
-      const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-      drawArrowhead(mx, my, Math.atan2(y1 - y0, x1 - x0), 5, color);
-    }
+  // Pass 2: print run overlays (numbers, sparse arrows, seam markers)
+  const ARROW_SPACING = 50; // world inches between arrows
+  const runs = buildPrintRuns(moves);
+
+  runs.forEach((run, runIdx) => {
+    // Print-run number at start
     if (showNumbers) {
-      drawNumber(x0 + (x1 - x0) * 0.25, y0 + (y1 - y0) * 0.25, i + 1, color);
+      const [nx, ny] = worldToCanvas(run.startPos[0], run.startPos[1]);
+      drawNumber(nx, ny - 10, runIdx + 1, MOVE_COLORS.print);
     }
-  }
 
-  if (moves.length > 0) {
-    const first = moves[0], last = moves[moves.length - 1];
-    const [sx, sy] = worldToCanvas(first.start[0], first.start[1]);
-    const [ex, ey] = worldToCanvas(last.end[0], last.end[1]);
-    drawDot(sx, sy, 6, '#33cc66');
-    drawDot(ex, ey, 6, '#cc3333');
-    ctx.font = '9px monospace';
-    ctx.fillStyle = '#33cc66'; ctx.textAlign = 'left';
-    ctx.fillText('START', sx + 8, sy - 6);
-    ctx.fillStyle = '#cc3333';
-    ctx.fillText('END', ex + 8, ey + 12);
-  }
+    // Sparse direction arrows along print run
+    if (showArrows) {
+      let distSinceArrow = ARROW_SPACING; // start eager to place first arrow early
+      for (const m of run.moves) {
+        if (m.kind !== 'print') continue;
+        const segLen = Math.hypot(m.end[0] - m.start[0], m.end[1] - m.start[1]);
+        distSinceArrow += segLen;
+        if (distSinceArrow >= ARROW_SPACING) {
+          const [x0, y0] = worldToCanvas(m.start[0], m.start[1]);
+          const [x1, y1] = worldToCanvas(m.end[0], m.end[1]);
+          drawArrowhead((x0 + x1) / 2, (y0 + y1) / 2,
+                        Math.atan2(y1 - y0, x1 - x0), 5, MOVE_COLORS.print);
+          distSinceArrow = 0;
+        }
+      }
+    }
+
+    // Seam marker where a closed run rejoins its start
+    const dx = run.endPos[0] - run.startPos[0];
+    const dy = run.endPos[1] - run.startPos[1];
+    if (Math.hypot(dx, dy) < 3) {
+      const [sx, sy] = worldToCanvas(run.startPos[0], run.startPos[1]);
+      drawSeamMarker(sx, sy);
+    }
+  });
+
+  // Start / end dots
+  const first = moves[0], last = moves[moves.length - 1];
+  const [sx, sy] = worldToCanvas(first.start[0], first.start[1]);
+  const [ex, ey] = worldToCanvas(last.end[0], last.end[1]);
+  drawDot(sx, sy, 6, '#33cc66');
+  drawDot(ex, ey, 6, '#cc3333');
+  ctx.font = '9px monospace';
+  ctx.fillStyle = '#33cc66'; ctx.textAlign = 'left';
+  ctx.fillText('START', sx + 8, sy - 6);
+  ctx.fillStyle = '#cc3333';
+  ctx.fillText('END', ex + 8, ey + 12);
 }
+
+// ---------------------------------------------------------------------------
+// Draw-in-progress (with snap-to-first-point highlight)
+// ---------------------------------------------------------------------------
+
+const SNAP_RADIUS = 12; // world inches
 
 function drawInProgress() {
   const cpts = drawPts.map(([wx, wy]) => worldToCanvas(wx, wy));
   drawPolyline(cpts, '#4a9eff', 1.5, false, false);
   for (const [cx, cy] of cpts) drawDot(cx, cy, 3, '#4a9eff');
+
+  // Snap-to-first highlight when mouse is within snap radius and ≥3 pts placed
+  if (drawPts.length >= 3 && _mousePosW) {
+    const [fx, fy] = drawPts[0];
+    if (Math.hypot(_mousePosW[0] - fx, _mousePosW[1] - fy) < SNAP_RADIUS) {
+      const [cx0, cy0] = worldToCanvas(fx, fy);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx0, cy0, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = '#33cc66';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Preview closing segment from last placed point to first
+      if (drawPts.length >= 2) {
+        const last = drawPts[drawPts.length - 1];
+        const [lx, ly] = worldToCanvas(last[0], last[1]);
+        ctx.beginPath();
+        ctx.moveTo(lx, ly);
+        ctx.lineTo(cx0, cy0);
+        ctx.strokeStyle = 'rgba(51,204,102,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+  }
 }
 
 function drawHandles(pid) {
@@ -445,7 +548,6 @@ function drawHandles(pid) {
   for (const h of getHandles(path)) {
     drawHandle(h.wx, h.wy, h.shape || 'point');
   }
-  // For circles: draw radius line from center to radius handle
   if (path.type === 'CirclePath') {
     const [cx, cy] = worldToCanvas(path.cx, path.cy);
     const [rx, ry] = worldToCanvas(path.cx + path.radius, path.cy);
@@ -466,7 +568,7 @@ function drawHandles(pid) {
 function setTool(t) {
   tool = t;
   drawPts = [];
-  document.getElementById('tool-select').classList.toggle('active', t === 'select');
+  document.getElementById('tool-edit').classList.toggle('active', t === 'edit');
   document.getElementById('tool-draw').classList.toggle('active', t === 'draw');
   canvas.className = `tool-${t}`;
   updateHint();
@@ -476,18 +578,18 @@ function setTool(t) {
 function updateHint() {
   const hint = document.getElementById('hint');
   if (tool === 'draw') {
-    hint.textContent = 'Click to place control points. Double-click or Enter to finish. C to close.';
+    hint.textContent = 'Click to place control points. Click start point (≥3 pts) to close. Double-click or Enter to finish open path.';
     return;
   }
   if (!selectedId) {
-    hint.textContent = 'Click a path to select it. Add primitives from the toolbar or use Draw Path.';
+    hint.textContent = 'Click a path to select and edit it. Add primitives from the toolbar or use Draw Path.';
     return;
   }
   const path = layer.source_paths.find(p => p.id === selectedId);
   if (!path) { hint.textContent = ''; return; }
   switch (path.type) {
     case 'CirclePath':
-      hint.textContent = 'Drag center ✛ to move. Drag □ radius handle to resize. Edit values in sidebar.'; break;
+      hint.textContent = 'Drag center ✛ to move. Drag □ handle to resize. Edit values in sidebar.'; break;
     case 'EllipsePath':
       hint.textContent = 'Drag center ✛ to move. Drag □ rx/ry handles to resize.'; break;
     case 'RectanglePath':
@@ -512,12 +614,20 @@ function onMouseDown(e) {
   const [wx, wy] = canvasFromEvent(e);
 
   if (tool === 'draw') {
+    // Snap-to-first: if ≥3 points placed and near first point, close
+    if (drawPts.length >= 3) {
+      const [fx, fy] = drawPts[0];
+      if (Math.hypot(wx - fx, wy - fy) < SNAP_RADIUS) {
+        finishDraw(true);
+        return;
+      }
+    }
     drawPts.push([wx, wy]);
     repaint();
     return;
   }
 
-  if (tool === 'select') {
+  if (tool === 'edit') {
     // 1. Handle on selected path takes priority
     if (selectedId) {
       const path = layer.source_paths.find(p => p.id === selectedId);
@@ -542,7 +652,6 @@ function onMouseDown(e) {
         updatePropPanel();
         updateHint();
       }
-      // Start body drag
       if (path) {
         bodyDragging = { pathId: pid, startWX: wx, startWY: wy,
                          originalState: capturePathState(path) };
@@ -551,7 +660,7 @@ function onMouseDown(e) {
       return;
     }
 
-    // 3. Empty canvas — deselect
+    // 3. Empty click — deselect
     if (selectedId) {
       selectedId = null;
       updatePathList();
@@ -563,8 +672,10 @@ function onMouseDown(e) {
 }
 
 function onMouseMove(e) {
+  _mousePosW = canvasFromEvent(e);
+
   if (dragging) {
-    const [wx, wy] = canvasFromEvent(e);
+    const [wx, wy] = _mousePosW;
     const path = layer.source_paths.find(p => p.id === dragging.pathId);
     if (path) {
       applyHandleDrag(path, dragging.handleKey, wx, wy, dragging.originalState);
@@ -575,10 +686,10 @@ function onMouseMove(e) {
     return;
   }
   if (bodyDragging) {
-    const [wx, wy] = canvasFromEvent(e);
+    const [wx, wy] = _mousePosW;
     const dx = wx - bodyDragging.startWX;
     const dy = wy - bodyDragging.startWY;
-    if (Math.hypot(dx, dy) < 1) return; // ignore tiny jitter
+    if (Math.hypot(dx, dy) < 1) return;
     const path = layer.source_paths.find(p => p.id === bodyDragging.pathId);
     if (path) {
       applyBodyDrag(path, dx, dy, bodyDragging.originalState);
@@ -586,7 +697,11 @@ function onMouseMove(e) {
       routeResult = null;
       repaint();
     }
+    return;
   }
+
+  // During draw: repaint to update snap preview
+  if (tool === 'draw' && drawPts.length >= 3) repaint();
 }
 
 function onMouseUp() {
@@ -642,8 +757,7 @@ function hitTestPath(wx, wy) {
 }
 
 function findHandle(path, wx, wy) {
-  const handles = getHandles(path);
-  for (const h of handles) {
+  for (const h of getHandles(path)) {
     if (Math.hypot(wx - h.wx, wy - h.wy) < HIT_DIST) return h;
   }
   return null;
@@ -664,8 +778,7 @@ function distToSeg(px, py, [ax, ay], [bx, by]) {
 function finishDraw(closed) {
   if (drawPts.length < 2) { drawPts = []; repaint(); return; }
   const pts = [...drawPts];
-  // Remove duplicate last point from double-click
-  if (pts.length >= 2) {
+  if (pts.length >= 2 && !closed) {
     const a = pts[pts.length - 1], b = pts[pts.length - 2];
     if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 8) pts.pop();
   }
@@ -678,14 +791,14 @@ function finishDraw(closed) {
     closed, role: 'free', visible: true,
     points: pts, control_points: pts,
   });
-  drawPts = [];
   selectedId = id;
   routeResult = null;
   scheduleRefresh();
   updatePathList();
   updatePropPanel();
-  updateHint();
-  repaint();
+  updateOffsetList();
+  updateLatticeList();
+  setTool('edit'); // auto-return to edit (also calls updateHint + repaint)
 }
 
 // ---------------------------------------------------------------------------
@@ -715,8 +828,9 @@ function addPrimitive(type) {
   scheduleRefresh();
   updatePathList();
   updatePropPanel();
-  updateHint();
-  repaint();
+  updateOffsetList();
+  updateLatticeList();
+  setTool('edit'); // auto-return to edit
 }
 
 function _computePrimitivePoints(path) {
@@ -744,7 +858,6 @@ function _computePrimitivePoints(path) {
       [path.x, path.y + path.h],
     ];
   } else {
-    // ExplicitPath — points and control_points are the same
     path.points = path.control_points || path.points;
   }
 }
@@ -796,7 +909,9 @@ function updatePropPanel() {
   addPropRowSelect(panel, 'Role', path.role, ['free', 'outer', 'inner', 'lattice'], v => {
     path.role = v; updatePathList(); repaint();
   });
-  addPropRowCheck(panel, 'Closed', path.closed, v => { path.closed = v; routeResult = null; scheduleRefresh(); repaint(); });
+  addPropRowCheck(panel, 'Closed', path.closed, v => {
+    path.closed = v; routeResult = null; scheduleRefresh(); repaint();
+  });
 
   switch (path.type) {
     case 'CirclePath':
@@ -814,7 +929,7 @@ function updatePropPanel() {
       addPropRowNum(panel, 'X',      'x', path.x, v => { path.x = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       addPropRowNum(panel, 'Y',      'y', path.y, v => { path.y = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       addPropRowNum(panel, 'Width',  'w', path.w, v => { path.w = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
-      addPropRowNum(panel, 'Height', 'h', path.h, v => { path.h = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Length', 'h', path.h, v => { path.h = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       break;
     case 'LinePath':
       addPropRowNum(panel, 'Start X', 'x0', path.start[0], v => { path.start[0] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
@@ -877,7 +992,7 @@ function addPropRowCheck(panel, label, value, onChange) {
 }
 
 // ---------------------------------------------------------------------------
-// Offset treatments UI
+// Offset treatments UI (direction + positive distance)
 // ---------------------------------------------------------------------------
 
 function updateOffsetList() {
@@ -889,7 +1004,7 @@ function updateOffsetList() {
 
     const hdr = document.createElement('div');
     hdr.className = 'treatment-header';
-    const nm = document.createElement('span'); nm.className = 'treatment-name'; nm.textContent = 'Offset';
+    const nm = document.createElement('span'); nm.className = 'treatment-name'; nm.textContent = 'Wall Offset';
     const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
     rm.onclick = () => {
       layer.offset_treatments = layer.offset_treatments.filter(x => x.id !== ot.id);
@@ -911,11 +1026,25 @@ function updateOffsetList() {
       if (p.id === ot.source_path_id) opt.selected = true;
       srcSel.appendChild(opt);
     }
-    srcSel.onchange = () => { ot.source_path_id = srcSel.value; routeResult = null; scheduleRefresh(); repaint(); };
+    srcSel.onchange = () => {
+      ot.source_path_id = srcSel.value;
+      routeResult = null; scheduleRefresh(); updateOffsetList(); repaint();
+    };
     srcRow.append(srcLbl, srcSel);
     panel.appendChild(srcRow);
 
-    addPropRowNumTo(panel, 'Offset', ot.distance, v => { ot.distance = v; routeResult = null; scheduleRefresh(); repaint(); });
+    // Direction: Inside/Outside for closed, Left/Right for open
+    const srcPath = layer.source_paths.find(p => p.id === ot.source_path_id);
+    const isClosed = srcPath ? srcPath.closed : true;
+    const dirOptions = isClosed ? ['inside', 'outside'] : ['left', 'right'];
+    addPropRowSelectTo(panel, 'Direction', ot.direction || 'inside', dirOptions, v => {
+      ot.direction = v; routeResult = null; scheduleRefresh(); repaint();
+    });
+
+    // Distance — always positive
+    addPropRowNumTo(panel, 'Distance', Math.abs(ot.distance != null ? ot.distance : 10),
+      v => { ot.distance = Math.max(0.1, v); routeResult = null; scheduleRefresh(); repaint(); }, 'in');
+
     addPropRowSelectTo(panel, 'Role', ot.role,
       ['inner', 'outer', 'free', 'lattice'],
       v => { ot.role = v; routeResult = null; scheduleRefresh(); repaint(); });
@@ -930,7 +1059,8 @@ function addOffset() {
   layer.offset_treatments.push({
     id: newId(),
     source_path_id: layer.source_paths[0].id,
-    distance: -10,
+    distance: 10,
+    direction: 'inside',
     role: 'inner',
     label: '',
   });
@@ -940,7 +1070,7 @@ function addOffset() {
 }
 
 // ---------------------------------------------------------------------------
-// Lattice UI
+// Connecting geometry (lattice) UI
 // ---------------------------------------------------------------------------
 
 function updateLatticeList() {
@@ -955,7 +1085,7 @@ function updateLatticeList() {
     const hdr = document.createElement('div');
     hdr.className = 'treatment-header';
     const nm = document.createElement('span'); nm.className = 'treatment-name';
-    nm.textContent = li.generator.charAt(0).toUpperCase() + li.generator.slice(1) + ' lattice';
+    nm.textContent = li.generator.charAt(0).toUpperCase() + li.generator.slice(1);
     const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
     rm.onclick = () => {
       layer.lattice_instances = layer.lattice_instances.filter(x => x.id !== li.id);
@@ -967,7 +1097,8 @@ function updateLatticeList() {
     const panel = document.createElement('div');
     panel.className = 'prop-panel';
 
-    for (const [key, label] of [['path_a_id', 'Path A'], ['path_b_id', 'Path B']]) {
+    // Boundary A and Boundary B selectors (not "Path A/B")
+    for (const [key, label] of [['path_a_id', 'Boundary A'], ['path_b_id', 'Boundary B']]) {
       const row = document.createElement('div'); row.className = 'prop-row';
       const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
       const sel = document.createElement('select'); sel.className = 'prop-input';
@@ -982,9 +1113,9 @@ function updateLatticeList() {
       panel.appendChild(row);
     }
 
-    // Generator selector
+    // Generator type selector
     const genRow = document.createElement('div'); genRow.className = 'prop-row';
-    const genLbl = document.createElement('span'); genLbl.className = 'prop-label'; genLbl.textContent = 'Type';
+    const genLbl = document.createElement('span'); genLbl.className = 'prop-label'; genLbl.textContent = 'Pattern';
     const genSel = document.createElement('select'); genSel.className = 'prop-input';
     for (const name of Object.keys(generators)) {
       const opt = document.createElement('option');
@@ -1007,7 +1138,8 @@ function updateLatticeList() {
     for (const param of genInfo.parameters) {
       addPropRowNumTo(panel, param.label,
         li.params[param.name] ?? param.default,
-        v => { li.params[param.name] = v; routeResult = null; scheduleRefresh(); repaint(); });
+        v => { li.params[param.name] = v; routeResult = null; scheduleRefresh(); repaint(); },
+        getParamUnit(param.name));
     }
 
     // Variation buttons
@@ -1021,7 +1153,7 @@ function updateLatticeList() {
     for (let i = 0; i < varCount; i++) {
       const btn = document.createElement('button');
       btn.className = 'var-btn' + (i === (li.variation_index || 0) ? ' active' : '');
-      btn.textContent = `V${i}`;
+      btn.textContent = `V${i + 1}`;
       btn.onclick = () => {
         li.variation_index = i;
         routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
@@ -1055,16 +1187,25 @@ function addLattice() {
   updateLatticeList();
 }
 
+function getParamUnit(paramName) {
+  const noUnit = ['segments', 'connect_ends', 'frequency', 'phase', 'samples'];
+  return noUnit.includes(paramName) ? '' : 'in';
+}
+
 // Helpers for building treatment panels
-function addPropRowNumTo(panel, label, value, onChange) {
+function addPropRowNumTo(panel, label, value, onChange, unit = 'in') {
   const row = document.createElement('div'); row.className = 'prop-row';
   const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
   const input = document.createElement('input');
   input.type = 'number'; input.className = 'prop-input';
   input.value = typeof value === 'number' ? +value.toFixed(2) : value;
   input.onchange = () => onChange(+input.value);
-  const unit = document.createElement('span'); unit.className = 'prop-unit'; unit.textContent = 'in';
-  row.append(lbl, input, unit); panel.appendChild(row);
+  row.append(lbl, input);
+  if (unit) {
+    const unitEl = document.createElement('span'); unitEl.className = 'prop-unit'; unitEl.textContent = unit;
+    row.append(unitEl);
+  }
+  panel.appendChild(row);
 }
 
 function addPropRowSelectTo(panel, label, value, options, onChange) {
@@ -1082,17 +1223,29 @@ function addPropRowSelectTo(panel, label, value, options, onChange) {
 }
 
 // ---------------------------------------------------------------------------
-// Live derived-path refresh
+// Live derived-path refresh + auto-routing
 // ---------------------------------------------------------------------------
 
 function scheduleRefresh() {
-  if (layer.offset_treatments.length === 0 && layer.lattice_instances.length === 0) {
+  clearTimeout(_refreshTimer);
+  if (layer.source_paths.length === 0) {
     derivedPaths = [];
+    routeResult = null;
     repaint();
     return;
   }
-  clearTimeout(_refreshTimer);
-  _refreshTimer = setTimeout(fetchEffectivePaths, 120);
+  if (showToolpath) {
+    // Auto-route: also updates derivedPaths
+    _refreshTimer = setTimeout(runRoute, 200);
+  } else {
+    const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0;
+    if (hasDerived) {
+      _refreshTimer = setTimeout(fetchEffectivePaths, 120);
+    } else {
+      derivedPaths = [];
+      repaint();
+    }
+  }
 }
 
 async function fetchEffectivePaths() {
@@ -1123,7 +1276,13 @@ async function fetchEffectivePaths() {
 // ---------------------------------------------------------------------------
 
 async function runRoute() {
-  if (layer.source_paths.length === 0) { setStatus('No paths to route.'); return; }
+  if (layer.source_paths.length === 0) {
+    routeResult = null;
+    derivedPaths = [];
+    document.getElementById('metrics-section').style.display = 'none';
+    repaint();
+    return;
+  }
   setStatus('Routing…');
   try {
     const res = await fetch('/api/route', {
@@ -1133,12 +1292,11 @@ async function runRoute() {
     });
     const data = await res.json();
     if (data.error) {
-      setStatus('Routing error — see console for details.');
+      setStatus('Routing error — see console.');
       console.error(data.error);
       return;
     }
     routeResult = data;
-    // Also update derivedPaths from route result so we don't need a second fetch
     const sourceIds = new Set(layer.source_paths.map(p => p.id));
     derivedPaths = (data.layer.paths || []).filter(p => !sourceIds.has(p.id));
     updateMetrics(data);
@@ -1154,7 +1312,18 @@ function buildPayload() {
     id: layer.id,
     label: layer.label,
     source_paths: layer.source_paths.map(p => ({ ...p })),
-    offset_treatments: layer.offset_treatments,
+    offset_treatments: layer.offset_treatments.map(ot => {
+      // Convert direction + positive distance → signed distance for backend
+      const dir = ot.direction || 'inside';
+      const sign = (dir === 'inside' || dir === 'left') ? 1 : -1;
+      return {
+        id: ot.id,
+        source_path_id: ot.source_path_id,
+        distance: sign * Math.abs(ot.distance != null ? ot.distance : 10),
+        role: ot.role,
+        label: ot.label || '',
+      };
+    }),
     lattice_instances: layer.lattice_instances.map(li => ({ ...li })),
     constraints: layer.constraints,
   };
@@ -1170,15 +1339,16 @@ function updateMetrics(data) {
   tEl.textContent = m.travel_moves;
   tEl.className = 'metric-value ' + (m.travel_moves === 0 ? 'good' : 'warn');
 
+  document.getElementById('m-tdist').textContent = m.travel_distance.toFixed(1) + ' in';
+
   const pEl = document.getElementById('m-pct');
   pEl.textContent = m.pct_printing + '%';
   pEl.className = 'metric-value ' + (m.pct_printing >= 95 ? 'good' : m.pct_printing >= 80 ? 'warn' : 'bad');
 
   document.getElementById('m-pdist').textContent = m.print_distance.toFixed(1) + ' in';
-  document.getElementById('m-tdist').textContent = m.travel_distance.toFixed(1) + ' in';
   document.getElementById('m-rdist').textContent = (m.retrace_distance || 0).toFixed(1) + ' in';
 
-  // Routing quality badge — designer-friendly language
+  // Routing quality badge
   const badgeEl = document.getElementById('euler-badge-container');
   let badge, cls, title;
   if (g.component_count > 1) {
@@ -1188,7 +1358,7 @@ function updateMetrics(data) {
   } else if (g.odd_degree_nodes === 0) {
     badge = 'Single continuous loop';
     cls = 'circuit';
-    title = 'All geometry connected — prints as one continuous loop with no travel moves';
+    title = 'All geometry connected — prints as one continuous loop with no travel';
   } else if (g.odd_degree_nodes === 2) {
     badge = 'Single continuous path';
     cls = 'path';
@@ -1200,7 +1370,9 @@ function updateMetrics(data) {
   }
   badgeEl.innerHTML = `<span class="euler-badge ${cls}" title="${title}">${badge}</span>`;
 
-  setStatus(`Routing complete — ${m.print_runs} print run${m.print_runs === 1 ? '' : 's'}, ${m.travel_moves} travel, ${m.pct_printing}% continuous`);
+  const runStr = `${m.print_runs} run${m.print_runs === 1 ? '' : 's'}`;
+  const travelStr = m.travel_moves === 0 ? 'no travel' : `${m.travel_moves} travel`;
+  setStatus(`${runStr}, ${travelStr}, ${m.pct_printing}% printing`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,7 +1384,14 @@ function toggleToolpath() {
   const btn = document.getElementById('btn-toolpath');
   btn.textContent = showToolpath ? 'Toolpath ON' : 'Toolpath OFF';
   btn.classList.toggle('toggle-on', showToolpath);
-  repaint();
+  if (showToolpath) {
+    if (layer.source_paths.length > 0) runRoute();
+    else repaint();
+  } else {
+    routeResult = null;
+    document.getElementById('metrics-section').style.display = 'none';
+    repaint();
+  }
 }
 
 function toggleArrows() {
@@ -1233,7 +1412,7 @@ function toggleNumbers() {
 
 function onOverrideChange() {
   layer.constraints.reverse_direction = document.getElementById('override-reverse').checked;
-  routeResult = null;
+  if (showToolpath) scheduleRefresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,7 +1463,7 @@ let _idCounter = 1;
 function newId() { return 'p' + (_idCounter++); }
 
 // ---------------------------------------------------------------------------
-// Init
+// Init — blank canvas, auto-routes when first path is added
 // ---------------------------------------------------------------------------
 
 async function init() {
@@ -1295,40 +1474,19 @@ async function init() {
     const gens = await res.json();
     for (const g of gens) {
       generators[g.name] = g;
-      g.variation_count = 2; // default; both built-in generators have 2
+      g.variation_count = 2;
     }
   } catch (e) {
     console.warn('Could not load generators', e);
   }
 
-  seedCaseD();
   updatePathList();
   updatePropPanel();
   updateOffsetList();
   updateLatticeList();
   updateHint();
   repaint();
-  setStatus('Ready — select paths, add offsets or lattice, then press Route.');
-}
-
-function seedCaseD() {
-  const scale = 3.0, ox = 20, oy = 160;
-  const perimPts = [[0,0],[25,0],[50,0],[75,0],[100,0],
-                    [100,10],[75,10],[50,10],[25,10],[0,10]]
-    .map(([x, y]) => [ox + x * scale, oy + y * scale]);
-  const webPts = [[25,10],[25,0],[50,10],[50,0],[75,10],[75,0]]
-    .map(([x, y]) => [ox + x * scale, oy + y * scale]);
-
-  layer.source_paths.push({
-    id: newId(), type: 'ExplicitPath', label: 'Wall perimeter',
-    closed: true, role: 'outer', visible: true,
-    points: perimPts, control_points: perimPts,
-  });
-  layer.source_paths.push({
-    id: newId(), type: 'ExplicitPath', label: 'Web',
-    closed: false, role: 'lattice', visible: true,
-    points: webPts, control_points: webPts,
-  });
+  setStatus('Ready — add paths from the toolbar or use Draw Path. Toolpath auto-routes when enabled.');
 }
 
 init();
