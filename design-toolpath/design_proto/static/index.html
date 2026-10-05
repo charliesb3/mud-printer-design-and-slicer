@@ -77,7 +77,7 @@
     .tool-btn:hover { background: #2e2e2e; color: #ddd; }
     .tool-btn.active { background: #1c3a5a; border-color: var(--accent); color: var(--accent); }
     .tool-btn.toggle-on { background: #1a3a1a; border-color: var(--good); color: var(--good); }
-    .tool-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+    .tool-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 
     /* ---- MAIN ---- */
     .main {
@@ -165,7 +165,6 @@
     .path-item .role-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     }
-    .tool-btn:disabled { opacity: 0.35; cursor: default; }
     .mini-btn { background: #1b2a3a; color: #9cc8ff; border: 1px solid #2f4a66; border-radius: 3px;
                 font-size: 11px; padding: 1px 5px; margin-left: 3px; cursor: pointer; flex-shrink: 0; }
     .mini-btn:hover { background: #24384d; }
@@ -357,7 +356,6 @@
 
 <header>
   <h1>DESIGN CANVAS</h1>
-  <span id="header-case" style="color:#555; font-size:11px; font-style:italic;"></span>
 </header>
 
 <div class="toolbar">

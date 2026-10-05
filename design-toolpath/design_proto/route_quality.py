@@ -208,34 +208,6 @@ def _ring_pos(rings, p, tol=1e-5):
     return None if best is None else (best[1], best[2])
 
 
-def _one_face(ring, s0, s1, chord):
-    """Do two boundary points lie on ONE face: the shorter boundary path
-    between them is not much longer than the straight line and turns less
-    than 120° (going round a wall end or across the wall turns ≥ 180°)."""
-    n = len(ring)
-    cum = [0.0]
-    for i in range(n):
-        cum.append(cum[-1] + math.dist(ring[i], ring[(i + 1) % n]))
-    L = cum[-1]
-    a, b = sorted((s0, s1))
-    if b - a > L / 2:
-        a, b = b, a + L
-    if b - a > CROSS_ARC * max(chord, 1e-9):
-        return False
-    turn = 0.0
-    for i in range(n):
-        for c in (cum[i], cum[i] + L):
-            if a + 1e-9 < c < b - 1e-9:
-                p0, p1, p2 = ring[i - 1], ring[i], ring[(i + 1) % n]
-                v1 = (p1[0] - p0[0], p1[1] - p0[1])
-                v2 = (p2[0] - p1[0], p2[1] - p1[1])
-                l1, l2 = math.hypot(*v1), math.hypot(*v2)
-                if l1 > 1e-12 and l2 > 1e-12:
-                    cs = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)))
-                    turn += math.acos(cs)
-    return turn < math.radians(120)
-
-
 def wall_metrics(layer, target=None, rho=CLEARANCE_RADIUS):
     """
     Geometric quality of the WALL lattice of a layer (measured on the
@@ -262,7 +234,6 @@ def wall_metrics(layer, target=None, rho=CLEARANCE_RADIUS):
     kind = {s.id: s.kind for s in rl.strands}
     # interior retrace: overlap of printed moves with printed FIELD moves
     pm = [mv for mv in moves if mv.kind != 'travel' and mv.length > 1e-9]
-    field_moves = [mv for mv in pm if kind.get(mv.strand_id) == 'field']
     retr = 0.0
     seen = []
     for mv in pm:
@@ -409,7 +380,6 @@ def wall_metrics(layer, target=None, rho=CLEARANCE_RADIUS):
         (gen if s.kind == 'field' else user).extend(segs)
     cg = congestion(gen, user, rho)
     ends = route_ends(moves)
-    plan = meta['network'].get('lattice') or {}
     return {
         'runs': m['print_runs'], 'travel_moves': m['travel_moves'],
         'travel_length': round(m['travel_distance'], 2),

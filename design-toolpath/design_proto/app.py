@@ -9,7 +9,6 @@ Serves the design canvas UI and exposes a stateless API:
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
-import json
 import traceback
 from flask import Flask, jsonify, request, send_from_directory
 

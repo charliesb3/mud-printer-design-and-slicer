@@ -2,9 +2,13 @@
 Route planning — make the layer continuous by LOCALLY editing the infill
 field, instead of retracing or inventing long return beads.
 
+ROLE NOW: only for the wide-region FIELD fallback (infill.py). Wall
+regions use wall_lattice.py motifs, which are continuous by construction
+and need no repair.
+
 Model
 -----
-Every wall region with infill has a WEB (infill.Web): sample points on the
+Every fallback region has a WEB (infill.Web): sample points on the
 wall faces and inside the wall, and every valid strut between Delaunay
 neighbours. The printed infill is a selection S of those struts
 (infill.select: degree-capped, at most one generated path through a

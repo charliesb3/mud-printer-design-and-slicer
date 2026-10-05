@@ -57,7 +57,7 @@ const layer = {
   junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
   network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
   wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
-  return_paths: true,        // hidden return paths instead of exact retrace
+  return_paths: true,        // "Infill repair": repair of the wide-region field fallback
   prefer_closed: true,       // prefer a closed (start = end) layer route
 };
 
@@ -359,21 +359,6 @@ function drawArrowhead(cx, cy, angle, size, fillColor, strokeColor) {
   ctx.restore();
 }
 
-function drawNumber(x, y, n, color) {
-  const s = String(n);
-  const w = s.length * 6 + 6;
-  const h = 12;
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.65)';
-  ctx.fillRect(x - w / 2, y - h / 2, w, h);
-  ctx.fillStyle = color;
-  ctx.font = '9px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(s, x, y);
-  ctx.restore();
-}
-
 function drawDot(x, y, r, color) {
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -562,7 +547,7 @@ function drawEffectivePaths() {
     }
     const pts = _pathCanvasPts(p);
     if (pts.length < 2) continue;
-    if (p.treatment_id === 'return_path' || p.treatment_id === 'infill_return') {  // corrective strand
+    if (p.treatment_id === 'infill_return') {  // corrective strand (wide-region repair)
       drawPolyline(pts, RETURN_COLOR, 1.5, false, false);
       continue;
     }
@@ -2768,7 +2753,7 @@ function updateOffsetList() {
 
     const hdr = document.createElement('div');
     hdr.className = 'treatment-header';
-    const nm = document.createElement('span'); nm.className = 'treatment-name'; nm.textContent = 'Wall Offset';
+    const nm = document.createElement('span'); nm.className = 'treatment-name'; nm.textContent = 'Extra Offset';
     const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
     rm.onclick = () => {
       const removedId = ot.id;
@@ -2852,7 +2837,7 @@ function _infillStatus(f) {
   if (info.status === 'ok') return info.regions > 1 ? `${info.regions} wall regions` : '';
   if (info.status === 'shadowed') return 'already filled by another infill';
   if (info.status === 'no wall material')
-    return 'no wall material here — give the wall an offset (or close the path)';
+    return 'no wall material here — give the wall a Wall Thickness (or close the path)';
   return info.status;
 }
 
@@ -2968,7 +2953,8 @@ function updateInfillList() {
   }
 }
 
-// Add infill to the wall region of the selected path (else the first path).
+// Add infill to the region of the selected path (else the outermost closed
+// boundary, else the first path).
 function addInfill() {
   // REGION: the selected path if the designer picked one (an inner shape
   // too — explicit wins); otherwise the OUTERMOST closed boundary (closed
@@ -2985,11 +2971,6 @@ function addInfill() {
   routeResult = null;
   scheduleRefresh();
   updateInfillList();
-}
-
-function getParamUnit(paramName) {
-  const noUnit = ['segments', 'connect_ends', 'cycles'];
-  return noUnit.includes(paramName) ? '' : 'in';
 }
 
 // Helpers for building treatment panels

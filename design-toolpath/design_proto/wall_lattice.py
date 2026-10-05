@@ -20,13 +20,18 @@ designs the topology first:
    adds degree 2 to the face (even), so the parity of the whole layer
    depends only on where passes END — which this module chooses:
      - ordinary run between junctions: one pass (single phase);
-     - closed loop with no junction: one circulating pass, even stitch
-       count (closes on itself);
-     - dead-end arm: OUT-AND-BACK — two passes in complementary phase
-       (/\\/\\ out, \\/\\/ back) joined by a rung at the dead end: no
-       interior retrace, the empty bays of the outgoing zigzag are filled
-       on the way back, and the module returns to the junction it left;
-     - a lone wall run (no junction): one pass, open route.
+     - closed loop with no junction: one circulating pass (closes on
+       itself);
+     - dead-end arm: OUT-AND-BACK — two INTERLEAVED phases on one station
+       grid (each at ~2 × target, offset by one station, so the combined
+       supports are ~target apart), joined at the dead end by a CAP V (the
+       last station is landed on the wall's end face); no interior
+       retrace, and the module returns to the junction it left;
+     - a lone wall run (no junction): one pass, open route, with a cap V
+       at each end.
+   Motif vocabulary: ordinary stitch, CORNER BRACE (corners are detected
+   along a run and both corner points are landed), junction hand-off and
+   cap V.
    Which runs get two passes is decided for the whole network at once
    (route inspection on the skeleton: the cheapest set of doubled runs
    making every junction even), so equivalent branches get the same motif.
@@ -38,10 +43,14 @@ designs the topology first:
    is used (cross-wall preferred). Single-pass runs choose their start
    face and stitch-count parity jointly with the corner pairing.
 
-4. TARGET SPACING. A run of usable length L gets N ≈ L / S stitches (the
-   nearest admissible integer) and actual pitch L / N exactly, so a 91 in
-   run at 20 in gets 5 stitches at 18.2 in, never 4 + a remainder. Small
-   changes of S move stations smoothly; N changes by one at a time.
+4. TARGET SPACING. A run is split into SEGMENTS between fixed support
+   points (junction ends, dead ends, corners); a segment of usable length
+   U gets n ≈ U / S stitches (the nearest admissible integer) and actual
+   pitch U / n, so a 91 in segment at 20 in gets 5 stitches at 18.2 in,
+   never 4 + a remainder. U is measured in a station parameter weighted
+   towards the shorter face (no crowding on the inside of bends). The
+   MAXIMUM UNSUPPORTED DISTANCE (default 1.375 × target) wins over the
+   target: stitches are added until no gap exceeds it.
 
 Wide regions (local thickness ≫ spacing — not a wall but an area) are not
 stitched here; the caller falls back to the field generator (infill.py).
@@ -64,8 +73,6 @@ PRUNE = 1.2           # × thickness: shorter side branches are corner noise
 MERGE = 1.0           # × thickness: junctions closer than this are one cluster
 SPACING_W = 4.0       # cost of pitch error: SPACING_W × L × (relative error)²
 SAME_FACE_W = 2.5     # a connector along one face costs more than one across
-BENT_W = 3.0
-DOUBLE_W = 1.0        # cost per inch of a doubled (out-and-back) run
 DMAX_RATIO = 1.375    # default maximum unsupported distance = 1.375 × target
 CORNER_TURN = math.radians(30.0)   # centre line turning within CORNER_WIN (a 140° interior corner turns ~35° there)
 CORNER_WIN = 2.0      # × thickness: window over which a corner turns
@@ -521,8 +528,10 @@ class _Geo:
     point of that face to the centre-line point — searched only along the
     stretch of the face that this run's chords span — so straight walls
     get perpendicular, evenly spaced landings and curved walls follow the
-    normal correspondence. Junction corners (run ends at a junction) are
-    the exact chord vertices, shared with the neighbouring run.
+    normal correspondence. Junction corners (run ends at a junction) start
+    as the exact chord vertices, shared with the neighbouring run (plan()
+    may later replace a shared corner by a merged point slightly inside a
+    rounded junction).
     """
 
     def __init__(self, sk):
@@ -704,14 +713,6 @@ def _interp(xs, ys, x):
     return ys[k] + f * (ys[k + 1] - ys[k])
 
 
-def _best_n(L, S, parity=None):
-    """Stitch count nearest to L / S (optionally of a given parity)."""
-    ideal = L / S
-    cands = [n for n in range(max(1, math.floor(ideal) - 2), math.ceil(ideal) + 3)
-             if parity is None or n % 2 == parity]
-    return min(cands, key=lambda n: (abs(L / n - S) / S, n))
-
-
 def _spacing_cost(L, n, S):
     e = (L / n - S) / S
     return SPACING_W * L * e * e
@@ -786,8 +787,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
 
     def span(r):
         """Usable station range: a dead end stops where the wall is still
-        square across (half a thickness or more short of the cap), so the
-        turnaround rung spans the wall between the two long faces."""
+        square across (half a thickness or more short of the cap), where
+        both faces are landed before the cap V turnaround."""
         if id(r) in span_cache:
             return span_cache[id(r)]
         def back(s, step):
@@ -801,10 +802,6 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             back(r.length - min(0.5 * thick, 0.25 * r.length), -0.25 * thick)
         span_cache[id(r)] = (lo, max(hi, lo + 1e-6))
         return span_cache[id(r)]
-
-    def ulen(r):
-        lo, hi = span(r)
-        return geo.u_of_s(r, hi) - geo.u_of_s(r, lo)
 
     # -- corners: first-class structural features ---------------------------
     corner_cache = {}
@@ -858,9 +855,6 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         out = []
         for x, tsign in found:
             c = geo.centre(r, x)
-            sides = {}
-            for side in (0, 1):
-                sides[side] = geo.side_point(r, side, x)
             # the inner side is the one the wall turns towards; the corner
             # bisector points from the turn's inside to its outside
             inner = 0 if tsign * geo._side_sign(r, 0) > 0 else 1
@@ -889,10 +883,6 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 geo.cache[(id(r), side, round(cn['s'] % L if r.cycle else cn['s'], 9))] = pnt
         corner_cache[id(r)] = out
         return out
-
-    def two_phase(r):
-        ri_ = next(k for k, rr in enumerate(runs) if rr is r)
-        return mult.get(ri_) == 2
 
     cap_cache = {}
 
@@ -1076,12 +1066,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 for k in range(2, n, 2):
                     sa = 1 - sa
                     A.append((st[k], sa))
-                if n % 2:
-                    sa = 1 - sa
-                    A.append((st[n], sa))
-                else:
-                    sa = 1 - sa
-                    A.append((st[n], sa))
+                sa = 1 - sa
+                A.append((st[n], sa))
                 for k in range(1, n + 1, 2):
                     sb = 1 - sb
                     B.append((st[k], sb))
@@ -1099,10 +1085,6 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 B.append((st[k], sb))
             aA = sa
         return [A, B]
-
-    def end_sides(r, mode, s0, parity):
-        seqs = layout(r, mode, s0, parity)
-        return seqs
 
     # -- 2. sides at run ends, junction pairing, stitch counts -------------
     # slot = (run index, end 0|1, side 0|1)
@@ -1200,7 +1182,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     else:                                         # coordinate descent
         choice = {ri: (flip, (sum(counts(runs[ri], 'single')[0]) + len(corners(runs[ri]))) % 2)
                   for ri in single}
-        best = (*solve(choice)[:1], dict(choice), solve(choice)[1])
+        tot0, pairs0 = solve(choice)
+        best = (tot0, dict(choice), pairs0)
         for _ in range(4):
             improved = False
             for ri in single:
@@ -1218,8 +1201,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         """One stitch from face side_a at station s_a to the opposite face
         at s_b, following the wall between them: each point lies on the
         local face-to-face chord (straight walls: a straight stitch; curved
-        walls: it bends with the wall). Wave: tangent to both faces. A
-        corner brace (same station, both faces) is straight."""
+        walls: it bends with the wall). Wave: a sine blended with the
+        straight crossing (WAVE_SINE), leaving a face at an angle. A corner
+        brace (same station, both faces) is straight."""
         pa, pb = geo.landing(r, side_a, s_a), geo.landing(r, side_b, s_b)
         if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b):
             return [pa, pb]
@@ -1498,60 +1482,6 @@ def _same_face(sk, p, q):
     L = sk.R.length(a[0])
     d = abs(a[1] - b[1])
     return min(d, L - d) < 2.0 * p.dist(q)
-
-
-def _nearest_face_point(sk, guess, c, thick):
-    """The boundary point nearest to centre point c, near `guess` — at a
-    corner the inner (reflex) vertex / inner arc apex."""
-    best = None
-    for ri, r in enumerate(sk.R.rings):
-        n = len(r)
-        for i in range(n):
-            a, b = r[i], r[(i + 1) % n]
-            if min(a.dist(guess), b.dist(guess), _seg_d(guess, a, b)) > 1.5 * thick:
-                continue
-            dx, dy = b.x - a.x, b.y - a.y
-            L2 = dx * dx + dy * dy
-            t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((c.x - a.x) * dx + (c.y - a.y) * dy) / L2))
-            q = r[i] if t <= 0 else (r[(i + 1) % n] if t >= 1 else a.lerp(b, t))
-            dd = q.dist(c)
-            if best is None or dd < best[0] - 1e-12:
-                best = (dd, q)
-    return best[1] if best else guess
-
-
-def _ray_face(sk, I, c, thick):
-    """First boundary crossing of the ray from I through c (beyond c): the
-    outer corner opposite the inner one."""
-    d = c - I
-    L = d.length()
-    if L < 1e-9:
-        return None
-    ux, uy = d.x / L, d.y / L
-    far = Vec2(I.x + ux * 4 * thick, I.y + uy * 4 * thick)
-    best = None
-    for r in sk.R.rings:
-        n = len(r)
-        for i in range(n):
-            a, b = r[i], r[(i + 1) % n]
-            ex, ey = b.x - a.x, b.y - a.y
-            den = (far.x - I.x) * ey - (far.y - I.y) * ex
-            if abs(den) < 1e-12:
-                continue
-            t = ((a.x - I.x) * ey - (a.y - I.y) * ex) / den
-            u = ((a.x - I.x) * (far.y - I.y) - (a.y - I.y) * (far.x - I.x)) / den
-            if 1e-6 < t <= 1.0 and -1e-9 <= u <= 1 + 1e-9:
-                if best is None or t < best[0]:
-                    best = (t, a.lerp(b, max(0.0, min(1.0, u))))
-    if best is None:
-        return None
-    q = best[1]
-    # snap to a ring vertex within a hair (exact corner)
-    for r in sk.R.rings:
-        for v in r:
-            if v.dist(q) < 1e-6:
-                return v
-    return q
 
 
 def _seg_d(p, a, b):

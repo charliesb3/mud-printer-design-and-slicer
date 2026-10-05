@@ -19,7 +19,7 @@ infill graph instead of being clipping masks:
      to its straight ends at the boundary.
   3. BOUNDARY CONTACT — consecutive lines are joined at the boundary by a
      TURN whose apex lands ON the boundary between them: a V for
-     rectilinear, a smooth U for wave. A turn adds degree 2 to the
+     rectilinear, a smooth U for serpentine. A turn adds degree 2 to the
      perimeter (even), so every turn braces the boundary without creating
      routing defects. Chain ends land on the boundary too. Void loops that
      no line reaches get one turn redirected onto them.
@@ -35,8 +35,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from model import Vec2, _offset_polyline, _trim_offset, _polygon_area, \
-    _dedupe_polyline
+from model import Vec2, _offset_polyline, _trim_offset, _dedupe_polyline
 from infill import _Region, _strut_ok
 
 PATTERNS = {
@@ -52,8 +51,8 @@ TURN_BACK = 0.5         # × spacing: a turn starts this far before the boundary
 LINK_MAX = 2.0          # × spacing: longest V / U link between chain ends
 JOIN_MAX = 4.0          # × spacing: longest boundary stretch a turn may bridge
 PERIMETER_SPACING = 6.0  # default spacing of extra perimeters (in)
-WAVE_AMP = 0.22         # × spacing: wave amplitude (gap stays ≥ 0.56 × spacing)
-WAVE_LEN = 2.5          # × spacing: wavelength
+WAVE_AMP = 0.22         # × spacing: serpentine amplitude (gap stays ≥ 0.56 × spacing)
+WAVE_LEN = 2.5          # × spacing: serpentine wavelength
 
 
 @dataclass
@@ -186,7 +185,7 @@ class _Builder:
             if T.dist(P) < 1e-6 or T.dist(C) < 1e-6:
                 continue
             if _strut_ok(P, T, self.region) and _strut_ok(T, C, self.region):
-                # wave: a smooth U where the lines are long enough to carry
+                # serpentine: a smooth U where the lines are long enough to carry
                 # it; short lines (narrow places) turn with a plain V
                 smooth = self.pattern == 'serpentine' and short >= WAVE_LEN * self.sp
                 pts = [T] if not smooth else self._u_turn(P, T, C, dir_in, dir_out)

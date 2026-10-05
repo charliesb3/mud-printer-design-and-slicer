@@ -60,9 +60,6 @@ class Vec2:
     def perpendicular(self) -> Vec2:
         return Vec2(-self.y, self.x)
 
-    def to_tuple(self) -> tuple:
-        return (self.x, self.y)
-
 
 # ---------------------------------------------------------------------------
 # PathSection — a range [t_start, t_end] on a parent path
@@ -145,9 +142,6 @@ class Path:
         if self.closed and pts:
             total += pts[-1].dist(pts[0])
         return total
-
-    def to_strand_points(self) -> list[Vec2]:
-        return self.sample_points()
 
     def to_dict(self) -> dict:
         pts = self.sample_points()
@@ -1604,12 +1598,13 @@ class RegionInfill:
     the first one wins.
 
     KIND — what the infill MEANS (and so how it is generated / routed):
-      'wall'   wall infill: struts reinforcing a wall BETWEEN ITS FACES
-               (zigzag / wave field, local continuity repair, wall
-               congestion rules). infill.py + route_plan.py.
+      'wall'   wall infill: stitches reinforcing a wall BETWEEN ITS FACES
+               (zigzag / wave), generated route-aware by wall_lattice.py;
+               regions too wide to be a wall fall back to the field
+               generator + local repair (infill.py + route_plan.py).
       'solid'  solid infill: conventional AREA fill of a solid region
-               (rectilinear lines at an angle, boustrophedon-connected,
-               short local connections, short travel rather than long
+               (rectilinear or serpentine lines whose turns land on the
+               outer and void boundaries; short travel rather than long
                connectors). solid.py.
     Defaults to 'wall' for compatibility with older payloads; the UI sets
     it explicitly ('solid' for closed single-bead boundaries).
@@ -2153,8 +2148,10 @@ class PrintLayer:
     junction_overrides: list[JunctionSetting] = field(default_factory=list)
     network_walls: list[NetworkWall] = field(default_factory=list)
     wall_relations: list[WallRelation] = field(default_factory=list)
-    # Route planning: add hidden return paths instead of exact retrace, and
-    # prefer a closed (start = end) layer route when it is cheap.
+    # return_paths ("Infill repair" in the UI): local continuity repair of
+    # the wide-region field fallback (route_plan.repair); motif wall
+    # lattices and solid infill do not use it. prefer_closed: prefer a
+    # closed (start = end) layer route when it is cheap.
     return_paths: bool = True
     prefer_closed: bool = True
 
@@ -2485,10 +2482,11 @@ class PrintLayer:
             for k, ids in enumerate(n for n in source_nets if len(n) > 1)]
         meta = {'cls': cls_of, 'pts': pts_of, 'network': network,
                 'regions': regions}
-        # 10) Region infill + route planning. The infill is a structural
-        # FIELD (web of candidate struts, degree-capped selection); for
-        # continuity the selection is edited LOCALLY (route_plan.repair)
-        # rather than retracing or adding long return beads.
+        # 10) Region infill. WALL regions: route-aware stitching motifs
+        # (wall_lattice.plan), continuous by construction. Regions too wide
+        # to be a wall fall back to the structural FIELD (infill.py web,
+        # degree-capped selection) whose continuity is repaired LOCALLY
+        # (route_plan.repair). SOLID regions: solid.py area fill.
         network['route_plan'] = None
         if jobs:
             import infill as IF
@@ -2986,8 +2984,8 @@ class PrintLayer:
                 filled[(root, k)] = inf.id
                 rings = [N.fillet_ring(r, fillets) for r in comps[k].rings]
                 holes.append(len(rings) - 1)
-                # Generated after the network, by route planning (stage 10),
-                # so the field can be locally edited for continuity.
+                # Generated after the network (stage 10): wall lattice,
+                # field fallback (locally repairable) or solid fill.
                 summary.setdefault('_infill_jobs', []).append(
                     {'infill': inf, 'rings': rings, 'key': f'{inf.id}~{k}'})
                 mine += 1
@@ -3120,8 +3118,9 @@ class PrintLayer:
         geometry, so continuity transitions hide inside the wall.
         """
         import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
-                                        '..', 'toolpath_proto'))
+        sys_path = os.path.join(os.path.dirname(__file__), '..', 'toolpath_proto')
+        if sys_path not in sys.path:
+            sys.path.insert(0, sys_path)
         from geometry import Strand, Layer as RoutingLayer, Vec2 as RVec2
         import network as N
 

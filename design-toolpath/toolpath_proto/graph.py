@@ -3,24 +3,29 @@ Print graph construction and continuity-first routing.
 
 Printable geometry is modeled as an undirected multigraph:
   - nodes  = point coordinates (x, y)
-  - edges  = printable segments (kind='print') or travel gaps (kind='travel')
+  - edges  = printable segments (kind='print'); augmentation may add
+    travel edges (kind='travel', see below)
 
 A fully continuous print corresponds to an Eulerian traversal.
 
 Objective, lexicographic:
   1. never create false printable connections (only real contact merges
-     nodes: shared vertices, or a vertex lying on another segment),
+     nodes: shared vertices, a vertex lying on another segment, or two
+     segments crossing — except hidden 'field' strands crossing hidden
+     geometry, which pass over each other),
   2. print every edge,
-  3. minimise print runs / travel moves — travel happens ONLY between
-     disconnected components,
+  3. minimise print runs / travel moves — travel happens between
+     disconnected components, and inside a component only to pair odd
+     ends of `travel_pairing` strands (solid infill),
   4. minimise travel distance,
   5. minimise retracing.
 
 Within a connected component that is not Eulerian, odd-degree nodes are
-paired by RETRACING existing printable edges along shortest in-graph paths
-(route inspection / Chinese postman), leaving one pair as the trail's
-start and end. The result is one continuous run per component; the
-re-traversed edges are reported as 'retrace' moves.
+paired by RETRACING existing printable edges along the cheapest in-graph
+paths (cost = length × the strand's retrace_cost; route inspection /
+Chinese postman), leaving one pair as the trail's start and end. A pair
+involving a `travel_pairing` strand is joined by a TRAVEL edge instead
+when that is shorter. Re-traversed edges are reported as 'retrace' moves.
 """
 from __future__ import annotations
 import math

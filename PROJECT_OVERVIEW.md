@@ -376,48 +376,47 @@ See `pi-interface/PROJECT_MEMORY.md` for full details.
 
 ### Design + Toolpath — Phase 2 (Toolpath) Prototype Complete
 
-The graph-based toolpath prototype is complete. 90 tests passing.
-Routing objective: no false connections → print everything → fewest runs/travels → least travel → least retrace (weighted: retracing visible wall faces costs more than internal geometry, so transitions hide inside the wall). Connected non-Eulerian geometry prints as one run by retracing printed edges; travel only between disconnected sections. Geometry that touches mid-segment (T-junctions) or crosses (X-junctions) shares graph nodes.
+Graph-based toolpath prototype (`design-toolpath/toolpath_proto/`, 90 tests).
+Printable geometry is a multigraph; a continuous print is an Eulerian
+traversal. Objective: no false connections → print everything → fewest
+runs / travels → least travel → least retrace (retracing visible faces costs
+more than internal geometry). Connected non-Eulerian geometry is printed in
+one run by retracing printed edges; travel otherwise only joins
+disconnected sections — except that leftover odd ends of solid infill are
+joined by a short travel rather than printing a perimeter twice. Touching
+(T) and crossing (X) geometry share graph nodes. Key result: a wall
+perimeter + internal web prints as one continuous path with zero travel.
 
-Location: `design-toolpath/toolpath_proto/`
+### Design + Toolpath — Phase 3 (Design Canvas) Prototype
 
-Validates Eulerian/Chinese Postman routing for five test geometries.
-Key result: Case D (wall perimeter + internal web) = single continuous path,
-zero travel moves.
+Interactive path-first design canvas (`design-toolpath/design_proto/`,
+750 tests incl. 3 UI smoke tests). Checkpointed in commit 414c283; the work
+since wall networks still awaits manual browser verification.
 
-### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete + Four UX Passes
+Major capabilities:
+- Path-first, non-destructive design: parametric primitives, curves, drawn
+  paths, interactive shape tools, snapping, undo / redo, copy / duplicate /
+  rotate, parametric inset / outset.
+- Walls: a source path is reference geometry; Wall Thickness + Alignment
+  make it a wall. Touching / crossing walls form wall networks with
+  junctions (miter / rounded); openings cut clear gaps; nested closed
+  boundaries can be linked as a parametric wall relationship.
+- Three layers are kept distinct: DESIGN GEOMETRY → WALL / REGION SEMANTICS
+  (thickness, regions + voids by geometric nesting, wall vs solid, openings)
+  → TOOLPATH.
+- Wall infill is a STITCHING pattern between a wall's faces, designed
+  route-aware (motifs chosen for the whole network), so it is continuous by
+  construction: no interior retrace, coherent branches, braced corners and
+  caps, a maximum unsupported distance. Spacing is a target. Regions too
+  wide to be a wall use a field generator with local repair (provisional
+  wall / area threshold).
+- Solid infill is conventional area fill (rectilinear / serpentine) whose
+  turns land on the outer and void boundaries.
+- Guiding rule: pattern parameters are preferences; structural support and
+  topology are constraints.
+- Toolpath overlay with playback; routing diagnostics.
 
-The interactive design canvas prototype is complete. 587 tests passing.
-
-Location: `design-toolpath/design_proto/`
-
-Implements the full path-first design model:
-- Parametric primitives (Line, Circle, Ellipse, Rectangle) + drawn ExplicitPaths
-- Non-destructive OffsetTreatment — true geometric parallel offset (segment-intersection algorithm)
-- ZigzagGenerator + WaveGenerator with variations
-- PrintLayer assembles effective geometry → feeds routing engine; lattice can use offset-derived paths as boundaries
-- Auto-routing when Toolpath ON (no manual Route button)
-- Sparse direction arrows (white, high-contrast), seam markers on closed loops
-- Offset: Inside/Outside/Left/Right direction + positive distance
-- Individual path delete with cascade (removes dependent offsets/lattices)
-- Routing overrides stored as TraversalConstraints (not geometry mutations)
-- Wave seam bridge for zero-travel closed-wall routing
-- Open wall end caps for Eulerian open-wall routing
-- Toolpath playback transport (scrub, play/pause, speed, reverse)
-- Corner R fillets, trimmed (never self-crossing) offsets, wall-system end caps (Flat / Rounded Corners + End R / Full Round)
-- Openings (future doors/windows; any number per wall, overlapping/touching ones unioned): path-relative arc-length intervals on a source wall that cut the whole wall assembly (source, offsets, lattice); cut faces reuse the wall-end cap system; routing solves the resulting topology. Designed to gain physical-Z ranges (z_min/z_max) later.
-- Wall networks / printable regions: walls (any primitive, curve or drawn path, with offsets) that touch or cross are combined — derived per layer, source geometry untouched — into one printable wall region via a planar arrangement: T / X / corner / Y junctions, branch faces splice into host faces, faces buried inside the combined wall disappear, lattice stays inside the region, openings keep their clear width void. Region wall/void overrides exist in the data model (no paint UI yet). Snapping UI makes connections exact.
-- Lattice is now INFILL OF THE WALL REGION: one coherent field (one spacing / phase) filling a network's printable wall material — a polygon with any number of holes, branches and openings — instead of a lattice between two chosen boundaries (that pairwise model remains only as a backend legacy path).
-- Corner R belongs to each source path (its own corners); corners created where walls join are network junctions with their own treatment (Miter / Rounded + radius, layer default + per-junction setting keyed by the meeting wall faces).
-- Route planning (physical quality): infill is a structural FIELD with degree caps (at most two generated paths through any point); continuity is achieved by the smallest LOCAL edits of that field (strut toggles, short supports, density-neutral phase shifts) under a hard congestion rule, not by long return beads; exact retrace is a last resort. Route-quality diagnostics (retrace, bead congestion, generated junction degree, correction size/locality) are tested. A closed layer loop is preferred when cheap, otherwise open ends are kept for alternating layers (RouteEnds).
-- Wall infill is a STITCHING pattern between the two faces of a wall, designed route-aware: the wall material's skeleton gives wall runs, dead ends and junctions; each run gets a motif (single zigzag, complementary out-and-back for dead ends, circulating for loops) chosen for the whole network, so the lattice is continuous by construction (no interior retrace, coherent branches, passes meeting at junction corners). Spacing is a target (whole stitches redistributed evenly). Local repair remains only for wide areas.
-- Structural infill rules: pattern parameters are preferences; structural support and topology are constraints. Wall lattice priority: no voids/openings > no interior retrace > support corners / junctions / caps > maximum unsupported distance > no congestion > continuity > coherent motif > target spacing > regularity. Solid infill attaches to its outer and void boundaries (turns land on them); leftover odd ends of solid infill are joined by a short travel, never by printing the perimeter twice. Nested closed boundaries can be linked as a parametric wall relationship (one drives, the other keeps the wall thickness).
-- Three layers are kept distinct in the design environment: DESIGN GEOMETRY (source paths, incl. parametric inset / outset children that follow their parent) → WALL / REGION SEMANTICS (wall thickness / alignment, region + voids by geometric nesting, wall vs solid regions, openings) → TOOLPATH (faces, wall infill with local repair, conventional solid area infill, travel). Editing is snapshot-based undo / redo of the whole design state.
-- Wall model: a source path is reference geometry; Wall Thickness + Wall Alignment make it a wall region (a centred wall's reference line is not printed by default). Network Wall Thickness applies to all connected paths unless overridden; Extra Offsets are an advanced feature.
-- Parametric walls: a source path's wall thickness (WallSpec) generates its offset faces, so walls stay exactly that thick through any edit; a network-level wall applies to every connected path. Shape tools are interactive (place by clicking / dragging).
-Implemented and tested; awaiting manual verification, not yet committed.
-
-See `design-toolpath/PROJECT_MEMORY.md` for full details.
+See `design-toolpath/PROJECT_MEMORY.md` for decisions, history and details.
 
 ---
 
@@ -489,5 +488,5 @@ Allow the architecture to evolve as the machine and software become better under
 2026-10-05
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath Phase 2 (90 tests, retrace routing) and Phase 3 (587 tests, incl. geometry correctness pass and multiple wall openings) complete; openings + retrace routing manually verified in the UI and committed. Wall networks, wall-region infill, per-source Corner R, junction treatment, physical-quality route planning (local infill repair, congestion rules), parametric / network walls, wall-authoring UI, interactive shape tools, undo / redo, copy / duplicate / rotate, parametric insets, explicit region / void semantics, solid (area) infill, the motif-based route-aware wall lattice and pass-7 structural rules (corner support, max unsupported distance, cap V, solid boundary contact + wave, wall relationships) implemented (automated tests green: 90 toolpath, 750 design), pending manual verification and commit.
+Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas through pass 7 checkpointed in commit 414c283 (750 tests, all green), followed by a behaviour-preserving cleanup; manual browser verification pending.
 Arduino/GRBL subproject not yet started.

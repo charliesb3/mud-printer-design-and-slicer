@@ -30,7 +30,7 @@ import app  # noqa: F401  (path setup)
 import route_quality as RQ
 import wall_lattice as WL
 import wall_fixtures as WF
-from model import Vec2, PrintLayer, RectanglePath, RegionInfill, CirclePath
+from model import Vec2, PrintLayer, RectanglePath, RegionInfill, CirclePath, LinePath, WallSpec
 from tests.test_networks import _assert_internal_inside
 
 
@@ -97,11 +97,27 @@ def test_lone_wall_is_one_open_single_phase_run():
 # ---------------------------------------------------------------------------
 
 def test_stitch_count_redistributes_the_remainder():
-    # 91 in at 20 in → 5 stitches at 18.2 in (never 4 × 20 + remainder)
-    assert WL._best_n(91, 20) == 5 and 91 / 5 == pytest.approx(18.2)
-    # even count required: 6 × 16.7 (−17 %) beats 4 × 25 (+25 %)
-    assert WL._best_n(100, 20) == 5 and WL._best_n(100, 20, parity=0) == 6
-    assert WL._best_n(5, 20) == 1
+    # Through the generator: a lone straight wall whose usable run is
+    # ~91 in at a 20 in target gets 5 stitches at ~18.2 in, evenly spread
+    # (never 4 × 20 + a remainder stitch).
+    W = LinePath(Vec2(0, 0), Vec2(101, 0), id='W')
+    W.wall = WallSpec(10)
+    L = PrintLayer('t', source_paths=[W],
+                   infills=[RegionInfill('I', 'W', 'zigzag', {'spacing': 20})])
+    (run,) = runs_of(L)
+    assert run['length'] == pytest.approx(91, abs=0.1)
+    assert run['stitches'] == 5 and run['pitch'] == pytest.approx(18.2, abs=0.05)
+    # geometry: the stations (landings on either face, cap-V landings at
+    # the very ends excluded) are evenly spaced at that pitch
+    paths, _ = L._build_effective()
+    xs = sorted({round(q.x, 6) for p in paths if getattr(p, 'treatment_id', '') == 'infill'
+                 for q in p.sample_points() if abs(abs(q.y) - 5) < 1e-6})
+    gaps = [b - a for a, b in zip(xs, xs[1:])]
+    assert len(gaps) == 5
+    # (even within 0.5 % — the end gaps differ slightly via the station
+    # parameter near the caps; same tolerance as the straight-wall test)
+    assert max(gaps) - min(gaps) < 0.005 * max(gaps)
+    assert sum(gaps) / len(gaps) == pytest.approx(run['pitch'], abs=0.05)
 
 
 @pytest.mark.parametrize('name', list(WF.FIXTURES))
@@ -130,7 +146,7 @@ def test_even_landings_along_a_straight_wall():
 # Dead ends: complementary-phase out-and-back
 # ---------------------------------------------------------------------------
 
-def test_dead_end_return_uses_the_complementary_phase():
+def test_dead_end_return_interleaves_at_combined_target_density():
     # Pass 7 density semantics: Target Spacing is the COMBINED density. The
     # outgoing and return phases interleave — each at ~2 × target, offset by
     # ~one target — so support stations (either face) are ~target apart and

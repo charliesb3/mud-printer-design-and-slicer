@@ -1,5 +1,14 @@
 """
-Region infill — lattice that fills a printable wall REGION.
+Region infill FIELD — the wide-region fallback, and shared region helpers.
+
+ROLE NOW: wall regions are stitched by wall_lattice.py (route-aware
+motifs). This field generator runs only for regions too wide to be a wall
+(wall_lattice.plan returns None), with route_plan.repair for continuity.
+Its `_Region` and `_strut_ok` helpers are shared by wall_lattice.py,
+solid.py, route_plan.py and route_quality.py. PATTERNS / PARAMETERS here
+are also the wall-infill pattern list served to the UI.
+
+Algorithm (fallback field):
 
 A wall region (network.MaterialComponent) is a polygon with any number of
 holes: its rings carry the material on their LEFT (outer outline CCW,
@@ -620,15 +629,3 @@ def emit(web, struts, pattern='zigzag'):
         else:
             out.append([pts[k] for k in ch])
     return out
-
-
-def generate(rings, pattern='zigzag', spacing=20.0, variation=0):
-    """
-    Infill polylines for one wall region (default selection, no routing
-    repair). rings: closed point lists with the material on the left
-    (outer + holes). Returns [[Vec2]].
-    """
-    web = build_web(rings, spacing, variation)
-    if web is None:
-        return []
-    return emit(web, select(web), pattern)
