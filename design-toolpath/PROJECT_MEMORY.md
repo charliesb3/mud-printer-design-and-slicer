@@ -358,15 +358,15 @@ Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
 
 ### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + six UX passes)
 
-Location: `design-toolpath/design_proto/`. 174 tests passing.
+Location: `design-toolpath/design_proto/`. 235 tests passing.
 
 Files:
 - `model.py` — full data model: Vec2, Path subtypes (incl. QuadBezierPath), OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer (with corner_radius, cap_style), TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
 - `static/index.html` — design canvas UI (incl. WALL GEOMETRY sidebar section)
 - `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay (incl. curve chord), playback transport, JS-side corner rounding
-- `tests/test_model.py` — 118 unit tests covering model layer + geometry validation
-- `tests/test_app.py` — 56 integration + workflow tests
+- `tests/test_model.py` — unit tests covering model layer + geometry validation
+- `tests/test_app.py` — integration + workflow tests
 
 **UX pass 2 (14-point spec):** True geometric offset, Add Lattice fix, Role removed from UI, Individual delete, Arrow legibility, Numbers removed, Arrows disabled when Toolpath OFF, Metric label renames, Clear All.
 
@@ -458,6 +458,15 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 **WALL GEOMETRY sidebar section**: Corner R number input + End caps Flat/Round select. Both are layer-level (not per-path). Changing either immediately refreshes effective geometry.
 
+**Geometry correctness pass (2026-10-05) — wall offsets, rounding, end caps** — complete; verified by manual UI testing:
+
+- **One canonical processed source per path**: `_processed_source_pts(path, corner_radius)` (sample → fillet if eligible → dedupe). Source display, every offset, caps and lattice all derive from it. `OffsetTreatment.generate(processed_pts, closed)` is now a pure offset of that polyline (signature changed from `generate(source, corner_radius)`).
+- **Always miter, never bevel** (decision): `_offset_polyline` no longer bevels at acute corners, because a bevel silently thins the wall below D. Consequence: miter spikes at sharp corners are kept and treated as real geometry.
+- **Offset trimming** — `_trim_offset(raw, source, dist, closed)` replaced the earlier `_prune_offset_inversions` (direction-reversal vertex dropping), which failed on manual test (irregular W polygon, 10 in inside offset, Corner R 6 → hooks/loops at concave corners). Root cause: wherever D exceeds the local feature size (fillet R < D, or notch narrower than 2D) the raw miter offset forms swallowtail loops, including non-local ones the vertex-direction test cannot see. Fix: split the raw offset at all self-intersections; keep pieces that lie outside the *mitered* offset band of the source (per-edge rectangles + per-joint miter kites — must match miter semantics, true-distance classification breaks reassembly at miter spikes) and on the requested side; re-join at intersection nodes. Closed: largest loop kept; open: longest chain. Nothing valid → empty DerivedPath (explicit collapse signal; JS skips it).
+- **Wall-system end treatment**: one cap per end per wall system (source + all its offsets), never per offset. Single cross-section profile of total thickness W: outermost wall → fillet r → straight face (r beyond wall ends) → fillet r → innermost wall, fillets tangent to the walls. `flat` r=0; `rounded_corners` r=min(End R, W/2); `full_round` r=W/2 (legacy `'round'` aliases to it). Intermediate walls get no cap: each continues straight (`cap_*_ext` DerivedPath, role `cap`) to a vertex inserted into the cap profile, so the system routes as one run with zero travel. Earlier version ignored End R (it filleted collinear points on the end face) and Full Round spiked back to / dangled the centre wall — both fixed.
+- UI: End caps select = Flat / Rounded Corners / Full Round; `End R` input (`cap_corner_radius`, layer-level) shown for Rounded Corners.
+- **Known ambiguous case**: sharp (Corner R = 0) deep notches with a large inside offset — the miter spike at the notch can sever the cavity into islands; only the largest island is kept. True (round-join) distance would keep it connected. Not changed because always-miter is a deliberate decision; revisit if it matters in practice (options: Corner R > 0, round joins at reflex corners, or emit all islands).
+
 **UX pass 5 — editable curved line segments (QuadBezierPath):**
 
 `QuadBezierPath` added as a first-class parametric type. Implements B(t) = (1−t)² P0 + 2(1−t)t P1 + t² P2 where P0=start, P1=control/bend, P2=end.
@@ -507,6 +516,6 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 ## Last Updated
 
-2026-10-04
+2026-10-05
 
-Phase 3 UX pass 6 (curve chord dimensions, global corner rounding, round end caps) complete. Phase 2: 65 tests. Phase 3: 174 tests. All green.
+Geometry correctness pass (offset trimming, wall-system caps with End R) complete and manually verified in the UI. Phase 2: 65 tests. Phase 3: 235 tests. All green.

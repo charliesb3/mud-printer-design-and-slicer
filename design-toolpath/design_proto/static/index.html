@@ -430,8 +430,16 @@
             <select class="prop-input" id="wg-cap-style"
                     onchange="onWallGeometryChange()">
               <option value="flat">Flat</option>
-              <option value="round">Round</option>
+              <option value="rounded_corners">Rounded Corners</option>
+              <option value="full_round">Full Round</option>
             </select>
+          </div>
+          <div class="prop-row" id="wg-cap-radius-row" style="display:none">
+            <span class="prop-label">End R</span>
+            <input type="number" class="prop-input" id="wg-cap-corner-radius"
+                   value="0" min="0" step="1"
+                   onchange="onWallGeometryChange()">
+            <span class="prop-unit">in</span>
           </div>
         </div>
       </div>

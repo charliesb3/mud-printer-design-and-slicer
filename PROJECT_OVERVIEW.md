@@ -386,7 +386,7 @@ zero travel moves.
 
 ### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete + Four UX Passes
 
-The interactive design canvas prototype is complete. 126 tests passing.
+The interactive design canvas prototype is complete. 235 tests passing.
 
 Location: `design-toolpath/design_proto/`
 

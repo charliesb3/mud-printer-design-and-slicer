@@ -101,6 +101,7 @@ def _deserialise_layer(data: dict) -> PrintLayer:
 
     layer.corner_radius = float(data.get('corner_radius', 0.0))
     layer.cap_style = data.get('cap_style', 'flat')
+    layer.cap_corner_radius = float(data.get('cap_corner_radius', 0.0))
 
     return layer
 

@@ -46,6 +46,7 @@ const layer = {
   },
   corner_radius: 0,
   cap_style: 'flat',
+  cap_corner_radius: 0,
 };
 
 let generators = {};
@@ -1819,6 +1820,7 @@ function buildPayload() {
     constraints: layer.constraints,
     corner_radius: layer.corner_radius || 0,
     cap_style: layer.cap_style || 'flat',
+    cap_corner_radius: layer.cap_corner_radius || 0,
   };
 }
 
@@ -2076,8 +2078,12 @@ function onOverrideChange() {
 function onWallGeometryChange() {
   const crEl = document.getElementById('wg-corner-radius');
   const csEl = document.getElementById('wg-cap-style');
+  const ccrEl = document.getElementById('wg-cap-corner-radius');
   if (crEl) layer.corner_radius = Math.max(0, parseFloat(crEl.value) || 0);
   if (csEl) layer.cap_style = csEl.value || 'flat';
+  if (ccrEl) layer.cap_corner_radius = Math.max(0, parseFloat(ccrEl.value) || 0);
+  const row = document.getElementById('wg-cap-radius-row');
+  if (row) row.style.display = (layer.cap_style === 'rounded_corners') ? '' : 'none';
   // Recompute all path.points so canvas rendering matches new rounding
   for (const p of layer.source_paths) _computePrimitivePoints(p);
   routeResult = null;
@@ -2114,10 +2120,15 @@ function clearAll() {
                          reverse_direction: false, component_order: null };
   layer.corner_radius = 0;
   layer.cap_style = 'flat';
+  layer.cap_corner_radius = 0;
   const crEl = document.getElementById('wg-corner-radius');
   const csEl = document.getElementById('wg-cap-style');
+  const ccrEl = document.getElementById('wg-cap-corner-radius');
+  const ccrRow = document.getElementById('wg-cap-radius-row');
   if (crEl) crEl.value = 0;
   if (csEl) csEl.value = 'flat';
+  if (ccrEl) ccrEl.value = 0;
+  if (ccrRow) ccrRow.style.display = 'none';
   selectedId = null;
   routeResult = null;
   derivedPaths = [];

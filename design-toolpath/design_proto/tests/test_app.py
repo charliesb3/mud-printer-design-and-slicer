@@ -1236,3 +1236,56 @@ class TestWallGeometryAPI:
         data = r.get_json()
         assert len(data['moves']) > 0
         assert len([p for p in data['layer']['paths'] if p.get('role') == 'lattice']) >= 1
+
+
+# ---------------------------------------------------------------------------
+# End R plumbing — payload → model → effective geometry → routing
+# ---------------------------------------------------------------------------
+
+class TestRoundedCornersEndRadiusAPI:
+    def _payload(self, cap_style, cap_corner_radius):
+        return {
+            'id': 'endr', 'label': '',
+            'source_paths': [{
+                'id': 'line', 'type': 'LinePath', 'label': 'Line',
+                'closed': False, 'role': 'free', 'visible': True,
+                'start': [0, 0], 'end': [200, 0],
+            }],
+            'offset_treatments': [
+                {'id': 'l', 'source_path_id': 'line', 'distance': 10,
+                 'role': 'outer', 'label': ''},
+                {'id': 'r', 'source_path_id': 'line', 'distance': -10,
+                 'role': 'inner', 'label': ''},
+            ],
+            'lattice_instances': [],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+            'cap_style': cap_style,
+            'cap_corner_radius': cap_corner_radius,
+        }
+
+    def _cap_start(self, client, style, r):
+        resp = client.post('/api/effective_paths',
+                           data=json.dumps(self._payload(style, r)),
+                           content_type='application/json')
+        assert resp.status_code == 200
+        paths = resp.get_json()['paths']
+        return next(p for p in paths if p.get('label') == 'cap_start')['points']
+
+    def test_end_r_reaches_cap_geometry(self, client):
+        p2 = self._cap_start(client, 'rounded_corners', 2)
+        p6 = self._cap_start(client, 'rounded_corners', 6)
+        assert min(x for x, _ in p2) == pytest.approx(-2.0, abs=1e-6)
+        assert min(x for x, _ in p6) == pytest.approx(-6.0, abs=1e-6)
+
+    def test_end_r_zero_matches_flat(self, client):
+        assert (self._cap_start(client, 'rounded_corners', 0) ==
+                self._cap_start(client, 'flat', 0))
+
+    def test_rounded_corners_routes_zero_travel(self, client):
+        resp = client.post('/api/route',
+                           data=json.dumps(self._payload('rounded_corners', 6)),
+                           content_type='application/json')
+        assert resp.status_code == 200
+        m = resp.get_json()['metrics']
+        assert m['travel_moves'] == 0 and m['print_runs'] == 1

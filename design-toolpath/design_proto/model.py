@@ -325,19 +325,24 @@ class OffsetTreatment:
     role: str = 'inner'
     label: str = ''
 
-    def generate(self, source: Path,
-                 corner_radius: float = 0.0) -> 'DerivedPath':
-        pts = source.sample_points(128)
-        if not pts:
-            return DerivedPath([], closed=source.closed,
+    def generate(self, processed_pts: list[Vec2],
+                 closed: bool) -> 'DerivedPath':
+        """
+        Pure offset: callers pass the already-processed source polyline
+        (sampled + rounded if applicable) and we produce the parallel offset.
+        Layer-level concerns (rounding, cap style) stay in PrintLayer.
+        """
+        if not processed_pts:
+            return DerivedPath([], closed=closed,
                                id=self.id,
                                role=self.role, label=self.label,
                                source_id=self.source_path_id,
                                treatment_id=self.id)
-        if corner_radius > 0.0 and _eligible_for_rounding(source):
-            pts = _apply_corner_rounding(pts, corner_radius, source.closed)
-        offset_pts = _offset_polyline(pts, self.distance, source.closed)
-        return DerivedPath(offset_pts, closed=source.closed,
+        processed_pts = _dedupe_polyline(processed_pts, closed)
+        offset_pts = _offset_polyline(processed_pts, self.distance, closed)
+        offset_pts = _trim_offset(offset_pts, processed_pts,
+                                  self.distance, closed)
+        return DerivedPath(offset_pts, closed=closed,
                            id=self.id,
                            role=self.role, label=self.label,
                            source_id=self.source_path_id,
@@ -464,15 +469,22 @@ def _offset_polyline(pts: list[Vec2], dist: float, closed: bool) -> list[Vec2]:
     """
     True 2D polyline offset: shift each segment parallel by dist, then
     intersect adjacent offset segments to find each vertex (miter join).
-    Falls back to bevel (two points per corner) when miter extension
-    exceeds MITER_LIMIT * abs(dist).
+
+    Always miters — no bevel fallback. A bevel at an acute corner
+    silently reduces the perpendicular wall spacing below the requested
+    |dist|, which this project treats as a hard geometric invariant.
+    If miters produce long spikes at acute corners that is a signal to
+    the designer, not a reason to thin the wall.
+
+    This is the RAW offset: where |dist| exceeds the local feature size
+    it contains swallowtail loops. _trim_offset, which the
+    OffsetTreatment pipeline calls on this result, removes them.
+
     Positive dist = left of travel direction.
     """
     n = len(pts)
     if n < 2:
         return list(pts)
-
-    MITER_LIMIT = 4.0
 
     def _seg_offset(a: Vec2, b: Vec2) -> tuple:
         d = (b - a).normalized()
@@ -487,21 +499,15 @@ def _offset_polyline(pts: list[Vec2], dist: float, closed: bool) -> list[Vec2]:
         return Vec2(p1.x + t * d1.x, p1.y + t * d1.y)
 
     def _join(prev_seg, curr_seg, result_list):
-        """Append miter or bevel join vertex/vertices between two offset segments."""
+        """Append the mitered join vertex between two offset segments."""
         ob0 = prev_seg[1]
-        oa1 = curr_seg[0]
         d0 = (prev_seg[1] - prev_seg[0]).normalized()
         d1 = (curr_seg[1] - curr_seg[0]).normalized()
         pt = _line_intersect(prev_seg[0], d0, curr_seg[0], d1)
         if pt is None:
-            result_list.append(ob0)
+            result_list.append(ob0)   # parallel segments — degenerate join
         else:
-            miter_len = ob0.dist(pt)
-            if abs(dist) > 1e-12 and miter_len > MITER_LIMIT * abs(dist):
-                result_list.append(ob0)
-                result_list.append(oa1)
-            else:
-                result_list.append(pt)
+            result_list.append(pt)    # always miter
 
     result: list[Vec2] = []
 
@@ -517,6 +523,398 @@ def _offset_polyline(pts: list[Vec2], dist: float, closed: bool) -> list[Vec2]:
         result.append(offset_segs[-1][1])
 
     return result
+
+
+def _dedupe_polyline(pts: list[Vec2], closed: bool,
+                     eps: float = 1e-9) -> list[Vec2]:
+    """Drop consecutive coincident points (and a duplicated closing point)."""
+    out: list[Vec2] = []
+    for p in pts:
+        if not out or p.dist(out[-1]) > eps:
+            out.append(p)
+    if closed and len(out) > 1 and out[0].dist(out[-1]) <= eps:
+        out.pop()
+    return out
+
+
+def _miter_band_test(source: list[Vec2], dist: float, closed: bool,
+                     tol: float):
+    """
+    Return a predicate: is p STRICTLY inside the mitered offset band of
+    `source` at |dist|?
+
+    The band is the union of, per source edge, the rectangle of points
+    whose foot lies on the edge and whose perpendicular distance is
+    < |dist| (either side), plus, per joint, the miter kite
+    [vertex, offset of edge-in end, miter point, offset of edge-out start]
+    on the offset side. A point on a correct miter offset lies exactly on
+    the band boundary; any part of the raw offset strictly inside the
+    band is closer to the source than requested (under the same miter
+    semantics used to build it) and must be trimmed.
+    """
+    n = len(source)
+    D = abs(dist)
+    m = n if closed else n - 1
+    rects = []
+    dirs = []
+    for i in range(m):
+        a, b = source[i], source[(i + 1) % n]
+        L = a.dist(b)
+        t = (b - a).normalized()
+        dirs.append(t)
+        if L > 1e-12:
+            rects.append((a, t, L))
+    kites = []
+    joints = range(n) if closed else range(1, n - 1)
+    for i in joints:
+        t0, t1 = dirs[(i - 1) % m], dirs[i % m]
+        v = source[i]
+        p0 = Vec2(v.x - t0.y * dist, v.y + t0.x * dist)
+        p1 = Vec2(v.x - t1.y * dist, v.y + t1.x * dist)
+        cross = t0.x * t1.y - t0.y * t1.x
+        if abs(cross) < 1e-12:
+            continue
+        s = ((p1.x - p0.x) * t1.y - (p1.y - p0.y) * t1.x) / cross
+        M = Vec2(p0.x + s * t0.x, p0.y + s * t0.y)
+        kites.append((v, p0, M, p1))
+
+    def _in_convex(p: Vec2, poly) -> bool:
+        sign = 0
+        k = len(poly)
+        for j in range(k):
+            a, b = poly[j], poly[(j + 1) % k]
+            c = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+            L = a.dist(b)
+            if L < 1e-12:
+                continue
+            c /= L
+            if abs(c) <= tol:
+                return False                  # on boundary → not strictly in
+            sgn = 1 if c > 0 else -1
+            if sign == 0:
+                sign = sgn
+            elif sgn != sign:
+                return False
+        return sign != 0
+
+    def in_band(p: Vec2) -> bool:
+        for a, t, L in rects:
+            dx, dy = p.x - a.x, p.y - a.y
+            f = dx * t.x + dy * t.y
+            if tol < f < L - tol and abs(dx * t.y - dy * t.x) < D - tol:
+                return True
+        return any(_in_convex(p, k) for k in kites)
+
+    return in_band
+
+
+def _trim_offset(raw: list[Vec2], source: list[Vec2],
+                 dist: float, closed: bool) -> list[Vec2]:
+    """
+    Resolve a raw miter offset into the valid parallel offset.
+
+    Wherever |dist| exceeds the local feature size of the source — a
+    fillet radius smaller than the offset, or a notch narrower than
+    2·|dist| — the raw miter offset folds over itself into swallowtail
+    loops. Those loops are not part of the true offset: every point on
+    them is CLOSER than |dist| to some part of the source.
+
+    Trimming (the classic raw-offset + clip approach):
+      1. Split the raw offset at all of its self-intersections.
+      2. Keep a piece only if it lies outside the mitered offset band of
+         the whole source (i.e. at ≥ |dist| under the same miter join
+         semantics _offset_polyline uses) and, for closed sources, on the
+         requested side.
+      3. Re-join the kept pieces at the shared intersection points.
+
+    Closed sources: the largest resulting loop is returned. If the
+    offset genuinely splits into several islands (e.g. an inward offset
+    through a narrow neck) only the largest survives — the remainder is
+    a topology change the designer must resolve. If nothing survives
+    the offset has collapsed and [] is returned.
+
+    Open sources: the longest resulting chain is returned.
+    """
+    raw = _dedupe_polyline(raw, closed)
+    n = len(raw)
+    if abs(dist) < 1e-12 or n < 2 or len(source) < 2:
+        return raw
+
+    segs = list(range(n if closed else n - 1))   # seg i: raw[i] → raw[i+1]
+    m = len(segs)
+
+    # 1) Self-intersections. Half-open parameter ranges [0, 1) so a hit
+    # exactly on a shared vertex is recorded once.
+    eps = 1e-9
+    events: list[list[tuple[float, int]]] = [[] for _ in range(m)]
+    nodes: list[Vec2] = []
+    boxes = []
+    for i in range(m):
+        a, b = raw[i], raw[(i + 1) % n]
+        boxes.append((min(a.x, b.x), max(a.x, b.x),
+                      min(a.y, b.y), max(a.y, b.y)))
+    for i in range(m):
+        a, b = raw[i], raw[(i + 1) % n]
+        bi = boxes[i]
+        d1x, d1y = b.x - a.x, b.y - a.y
+        for j in range(i + 2, m):
+            if closed and i == 0 and j == m - 1:
+                continue                              # adjacent via wrap
+            bj = boxes[j]
+            if (bj[0] > bi[1] + eps or bj[1] < bi[0] - eps or
+                    bj[2] > bi[3] + eps or bj[3] < bi[2] - eps):
+                continue
+            c, d = raw[j], raw[(j + 1) % n]
+            d2x, d2y = d.x - c.x, d.y - c.y
+            cross = d1x * d2y - d1y * d2x
+            if abs(cross) < 1e-12:
+                continue
+            t = ((c.x - a.x) * d2y - (c.y - a.y) * d2x) / cross
+            u = ((c.x - a.x) * d1y - (c.y - a.y) * d1x) / cross
+            if -eps <= t < 1.0 - eps and -eps <= u < 1.0 - eps:
+                t = max(0.0, t)
+                u = max(0.0, u)
+                k = len(nodes)
+                nodes.append(Vec2(a.x + t * d1x, a.y + t * d1y))
+                events[i].append((t, k))
+                events[j].append((u, k))
+
+    tol = 1e-6 * max(1.0, abs(dist))
+    in_band = _miter_band_test(_dedupe_polyline(source, closed),
+                               dist, closed, tol)
+    want_inside = None
+    if closed and len(source) >= 3:
+        want_inside = (dist > 0) == (_polygon_area(source) > 0)
+
+    def _valid(piece: list[Vec2]) -> bool:
+        best_len, sample = -1.0, None
+        for p, q in zip(piece, piece[1:]):
+            L = p.dist(q)
+            if L > best_len:
+                best_len, sample = L, p.lerp(q, 0.5)
+        if sample is None or best_len < 1e-12:
+            return False
+        if in_band(sample):
+            return False
+        if want_inside is not None:
+            return _point_in_polygon(sample, source) == want_inside
+        return True
+
+    if not nodes:
+        piece = raw + [raw[0]] if closed else raw
+        return raw if _valid(piece) else []
+
+    # 2) Walk the raw offset, cutting it into pieces between nodes.
+    seq: list[tuple[Vec2, object]] = []
+    for i in range(m):
+        seq.append((raw[i], 'S' if (not closed and i == 0) else None))
+        for t, k in sorted(events[i]):
+            seq.append((nodes[k], k))
+    if not closed:
+        seq.append((raw[-1], 'E'))
+    else:
+        first = next(i for i, (_, k) in enumerate(seq) if k is not None)
+        seq = seq[first:] + seq[:first]
+        seq.append(seq[0])
+
+    pieces: list[tuple[object, object, list[Vec2]]] = []
+    cur_node, cur_pts = seq[0][1], [seq[0][0]]
+    for p, k in seq[1:]:
+        cur_pts.append(p)
+        if k is not None:
+            pieces.append((cur_node, k, cur_pts))
+            cur_node, cur_pts = k, [p]
+
+    valid = [pc for pc in pieces if _valid(pc[2])]
+    if not valid:
+        return []
+
+    # 3) Re-join kept pieces at their shared intersection nodes.
+    by_start: dict = {}
+    for idx, (s, _, _) in enumerate(valid):
+        by_start.setdefault(s, []).append(idx)
+    ends = {e for _, e, _ in valid}
+    order = ([i for i, pc in enumerate(valid) if pc[0] not in ends] +
+             list(range(len(valid))))
+    used: set[int] = set()
+    chains: list[tuple[bool, list[Vec2]]] = []
+    for head in order:
+        if head in used:
+            continue
+        start_node = valid[head][0]
+        pts: list[Vec2] = []
+        cur, is_loop = head, False
+        while cur is not None:
+            used.add(cur)
+            s, e, ppts = valid[cur]
+            pts.extend(ppts if not pts else ppts[1:])
+            if e == start_node:
+                is_loop = True
+                break
+            cur = next((c for c in by_start.get(e, []) if c not in used),
+                       None)
+        chains.append((is_loop, pts))
+
+    if closed:
+        loops = [_dedupe_polyline(pts, True)
+                 for is_loop, pts in chains if is_loop]
+        loops = [lp for lp in loops if len(lp) >= 3]
+        if not loops:
+            return []
+        return max(loops, key=lambda lp: abs(_polygon_area(lp)))
+
+    def _arc_len(pts):
+        return sum(p.dist(q) for p, q in zip(pts, pts[1:]))
+    opens = [pts for is_loop, pts in chains if not is_loop]
+    if not opens:
+        return []
+    return _dedupe_polyline(max(opens, key=_arc_len), False)
+
+
+def _wall_system_end_pts(src_pts: list[Vec2],
+                          ots: list,
+                          cap_style: str,
+                          cap_corner_radius: float):
+    """
+    One end treatment per wall SYSTEM (source + N parallel offsets).
+
+    The whole wall assembly is treated as ONE cross-section of total
+    thickness W (outermost → innermost wall endpoint). At each end the
+    cap follows a single profile across that cross-section:
+
+        outermost wall → fillet r → straight end face → fillet r → innermost wall
+
+    The fillets are tangent to the longitudinal walls at the wall
+    endpoints (centres at r and W−r along the cross-section); the end
+    face sits r beyond the wall ends. The effective radius r is:
+
+        'flat'            → 0          (straight face through the endpoints)
+        'rounded_corners' → min(cap_corner_radius, W/2)
+        'full_round'      → W/2        (the two fillets meet: a semicircle)
+
+    So End R = 0 reduces exactly to Flat and End R ≥ W/2 to Full Round.
+
+    Intermediate walls never get caps of their own. Each one continues
+    straight (along the end tangent) until it meets the cap profile; that
+    meeting point is inserted into the cap polyline so the routing graph
+    joins the wall system into one component. When the profile is at
+    height 0 there (flat face) the wall endpoint itself lies on the cap
+    and no extension is needed.
+
+    Returns (start, end), each (cap_pts, [extension_pts, ...]).
+    Cap endpoints and extension endpoints are exact wall-endpoint / cap
+    coordinates so the routing graph merges the nodes.
+    """
+    if len(src_pts) < 2 or not ots:
+        return ([], []), ([], [])
+
+    # Walls ordered outermost (most positive distance = furthest LEFT of
+    # travel) → innermost; the source is the distance-0 wall.
+    entries: list[tuple[float, list[Vec2]]] = [(0.0, src_pts)]
+    for ot, derived in ots:
+        entries.append((ot.distance, derived.sample_points()))
+    entries.sort(key=lambda e: -e[0])
+
+    if cap_style == 'flat':
+        req_r = 0.0
+    elif cap_style == 'rounded_corners':
+        req_r = max(0.0, cap_corner_radius)
+    else:                                   # 'full_round'
+        req_r = float('inf')
+
+    def _build(end_index: int):
+        endpoints = [poly[end_index] for _, poly in entries if poly]
+        if len(endpoints) < 2:
+            return [], []
+        if end_index == 0:
+            tangent = (src_pts[1] - src_pts[0]).normalized()
+            o = Vec2(-tangent.x, -tangent.y)        # outward = backwards
+        else:
+            o = (src_pts[-1] - src_pts[-2]).normalized()
+        e_out, e_in = endpoints[0], endpoints[-1]
+        W = e_out.dist(e_in)
+        if W < 1e-9:
+            return list(endpoints), []
+        u = (e_in - e_out) * (1.0 / W)
+        r = min(req_r, W / 2.0)
+        if r < 1e-9:
+            r = 0.0
+
+        def _at(s: float, h: float) -> Vec2:
+            return Vec2(e_out.x + s * u.x + h * o.x,
+                        e_out.y + s * u.y + h * o.y)
+
+        def _height(s: float) -> float:
+            if r == 0.0:
+                return 0.0
+            if s < r:
+                c = r
+            elif s > W - r:
+                c = W - r
+            else:
+                return r
+            return math.sqrt(max(0.0, r * r - (s - c) ** 2))
+
+        # Profile samples as (s, point); s is monotonic along the profile.
+        prof: list[tuple[float, Vec2]] = [(0.0, e_out)]
+        if r > 0.0:
+            n_arc = 19                                   # 5° per sample
+            for i in range(1, n_arc):                    # outer fillet
+                a = (math.pi / 2) * i / (n_arc - 1)
+                s = r - r * math.cos(a)
+                prof.append((s, _at(s, r * math.sin(a))))
+            # Inner fillet; skip its first sample when the fillets meet
+            # (full round) and its last sample, which is e_in itself.
+            first = 0 if W - 2 * r > 1e-9 else 1
+            for i in range(first, n_arc - 1):
+                a = (math.pi / 2) * i / (n_arc - 1)
+                s = (W - r) + r * math.sin(a)
+                prof.append((s, _at(s, r * math.cos(a))))
+        prof.append((W, e_in))
+
+        # Intermediate walls land on the profile.
+        extensions: list[list[Vec2]] = []
+        landing: list[tuple[float, Vec2]] = []
+        for ep in endpoints[1:-1]:
+            s = (ep - e_out).x * u.x + (ep - e_out).y * u.y
+            s = max(0.0, min(W, s))
+            h = _height(s)
+            if h < 1e-9:
+                landing.append((s, ep))          # already on the flat face
+            else:
+                q = _at(s, h)
+                landing.append((s, q))
+                extensions.append([ep, q])
+
+        # Merge landing points into the profile by s, replacing any
+        # profile sample that coincides with them.
+        merged = list(prof)
+        for s, q in landing:
+            merged = [(ps, pp) for ps, pp in merged
+                      if pp is e_out or pp is e_in or pp.dist(q) > 1e-9]
+            idx = next((i for i, (ps, _) in enumerate(merged) if ps > s),
+                       len(merged) - 1)
+            merged.insert(idx, (s, q))
+        cap = [p for _, p in merged]
+        cap[0], cap[-1] = e_out, e_in
+        return cap, extensions
+
+    return _build(0), _build(-1)
+
+
+def _processed_source_pts(path: 'Path', corner_radius: float) -> list[Vec2]:
+    """
+    THE canonical processed-source polyline for a path.
+    - Samples the path parametrically.
+    - If the path type has discrete corners AND corner_radius > 0:
+        applies corner_radius fillets.
+    Downstream geometry (offsets, caps, lattice, routing, display) all
+    derive from this single result — not from re-sampling the source.
+    """
+    pts = path.sample_points(128)
+    if corner_radius > 0.0 and _eligible_for_rounding(path):
+        pts = _apply_corner_rounding(pts, corner_radius, path.closed)
+    return _dedupe_polyline(pts, path.closed)
 
 
 # ---------------------------------------------------------------------------
@@ -909,72 +1307,99 @@ class PrintLayer:
     offset_treatments: list[OffsetTreatment] = field(default_factory=list)
     lattice_instances: list[LatticeInstance] = field(default_factory=list)
     constraints: TraversalConstraints = field(default_factory=TraversalConstraints)
-    corner_radius: float = 0.0    # global fillet radius; 0 = sharp corners
-    cap_style: str = 'flat'       # 'flat' | 'round' — open double-wall end caps
+    corner_radius: float = 0.0        # global fillet radius; 0 = sharp corners
+    cap_style: str = 'flat'           # 'flat' | 'rounded_corners' | 'full_round'
+    cap_corner_radius: float = 0.0    # fillet radius for 'rounded_corners' cap
 
     def _path_by_id(self, pid: str) -> Optional[Path]:
         return next((p for p in self.source_paths if p.id == pid), None)
 
-    def _rounded_pts(self, path: Path) -> list[Vec2]:
-        """Sample path and apply corner rounding if eligible and radius > 0."""
-        pts = path.sample_points()
-        if self.corner_radius > 0.0 and _eligible_for_rounding(path):
-            pts = _apply_corner_rounding(pts, self.corner_radius, path.closed)
-        return pts
+    def _normalized_cap_style(self) -> str:
+        """
+        Normalize cap_style aliases:
+          'round' (legacy) → 'full_round'
+          'rounded' → 'rounded_corners'
+        """
+        s = (self.cap_style or 'flat').lower()
+        if s == 'round':
+            return 'full_round'
+        if s == 'rounded':
+            return 'rounded_corners'
+        return s
 
     def effective_paths(self) -> list[Path]:
-        """All printable paths: source + derived. Preserves source order."""
+        """
+        Canonical pipeline:
+          raw source → _processed_source_pts (ONE per source)
+            → wrap source into result as a DerivedPath carrying processed pts
+            → every offset of this source uses the same processed pts
+            → end treatment per wall system (not per offset)
+            → lattice/connecting geometry references result-by-id
+        """
         result: list[Path] = []
 
-        # Source paths — eligible ones wrapped in a DerivedPath with rounded geometry
-        # (same ID so lattice lookups and routing work; filtered from derivedPaths in JS)
+        # 1) Canonical processed-source polylines (ONE per visible source path)
+        processed: dict[str, list[Vec2]] = {}
+        source_paths_in_order: list[Path] = []
         for p in self.source_paths:
             if not p.visible:
                 continue
-            if self.corner_radius > 0.0 and _eligible_for_rounding(p):
-                raw = p.sample_points()
-                rounded = _apply_corner_rounding(raw, self.corner_radius, p.closed)
-                result.append(DerivedPath(rounded, closed=p.closed,
+            processed[p.id] = _processed_source_pts(p, self.corner_radius)
+            source_paths_in_order.append(p)
+
+        # 2) Append each source path to result. If rounding is non-trivial
+        # we wrap it in a DerivedPath (so routing/lattice see the processed
+        # pts); otherwise the parametric source path flows through unchanged.
+        for p in source_paths_in_order:
+            pts = processed[p.id]
+            if (self.corner_radius > 0.0 and _eligible_for_rounding(p)):
+                result.append(DerivedPath(pts, closed=p.closed,
                                           id=p.id, role=p.role, label=p.label,
                                           source_id=p.id, treatment_id='round'))
             else:
                 result.append(p)
 
-        # Offset-derived paths + end caps for open sources
+        # 3) Offset-derived paths. All offsets of the same source use the
+        # SAME processed polyline — no re-sampling or re-rounding.
+        offsets_by_source: dict[str, list[tuple[OffsetTreatment, DerivedPath]]] = {}
         for ot in self.offset_treatments:
             src = self._path_by_id(ot.source_path_id)
-            if src is not None:
-                derived = ot.generate(src, self.corner_radius)
-                result.append(derived)
-                if not src.closed:
-                    # Effective (possibly rounded) source pts for exact cap endpoints
-                    src_pts = self._rounded_pts(src)
-                    der_pts = derived.sample_points()
-                    if src_pts and der_pts:
-                        if self.cap_style == 'round':
-                            st = ((src_pts[1] - src_pts[0]).normalized()
-                                  if len(src_pts) > 1 else Vec2(1, 0))
-                            et = ((src_pts[-1] - src_pts[-2]).normalized()
-                                  if len(src_pts) > 1 else Vec2(1, 0))
-                            cs_pts = _semicircle_cap(
-                                src_pts[0], der_pts[0], Vec2(-st.x, -st.y))
-                            ce_pts = _semicircle_cap(
-                                src_pts[-1], der_pts[-1], et)
-                        else:
-                            cs_pts = [src_pts[0], der_pts[0]]
-                            ce_pts = [src_pts[-1], der_pts[-1]]
-                        result.append(DerivedPath(
-                            cs_pts, closed=False, role='cap', label='cap_start',
-                            source_id=ot.id, treatment_id=ot.id,
-                            id=ot.id + '_cs',
-                        ))
-                        result.append(DerivedPath(
-                            ce_pts, closed=False, role='cap', label='cap_end',
-                            source_id=ot.id, treatment_id=ot.id,
-                            id=ot.id + '_ce',
-                        ))
+            if src is None or src.id not in processed:
+                continue
+            src_pts = processed[src.id]
+            derived = ot.generate(src_pts, src.closed)
+            result.append(derived)
+            offsets_by_source.setdefault(src.id, []).append((ot, derived))
 
-        # Lattice-derived paths — can reference source paths OR offset-derived paths
+        # 4) Wall-system end treatment — ONE cap_start + ONE cap_end per
+        # wall system (= source + its offsets) when the source is open.
+        cap_style = self._normalized_cap_style()
+        for src in source_paths_in_order:
+            if src.closed:
+                continue
+            ots = offsets_by_source.get(src.id, [])
+            if not ots:
+                continue
+            src_pts = processed[src.id]
+            ends = _wall_system_end_pts(
+                src_pts, ots, cap_style, self.cap_corner_radius)
+            for (cap_pts, extensions), tag, label in zip(
+                    ends, ('_cs', '_ce'), ('cap_start', 'cap_end')):
+                if cap_pts:
+                    result.append(DerivedPath(
+                        cap_pts, closed=False, role='cap', label=label,
+                        source_id=src.id, treatment_id='wall_system',
+                        id=src.id + tag,
+                    ))
+                # Intermediate walls continuing onto the cap profile.
+                for k, ext in enumerate(extensions):
+                    result.append(DerivedPath(
+                        ext, closed=False, role='cap', label=label + '_ext',
+                        source_id=src.id, treatment_id='wall_system',
+                        id=f'{src.id}{tag}_x{k}',
+                    ))
+
+        # 5) Lattice-derived paths — can reference source paths OR offsets
         all_by_id = {p.id: p for p in result}
         for li in self.lattice_instances:
             pa = all_by_id.get(li.path_a_id)
@@ -1020,6 +1445,7 @@ class PrintLayer:
             'constraints': self.constraints.to_dict(),
             'corner_radius': self.corner_radius,
             'cap_style': self.cap_style,
+            'cap_corner_radius': self.cap_corner_radius,
         }
 
 
