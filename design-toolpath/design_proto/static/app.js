@@ -26,18 +26,20 @@ const _PLAYBACK_WORLD_SPEED = 100.0; // world inches per second at 1×
 
 let routeResult = null;
 let derivedPaths = [];       // populated by effective_paths or route on model change
+let networkInfo = null;      // derived wall-network topology from the backend
 let _refreshTimer = null;
 
 // Drag state
 let dragging = null;         // { pathId, handleKey, originalState }
 let bodyDragging = null;     // { pathId, startWX, startWY, originalState }
+let rotateDrag = null;       // { pathId, pivot, a0, orig } — rotation handle
 
 const layer = {
   id: 'design',
   label: '',
   source_paths: [],
   offset_treatments: [],
-  lattice_instances: [],
+  lattice_instances: [],   // legacy pairwise lattice (backend only; no UI)
   constraints: {
     start_path_id: null,
     start_t: null,
@@ -48,9 +50,19 @@ const layer = {
   cap_style: 'flat',
   cap_corner_radius: 0,
   openings: [],         // path-relative wall openings (see Openings section)
+  region_overrides: [], // wall-network region paint (wall/void); no UI yet
+  infills: [],          // wall-region infill (lattice of a whole wall region)
+  junction_style: 'miter',   // default treatment of network junction corners
+  junction_radius: 2,        // radius when junction_style === 'round'
+  junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
+  network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
+  wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
+  return_paths: true,        // hidden return paths instead of exact retrace
+  prefer_closed: true,       // prefer a closed (start = end) layer route
 };
 
-let generators = {};
+let infillPatterns = {};     // name → { parameters } from /api/infill_patterns
+let selectedJunction = null; // { key, x, y } of the selected network junction
 
 // ---------------------------------------------------------------------------
 // Canvas setup
@@ -90,18 +102,21 @@ function canvasToWorld(cx, cy) {
 // ---------------------------------------------------------------------------
 
 function getHandles(path) {
+  if (_relationOf(path.id) && _relationOf(path.id).dep === path.id) return [];   // driven boundary
   switch (path.type) {
     case 'CirclePath':
       return [
         { key: 'center', wx: path.cx, wy: path.cy, shape: 'cross' },
         { key: 'radius', wx: path.cx + path.radius, wy: path.cy, shape: 'square' },
       ];
-    case 'EllipsePath':
+    case 'EllipsePath': {
+      const c = Math.cos(path.rotation || 0), s = Math.sin(path.rotation || 0);
       return [
         { key: 'center', wx: path.cx, wy: path.cy, shape: 'cross' },
-        { key: 'rx', wx: path.cx + path.rx, wy: path.cy, shape: 'square' },
-        { key: 'ry', wx: path.cx, wy: path.cy + path.ry, shape: 'square' },
+        { key: 'rx', wx: path.cx + path.rx * c, wy: path.cy + path.rx * s, shape: 'square' },
+        { key: 'ry', wx: path.cx - path.ry * s, wy: path.cy + path.ry * c, shape: 'square' },
       ];
+    }
     case 'LinePath':
       return [
         { key: 'start', wx: path.start[0], wy: path.start[1], shape: 'point' },
@@ -114,12 +129,10 @@ function getHandles(path) {
         { key: 'control', wx: path.control[0], wy: path.control[1], shape: 'square' },
       ];
     case 'RectanglePath':
-      return [
-        { key: 'tl', wx: path.x,           wy: path.y,           shape: 'square' },
-        { key: 'tr', wx: path.x + path.w,  wy: path.y,           shape: 'square' },
-        { key: 'br', wx: path.x + path.w,  wy: path.y + path.h,  shape: 'square' },
-        { key: 'bl', wx: path.x,           wy: path.y + path.h,  shape: 'square' },
-      ];
+      return _rectCorners(path).map((q, i) => (
+        { key: ['tl', 'tr', 'br', 'bl'][i], wx: q[0], wy: q[1], shape: 'square' }));
+    case 'InsetPath':
+      return [];              // derived from its parent: no handles of its own
     default: {
       // ExplicitPath — only user-placed control points
       const pts = path.control_points || path.points || [];
@@ -138,8 +151,12 @@ function applyHandleDrag(path, handleKey, wx, wy, orig) {
       break;
     case 'EllipsePath':
       if (handleKey === 'center') { path.cx = wx; path.cy = wy; }
-      if (handleKey === 'rx') { path.rx = Math.max(1, Math.abs(wx - path.cx)); }
-      if (handleKey === 'ry') { path.ry = Math.max(1, Math.abs(wy - path.cy)); }
+      {
+        const c = Math.cos(path.rotation || 0), s = Math.sin(path.rotation || 0);
+        const dx = wx - path.cx, dy = wy - path.cy;
+        if (handleKey === 'rx') { path.rx = Math.max(1, Math.abs(dx * c + dy * s)); }
+        if (handleKey === 'ry') { path.ry = Math.max(1, Math.abs(-dx * s + dy * c)); }
+      }
       break;
     case 'LinePath':
       if (handleKey === 'start') { path.start = [wx, wy]; }
@@ -151,6 +168,37 @@ function applyHandleDrag(path, handleKey, wx, wy, orig) {
       if (handleKey === 'control') { path.control = [wx, wy]; }
       break;
     case 'RectanglePath': {
+      // A rotated rectangle is resized in its own frame; the opposite
+      // corner stays put in the world.
+      const th = orig.rotation || 0;
+      if (th) {
+        const oc = [orig.x + orig.w / 2, orig.y + orig.h / 2];
+        const [lx, ly] = _rotMap(oc, -th)([wx, wy]);
+        _rectAxisDrag(path, handleKey, lx, ly, orig);
+        const nc = _rotMap(oc, th)([path.x + path.w / 2, path.y + path.h / 2]);
+        path.x = nc[0] - path.w / 2; path.y = nc[1] - path.h / 2;
+      } else {
+        _rectAxisDrag(path, handleKey, wx, wy, orig);
+      }
+      break;
+    }
+    default: {
+      const idx = parseInt(handleKey.replace('pt', ''), 10);
+      if (!isNaN(idx)) {
+        const pts = path.control_points || path.points;
+        pts[idx] = [wx, wy];
+        path.control_points = pts;
+        path.points = pts;
+      }
+      break;
+    }
+  }
+  _computePrimitivePoints(path);
+  _refreshInsetChildren(path.id);
+}
+
+function _rectAxisDrag(path, handleKey, wx, wy, orig) {
+  {
       const fixBRX = orig.x + orig.w, fixBRY = orig.y + orig.h;
       if (handleKey === 'tl') {
         path.x = Math.min(wx, fixBRX - 1);
@@ -170,20 +218,7 @@ function applyHandleDrag(path, handleKey, wx, wy, orig) {
         path.w = fixTRX - path.x;
         path.h = Math.max(1, wy - orig.y);
       }
-      break;
-    }
-    default: {
-      const idx = parseInt(handleKey.replace('pt', ''), 10);
-      if (!isNaN(idx)) {
-        const pts = path.control_points || path.points;
-        pts[idx] = [wx, wy];
-        path.control_points = pts;
-        path.points = pts;
-      }
-      break;
-    }
   }
-  _computePrimitivePoints(path);
 }
 
 function capturePathState(path) {
@@ -226,6 +261,7 @@ function applyBodyDrag(path, dx, dy, orig) {
     }
   }
   _computePrimitivePoints(path);
+  _refreshInsetChildren(path.id);
 }
 
 function syncPropPanel(path) {
@@ -403,6 +439,7 @@ function repaint() {
   drawGrid();
   drawEffectivePaths();
   drawOpenings();
+  drawJunctions();
   if (showToolpath && routeResult) {
     if (playbackPos > 0.0 || playbackPlaying) {
       drawToolpathWithPlayback(routeResult.moves);
@@ -413,7 +450,10 @@ function repaint() {
   if (showDimensions) drawDimensions();
   if (tool === 'draw' && drawPts.length > 0) drawInProgress();
   if (tool === 'curve') drawCurveInProgress();
+  if (SHAPE_TOOLS[tool]) drawShapeInProgress();
   if (selectedId) drawHandles(selectedId);
+  drawHighlight();
+  drawSnapHint();
 }
 
 function drawGrid() {
@@ -443,9 +483,30 @@ function _pathCanvasPts(path) {
   return pts.map(([wx, wy]) => worldToCanvas(wx, wy));
 }
 
+function _draggedPathId() {
+  return dragging ? dragging.pathId : (bodyDragging ? bodyDragging.pathId : null);
+}
+
+// Sources the wall network has trimmed (e.g. the host face across a T
+// mouth). They are drawn from the backend's resolved pieces, except while
+// being dragged (the pieces are stale until the next refresh).
+function _networkTrimmed() {
+  return new Set((networkInfo && networkInfo.modified_sources) || []);
+}
+
 function drawEffectivePaths() {
+  const trimmed = _networkTrimmed();
+  const dragged = _draggedPathId();
+  const refOnly = new Set((networkInfo && networkInfo.reference_only) || []);
   for (const p of layer.source_paths) {
     if (!p.visible) continue;
+    if (refOnly.has(p.id) && p.id !== dragged) {
+      // a centred wall's reference line: construction geometry, not printed
+      const isSel = p.id === selectedId;
+      drawPolyline(_pathCanvasPts(p), isSel ? '#ffffff' : '#777', isSel ? 1.6 : 1, true, p.closed);
+      continue;
+    }
+    if (trimmed.has(p.id) && p.id !== dragged) continue;   // pieces below
     const isSel = p.id === selectedId;
     const color = isSel ? '#ffffff' : (ROLE_COLORS[p.role] || '#aaa');
     const width = isSel ? 2.5 : 1.8;
@@ -487,12 +548,160 @@ function drawEffectivePaths() {
   }
 
   for (const p of derivedPaths) {
-    if (p.treatment_id === 'opening_cut') continue;   // source pieces drawn above
+    const srcPiece = p.treatment_id === 'opening_cut' || p.treatment_id === 'network_src';
+    if (srcPiece) {
+      // Source pieces: openings are drawn above from the live JS cut unless
+      // the network trimmed this source; then the backend pieces are used.
+      if (!trimmed.has(p.source_id) || p.source_id === dragged) continue;
+      const src = layer.source_paths.find(s => s.id === p.source_id);
+      if (!src || !src.visible) continue;
+      const isSel = src.id === selectedId;
+      drawPolyline(_pathCanvasPts(p), isSel ? '#ffffff' : (ROLE_COLORS[src.role] || '#aaa'),
+                   isSel ? 2.5 : 1.8, false, p.closed);
+      continue;
+    }
     const pts = _pathCanvasPts(p);
     if (pts.length < 2) continue;
+    if (p.treatment_id === 'return_path' || p.treatment_id === 'infill_return') {  // corrective strand
+      drawPolyline(pts, RETURN_COLOR, 1.5, false, false);
+      continue;
+    }
     const color = ROLE_COLORS[p.role] || '#aa88ff';
     drawPolyline(pts, color, 1.5, p.role === 'lattice', p.closed);
   }
+}
+
+const RETURN_COLOR = '#ff6fa8';
+
+// Junctions of the derived wall network: where walls of different systems
+// meet (T, X, end-to-end, spliced faces) — the visual proof that geometry
+// has become one connected wall network.
+const JUNCTION_COLOR = '#33dd88';
+
+function drawJunctions() {
+  if (!networkInfo || !(networkInfo.junctions || []).length) return;
+  if (_draggedPathId()) return;                       // stale while dragging
+  ctx.save();
+  for (const jn of networkInfo.junctions) {
+    const [cx, cy] = worldToCanvas(jn.x, jn.y);
+    const sel = _isSelectedJunction(jn);
+    const r = sel ? 6 : (jn.corner ? 4 : 3);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy);
+    ctx.closePath();
+    // filled = a wall-face corner (treatable); hollow = internal junction
+    ctx.fillStyle = sel ? '#ffffff' : (jn.corner ? 'rgba(20,40,30,0.9)' : 'rgba(0,0,0,0)');
+    ctx.fill();
+    ctx.strokeStyle = jn.treatment === 'round' ? '#88ddff' : JUNCTION_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Junction selection — corners CREATED by the wall network. Their
+// treatment (Miter / Rounded + radius) is independent of every source
+// path's own Corner R. Identity = the wall faces that meet (key), so a
+// setting follows the junction while walls are moved or reshaped.
+// ---------------------------------------------------------------------------
+
+function _isSelectedJunction(jn) {
+  if (!selectedJunction) return false;
+  if (selectedJunction.key) return jn.key === selectedJunction.key;
+  return Math.hypot(jn.x - selectedJunction.x, jn.y - selectedJunction.y) < 1e-6;
+}
+
+function hitTestJunction(wx, wy) {
+  if (!networkInfo) return null;
+  let best = null;
+  for (const jn of networkInfo.junctions || []) {
+    const d = Math.hypot(wx - jn.x, wy - jn.y);
+    if (d < HIT_DIST * 0.8 && (!best || d < best.d)) best = { jn, d };
+  }
+  return best ? best.jn : null;
+}
+
+function selectJunction(jn) {
+  selectedJunction = jn ? { key: jn.key, x: jn.x, y: jn.y } : null;
+  selectedId = null;
+  selectedOpeningId = null;
+  updatePathList();
+  updatePropPanel();
+  updateHint();
+  repaint();
+}
+
+function _currentJunction() {
+  if (!selectedJunction || !networkInfo) return null;
+  return (networkInfo.junctions || []).find(_isSelectedJunction) || null;
+}
+
+function _faceName(fid) {
+  if (fid.startsWith('junction:')) return 'junction arc';
+  const wm = fid.match(/^(.*)\.wall([+-]?)$/);
+  if (wm) {
+    const s = layer.source_paths.find(x => x.id === wm[1]);
+    const side = wm[2] === '+' ? 'left ' : wm[2] === '-' ? 'right ' : '';
+    return `${side}wall face of ${s ? (s.label || s.id) : '?'}`;
+  }
+  const p = layer.source_paths.find(s => s.id === fid);
+  if (p) return p.label || p.id;
+  const ot = layer.offset_treatments.find(o => o.id === fid);
+  if (ot) {
+    const s = layer.source_paths.find(x => x.id === ot.source_path_id);
+    return `${ot.direction || 'inside'} offset of ${s ? (s.label || s.id) : '?'}`;
+  }
+  const m = fid.match(/^(.*)_c[se]$/);
+  if (m) {
+    const s = layer.source_paths.find(x => x.id === m[1].split('~')[0]);
+    return `end cap of ${s ? (s.label || s.id) : '?'}`;
+  }
+  return fid;
+}
+
+function updateJunctionPropPanel(panel) {
+  const jn = _currentJunction();
+  const title = document.createElement('div');
+  title.className = 'path-type';
+  title.style.cssText = 'color:' + JUNCTION_COLOR + ';margin-bottom:2px';
+  title.textContent = 'Junction';
+  panel.appendChild(title);
+  const info = document.createElement('div');
+  info.className = 'path-type';
+  if (!jn) {
+    info.textContent = 'This junction no longer exists in the current geometry.';
+    panel.appendChild(info);
+    return;
+  }
+  if (!jn.corner) {
+    info.textContent = 'Internal junction (walls meet inside the wall) — no wall-face corner to treat.';
+    panel.appendChild(info);
+    return;
+  }
+  const faces = jn.key.split('#')[0].split('|').map(_faceName);
+  info.textContent = `Corner where ${faces.join(' meets ')}`;
+  panel.appendChild(info);
+  const ov = (layer.junction_overrides || []).find(o => o.key === jn.key);
+  const dflt = `Default (${layer.junction_style === 'round' ? 'Rounded ' + (layer.junction_radius || 0) + ' in' : 'Miter'})`;
+  const cur = ov ? (ov.treatment === 'round' ? 'Rounded' : 'Miter') : dflt;
+  addPropRowSelect(panel, 'Treatment', cur, [dflt, 'Miter', 'Rounded'], v => {
+    layer.junction_overrides = (layer.junction_overrides || []).filter(o => o.key !== jn.key);
+    if (v !== dflt) {
+      layer.junction_overrides.push({ key: jn.key, treatment: v === 'Rounded' ? 'round' : 'miter',
+                                      radius: ov ? ov.radius : (layer.junction_radius || 2) });
+    }
+    routeResult = null; scheduleRefresh(); updatePropPanel(); repaint();
+  });
+  if (ov && ov.treatment === 'round') {
+    addPropRowNum(panel, 'Radius', 'jn-radius', ov.radius, v => {
+      ov.radius = Math.max(0, v); routeResult = null; scheduleRefresh(); repaint();
+    });
+  }
+  const hint = document.createElement('div');
+  hint.className = 'path-type';
+  hint.textContent = 'Independent of the walls\' own Corner R.';
+  panel.appendChild(hint);
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +1034,23 @@ function drawInProgress() {
 function drawHandles(pid) {
   const path = layer.source_paths.find(p => p.id === pid);
   if (!path) return;
+  const rh = _rotHandle(path);
+  if (rh) {
+    const [px, py] = worldToCanvas(rh.pivot[0], rh.pivot[1]);
+    const [hx, hy] = worldToCanvas(rh.wx, rh.wy);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,158,255,0.45)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#1b2a3a';
+    ctx.strokeStyle = '#4a9eff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(hx, hy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
   for (const h of getHandles(path)) {
     drawHandle(h.wx, h.wy, h.shape || 'point');
   }
@@ -852,6 +1078,116 @@ function drawHandles(pid) {
     ctx.setLineDash([]);
     ctx.restore();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Snapping — make intentional connections easy
+//
+// While drawing, placing curve ends, dragging endpoints or moving an open
+// path, a point near another wall snaps EXACTLY onto it: onto an open
+// path's end (→ end-to-end joint), or onto the nearest point of a wall
+// line — sources and their visible offset / cap faces — (→ T junction).
+// The backend recognises any real contact, snapped or not; snapping just
+// makes the contact exact. Hold Alt to place freely.
+// ---------------------------------------------------------------------------
+
+const SNAP_DIST = 8;            // world inches
+let snapHint = null;            // { pt: [x, y], kind: 'end' | 'edge' } shown on canvas
+
+function _snapTargets(excludeId) {
+  const out = [];
+  for (const p of layer.source_paths) {
+    if (!p.visible || p.id === excludeId) continue;
+    const pts = p.points || [];
+    if (pts.length < 2) continue;
+    out.push({ pts, closed: !!p.closed,
+               ends: p.closed ? [] : [pts[0], pts[pts.length - 1]] });
+  }
+  // Visible wall faces of other systems (offsets, caps, network pieces).
+  for (const d of derivedPaths) {
+    if (d.role === 'lattice' || d.source_id === excludeId) continue;
+    const pts = d.points || [];
+    if (pts.length >= 2) out.push({ pts, closed: !!d.closed, ends: [] });
+  }
+  return out;
+}
+
+// Snap target for a world point, or null. Ends win over edges.
+function findSnap(wx, wy, excludeId, altKey) {
+  if (altKey) return null;
+  const targets = _snapTargets(excludeId);
+  let best = null;
+  for (const t of targets) {
+    for (const e of t.ends) {
+      const d = Math.hypot(wx - e[0], wy - e[1]);
+      if (d < SNAP_DIST && (!best || d < best.d)) best = { pt: [e[0], e[1]], kind: 'end', d };
+    }
+  }
+  if (best) return best;
+  for (const t of targets) {
+    const n = t.pts.length;
+    for (let i = 0; i < (t.closed ? n : n - 1); i++) {
+      const a = t.pts[i], b = t.pts[(i + 1) % n];
+      const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+      const u = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((wx - a[0]) * dx + (wy - a[1]) * dy) / L2));
+      const pt = [a[0] + u * dx, a[1] + u * dy];
+      const d = Math.hypot(wx - pt[0], wy - pt[1]);
+      if (d < SNAP_DIST && (!best || d < best.d)) best = { pt, kind: 'edge', d };
+    }
+  }
+  return best;
+}
+
+function drawSnapHint() {
+  if (!snapHint) return;
+  const [cx, cy] = worldToCanvas(snapHint.pt[0], snapHint.pt[1]);
+  ctx.save();
+  ctx.strokeStyle = JUNCTION_COLOR;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = JUNCTION_COLOR;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  const label = snapHint.kind === 'end' ? 'join end' : 'connect';
+  const w = label.length * 6 + 6;
+  ctx.fillStyle = 'rgba(10,30,20,0.85)';
+  ctx.fillRect(cx + 10, cy - 22, w, 14);
+  ctx.fillStyle = JUNCTION_COLOR;
+  ctx.fillText(label, cx + 13, cy - 9);
+  ctx.restore();
+}
+
+// Handles that are path ENDS (or any drawn-path point) may snap.
+function _snappableHandle(path, key) {
+  if (path.type === 'LinePath' || path.type === 'QuadBezierPath') return key === 'start' || key === 'end';
+  if (path.type === 'ExplicitPath' || !path.type) return key.startsWith('pt');
+  return false;
+}
+
+// Body drag of an open path: shift (dx, dy) so the end nearest to a snap
+// target lands exactly on it.
+function _snapBodyDrag(path, dx, dy, orig, altKey) {
+  if (path.closed || altKey) return [dx, dy, null];
+  let ends;
+  if (path.type === 'LinePath' || path.type === 'QuadBezierPath') ends = [orig.start, orig.end];
+  else {
+    const pts = orig.control_points || orig.points || [];
+    if (pts.length < 2) return [dx, dy, null];
+    ends = [pts[0], pts[pts.length - 1]];
+  }
+  let best = null;
+  for (const e of ends) {
+    const s = findSnap(e[0] + dx, e[1] + dy, path.id, false);
+    if (s && (!best || s.d < best.s.d)) best = { s, e };
+  }
+  if (!best) return [dx, dy, null];
+  return [best.s.pt[0] - best.e[0], best.s.pt[1] - best.e[1], best.s];
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,6 +1461,7 @@ function placeOpening(wx, wy) {
 function selectOpening(id) {
   selectedOpeningId = id;
   selectedId = null;
+  selectedJunction = null;
   updatePathList();
   updatePropPanel();
   updateHint();
@@ -1233,12 +1570,12 @@ function deleteOpening(id) {
 function setTool(t) {
   tool = t;
   drawPts = [];
-  document.getElementById('tool-edit').classList.toggle('active', t === 'edit');
-  document.getElementById('tool-draw').classList.toggle('active', t === 'draw');
-  const curveBtn = document.getElementById('tool-curve');
-  if (curveBtn) curveBtn.classList.toggle('active', t === 'curve');
-  const openBtn = document.getElementById('tool-opening');
-  if (openBtn) openBtn.classList.toggle('active', t === 'opening');
+  snapHint = null;
+  _shapeDown = null;
+  for (const name of ['edit', 'draw', 'curve', 'opening', 'line', 'rect', 'circle', 'ellipse']) {
+    const btn = document.getElementById('tool-' + name);
+    if (btn) btn.classList.toggle('active', t === name);
+  }
   // Curve uses crosshair like draw; edit uses default arrow
   canvas.className = t === 'edit' ? 'tool-edit' : 'tool-draw';
   updateHint();
@@ -1248,12 +1585,12 @@ function setTool(t) {
 function updateHint() {
   const hint = document.getElementById('hint');
   if (tool === 'draw') {
-    hint.textContent = 'Click to place control points. Click start point (≥3 pts) to close. Double-click or Enter to finish open path.';
+    hint.textContent = 'Click to place control points (they snap onto walls to connect — Alt for free placement). Click start point (≥3 pts) to close. Double-click or Enter to finish open path.';
     return;
   }
   if (tool === 'curve') {
-    if (drawPts.length === 0) hint.textContent = 'Click to place curve start point.';
-    else if (drawPts.length === 1) hint.textContent = 'Click to place curve end point.';
+    if (drawPts.length === 0) hint.textContent = 'Click to place curve start point (snaps onto walls to connect).';
+    else if (drawPts.length === 1) hint.textContent = 'Click to place curve end point (snaps onto walls to connect).';
     else hint.textContent = 'Click to set bend/control point — curve will be placed.';
     return;
   }
@@ -1261,12 +1598,25 @@ function updateHint() {
     hint.textContent = 'Click on a wall to place a 12 in opening centred there.';
     return;
   }
+  if (SHAPE_TOOLS[tool]) {
+    const first = { line: 'start point', rect: 'first corner', circle: 'centre', ellipse: 'centre' }[tool];
+    const second = { line: 'end point', rect: 'opposite corner', circle: 'a point on the circle',
+                     ellipse: 'a corner of its bounding box' }[tool];
+    hint.textContent = drawPts.length === 0
+      ? `Click (or press and drag) to place the ${first}. Points snap onto walls (Alt = free). Esc cancels.`
+      : `Click (or release) to place the ${second}. Esc cancels.`;
+    return;
+  }
   if (selectedOpeningId) {
     hint.textContent = 'Drag the opening to slide it along the wall. Drag □ ends to resize. Del to delete.';
     return;
   }
+  if (selectedJunction) {
+    hint.textContent = 'Junction selected: set its corner treatment in the sidebar (independent of Corner R).';
+    return;
+  }
   if (!selectedId) {
-    hint.textContent = 'Click a path to select and edit it. Add primitives from the toolbar or use Draw Path.';
+    hint.textContent = 'Click a path to select and edit it, or a ◆ junction to treat its corner. Add primitives from the toolbar or use Draw Path.';
     return;
   }
   const path = layer.source_paths.find(p => p.id === selectedId);
@@ -1279,7 +1629,7 @@ function updateHint() {
     case 'RectanglePath':
       hint.textContent = 'Drag □ corner handles to resize. Drag body to move.'; break;
     case 'LinePath':
-      hint.textContent = 'Drag ● endpoints to reshape. Drag body to move.'; break;
+      hint.textContent = 'Drag ● endpoints to reshape — they snap onto other walls to connect (Alt = free). Drag body to move, ◯ to rotate (Shift = 15°). ⌘Z / ⇧⌘Z undo / redo · ⌘C ⌘V ⌘D copy / paste / duplicate.'; break;
     case 'QuadBezierPath':
       hint.textContent = 'Drag ● start/end handles to reshape. Drag □ bend handle to adjust curvature. Drag body to move.'; break;
     default:
@@ -1308,13 +1658,16 @@ function onMouseDown(e) {
         return;
       }
     }
-    drawPts.push([wx, wy]);
+    const s = findSnap(wx, wy, null, e.altKey);
+    drawPts.push(s ? s.pt : [wx, wy]);
     repaint();
     return;
   }
 
   if (tool === 'curve') {
-    drawPts.push([wx, wy]);
+    // Start and end snap onto walls; the bend (3rd click) never does.
+    const s = drawPts.length < 2 ? findSnap(wx, wy, null, e.altKey) : null;
+    drawPts.push(s ? s.pt : [wx, wy]);
     if (drawPts.length === 3) {
       finishCurve();
     } else {
@@ -1329,6 +1682,20 @@ function onMouseDown(e) {
     return;
   }
 
+  if (SHAPE_TOOLS[tool]) {
+    _mousePosW = [wx, wy];
+    const pt = _shapePoint(wx, wy, e.altKey);
+    if (drawPts.length === 0) {
+      drawPts = [pt];
+      _shapeDown = pt;
+      updateHint();
+      repaint();
+    } else {
+      createShape(SHAPE_TOOLS[tool], drawPts[0], pt);
+    }
+    return;
+  }
+
   if (tool === 'edit') {
     // 0. Resize handles of the selected opening
     if (selectedOpeningId) {
@@ -1340,9 +1707,16 @@ function onMouseDown(e) {
         return;
       }
     }
-    // 1. Handle on selected path takes priority
+    // 1. Handle on selected path takes priority (rotation handle first)
     if (selectedId) {
       const path = layer.source_paths.find(p => p.id === selectedId);
+      const rh = path && _rotHandle(path);
+      if (rh && Math.hypot(wx - rh.wx, wy - rh.wy) < HIT_DIST * 0.8) {
+        rotateDrag = { pathId: path.id, pivot: rh.pivot,
+                       a0: Math.atan2(wy - rh.pivot[1], wx - rh.pivot[0]),
+                       orig: capturePathState(path) };
+        return;
+      }
       if (path) {
         const h = findHandle(path, wx, wy);
         if (h) {
@@ -1351,6 +1725,14 @@ function onMouseDown(e) {
           return;
         }
       }
+    }
+
+    // 1a. A network junction diamond
+    const jn = hitTestJunction(wx, wy);
+    if (jn && !selectedId) { selectJunction(jn); return; }
+    if (jn && selectedId) {
+      const path = layer.source_paths.find(p => p.id === selectedId);
+      if (!(path && findHandle(path, wx, wy))) { selectJunction(jn); return; }
     }
 
     // 1b. An opening gap (slide it) — before the wall body under it
@@ -1369,16 +1751,21 @@ function onMouseDown(e) {
     // 2. Hit test any path
     const pid = hitTestPath(wx, wy);
     if (pid) {
-      const switching = pid !== selectedId || selectedOpeningId !== null;
+      const switching = pid !== selectedId || selectedOpeningId !== null || selectedJunction !== null;
       selectedId = pid;
       selectedOpeningId = null;
+      selectedJunction = null;
       const path = layer.source_paths.find(p => p.id === pid);
       if (switching) {
         updatePathList();
         updatePropPanel();
         updateHint();
       }
-      if (path) {
+      if (path && (path.type === 'InsetPath' || _isDriven(path))) {
+        setStatus(path.type === 'InsetPath'
+          ? `${path.label || path.id} follows its parent — move the parent, or Detach it.`
+          : `${path.label || path.id} follows its wall relationship — edit the driving boundary, or break the link.`);
+      } else if (path) {
         bodyDragging = { pathId: pid, startWX: wx, startWY: wy,
                          originalState: capturePathState(path) };
       }
@@ -1387,9 +1774,10 @@ function onMouseDown(e) {
     }
 
     // 3. Empty click — deselect
-    if (selectedId || selectedOpeningId) {
+    if (selectedId || selectedOpeningId || selectedJunction) {
       selectedId = null;
       selectedOpeningId = null;
+      selectedJunction = null;
       updatePathList();
       updatePropPanel();
       updateHint();
@@ -1405,10 +1793,27 @@ function onMouseMove(e) {
     applyOpeningDrag(_mousePosW[0], _mousePosW[1]);
     return;
   }
+  if (rotateDrag) {
+    const path = layer.source_paths.find(p => p.id === rotateDrag.pathId);
+    if (path) {
+      const [wx, wy] = _mousePosW;
+      let d = Math.atan2(wy - rotateDrag.pivot[1], wx - rotateDrag.pivot[0]) - rotateDrag.a0;
+      if (e.shiftKey) d = Math.round(d / (Math.PI / 12)) * (Math.PI / 12);   // 15° steps
+      _restorePathState(path, rotateDrag.orig);
+      _transformPath(path, _rotMap(rotateDrag.pivot, d), d);
+      syncPropPanel(path);
+      routeResult = null;
+      repaint();
+    }
+    return;
+  }
   if (dragging) {
-    const [wx, wy] = _mousePosW;
+    let [wx, wy] = _mousePosW;
     const path = layer.source_paths.find(p => p.id === dragging.pathId);
     if (path) {
+      snapHint = _snappableHandle(path, dragging.handleKey)
+        ? findSnap(wx, wy, path.id, e.altKey) : null;
+      if (snapHint) [wx, wy] = snapHint.pt;
       applyHandleDrag(path, dragging.handleKey, wx, wy, dragging.originalState);
       syncPropPanel(path);
       routeResult = null;
@@ -1418,11 +1823,12 @@ function onMouseMove(e) {
   }
   if (bodyDragging) {
     const [wx, wy] = _mousePosW;
-    const dx = wx - bodyDragging.startWX;
-    const dy = wy - bodyDragging.startWY;
+    let dx = wx - bodyDragging.startWX;
+    let dy = wy - bodyDragging.startWY;
     if (Math.hypot(dx, dy) < 1) return;
     const path = layer.source_paths.find(p => p.id === bodyDragging.pathId);
     if (path) {
+      [dx, dy, snapHint] = _snapBodyDrag(path, dx, dy, bodyDragging.originalState, e.altKey);
       applyBodyDrag(path, dx, dy, bodyDragging.originalState);
       syncPropPanel(path);
       routeResult = null;
@@ -1431,25 +1837,64 @@ function onMouseMove(e) {
     return;
   }
 
-  // During draw: repaint to update snap preview
-  if (tool === 'draw' && drawPts.length >= 3) repaint();
-  // During curve: always repaint for live preview
-  if (tool === 'curve') repaint();
+  // Shape tools: live preview + snap indicator.
+  if (SHAPE_TOOLS[tool]) {
+    snapHint = findSnap(_mousePosW[0], _mousePosW[1], null, e.altKey);
+    repaint();
+    return;
+  }
+  // Draw / curve: preview where the next click would snap (and repaint
+  // for the close-path and live-curve previews).
+  if (tool === 'draw' || tool === 'curve') {
+    snapHint = (tool === 'draw' || drawPts.length < 2)
+      ? findSnap(_mousePosW[0], _mousePosW[1], null, e.altKey) : null;
+    repaint();
+  }
 }
 
-function onMouseUp() {
-  const wasDragging = dragging !== null || bodyDragging !== null || openingDrag !== null;
+function onMouseUp(e) {
+  // Press-drag-release with a shape tool places the shape on release.
+  const up = (e && e.clientX !== undefined) ? canvasFromEvent(e) : _mousePosW;
+  if (SHAPE_TOOLS[tool] && drawPts.length === 1 && _shapeDown && up &&
+      Math.hypot(up[0] - _shapeDown[0], up[1] - _shapeDown[1]) > 3) {
+    const pt = _shapePoint(up[0], up[1], e && e.altKey);
+    _shapeDown = null;
+    createShape(SHAPE_TOOLS[tool], drawPts[0], pt);
+    return;
+  }
+  _shapeDown = null;
+  const wasDragging = dragging !== null || bodyDragging !== null || openingDrag !== null ||
+                      rotateDrag !== null;
+  snapHint = null;
   dragging = null;
   bodyDragging = null;
   openingDrag = null;
-  if (wasDragging) scheduleRefresh();
+  rotateDrag = null;
+  if (wasDragging) { scheduleRefresh(); updatePropPanel(); }   // ONE undo step per drag
 }
 
 function onDblClick(e) {
   if (tool === 'draw') finishDraw(false);
 }
 
+function _isTyping() {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = (el.tagName || '').toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el.isContentEditable;
+}
+
 document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && !_isTyping()) {
+    const k = (e.key || '').toLowerCase();
+    if (k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+    if (k === 'y') { e.preventDefault(); redo(); return; }
+    if (k === 'c') { if (copySelected()) e.preventDefault(); return; }
+    if (k === 'v') { if (_clipboard) { e.preventDefault(); pasteClipboard(); } return; }
+    if (k === 'd') { e.preventDefault(); duplicateSelected(); return; }
+  }
+  if (mod) return;          // Cmd-C is copy, never the draw tool's 'c'
   if (e.key === 'c' || e.key === 'C') {
     if (tool === 'draw' && drawPts.length >= 3) finishDraw(true);
   }
@@ -1459,10 +1904,10 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (tool === 'draw') { drawPts = []; repaint(); }
     else if (tool === 'curve') { drawPts = []; setTool('edit'); }
-    else if (tool === 'opening') { setTool('edit'); }
-    else { selectedId = null; selectedOpeningId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
+    else if (tool === 'opening' || SHAPE_TOOLS[tool]) { setTool('edit'); }
+    else { selectedId = null; selectedOpeningId = null; selectedJunction = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
   }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement === document.body) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !_isTyping()) {
     if (selectedOpeningId) deleteOpening(selectedOpeningId);
     else if (selectedId) deletePath(selectedId);
   }
@@ -1524,7 +1969,7 @@ function finishDraw(closed) {
   const id = newId();
   layer.source_paths.push({
     id, type: 'ExplicitPath',
-    label: `Path ${layer.source_paths.length + 1}`,
+    label: _nextLabel('ExplicitPath'),
     closed, role: 'free', visible: true,
     points: pts, control_points: pts,
   });
@@ -1534,7 +1979,7 @@ function finishDraw(closed) {
   updatePathList();
   updatePropPanel();
   updateOffsetList();
-  updateLatticeList();
+  updateInfillList();
   setTool('edit'); // auto-return to edit (also calls updateHint + repaint)
 }
 
@@ -1548,7 +1993,7 @@ function finishCurve() {
   const id = newId();
   const path = {
     id, type: 'QuadBezierPath',
-    label: `Curve ${layer.source_paths.length + 1}`,
+    label: _nextLabel('QuadBezierPath'),
     closed: false, role: 'free', visible: true,
     start, end, control,
   };
@@ -1561,7 +2006,7 @@ function finishCurve() {
   updatePathList();
   updatePropPanel();
   updateOffsetList();
-  updateLatticeList();
+  updateInfillList();
   setTool('edit');
 }
 
@@ -1623,6 +2068,68 @@ function drawCurveInProgress() {
 }
 
 // ---------------------------------------------------------------------------
+// Interactive shape tools — nothing is created until the shape is placed.
+//   Line:    start → end          Rect:    corner → opposite corner
+//   Circle:  centre → radius      Ellipse: centre → bounding-box corner
+// Two clicks, or press-drag-release. Points snap onto walls (Alt = free).
+// Escape cancels. After placing, back to Edit with the new shape selected.
+// ---------------------------------------------------------------------------
+
+const SHAPE_TOOLS = { line: 'LinePath', rect: 'RectanglePath',
+                      circle: 'CirclePath', ellipse: 'EllipsePath' };
+let _shapeDown = null;        // first point when it was a press (for drag)
+
+function _shapeFields(type, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  switch (type) {
+    case 'LinePath': return { start: [a[0], a[1]], end: [b[0], b[1]] };
+    case 'RectanglePath': return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]),
+                                   w: Math.max(1, Math.abs(dx)), h: Math.max(1, Math.abs(dy)) };
+    case 'CirclePath': return { cx: a[0], cy: a[1], radius: Math.max(1, Math.hypot(dx, dy)) };
+    case 'EllipsePath': return { cx: a[0], cy: a[1], rx: Math.max(1, Math.abs(dx)),
+                                 ry: Math.max(1, Math.abs(dy)), rotation: 0 };
+  }
+  return {};
+}
+
+function createShape(type, a, b) {
+  if (type === 'LinePath' && Math.hypot(b[0] - a[0], b[1] - a[1]) < 1) return null;
+  const id = newId();
+  const path = { id, type, label: _nextLabel(type), closed: type !== 'LinePath',
+                 role: 'free', visible: true, ..._shapeFields(type, a, b) };
+  _computePrimitivePoints(path);
+  layer.source_paths.push(path);
+  selectedId = id;
+  selectedOpeningId = null;
+  selectedJunction = null;
+  routeResult = null;
+  scheduleRefresh();
+  updatePathList();
+  updatePropPanel();
+  updateOffsetList();
+  updateInfillList();
+  setTool('edit');
+  return path;
+}
+
+function _shapePoint(wx, wy, altKey) {
+  const s = findSnap(wx, wy, null, altKey);
+  return s ? s.pt : [wx, wy];
+}
+
+function drawShapeInProgress() {
+  const type = SHAPE_TOOLS[tool];
+  if (!type || drawPts.length !== 1 || !_mousePosW) return;
+  const b = snapHint ? snapHint.pt : _mousePosW;
+  const ghost = { type, closed: type !== 'LinePath', ..._shapeFields(type, drawPts[0], b) };
+  _computePrimitivePoints(ghost);
+  const cp = (ghost.points || []).map(([x, y]) => worldToCanvas(x, y));
+  drawPolyline(cp, '#4a9eff', 1.5, true, ghost.closed);
+  const [x0, y0] = worldToCanvas(drawPts[0][0], drawPts[0][1]);
+  drawDot(x0, y0, 4, '#4a9eff');
+}
+
+// ---------------------------------------------------------------------------
 // Primitives
 // ---------------------------------------------------------------------------
 
@@ -1633,11 +2140,28 @@ const PRIM_DEFAULTS = {
   RectanglePath: () => ({ x: 140, y: 140, w: 120, h: 120 }),
 };
 
+// Auto-numbered default labels (Line 1, Line 2, Rect 1 …); a label the
+// user typed is never touched.
+const TYPE_NAMES = { LinePath: 'Line', RectanglePath: 'Rect', CirclePath: 'Circle',
+                     EllipsePath: 'Ellipse', QuadBezierPath: 'Curve', ExplicitPath: 'Path',
+                     InsetPath: 'Inset' };
+
+function _nextLabel(type) {
+  const base = TYPE_NAMES[type] || 'Path';
+  const re = new RegExp('^' + base + ' (\\d+)$');
+  let n = 0;
+  for (const p of layer.source_paths) {
+    const m = (p.label || '').match(re);
+    if (m) n = Math.max(n, +m[1]);
+  }
+  return `${base} ${n + 1}`;
+}
+
 function addPrimitive(type) {
   const id = newId();
   const path = {
     id, type,
-    label: type.replace('Path', ''),
+    label: _nextLabel(type),
     closed: type !== 'LinePath',
     role: 'free', visible: true,
     ...PRIM_DEFAULTS[type](),
@@ -1650,7 +2174,7 @@ function addPrimitive(type) {
   updatePathList();
   updatePropPanel();
   updateOffsetList();
-  updateLatticeList();
+  updateInfillList();
   setTool('edit'); // auto-return to edit
 }
 
@@ -1704,6 +2228,13 @@ function _applyCornerRounding(pts, radius, closed) {
   return result;
 }
 
+// A path's OWN Corner R (rounds its original corners only — never the
+// corners a wall network creates at junctions). Legacy fallback: layer.
+function _cornerR(path) {
+  if (path.corner_radius != null) return Math.max(0, +path.corner_radius || 0);
+  return (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
+}
+
 function _computePrimitivePoints(path) {
   if (path.type === 'LinePath') {
     path.points = [path.start, path.end];
@@ -1721,14 +2252,11 @@ function _computePrimitivePoints(path) {
       const lx = path.rx * Math.cos(a), ly = path.ry * Math.sin(a);
       return [path.cx + lx * cr - ly * sr, path.cy + lx * sr + ly * cr];
     });
+  } else if (path.type === 'InsetPath') {
+    // derived: points come from the parent (preview here, backend exact)
   } else if (path.type === 'RectanglePath') {
-    const corners = [
-      [path.x, path.y],
-      [path.x + path.w, path.y],
-      [path.x + path.w, path.y + path.h],
-      [path.x, path.y + path.h],
-    ];
-    const r = (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
+    const corners = _rectCorners(path);
+    const r = _cornerR(path);
     path.points = r > 0 ? _applyCornerRounding(corners, r, true) : corners;
   } else if (path.type === 'QuadBezierPath') {
     const n = 128;
@@ -1742,7 +2270,7 @@ function _computePrimitivePoints(path) {
     });
   } else {
     const raw = path.control_points || path.points || [];
-    const r = (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
+    const r = _cornerR(path);
     path.points = (r > 0 && raw.length >= 3)
       ? _applyCornerRounding(raw, r, !!path.closed)
       : raw;
@@ -1753,13 +2281,31 @@ function _computePrimitivePoints(path) {
 // Path list UI
 // ---------------------------------------------------------------------------
 
+// Wall-network membership: source id → { label: 'N1', members: [...] }.
+// Wall-network membership: source paths that touch / cross (the networks
+// the designer builds). source id → { label: 'N1', ids, names, wall }.
+function _networkOf() {
+  const out = {};
+  ((networkInfo && networkInfo.source_networks) || []).forEach(c => {
+    const names = c.sources.map(id => {
+      const p = layer.source_paths.find(s => s.id === id);
+      return p ? (p.label || p.id) : id;
+    });
+    for (const id of c.sources) out[id] = { label: c.id, ids: c.sources, names, wall: c.wall };
+  });
+  return out;
+}
+
 function updatePathList() {
   const el = document.getElementById('path-list');
   el.innerHTML = '';
+  const nets = _networkOf();
   for (const p of layer.source_paths) {
     const item = document.createElement('div');
     item.className = 'path-item' + (p.id === selectedId ? ' selected' : '');
-    item.onclick = () => { selectedId = p.id; selectedOpeningId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); };
+    item.onclick = () => { selectedId = p.id; selectedOpeningId = null; selectedJunction = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); };
+    item.onmouseenter = () => setHighlight(p.id);
+    item.onmouseleave = () => setHighlight(null);
 
     const dot = document.createElement('div');
     dot.className = 'role-dot';
@@ -1774,6 +2320,15 @@ function updatePathList() {
     type.textContent = (p.type || 'Path').replace('Path', '').toLowerCase();
 
     item.append(dot, label, type);
+    const net = nets[p.id];
+    if (net) {
+      const badge = document.createElement('div');
+      badge.className = 'path-type';
+      badge.style.cssText = `color:${JUNCTION_COLOR};margin-left:6px`;
+      badge.textContent = `⛓ ${net.label}`;
+      badge.title = `Connected wall network ${net.label}: ${net.names.join(', ')}`;
+      item.appendChild(badge);
+    }
     el.appendChild(item);
 
     for (const op of _openingsOf(p.id)) {
@@ -1813,13 +2368,29 @@ function updatePropPanel() {
       return;
     }
   }
+  if (selectedJunction) {
+    section.style.display = '';
+    panel.innerHTML = '';
+    updateJunctionPropPanel(panel);
+    return;
+  }
   if (!selectedId) { section.style.display = 'none'; return; }
   const path = layer.source_paths.find(p => p.id === selectedId);
   if (!path) { section.style.display = 'none'; return; }
   section.style.display = '';
   panel.innerHTML = '';
 
-  addPropRowText(panel, 'Label', path.label || '', v => { path.label = v; updatePathList(); });
+  const head = document.createElement('div');
+  head.className = 'prop-header';
+  head.textContent = `${path.label || path.id}`;
+  const kind = document.createElement('span');
+  kind.className = 'prop-header-kind';
+  kind.textContent = `  ${(TYPE_NAMES[path.type] || 'Path').toLowerCase()}`;
+  head.appendChild(kind);
+  head.onmouseenter = () => setHighlight(path.id);
+  head.onmouseleave = () => setHighlight(null);
+  panel.appendChild(head);
+  addPropRowText(panel, 'Label', path.label || '', v => { path.label = v; historyCheckpoint(); updatePathList(); updatePropPanel(); });
   if (path.type !== 'QuadBezierPath') {
     addPropRowCheck(panel, 'Closed', path.closed, v => {
       path.closed = v; routeResult = null; scheduleRefresh(); repaint();
@@ -1843,6 +2414,7 @@ function updatePropPanel() {
       addPropRowNum(panel, 'Y',      'y', path.y, v => { path.y = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       addPropRowNum(panel, 'Width',  'w', path.w, v => { path.w = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       addPropRowNum(panel, 'Length', 'h', path.h, v => { path.h = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      _addCornerRRow(panel, path);
       break;
     case 'LinePath':
       addPropRowNum(panel, 'Start X', 'x0', path.start[0], v => { path.start[0] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
@@ -1860,6 +2432,14 @@ function updatePropPanel() {
       break;
   }
 
+  if (path.type === 'ExplicitPath' || !path.type) _addCornerRRow(panel, path);
+  if (path.type === 'InsetPath') _addInsetChildRows(panel, path);
+  else if (!_isDriven(path)) _addTransformRows(panel, path);
+  if (path.closed && ['RectanglePath', 'CirclePath', 'EllipsePath'].includes(path.type))
+    _addWallRelationRows(panel, path);
+  if (path.closed) _addInsetCreateRows(panel, path);
+  _addWallRows(panel, path);
+
   // Delete button
   const delBtn = document.createElement('button');
   delBtn.className = 'add-btn';
@@ -1867,9 +2447,264 @@ function updatePropPanel() {
   delBtn.textContent = '× Delete path';
   delBtn.onclick = () => deletePath(path.id);
   panel.appendChild(delBtn);
+  _addNetworkPanel(panel, path);
 }
 
-function addPropRowNum(panel, label, fieldKey, value, onChange) {
+// --- Wall model: the source path is the REFERENCE geometry. Wall Thickness
+// turns it into a printable wall region; Wall Alignment says where the
+// thickness lies relative to the reference. A Centered wall's reference is
+// a construction line (not printed unless asked) — the faces and the infill
+// are what print. Network Wall Thickness applies to every path of the
+// connected network unless a path overrides it.
+const ALIGN_UI = {           // UI label ↔ stored value
+  Inside: 'inside', Centered: 'center', Outside: 'outside', Left: 'left', Right: 'right',
+};
+function _alignOptions(closed) { return closed ? ['Inside', 'Centered', 'Outside'] : ['Centered', 'Left', 'Right']; }
+function _alignLabel(align, closed) {
+  const a = (!align || align === 'auto') ? (closed ? 'inside' : 'center') : align;
+  return Object.keys(ALIGN_UI).find(k => ALIGN_UI[k] === a) || (closed ? 'Inside' : 'Centered');
+}
+function _effectiveWall(path) {
+  const own = path.wall && path.wall.thickness > 0 ? path.wall : null;
+  if (own) return { wall: own, from: 'path' };
+  const net = _networkOf()[path.id];
+  const nw = net ? _netWallFor(net.ids) : null;
+  return nw ? { wall: nw, from: 'network', net } : { wall: null, from: null };
+}
+
+function _addSubTitle(panel, text, color) {
+  const t = document.createElement('div');
+  t.className = 'section-title';
+  t.style.cssText = 'margin-top:12px;' + (color ? 'color:' + color : '');
+  t.textContent = text;
+  panel.appendChild(t);
+}
+
+function _addNote(panel, text) {
+  const n = document.createElement('div');
+  n.className = 'path-type';
+  n.textContent = text;
+  panel.appendChild(n);
+}
+
+function _addButton(panel, text, onclick, disabled) {
+  const b = document.createElement('button');
+  b.className = 'add-btn';
+  b.style.marginTop = '4px';
+  b.textContent = text;
+  b.disabled = !!disabled;
+  b.onclick = onclick;
+  panel.appendChild(b);
+}
+
+function _addWallRows(panel, path) {
+  _addSubTitle(panel, 'Wall');
+  const eff = _effectiveWall(path);
+  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); repaint(); };
+  if (eff.from === 'network') {
+    _addNote(panel, `Wall Thickness ${eff.wall.thickness} in · ${_alignLabel(eff.wall.align, path.closed)}` +
+                    ` — inherited from network ${eff.net.label}.`);
+    _addButton(panel, 'Override for this path', () => {
+      path.wall = { thickness: eff.wall.thickness, align: eff.wall.align || 'auto',
+                    print_reference: !!eff.wall.print_reference };
+      refresh();
+    });
+    return;
+  }
+  const own = eff.wall;
+  addPropRowNum(panel, 'Wall Thickness', 'wall-t', own ? own.thickness : 0, v => {
+    path.wall = v > 0 ? { thickness: v, align: (path.wall && path.wall.align) || 'auto',
+                          print_reference: !!(path.wall && path.wall.print_reference) } : null;
+    refresh();
+  });
+  if (!own) {
+    _addNote(panel, '0 = a single bead (no wall region). Set a thickness to make this path a wall; ' +
+                    'its faces follow every edit of the path.');
+    return;
+  }
+  addPropRowSelect(panel, 'Wall Alignment', _alignLabel(own.align, path.closed), _alignOptions(path.closed), v => {
+    path.wall = { ...own, align: ALIGN_UI[v] };
+    refresh();
+  });
+  const centred = _alignLabel(own.align, path.closed) === 'Centered';
+  if (centred) {
+    addPropRowCheck(panel, 'Print reference line', !!own.print_reference, v => {
+      path.wall = { ...own, print_reference: v };
+      refresh();
+    });
+  }
+  _addNote(panel, centred
+    ? 'Thickness is split evenly on both sides of the path; the path itself is a reference line.'
+    : `The path is one face of the wall; the thickness lies ${_alignLabel(own.align, path.closed).toLowerCase()}.`);
+  const net = _networkOf()[path.id];
+  if (net && _netWallFor(net.ids)) {
+    _addButton(panel, `Use network ${net.label} wall instead`, () => { path.wall = null; refresh(); });
+  }
+}
+
+// --- Wall-network properties: apply to EVERY path of the connected network
+// (and to paths joined to it later) unless a path overrides it.
+function _netWallFor(ids) {
+  return (layer.network_walls || []).find(w => ids.includes(w.path_id)) || null;
+}
+
+function _addNetworkPanel(panel, path) {
+  const net = _networkOf()[path.id];
+  if (!net || net.ids.length < 2) return;
+  _addSubTitle(panel, `Wall network ${net.label}`, JUNCTION_COLOR);
+  _addNote(panel, `${net.ids.length} connected paths: ${net.names.join(', ')}`);
+  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); repaint(); };
+  const nw = _netWallFor(net.ids);
+  addPropRowNum(panel, 'Network Wall Thickness', 'net-wall-t', nw ? nw.thickness : 0, v => {
+    let w = _netWallFor(net.ids);
+    if (v > 0) {
+      if (!w) { w = { id: newId(), path_id: path.id, thickness: v, align: 'auto' }; layer.network_walls.push(w); }
+      w.thickness = v;
+    } else if (w) {
+      layer.network_walls = layer.network_walls.filter(x => x !== w);
+    }
+    refresh();
+  });
+  if (nw) {
+    addPropRowSelect(panel, 'Wall Alignment', nw.align === 'auto' || !nw.align ? 'Default' : _alignLabel(nw.align, true),
+                     ['Default', 'Centered', 'Inside', 'Outside'], v => {
+      nw.align = v === 'Default' ? 'auto' : ALIGN_UI[v];
+      refresh();
+    });
+  }
+  const own = net.ids.filter(id => {
+    const p = layer.source_paths.find(s => s.id === id);
+    return p && p.wall && p.wall.thickness > 0;
+  });
+  _addNote(panel, 'Applies to every path in this network unless a path overrides it. ' +
+                  'Default alignment: Centered on lines, Inside closed shapes.' +
+                  (own.length ? ` Overridden by: ${own.map(id => _pathName(id)).join(', ')}.` : ''));
+  const hasInfill = (layer.infills || []).some(f => net.ids.includes(f.path_id));
+  _addButton(panel, hasInfill ? 'Infill: see Infill section' : '+ Add infill to network',
+             () => { selectedId = path.id; addInfill(); updatePropPanel(); }, hasInfill);
+}
+
+function _pathName(id) {
+  const p = layer.source_paths.find(s => s.id === id);
+  return p ? (p.label || p.id) : id;
+}
+
+// ---------------------------------------------------------------------------
+// Path identification — hovering / focusing a path name (picker items,
+// path list) highlights that path on the canvas; nothing is labelled
+// permanently.
+// ---------------------------------------------------------------------------
+
+let highlightPathId = null;
+const HIGHLIGHT_COLOR = '#ffd84a';
+
+function setHighlight(id) {
+  if (highlightPathId === id) return;
+  highlightPathId = id;
+  repaint();
+}
+
+function drawHighlight() {
+  const p = highlightPathId && layer.source_paths.find(s => s.id === highlightPathId);
+  if (!p || !(p.points || []).length) return;
+  const cp = p.points.map(([x, y]) => worldToCanvas(x, y));
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  drawPolyline(cp, HIGHLIGHT_COLOR, 9, false, p.closed);
+  ctx.globalAlpha = 1;
+  drawPolyline(cp, HIGHLIGHT_COLOR, 2.5, false, p.closed);
+  const mid = cp[Math.floor(cp.length / 2)];
+  const label = p.label || p.id;
+  ctx.font = 'bold 11px monospace';
+  const w = label.length * 7 + 8;
+  ctx.fillStyle = 'rgba(30,25,5,0.9)';
+  ctx.fillRect(mid[0] + 8, mid[1] - 20, w, 16);
+  ctx.fillStyle = HIGHLIGHT_COLOR;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, mid[0] + 12, mid[1] - 12);
+  ctx.restore();
+}
+
+// A source-path picker: like a select, but hovering or arrow-keying over an
+// item highlights that path on the canvas.
+function addPathPickerRow(panel, label, currentId, onChange, excludeId, filterFn) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
+  const btn = document.createElement('button');
+  btn.className = 'prop-input path-picker';
+  btn.textContent = _pathName(currentId) + ' ▾';
+  btn.onmouseenter = () => setHighlight(currentId);
+  let isOpen = false;
+  btn.onmouseleave = () => { if (!isOpen) setHighlight(null); };
+  const list = document.createElement('div');
+  list.className = 'path-picker-list';
+  // Candidates are read when the list OPENS (paths drawn after this panel
+  // was built must be selectable too).
+  let items = [], active = 0, nodes = [];
+  const refreshItems = () => {
+    items = layer.source_paths.filter(p => p.id !== excludeId && (!filterFn || filterFn(p)));
+    active = Math.max(0, items.findIndex(p => p.id === currentId));
+  };
+  refreshItems();
+  const close = (commit) => {
+    if (!isOpen) return;
+    isOpen = false;
+    if (list.parentNode) list.parentNode.removeChild(list);
+    setHighlight(null);
+    if (commit && items[active]) onChange(items[active].id);
+  };
+  const mark = () => nodes.forEach((it, i) => {
+    it.className = 'path-picker-item' + (i === active ? ' active' : '') +
+                   (items[i].id === currentId ? ' current' : '');
+  });
+  // Nodes are built once per opening; hovering only moves the 'active'
+  // class (rebuilding the node under the pointer could swallow the click).
+  const render = () => {
+    list.innerHTML = '';
+    nodes = items.map((p, i) => {
+      const it = document.createElement('div');
+      it.textContent = `${p.label || p.id}  ·  ${(TYPE_NAMES[p.type] || 'Path').toLowerCase()}`;
+      it.onmouseenter = () => { active = i; setHighlight(p.id); mark(); };
+      it.onmousedown = (ev) => { ev.preventDefault(); active = i; close(true); };
+      list.appendChild(it);
+      return it;
+    });
+    mark();
+  };
+  btn.onclick = () => {
+    if (isOpen) { close(false); return; }
+    isOpen = true;
+    refreshItems();
+    render();
+    row.appendChild(list);
+    setHighlight(items[active] ? items[active].id : null);
+    btn.focus();
+  };
+  btn.onkeydown = (ev) => {
+    if (!isOpen) return;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      active = (active + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      setHighlight(items[active].id); mark(); ev.preventDefault();
+    } else if (ev.key === 'Enter') { close(true); ev.preventDefault(); }
+    else if (ev.key === 'Escape') { close(false); ev.preventDefault(); }
+  };
+  btn.onblur = () => close(false);
+  row.append(lbl, btn);
+  panel.appendChild(row);
+  return { row, btn, list, get items() { return items; }, open: () => { if (!isOpen) btn.onclick(); }, close,
+           get active() { return active; }, isOpen: () => isOpen };
+}
+
+function _addCornerRRow(panel, path) {
+  addPropRowNum(panel, 'Corner R', 'corner-r', _cornerR(path), v => {
+    path.corner_radius = Math.max(0, v);
+    _computePrimitivePoints(path);
+    routeResult = null; scheduleRefresh(); repaint();
+  });
+}
+
+function addPropRowNum(panel, label, fieldKey, value, onChange, unitText = 'in') {
   const row = document.createElement('div');
   row.className = 'prop-row';
   const lbl = document.createElement('span');
@@ -1883,7 +2718,7 @@ function addPropRowNum(panel, label, fieldKey, value, onChange) {
   input.onchange = () => onChange(+input.value);
   const unit = document.createElement('span');
   unit.className = 'prop-unit';
-  unit.textContent = 'in';
+  unit.textContent = unitText;
   row.append(lbl, input, unit);
   panel.appendChild(row);
 }
@@ -1941,7 +2776,7 @@ function updateOffsetList() {
       layer.lattice_instances = layer.lattice_instances.filter(
         li => li.path_a_id !== removedId && li.path_b_id !== removedId
       );
-      routeResult = null; scheduleRefresh(); updateOffsetList(); updateLatticeList(); repaint();
+      routeResult = null; scheduleRefresh(); updateOffsetList(); updateInfillList(); repaint();
     };
     hdr.append(nm, rm);
     block.appendChild(hdr);
@@ -1949,22 +2784,14 @@ function updateOffsetList() {
     const panel = document.createElement('div');
     panel.className = 'prop-panel';
 
-    // Source selector
-    const srcRow = document.createElement('div'); srcRow.className = 'prop-row';
-    const srcLbl = document.createElement('span'); srcLbl.className = 'prop-label'; srcLbl.textContent = 'Source';
-    const srcSel = document.createElement('select'); srcSel.className = 'prop-input';
-    for (const p of layer.source_paths) {
-      const opt = document.createElement('option');
-      opt.value = p.id; opt.textContent = p.label || p.id;
-      if (p.id === ot.source_path_id) opt.selected = true;
-      srcSel.appendChild(opt);
-    }
-    srcSel.onchange = () => {
-      ot.source_path_id = srcSel.value;
+    // Source: a picker that highlights each candidate path on hover
+    addPathPickerRow(panel, 'Source', ot.source_path_id, id => {
+      ot.source_path_id = id;
+      const np = layer.source_paths.find(p => p.id === id);
+      const valid = np && np.closed ? ['inside', 'outside'] : ['left', 'right'];
+      if (!valid.includes(ot.direction)) ot.direction = valid[0];
       routeResult = null; scheduleRefresh(); updateOffsetList(); repaint();
-    };
-    srcRow.append(srcLbl, srcSel);
-    panel.appendChild(srcRow);
+    });
 
     // Direction: Inside/Outside for closed, Left/Right for open
     const srcPath = layer.source_paths.find(p => p.id === ot.source_path_id);
@@ -1985,11 +2812,15 @@ function updateOffsetList() {
 
 function addOffset() {
   if (layer.source_paths.length === 0) { setStatus('Add at least one path first.'); return; }
+  // Source = the selected path (previously always the FIRST path, which
+  // made every new offset land on Rect 1 / Line 1 whatever was selected).
+  const src = layer.source_paths.find(p => p.id === selectedId) || layer.source_paths[0];
+  const closed = !!src.closed;
   layer.offset_treatments.push({
     id: newId(),
-    source_path_id: layer.source_paths[0].id,
+    source_path_id: src.id,
     distance: 10,
-    direction: 'inside',
+    direction: closed ? 'inside' : 'left',
     role: 'inner',
     label: '',
   });
@@ -1999,142 +2830,161 @@ function addOffset() {
 }
 
 // ---------------------------------------------------------------------------
-// Connecting geometry (lattice) UI
+// Infill (wall-region lattice) UI
 // ---------------------------------------------------------------------------
 
-function allBoundaries() {
-  const items = [];
-  for (const p of layer.source_paths) {
-    items.push({ id: p.id, label: p.label || p.id });
-  }
-  for (const ot of layer.offset_treatments) {
-    const src = layer.source_paths.find(p => p.id === ot.source_path_id);
-    const srcLabel = src ? (src.label || src.id) : ot.source_path_id;
-    const dir = ot.direction || 'inside';
-    const dirCap = dir.charAt(0).toUpperCase() + dir.slice(1);
-    const dist = ot.distance != null ? ot.distance : 10;
-    items.push({ id: ot.id, label: `${dirCap} offset of ${srcLabel} — ${dist.toFixed(0)} in` });
-  }
-  return items;
+// Infill fills the printable WALL REGION of a wall network (or a single
+// wall) — all its branches, junctions, holes and openings — as ONE
+// coherent field. It is anchored to a source path (the wall it was added
+// to); the backend fills every wall-material region bordering that path.
+function _infillTargetLabel(f) {
+  const nets = _networkOf();
+  const p = layer.source_paths.find(s => s.id === f.path_id);
+  const name = p ? (p.label || p.id) : f.path_id;
+  if (f.kind === 'solid') return `the area of ${name}`;
+  const net = nets[f.path_id];
+  return net ? `wall network ${net.label} (${net.names.join(', ')})` : `wall of ${name}`;
 }
 
-function updateLatticeList() {
-  const el = document.getElementById('lattice-list');
+function _infillStatus(f) {
+  const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
+  if (!info) return '';
+  if (info.status === 'ok') return info.regions > 1 ? `${info.regions} wall regions` : '';
+  if (info.status === 'shadowed') return 'already filled by another infill';
+  if (info.status === 'no wall material')
+    return 'no wall material here — give the wall an offset (or close the path)';
+  return info.status;
+}
+
+function updateInfillList() {
+  const el = document.getElementById('infill-list');
+  if (!el) return;
   el.innerHTML = '';
-  for (const li of layer.lattice_instances) {
+  for (const f of layer.infills || []) {
     const block = document.createElement('div');
     block.className = 'treatment-block';
-
-    const genInfo = generators[li.generator] || { parameters: [] };
-
     const hdr = document.createElement('div');
     hdr.className = 'treatment-header';
     const nm = document.createElement('span'); nm.className = 'treatment-name';
-    nm.textContent = li.generator.charAt(0).toUpperCase() + li.generator.slice(1);
+    nm.textContent = (f.kind === 'solid' ? 'Solid Infill' : 'Wall Infill');
     const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
     rm.onclick = () => {
-      layer.lattice_instances = layer.lattice_instances.filter(x => x.id !== li.id);
-      routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
+      layer.infills = layer.infills.filter(x => x.id !== f.id);
+      routeResult = null; scheduleRefresh(); updateInfillList(); repaint();
     };
     hdr.append(nm, rm);
     block.appendChild(hdr);
-
     const panel = document.createElement('div');
     panel.className = 'prop-panel';
-
-    // Boundary A and Boundary B selectors — includes source paths and offset-derived paths
-    const boundaries = allBoundaries();
-    for (const [key, label] of [['path_a_id', 'Boundary A'], ['path_b_id', 'Boundary B']]) {
-      const row = document.createElement('div'); row.className = 'prop-row';
-      const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
-      const sel = document.createElement('select'); sel.className = 'prop-input';
-      for (const { id, label: bLabel } of boundaries) {
-        const opt = document.createElement('option');
-        opt.value = id; opt.textContent = bLabel;
-        if (id === li[key]) opt.selected = true;
-        sel.appendChild(opt);
-      }
-      sel.onchange = () => { li[key] = sel.value; routeResult = null; scheduleRefresh(); repaint(); };
-      row.append(lbl, sel);
-      panel.appendChild(row);
+    addPropRowSelectTo(panel, 'Type', f.kind === 'solid' ? 'Solid' : 'Wall', ['Wall', 'Solid'], v => {
+      _setInfillKind(f, v === 'Solid' ? 'solid' : 'wall');
+      routeResult = null; scheduleRefresh(); updateInfillList(); repaint();
+    });
+    addPathPickerRow(panel, 'Region', f.path_id, id => {
+      f.path_id = id;                // explicit choice (e.g. an inner shape)
+      routeResult = null; scheduleRefresh(); updateInfillList(); repaint();
+    });
+    const target = document.createElement('div');
+    target.className = 'path-type';
+    target.textContent = 'Fills ' + _infillTargetLabel(f);
+    panel.appendChild(target);
+    const vtxt = _infillVoidsLabel(f);
+    if (vtxt) {
+      const v = document.createElement('div');
+      v.className = 'path-type';
+      v.textContent = vtxt;
+      panel.appendChild(v);
     }
-
-    // Generator type selector
-    const genRow = document.createElement('div'); genRow.className = 'prop-row';
-    const genLbl = document.createElement('span'); genLbl.className = 'prop-label'; genLbl.textContent = 'Pattern';
-    const genSel = document.createElement('select'); genSel.className = 'prop-input';
-    for (const name of Object.keys(generators)) {
-      const opt = document.createElement('option');
-      opt.value = name; opt.textContent = name;
-      if (name === li.generator) opt.selected = true;
-      genSel.appendChild(opt);
+    const st = _infillStatus(f);
+    if (st) {
+      const s = document.createElement('div');
+      s.className = 'path-type';
+      s.style.color = 'var(--warn)';
+      s.textContent = st;
+      panel.appendChild(s);
     }
-    genSel.onchange = () => {
-      li.generator = genSel.value;
-      const newGen = generators[li.generator] || { parameters: [] };
-      for (const p of newGen.parameters) {
-        if (!(p.name in li.params)) li.params[p.name] = p.default;
-      }
-      li.variation_index = 0;
-      routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
-    };
-    genRow.append(genLbl, genSel);
-    panel.appendChild(genRow);
-
-    for (const param of genInfo.parameters) {
-      addPropRowNumTo(panel, param.label,
-        li.params[param.name] ?? param.default,
-        v => { li.params[param.name] = v; routeResult = null; scheduleRefresh(); repaint(); },
-        getParamUnit(param.name));
+    const names = _patternsFor(f.kind);
+    addPropRowSelectTo(panel, 'Pattern', f.pattern, names, v => {
+      f.pattern = v; routeResult = null; scheduleRefresh(); repaint();
+    });
+    for (const prm of _paramsFor(f)) {
+      addPropRowNumTo(panel, prm.label, f.params[prm.name] ?? prm.default, v => {
+        let x = Math.max(prm.min ?? -1e9, Math.min(prm.max ?? 1e9, v));
+        if (prm.name === 'perimeters') x = Math.round(x);
+        f.params[prm.name] = x;
+        routeResult = null; scheduleRefresh(); repaint();
+      }, prm.name === 'angle' ? '°' : prm.name === 'perimeters' ? '' : 'in');
     }
-
-    // Variation buttons
+    if (f.kind === 'solid') {
+      block.appendChild(panel);
+      el.appendChild(block);
+      continue;                       // no wall-field phase variation
+    }
+    const act = _latticeActual(f);
+    if (act) {
+      const d = document.createElement('div');
+      d.className = 'path-type';
+      d.textContent = act;
+      panel.appendChild(d);
+    }
+    // Advanced: structural bound (target spacing stays the main control)
+    const adv = document.createElement('details');
+    adv.className = 'advanced';
+    const sm = document.createElement('summary');
+    sm.textContent = 'Advanced';
+    adv.appendChild(sm);
+    const advPanel = document.createElement('div');
+    addPropRowNumTo(advPanel, 'Max unsupported', f.params.max_unsupported || 0, v => {
+      f.params.max_unsupported = Math.max(0, v);           // 0 = automatic
+      routeResult = null; scheduleRefresh(); repaint();
+    }, 'in');
+    const hint = document.createElement('div');
+    hint.className = 'path-type';
+    hint.textContent = '0 = automatic (1.375 × target). Wins over Target Spacing.';
+    advPanel.appendChild(hint);
+    adv.appendChild(advPanel);
+    panel.appendChild(adv);
+    if (!_variationEffective(f)) {
+      block.appendChild(panel);
+      el.appendChild(block);
+      continue;                       // V1 / V2 would do nothing here
+    }
     const varLabel = document.createElement('div');
     varLabel.style.cssText = 'color:#555;font-size:10px;margin-top:4px;';
-    varLabel.textContent = 'Variation';
+    varLabel.textContent = 'Variation (phase)';
     panel.appendChild(varLabel);
     const varRow = document.createElement('div');
     varRow.className = 'variation-row';
-    const varCount = genInfo.variation_count || 2;
-    for (let i = 0; i < varCount; i++) {
+    for (let i = 0; i < 2; i++) {
       const btn = document.createElement('button');
-      btn.className = 'var-btn' + (i === (li.variation_index || 0) ? ' active' : '');
+      btn.className = 'var-btn' + (i === (f.variation_index || 0) ? ' active' : '');
       btn.textContent = `V${i + 1}`;
-      btn.onclick = () => {
-        li.variation_index = i;
-        routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
-      };
+      btn.onclick = () => { f.variation_index = i; routeResult = null; scheduleRefresh(); updateInfillList(); repaint(); };
       varRow.appendChild(btn);
     }
     panel.appendChild(varRow);
-
     block.appendChild(panel);
     el.appendChild(block);
   }
 }
 
-function addLattice() {
-  const boundaries = allBoundaries();
-  if (boundaries.length < 2) {
-    setStatus('Add at least two paths (or a path and an offset) first.');
-    return;
-  }
-  const genName = Object.keys(generators)[0] || 'zigzag';
-  const gen = generators[genName] || { parameters: [] };
-  const params = {};
-  for (const p of gen.parameters) params[p.name] = p.default;
-  layer.lattice_instances.push({
-    id: newId(),
-    generator: genName,
-    path_a_id: boundaries[0].id,
-    path_b_id: boundaries[1].id,
-    params,
-    variation_index: 0,
-    label: '',
-  });
+// Add infill to the wall region of the selected path (else the first path).
+function addInfill() {
+  // REGION: the selected path if the designer picked one (an inner shape
+  // too — explicit wins); otherwise the OUTERMOST closed boundary (closed
+  // paths nested inside it become voids, by geometry not creation order).
+  const p = layer.source_paths.find(s => s.id === selectedId) || _outermostClosed() ||
+            layer.source_paths[0];
+  if (!p) { setStatus('Add a wall first.'); return; }
+  // KIND: a closed single-bead boundary is a SOLID area; a path with wall
+  // thickness (or in a wall network) gets WALL infill between its faces.
+  const kind = (p.closed && !_effectiveWall(p).wall) ? 'solid' : 'wall';
+  const f = { id: newId(), path_id: p.id, kind, pattern: 'zigzag', params: {}, variation_index: 0 };
+  _setInfillKind(f, kind);
+  layer.infills.push(f);
   routeResult = null;
   scheduleRefresh();
-  updateLatticeList();
+  updateInfillList();
 }
 
 function getParamUnit(paramName) {
@@ -2177,9 +3027,12 @@ function addPropRowSelectTo(panel, label, value, options, onChange) {
 // ---------------------------------------------------------------------------
 
 function scheduleRefresh() {
+  _syncRelations();
+  historyCheckpoint();
   clearTimeout(_refreshTimer);
   if (layer.source_paths.length === 0) {
     derivedPaths = [];
+    networkInfo = null;
     routeResult = null;
     repaint();
     return;
@@ -2188,8 +3041,10 @@ function scheduleRefresh() {
     // Auto-route: also updates derivedPaths
     _refreshTimer = setTimeout(runRoute, 200);
   } else {
+    // ≥ 2 paths may form a wall network (junction markers, trimmed faces)
     const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0 ||
-                       (layer.openings || []).length > 0;
+                       (layer.infills || []).length > 0 ||
+                       (layer.openings || []).length > 0 || layer.source_paths.length > 1;
     if (hasDerived) {
       _refreshTimer = setTimeout(fetchEffectivePaths, 120);
     } else {
@@ -2215,6 +3070,11 @@ async function fetchEffectivePaths() {
     if (data.paths) {
       const sourceIds = new Set(layer.source_paths.map(p => p.id));
       derivedPaths = data.paths.filter(p => !sourceIds.has(p.id));
+      networkInfo = data.network || null;
+      _applyDerivedSources();
+      updatePathList();
+      updateInfillList();
+      if (selectedJunction) updatePropPanel();
     }
   } catch (e) {
     console.warn('fetchEffectivePaths failed', e);
@@ -2250,6 +3110,11 @@ async function runRoute() {
     routeResult = data;
     const sourceIds = new Set(layer.source_paths.map(p => p.id));
     derivedPaths = (data.layer.paths || []).filter(p => !sourceIds.has(p.id));
+    networkInfo = data.network || null;
+    _applyDerivedSources();
+    updatePathList();
+    updateInfillList();
+    if (selectedJunction) updatePropPanel();
     _setupPlayback(data.moves);
     _showTransport(true);
     updateMetrics(data);
@@ -2278,11 +3143,20 @@ function buildPayload() {
       };
     }),
     lattice_instances: layer.lattice_instances.map(li => ({ ...li })),
+    infills: (layer.infills || []).map(f => ({ ...f, params: { ...f.params } })),
+    junction_style: layer.junction_style || 'miter',
+    junction_radius: layer.junction_radius || 0,
+    junction_overrides: (layer.junction_overrides || []).map(o => ({ ...o })),
+    network_walls: (layer.network_walls || []).map(w => ({ ...w })),
+    wall_relations: (layer.wall_relations || []).map(w => ({ ...w })),
+    return_paths: layer.return_paths !== false,
+    prefer_closed: layer.prefer_closed !== false,
     constraints: layer.constraints,
     corner_radius: layer.corner_radius || 0,
     cap_style: layer.cap_style || 'flat',
     cap_corner_radius: layer.cap_corner_radius || 0,
     openings: (layer.openings || []).map(o => ({ ...o })),
+    region_overrides: (layer.region_overrides || []).map(r => ({ ...r })),
   };
 }
 
@@ -2320,6 +3194,13 @@ function updateMetrics(data) {
     badge = 'Single continuous path';
     cls = 'path';
     title = 'Prints as one continuous path — one start, one end, no travel moves';
+  } else if (!(m.retrace_distance > 0) && m.travel_moves > 0) {
+    // one connected section whose leftover odd ends (e.g. solid infill
+    // split by a void) are joined by a short travel instead of a retrace
+    badge = `Connected, ${m.travel_moves} short hop${m.travel_moves === 1 ? '' : 's'}`;
+    cls = 'multi';
+    title = `One connected section with ${g.odd_degree_nodes} odd junctions: joined by ` +
+            `${m.travel_moves} short travel move(s) rather than printing anything twice`;
   } else {
     badge = 'Continuous, with retrace';
     cls = 'augmented';
@@ -2331,7 +3212,18 @@ function updateMetrics(data) {
 
   const runStr = `${m.print_runs} run${m.print_runs === 1 ? '' : 's'}`;
   const travelStr = m.travel_moves === 0 ? 'no travel' : `${m.travel_moves} travel`;
-  setStatus(`${runStr}, ${travelStr}, ${m.pct_printing}% printing`);
+  const nets = ((data.network && data.network.components) || []);
+  const netStr = nets.length
+    ? ` · ${nets.map((c, i) => `wall network N${i + 1}: ${c.sources.length} walls`).join(', ')}`
+    : '';
+  const ends = data.route_ends;
+  const loopStr = ends ? (ends.closed ? ' · closed loop (start = end)' : ' · open route (layers can alternate)') : '';
+  const plan = data.network && data.network.route_plan;
+  const retStr = plan && plan.repaired_pairs
+    ? ` · ${plan.repaired_pairs} local infill edit${plan.repaired_pairs === 1 ? '' : 's'} for continuity` +
+      (plan.left_to_retrace ? ` · ${plan.left_to_retrace} junction(s) left to retrace` : '')
+    : '';
+  setStatus(`${runStr}, ${travelStr}, ${m.pct_printing}% printing${loopStr}${retStr}${netStr}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2539,14 +3431,23 @@ function toggleArrows() {
 
 function onOverrideChange() {
   layer.constraints.reverse_direction = document.getElementById('override-reverse').checked;
-  if (showToolpath) scheduleRefresh();
+  const rp = document.getElementById('route-returns');
+  const pc = document.getElementById('route-closed');
+  if (rp) layer.return_paths = rp.checked;
+  if (pc) layer.prefer_closed = pc.checked;
+  routeResult = null;
+  scheduleRefresh();
 }
 
 function onWallGeometryChange() {
-  const crEl = document.getElementById('wg-corner-radius');
   const csEl = document.getElementById('wg-cap-style');
   const ccrEl = document.getElementById('wg-cap-corner-radius');
-  if (crEl) layer.corner_radius = Math.max(0, parseFloat(crEl.value) || 0);
+  const jsEl = document.getElementById('wg-junction-style');
+  const jrEl = document.getElementById('wg-junction-radius');
+  if (jsEl) layer.junction_style = jsEl.value || 'miter';
+  if (jrEl) layer.junction_radius = Math.max(0, parseFloat(jrEl.value) || 0);
+  const jrow = document.getElementById('wg-junction-radius-row');
+  if (jrow) jrow.style.display = layer.junction_style === 'round' ? '' : 'none';
   if (csEl) layer.cap_style = csEl.value || 'flat';
   if (ccrEl) layer.cap_corner_radius = Math.max(0, parseFloat(ccrEl.value) || 0);
   const row = document.getElementById('wg-cap-radius-row');
@@ -2563,12 +3464,28 @@ function onWallGeometryChange() {
 // ---------------------------------------------------------------------------
 
 function deletePath(id) {
+  // Parametric insets of this path DETACH (keep their current shape as an
+  // ordinary closed path) — deleting a parent never silently deletes the
+  // geometry derived from it. Undo restores the relationship.
+  for (const c of layer.source_paths)
+    if (c.type === 'InsetPath' && c.parent_id === id) _detachInset(c);
+  layer.wall_relations = (layer.wall_relations || []).filter(r => r.outer_id !== id && r.inner_id !== id);
   layer.source_paths = layer.source_paths.filter(p => p.id !== id);
   layer.offset_treatments = layer.offset_treatments.filter(ot => ot.source_path_id !== id);
   layer.lattice_instances = layer.lattice_instances.filter(
     li => li.path_a_id !== id && li.path_b_id !== id
   );
   layer.openings = (layer.openings || []).filter(o => o.source_path_id !== id);
+  layer.region_overrides = (layer.region_overrides || []).filter(r => r.path_id !== id);
+  layer.infills = (layer.infills || []).filter(f => f.path_id !== id);
+  // A network wall anchored to the deleted path moves to another member.
+  const net = _networkOf()[id];
+  for (const w of layer.network_walls || []) {
+    if (w.path_id !== id) continue;
+    const other = net && net.ids.find(x => x !== id && layer.source_paths.some(p => p.id === x));
+    w.path_id = other || null;
+  }
+  layer.network_walls = (layer.network_walls || []).filter(w => w.path_id);
   selectedId = null;
   selectedOpeningId = null;
   routeResult = null;
@@ -2576,7 +3493,7 @@ function deletePath(id) {
   updatePathList();
   updatePropPanel();
   updateOffsetList();
-  updateLatticeList();
+  updateInfillList();
   updateHint();
   repaint();
 }
@@ -2586,6 +3503,28 @@ function clearAll() {
   layer.offset_treatments = [];
   layer.lattice_instances = [];
   layer.openings = [];
+  layer.region_overrides = [];
+  layer.infills = [];
+  layer.network_walls = [];
+  layer.wall_relations = [];
+  layer.return_paths = true;
+  layer.prefer_closed = true;
+  for (const [elId, v] of [['route-returns', true], ['route-closed', true]]) {
+    const el = document.getElementById(elId);
+    if (el) el.checked = v;
+  }
+  layer.junction_overrides = [];
+  layer.junction_style = 'miter';
+  layer.junction_radius = 2;
+  selectedJunction = null;
+  const jsEl = document.getElementById('wg-junction-style');
+  const jrEl = document.getElementById('wg-junction-radius');
+  const jrow = document.getElementById('wg-junction-radius-row');
+  if (jsEl) jsEl.value = 'miter';
+  if (jrEl) jrEl.value = 2;
+  if (jrow) jrow.style.display = 'none';
+  networkInfo = null;
+  snapHint = null;
   selectedOpeningId = null;
   openingDrag = null;
   layer.constraints = { start_path_id: null, start_t: null,
@@ -2593,11 +3532,9 @@ function clearAll() {
   layer.corner_radius = 0;
   layer.cap_style = 'flat';
   layer.cap_corner_radius = 0;
-  const crEl = document.getElementById('wg-corner-radius');
   const csEl = document.getElementById('wg-cap-style');
   const ccrEl = document.getElementById('wg-cap-corner-radius');
   const ccrRow = document.getElementById('wg-cap-radius-row');
-  if (crEl) crEl.value = 0;
   if (csEl) csEl.value = 'flat';
   if (ccrEl) ccrEl.value = 0;
   if (ccrRow) ccrRow.style.display = 'none';
@@ -2615,14 +3552,751 @@ function clearAll() {
   updatePathList();
   updatePropPanel();
   updateOffsetList();
-  updateLatticeList();
+  updateInfillList();
   updateHint();
   document.getElementById('metrics-section').style.display = 'none';
+  historyCheckpoint();          // Clear All is undoable
   repaint();
 }
 
 function setStatus(msg) {
   document.getElementById('status-bar').textContent = msg;
+}
+
+// ---------------------------------------------------------------------------
+// Undo / redo — SNAPSHOT history of the editable design state
+//
+// The history is a list of serialised `layer` states (every source path,
+// wall spec, offset, infill, opening, inset relationship, junction and
+// routing setting) plus the selection at that moment. Every edit funnels
+// through scheduleRefresh() → historyCheckpoint(): if the serialised layer
+// differs from the last committed state, that state becomes an undo step
+// and the redo stack is cleared. No checkpoint is taken while a pointer
+// gesture is in progress (handle / body / rotation / opening drag), so a
+// continuous drag is ONE step. Undo restores the whole snapshot, so
+// everything DERIVED from geometry — snap connections, wall networks,
+// junctions, inset children, infill regions / voids — comes back with it;
+// there are no per-operation inverse functions to keep in sync.
+// Memory safeguard: oldest steps are dropped beyond HISTORY_MAX_STEPS or
+// HISTORY_MAX_BYTES of stored snapshots.
+// ---------------------------------------------------------------------------
+const HISTORY_MAX_STEPS = 2000;
+const HISTORY_MAX_BYTES = 64 * 1024 * 1024;
+const _hist = { undo: [], redo: [], current: null, bytes: 0 };
+
+function _histState() { return JSON.stringify(layer); }
+function _gestureActive() { return !!(dragging || bodyDragging || openingDrag || rotateDrag); }
+function _histSize(e) { return e.state.length * 2; }
+
+function historyCheckpoint() {
+  if (_gestureActive()) return false;
+  const s = _histState();
+  if (!_hist.current) { _hist.current = { state: s, sel: selectedId }; return false; }
+  if (s === _hist.current.state) { _hist.current.sel = selectedId; return false; }
+  _hist.undo.push(_hist.current);
+  _hist.bytes += _histSize(_hist.current);
+  for (const r of _hist.redo) _hist.bytes -= _histSize(r);
+  _hist.redo = [];                         // a new edit after undo clears redo
+  _hist.current = { state: s, sel: selectedId };
+  while (_hist.undo.length > HISTORY_MAX_STEPS ||
+         (_hist.bytes > HISTORY_MAX_BYTES && _hist.undo.length > 1))
+    _hist.bytes -= _histSize(_hist.undo.shift());
+  updateUndoButtons();
+  return true;
+}
+
+function canUndo() { return _hist.undo.length > 0 || (!!_hist.current && _histState() !== _hist.current.state); }
+function canRedo() { return _hist.redo.length > 0; }
+
+function undo() {
+  if (_gestureActive()) return false;
+  historyCheckpoint();                     // pending edits become a step first
+  if (!_hist.undo.length) return false;
+  const prev = _hist.undo.pop();
+  _hist.redo.push(_hist.current);
+  _hist.current = prev;
+  _histRestore(prev);
+  setStatus('Undo');
+  return true;
+}
+
+function redo() {
+  if (_gestureActive()) return false;
+  historyCheckpoint();
+  if (!_hist.redo.length) return false;
+  const next = _hist.redo.pop();
+  _hist.undo.push(_hist.current);
+  _hist.current = next;
+  _histRestore(next);
+  setStatus('Redo');
+  return true;
+}
+
+function _histRestore(entry) {
+  const st = JSON.parse(entry.state);
+  for (const k of Object.keys(layer)) delete layer[k];
+  Object.assign(layer, st);
+  selectedId = layer.source_paths.some(p => p.id === entry.sel) ? entry.sel : null;
+  if (selectedOpeningId && !(layer.openings || []).some(o => o.id === selectedOpeningId))
+    selectedOpeningId = null;
+  selectedJunction = null;
+  snapHint = null;
+  drawPts = [];
+  highlightPathId = null;
+  routeResult = null;
+  _syncLayerControls();
+  updatePathList();
+  updatePropPanel();
+  updateOffsetList();
+  updateInfillList();
+  updateHint();
+  scheduleRefresh();                       // state == current: no new step
+  updateUndoButtons();
+  repaint();
+}
+
+function updateUndoButtons() {
+  const u = document.getElementById('btn-undo');
+  const r = document.getElementById('btn-redo');
+  if (u) u.disabled = !canUndo();
+  if (r) r.disabled = !canRedo();
+}
+
+// Layer-level controls mirror the (restored) layer state.
+function _syncLayerControls() {
+  const set = (id, prop, v) => { const el = document.getElementById(id); if (el) el[prop] = v; };
+  set('route-returns', 'checked', layer.return_paths !== false);
+  set('route-closed', 'checked', layer.prefer_closed !== false);
+  set('override-reverse', 'checked', !!(layer.constraints && layer.constraints.reverse_direction));
+  set('wg-junction-style', 'value', layer.junction_style || 'miter');
+  set('wg-junction-radius', 'value', layer.junction_radius ?? 2);
+  const jrow = document.getElementById('wg-junction-radius-row');
+  if (jrow) jrow.style.display = layer.junction_style === 'round' ? '' : 'none';
+  set('wg-cap-style', 'value', layer.cap_style || 'flat');
+  set('wg-cap-corner-radius', 'value', layer.cap_corner_radius || 0);
+}
+
+_hist.current = { state: _histState(), sel: null };
+
+// ---------------------------------------------------------------------------
+// Transforms — one function maps any source path through a point map
+// (translation, rotation; later: scale / mirror). Parametric shapes keep
+// their identity: a rotated rectangle is still a RectanglePath (x, y, w, h
+// + rotation about its centre), an ellipse adds to its rotation, a circle
+// moves its centre; lines / curves / drawn paths map their points.
+// ---------------------------------------------------------------------------
+function _rotMap(pivot, a) {
+  let c = Math.cos(a), s = Math.sin(a);
+  if (Math.abs(c) < 1e-12) c = 0;          // exact quarter turns
+  if (Math.abs(s) < 1e-12) s = 0;
+  return p => [pivot[0] + (p[0] - pivot[0]) * c - (p[1] - pivot[1]) * s,
+               pivot[1] + (p[0] - pivot[0]) * s + (p[1] - pivot[1]) * c];
+}
+
+function _normAngle(a) {
+  a = Math.atan2(Math.sin(a), Math.cos(a));
+  return Math.abs(a) < 1e-12 ? 0 : a;
+}
+
+function _rectCorners(path) {
+  const pts = [[path.x, path.y], [path.x + path.w, path.y],
+               [path.x + path.w, path.y + path.h], [path.x, path.y + path.h]];
+  if (!path.rotation) return pts;
+  return pts.map(_rotMap([path.x + path.w / 2, path.y + path.h / 2], path.rotation));
+}
+
+// Rotation pivot: a shape's own centre (closed primitives), else the
+// centre of the bounding box (a line's midpoint).
+function _pathPivot(path) {
+  if (path.type === 'CirclePath' || path.type === 'EllipsePath') return [path.cx, path.cy];
+  if (path.type === 'RectanglePath') return [path.x + path.w / 2, path.y + path.h / 2];
+  const src = path.type === 'LinePath' ? [path.start, path.end]
+    : path.type === 'QuadBezierPath' ? path.points
+    : (path.control_points || path.points || []);
+  if (!src || !src.length) return [0, 0];
+  const xs = src.map(q => q[0]), ys = src.map(q => q[1]);
+  return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+}
+
+function _transformPath(path, map, dAngle) {
+  switch (path.type) {
+    case 'InsetPath':
+      return false;                          // follows its parent
+    case 'CirclePath':
+      [path.cx, path.cy] = map([path.cx, path.cy]); break;
+    case 'EllipsePath':
+      [path.cx, path.cy] = map([path.cx, path.cy]);
+      path.rotation = _normAngle((path.rotation || 0) + dAngle);
+      break;
+    case 'RectanglePath': {
+      const c = map([path.x + path.w / 2, path.y + path.h / 2]);
+      let r = _normAngle((path.rotation || 0) + dAngle);
+      // quarter turns keep the rectangle axis-aligned (w / h swap)
+      const q = Math.round(r / (Math.PI / 2));
+      if (Math.abs(r - q * Math.PI / 2) < 1e-9) {
+        if (q % 2) [path.w, path.h] = [path.h, path.w];
+        r = 0;
+      }
+      path.rotation = r;
+      path.x = c[0] - path.w / 2; path.y = c[1] - path.h / 2;
+      break;
+    }
+    case 'LinePath':
+      path.start = map(path.start); path.end = map(path.end); break;
+    case 'QuadBezierPath':
+      path.start = map(path.start); path.end = map(path.end); path.control = map(path.control);
+      break;
+    default: {
+      const pts = path.control_points || path.points || [];
+      path.control_points = pts.map(map);
+      path.points = path.control_points;
+    }
+  }
+  _computePrimitivePoints(path);
+  _refreshInsetChildren(path.id);
+  return true;
+}
+
+function _restorePathState(path, s) {
+  for (const k of Object.keys(s)) {
+    if (k === 'type' || s[k] === undefined) continue;
+    path[k] = JSON.parse(JSON.stringify(s[k]));
+  }
+  _computePrimitivePoints(path);
+}
+
+function rotatePath(id, degrees) {
+  const path = layer.source_paths.find(p => p.id === id);
+  if (!path || !degrees) return false;
+  if (path.type === 'InsetPath') { setStatus('An inset follows its parent — rotate the parent.'); return false; }
+  const a = degrees * Math.PI / 180;
+  _transformPath(path, _rotMap(_pathPivot(path), a), a);
+  routeResult = null;
+  scheduleRefresh();
+  updatePropPanel();
+  repaint();
+  return true;
+}
+
+function translatePath(id, dx, dy) {
+  const path = layer.source_paths.find(p => p.id === id);
+  if (!path || path.type === 'InsetPath') return false;
+  _transformPath(path, q => [q[0] + dx, q[1] + dy], 0);
+  routeResult = null;
+  scheduleRefresh();
+  updatePropPanel();
+  repaint();
+  return true;
+}
+
+// Rotation handle: above the selection's bounding box, about its pivot.
+const ROT_HANDLE_GAP = 16;   // world inches
+function _rotHandle(path) {
+  if (!path || path.type === 'InsetPath' || _isDriven(path) || !(path.points || []).length) return null;
+  const pivot = _pathPivot(path);
+  const ys = path.points.map(q => q[1]);
+  return { pivot, wx: pivot[0], wy: Math.max(...ys) + ROT_HANDLE_GAP };
+}
+
+function _addTransformRows(panel, path) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = 'Rotate';
+  const input = document.createElement('input');
+  input.type = 'number'; input.className = 'prop-input'; input.value = 15; input.step = 5;
+  input.style.minWidth = '42px';
+  input.title = 'Degrees (counter-clockwise) about the shape centre / midpoint';
+  const go = document.createElement('button');
+  const deg = document.createElement('span');
+  deg.className = 'prop-unit'; deg.textContent = '°';
+  go.className = 'mini-btn'; go.textContent = '↺';
+  go.title = 'Rotate by this many degrees';
+  go.onclick = () => rotatePath(path.id, +input.value || 0);
+  const cw = document.createElement('button');
+  cw.className = 'mini-btn'; cw.textContent = '↻';
+  cw.title = 'Rotate the other way';
+  cw.onclick = () => rotatePath(path.id, -(+input.value || 0));
+  row.append(lbl, input, deg, go, cw);
+  panel.appendChild(row);
+  if (path.type === 'RectanglePath' || path.type === 'EllipsePath') {
+    addPropRowNum(panel, 'Angle', 'rot', +((path.rotation || 0) * 180 / Math.PI).toFixed(3), v => {
+      rotatePath(path.id, v - (path.rotation || 0) * 180 / Math.PI);
+    }, '°');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Copy / paste / duplicate
+// A copy is a new source path: new id, next auto label (Line 2 …), offset
+// slightly so it is visible; its ends are ordinary snap targets / snapping
+// handles. Wall spec and Corner R travel with it. A copy of an inset is
+// ordinary (frozen) geometry — the relationship belongs to the original.
+// ---------------------------------------------------------------------------
+let _clipboard = null;
+let _pasteCount = 0;
+const PASTE_OFFSET = 10;   // world inches (+x, −y)
+
+function copySelected() {
+  const p = layer.source_paths.find(s => s.id === selectedId);
+  if (!p) return false;
+  _clipboard = JSON.parse(JSON.stringify(p));
+  _pasteCount = 0;
+  setStatus(`Copied ${p.label || p.id}`);
+  return true;
+}
+
+function _pasteCopy(src, d) {
+  const c = JSON.parse(JSON.stringify(src));
+  if (c.type === 'InsetPath') {
+    c.type = 'ExplicitPath';
+    c.control_points = (c.points || []).map(q => [...q]);
+    delete c.parent_id; delete c.distance; delete c.mode;
+    c.closed = true;
+  }
+  c.id = newId();
+  const auto = new RegExp('^' + (TYPE_NAMES[src.type] || 'Path') + ' \\d+$');
+  c.label = (!src.label || auto.test(src.label)) ? _nextLabel(c.type) : `${src.label} copy`;
+  _transformPath(c, q => [q[0] + d, q[1] - d], 0);
+  layer.source_paths.push(c);
+  selectedId = c.id;
+  selectedOpeningId = null;
+  selectedJunction = null;
+  routeResult = null;
+  scheduleRefresh();
+  updatePathList();
+  updatePropPanel();
+  updateOffsetList();
+  updateInfillList();
+  updateHint();
+  repaint();
+  return c;
+}
+
+function pasteClipboard() {
+  if (!_clipboard) return null;
+  _pasteCount += 1;
+  return _pasteCopy(_clipboard, PASTE_OFFSET * _pasteCount);
+}
+
+function duplicateSelected() {
+  const p = layer.source_paths.find(s => s.id === selectedId);
+  if (!p) { setStatus('Select a path to duplicate.'); return null; }
+  return _pasteCopy(p, PASTE_OFFSET);
+}
+
+// ---------------------------------------------------------------------------
+// Parametric inset / outset (DESIGN GEOMETRY, not a toolpath treatment)
+// An InsetPath is a real closed source path whose shape is derived from
+// its parent: { type: 'InsetPath', parent_id, distance, mode: inset|outset }.
+// The backend recomputes it from the parent every evaluation (exact,
+// trimmed); the frontend previews it while the parent is dragged. It can
+// carry a wall thickness, bound an infill region or be a void. Deleting
+// the parent DETACHES it (keeps the current shape as a plain path).
+// ---------------------------------------------------------------------------
+function _offsetClosedPreview(pts, d) {
+  // miter offset of a closed polyline (+d = to the left of travel)
+  const n = pts.length;
+  if (n < 3) return [];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[(i + n - 1) % n], b = pts[i], c = pts[(i + 1) % n];
+    const n1 = _leftNormal(a, b), n2 = _leftNormal(b, c);
+    let mx = n1[0] + n2[0], my = n1[1] + n2[1];
+    const ml = Math.hypot(mx, my);
+    if (ml < 1e-9) { out.push([b[0] + n1[0] * d, b[1] + n1[1] * d]); continue; }
+    mx /= ml; my /= ml;
+    const k = Math.min(10, 1 / Math.max(0.1, mx * n1[0] + my * n1[1]));
+    out.push([b[0] + mx * d * k, b[1] + my * d * k]);
+  }
+  return out;
+}
+function _leftNormal(a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+  return [-dy / L, dx / L];
+}
+function _signedArea(pts) {
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    s += a[0] * b[1] - b[0] * a[1];
+  }
+  return s / 2;
+}
+function _insetPreview(child, parent) {
+  const pts = parent.points || [];
+  if (!parent.closed || pts.length < 3) return [];
+  const inward = _signedArea(pts) > 0 ? 1 : -1;
+  const sign = child.mode === 'outset' ? -inward : inward;
+  return _offsetClosedPreview(pts, sign * child.distance);
+}
+function _refreshInsetChildren(parentId, depth = 0) {
+  if (depth > 8 || typeof layer === 'undefined') return;
+  const parent = layer.source_paths.find(p => p.id === parentId);
+  if (!parent) return;
+  for (const rel of (layer.wall_relations || [])) {
+    const info = _relInfo(rel);
+    if (info.drv === parentId) {
+      const dep = layer.source_paths.find(p => p.id === info.dep);
+      if (dep && _applyRelation(rel, parent, dep)) {
+        _computePrimitivePoints(dep);
+        _refreshInsetChildren(dep.id, depth + 1);
+      }
+    }
+  }
+  for (const c of layer.source_paths) {
+    if (c.type !== 'InsetPath' || c.parent_id !== parentId) continue;
+    c.points = _insetPreview(c, parent);
+    _refreshInsetChildren(c.id, depth + 1);
+  }
+}
+
+function createInset(parentId, distance, mode = 'inset') {
+  const parent = layer.source_paths.find(p => p.id === parentId);
+  if (!parent || !parent.closed) { setStatus('Inset / outset needs a closed path.'); return null; }
+  const c = { id: newId(), type: 'InsetPath', label: _nextLabel('InsetPath'), closed: true,
+              role: 'free', visible: true, parent_id: parentId,
+              distance: Math.max(0.1, +distance || 10), mode, points: [] };
+  c.points = _insetPreview(c, parent);
+  layer.source_paths.push(c);
+  selectedId = c.id;
+  routeResult = null;
+  scheduleRefresh();
+  updatePathList();
+  updatePropPanel();
+  updateOffsetList();
+  updateInfillList();
+  repaint();
+  return c;
+}
+
+function _detachInset(c) {
+  c.type = 'ExplicitPath';
+  c.control_points = (c.points || []).map(q => [...q]);
+  c.points = c.control_points;
+  c.closed = true;
+  delete c.parent_id; delete c.distance; delete c.mode;
+}
+
+function detachInset(id) {
+  const c = layer.source_paths.find(p => p.id === id && p.type === 'InsetPath');
+  if (!c) return false;
+  _detachInset(c);
+  routeResult = null;
+  scheduleRefresh();
+  updatePathList();
+  updatePropPanel();
+  repaint();
+  return true;
+}
+
+// Backend-evaluated inset shapes (exact). Not an edit: if nothing else is
+// pending, the current history state absorbs them (no phantom undo step).
+function _applyDerivedSources() {
+  const ds = networkInfo && networkInfo.derived_sources;
+  if (!ds) return;
+  const clean = _hist.current && _histState() === _hist.current.state;
+  let changed = false;
+  for (const p of layer.source_paths) {
+    if (p.type !== 'InsetPath' || !(p.id in ds)) continue;
+    if (JSON.stringify(p.points) !== JSON.stringify(ds[p.id])) { p.points = ds[p.id]; changed = true; }
+  }
+  if (changed && clean) _hist.current.state = _histState();
+  if (changed) repaint();
+}
+
+function _addInsetCreateRows(panel, path) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  row.title = 'Parametric: a closed path kept this far inside / outside this one; it follows every edit';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = 'Inset / Outset';
+  const input = document.createElement('input');
+  input.type = 'number'; input.className = 'prop-input'; input.value = 10; input.min = 0.1;
+  input.style.minWidth = '42px';
+  const bi = document.createElement('button');
+  bi.className = 'mini-btn'; bi.textContent = '+ In';
+  bi.onclick = () => createInset(path.id, +input.value, 'inset');
+  const bo = document.createElement('button');
+  bo.className = 'mini-btn'; bo.textContent = '+ Out';
+  bo.onclick = () => createInset(path.id, +input.value, 'outset');
+  row.append(lbl, input, bi, bo);
+  panel.appendChild(row);
+}
+
+function _addInsetChildRows(panel, path) {
+  const parent = layer.source_paths.find(p => p.id === path.parent_id);
+  const info = document.createElement('div');
+  info.className = 'path-type';
+  info.textContent = parent
+    ? `${path.mode === 'outset' ? 'Outset' : 'Inset'} of ${parent.label || parent.id} — follows it`
+    : 'Parent deleted';
+  info.onmouseenter = () => parent && setHighlight(parent.id);
+  info.onmouseleave = () => setHighlight(null);
+  panel.appendChild(info);
+  if (!(path.points || []).length) {
+    const w = document.createElement('div');
+    w.className = 'path-type'; w.style.color = 'var(--warn)';
+    w.textContent = 'no shape at this distance (inset larger than the parent)';
+    panel.appendChild(w);
+  }
+  addPropRowSelectTo(panel, 'Mode', path.mode === 'outset' ? 'Outset' : 'Inset', ['Inset', 'Outset'], v => {
+    path.mode = v === 'Outset' ? 'outset' : 'inset';
+    _refreshInsetChildren(path.parent_id);
+    routeResult = null; scheduleRefresh(); repaint();
+  });
+  addPropRowNumTo(panel, 'Distance', path.distance, v => {
+    path.distance = Math.max(0.1, v);
+    _refreshInsetChildren(path.parent_id);
+    routeResult = null; scheduleRefresh(); repaint();
+  }, 'in');
+  const det = document.createElement('button');
+  det.className = 'add-btn';
+  det.textContent = 'Detach (keep as plain path)';
+  det.onclick = () => detachInset(path.id);
+  panel.appendChild(det);
+}
+
+// ---------------------------------------------------------------------------
+// Infill kind / region helpers
+// ---------------------------------------------------------------------------
+const _SOLID_PARAMS = [
+  { name: 'spacing', label: 'Spacing', default: 20, min: 2 },
+  { name: 'angle', label: 'Angle', default: 45, min: -90, max: 180 },
+  { name: 'perimeters', label: 'Perimeters', default: 1, min: 1, max: 4 }];
+const SOLID_FALLBACK = { rectilinear: { kind: 'solid', parameters: _SOLID_PARAMS },
+                         serpentine: { kind: 'solid', parameters: _SOLID_PARAMS } };
+
+function _patternsFor(kind) {
+  const names = Object.keys(infillPatterns).filter(k => (infillPatterns[k].kind || 'wall') === kind);
+  if (names.length) return names;
+  return kind === 'solid' ? Object.keys(SOLID_FALLBACK) : ['zigzag', 'wave'];
+}
+function _paramsFor(f) {
+  const pat = infillPatterns[f.pattern] || SOLID_FALLBACK[f.pattern];
+  return (pat && pat.parameters) ||
+    [{ name: 'spacing', label: f.kind === 'solid' ? 'Spacing' : 'Target Spacing', default: 20 }];
+}
+function _setInfillKind(f, kind) {
+  f.kind = kind;
+  const names = _patternsFor(kind);
+  if (!names.includes(f.pattern)) f.pattern = names[0];
+  const old = f.params || {};
+  f.params = {};
+  for (const prm of _paramsFor(f)) f.params[prm.name] = old[prm.name] ?? prm.default;
+}
+
+function _pointInPoly(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi)
+      inside = !inside;
+  }
+  return inside;
+}
+// Closed paths not inside any other closed path (geometry, not order).
+function _outermostClosed() {
+  const closed = layer.source_paths.filter(p => p.closed && (p.points || []).length >= 3);
+  const inside = (a, b) => Math.abs(_signedArea(b.points)) > Math.abs(_signedArea(a.points)) &&
+                           a.points.every((q, i) => i % 8 || _pointInPoly(q, b.points));
+  const outer = closed.filter(a => !closed.some(b => b !== a && inside(a, b)));
+  return outer[0] || null;
+}
+
+// Wall lattice: the spacing is a target; the stitches are redistributed
+// evenly per wall run. Read-only diagnostic of the actual pitch.
+function _latticeActual(f) {
+  const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
+  const lat = info && info.lattice;
+  if (!lat || lat.pitch_min == null) return '';
+  const a = lat.pitch_min.toFixed(1), b = lat.pitch_max.toFixed(1);
+  let txt = `Actual: ${a === b ? a : a + '–' + b} in`;
+  if (lat.max_unsupported != null)
+    txt += ` · Max unsupported: ${lat.max_unsupported.toFixed(1)} in (limit ${lat.max_unsupported_limit.toFixed(1)})`;
+  return txt;
+}
+
+// V1 / V2 shift the phase only where it is free (closed loops, lone
+// walls); in wall networks the junctions fix it — the control is hidden.
+function _variationEffective(f) {
+  const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
+  const lat = info && info.lattice;
+  if (!lat || lat.motif === false) return true;            // field fallback: phase applies
+  return lat.variation_effective !== false;
+}
+
+function _infillVoidsLabel(f) {
+  const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
+  const p = layer.source_paths.find(s => s.id === f.path_id);
+  if (!info || !p || !p.closed) return '';
+  if (f.kind !== 'solid' && _effectiveWall(p).wall) return '';
+  const nm = id => _pathName(id);
+  const v = (info.voids || []).map(nm);
+  let s = `Region: ${nm(f.path_id)} · Voids: ${v.length ? v.join(', ') : 'none'}`;
+  if ((info.islands || []).length) s += ` · Islands: ${info.islands.map(nm).join(', ')}`;
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// Wall relationship between two nested closed boundaries (WALL / REGION
+// semantics): "these two boundaries define a wall `thickness` thick". The
+// driver (default: outer) is edited; the dependent follows. Mirrors
+// model.WallRelation (backend authoritative); rect ↔ rect, circle ↔ circle,
+// ellipse ↔ ellipse only — anything else is refused, never distorted.
+// ---------------------------------------------------------------------------
+const RELATION_TYPES = ['RectanglePath', 'CirclePath', 'EllipsePath'];
+
+// Every driven boundary follows its driver (numeric edits, undo, …).
+function _syncRelations() {
+  for (const rel of (layer.wall_relations || [])) {
+    const { drv, dep } = _relInfo(rel);
+    const D = layer.source_paths.find(p => p.id === drv), P = layer.source_paths.find(p => p.id === dep);
+    if (D && P && _applyRelation(rel, D, P)) _computePrimitivePoints(P);
+  }
+}
+
+function _relInfo(rel) {
+  return rel.driver === 'inner' ? { drv: rel.inner_id, dep: rel.outer_id }
+                                : { drv: rel.outer_id, dep: rel.inner_id };
+}
+function _relationOf(id) {
+  for (const rel of (typeof layer !== 'undefined' && layer.wall_relations) || []) {
+    if (rel.outer_id === id || rel.inner_id === id) return Object.assign({ rel }, _relInfo(rel));
+  }
+  return null;
+}
+function _isDriven(path) {
+  const r = path && _relationOf(path.id);
+  return !!(r && r.dep === path.id);
+}
+
+// dependent = driver ∓ thickness (outer drives: −, inner drives: +)
+function _applyRelation(rel, drv, dep) {
+  if (drv.type !== dep.type || !RELATION_TYPES.includes(drv.type)) return false;
+  const t = Math.max(0, +rel.thickness || 0);
+  const sgn = rel.driver === 'inner' ? 1 : -1;
+  if (drv.type === 'RectanglePath') {
+    const w = drv.w + 2 * sgn * t, h = drv.h + 2 * sgn * t;
+    if (w <= 0 || h <= 0) return false;
+    const cx = drv.x + drv.w / 2, cy = drv.y + drv.h / 2;
+    Object.assign(dep, { w, h, x: cx - w / 2, y: cy - h / 2, rotation: drv.rotation || 0 });
+    const r = _cornerR(drv);
+    dep.corner_radius = r > 0 ? Math.max(0, r + sgn * t) : 0;
+    return true;
+  }
+  if (drv.type === 'CirclePath') {
+    const rad = drv.radius + sgn * t;
+    if (rad <= 0) return false;
+    Object.assign(dep, { cx: drv.cx, cy: drv.cy, radius: rad });
+    return true;
+  }
+  const rx = drv.rx + sgn * t, ry = drv.ry + sgn * t;
+  if (rx <= 0 || ry <= 0) return false;
+  Object.assign(dep, { cx: drv.cx, cy: drv.cy, rx, ry, rotation: drv.rotation || 0 });
+  return true;
+}
+
+function _contains(outer, inner) {
+  const op = outer.points || [], ip = inner.points || [];
+  if (op.length < 3 || ip.length < 3) return false;
+  return Math.abs(_signedArea(op)) > Math.abs(_signedArea(ip)) &&
+         ip.every((q, i) => i % 8 || _pointInPoly(q, op));
+}
+
+function createWallRelation(aId, bId, thickness = 10) {
+  const a = layer.source_paths.find(p => p.id === aId);
+  const b = layer.source_paths.find(p => p.id === bId);
+  if (!a || !b || a === b) return null;
+  if (a.type !== b.type || !RELATION_TYPES.includes(a.type)) {
+    setStatus('A wall relationship needs two rectangles, two circles or two ellipses (use Inset / Outset for other shapes).');
+    return null;
+  }
+  const [outer, inner] = _contains(a, b) ? [a, b] : _contains(b, a) ? [b, a] : [null, null];
+  if (!outer) { setStatus('The two boundaries must be nested (one inside the other).'); return null; }
+  if (_relationOf(a.id) || _relationOf(b.id)) { setStatus('A boundary can be in one wall relationship.'); return null; }
+  const rel = { id: newId(), outer_id: outer.id, inner_id: inner.id,
+                thickness: Math.max(0.1, +thickness || 10), driver: 'outer' };
+  if (!_applyRelation(rel, outer, inner)) { setStatus('Thickness too large for these boundaries.'); return null; }
+  layer.wall_relations.push(rel);
+  _computePrimitivePoints(inner);
+  _refreshInsetChildren(inner.id);
+  routeResult = null;
+  scheduleRefresh();
+  updatePropPanel();
+  repaint();
+  return rel;
+}
+
+function breakWallRelation(relId) {
+  const n = layer.wall_relations.length;
+  layer.wall_relations = layer.wall_relations.filter(r => r.id !== relId);   // geometry stays
+  if (layer.wall_relations.length === n) return false;
+  routeResult = null;
+  scheduleRefresh();
+  updatePropPanel();
+  repaint();
+  return true;
+}
+
+function setRelationThickness(relId, t) {
+  const rel = layer.wall_relations.find(r => r.id === relId);
+  if (!rel) return false;
+  const old = rel.thickness;
+  rel.thickness = Math.max(0.1, +t || rel.thickness);
+  const { drv, dep } = _relInfo(rel);
+  const D = layer.source_paths.find(p => p.id === drv), P = layer.source_paths.find(p => p.id === dep);
+  if (!_applyRelation(rel, D, P)) { rel.thickness = old; setStatus('Thickness too large.'); return false; }
+  _computePrimitivePoints(P);
+  _refreshInsetChildren(P.id);
+  routeResult = null; scheduleRefresh(); updatePropPanel(); repaint();
+  return true;
+}
+
+function setRelationDriver(relId, driver) {
+  const rel = layer.wall_relations.find(r => r.id === relId);
+  if (!rel) return false;
+  rel.driver = driver === 'inner' ? 'inner' : 'outer';
+  routeResult = null; scheduleRefresh(); updatePropPanel(); repaint();
+  return true;
+}
+
+function _addWallRelationRows(panel, path) {
+  const title = document.createElement('div');
+  title.className = 'section-title';
+  title.style.marginTop = '8px';
+  title.textContent = 'Wall relationship';
+  panel.appendChild(title);
+  const r = _relationOf(path.id);
+  if (r) {
+    const rel = r.rel;
+    const line = (txt) => { const d = document.createElement('div'); d.className = 'path-type'; d.textContent = txt; panel.appendChild(d); return d; };
+    line(`Outer boundary: ${_pathName(rel.outer_id)}${rel.driver === 'outer' ? ' (drives)' : ''}`);
+    line(`Inner boundary: ${_pathName(rel.inner_id)}${rel.driver === 'inner' ? ' (drives)' : ''}`);
+    addPropRowNum(panel, 'Thickness', 'rel-t', rel.thickness, v => setRelationThickness(rel.id, v));
+    addPropRowSelectTo(panel, 'Driver', rel.driver === 'inner' ? 'Inner' : 'Outer', ['Outer', 'Inner'],
+                       v => setRelationDriver(rel.id, v === 'Inner' ? 'inner' : 'outer'));
+    const st = ((networkInfo && networkInfo.wall_relations) || {})[rel.id];
+    if (st && st.status !== 'ok') { const w = line(st.status); w.style.color = 'var(--warn)'; }
+    else if (st && st.spread > 0.01) line(`Gap ${st.min_gap}–${st.max_gap} in (ellipses: exact on the axes)`);
+    const br = document.createElement('button');
+    br.className = 'add-btn';
+    br.textContent = 'Break relationship (keep geometry)';
+    br.onclick = () => breakWallRelation(rel.id);
+    panel.appendChild(br);
+    return;
+  }
+  let other = null;
+  const pk = addPathPickerRow(panel, 'Wall with', null, id => { other = id; pk.btn.textContent = _pathName(id) + ' ▾'; },
+                              path.id, p => p.type === path.type && p.closed && !_relationOf(p.id) &&
+                              (_contains(p, path) || _contains(path, p)));
+  pk.btn.textContent = 'choose boundary ▾';
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = 'Thickness';
+  const input = document.createElement('input');
+  input.type = 'number'; input.className = 'prop-input'; input.value = 10; input.min = 0.1;
+  input.style.minWidth = '42px';
+  const go = document.createElement('button');
+  go.className = 'mini-btn'; go.textContent = 'Link';
+  go.onclick = () => { if (other) createWallRelation(path.id, other, +input.value); else setStatus('Choose the other boundary first.'); };
+  row.append(lbl, input, go);
+  panel.appendChild(row);
 }
 
 let _idCounter = 1;
@@ -2636,21 +4310,19 @@ async function init() {
   resizeCanvas();
 
   try {
-    const res = await fetch('/api/generators');
-    const gens = await res.json();
-    for (const g of gens) {
-      generators[g.name] = g;
-      g.variation_count = 2;
-    }
+    const res = await fetch('/api/infill_patterns');
+    const pats = await res.json();
+    for (const p of pats) infillPatterns[p.name] = p;
   } catch (e) {
-    console.warn('Could not load generators', e);
+    console.warn('Could not load infill patterns', e);
   }
 
   updatePathList();
   updatePropPanel();
   updateOffsetList();
-  updateLatticeList();
+  updateInfillList();
   updateHint();
+  updateUndoButtons();
   repaint();
   setStatus('Ready — add paths from the toolbar or use Draw Path. Toolpath auto-routes when enabled.');
 }

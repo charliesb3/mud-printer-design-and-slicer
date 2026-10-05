@@ -165,6 +165,10 @@
     .path-item .role-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     }
+    .tool-btn:disabled { opacity: 0.35; cursor: default; }
+    .mini-btn { background: #1b2a3a; color: #9cc8ff; border: 1px solid #2f4a66; border-radius: 3px;
+                font-size: 11px; padding: 1px 5px; margin-left: 3px; cursor: pointer; flex-shrink: 0; }
+    .mini-btn:hover { background: #24384d; }
     .path-item .path-label { flex: 1; color: #aaa; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .path-item .path-type  { color: #555; font-size: 10px; flex-shrink: 0; }
 
@@ -248,6 +252,19 @@
     .swatch-dot { width: 8px; height: 8px; border-radius: 50%; }
     .swatch-dot.start { background: #3c3; }
     .swatch-dot.end   { background: #c33; }
+    .prop-header { font-size: 14px; font-weight: bold; color: #fff; margin: 2px 0 8px; cursor: default; }
+    .prop-header-kind { font-size: 11px; font-weight: normal; color: #777; }
+    .path-picker { text-align: left; cursor: pointer; }
+    .path-picker-list { position: absolute; z-index: 20; margin-top: 26px; right: 0; min-width: 160px;
+                        background: #1b1b1b; border: 1px solid #444; border-radius: 3px; max-height: 220px;
+                        overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    .path-picker-item { padding: 4px 8px; font-size: 11px; color: #bbb; cursor: pointer; white-space: nowrap; }
+    .path-picker-item.active { background: #3a3415; color: #ffd84a; }
+    .path-picker-item.current { font-weight: bold; }
+    details.advanced > summary { cursor: pointer; list-style: revert; }
+    .prop-row { position: relative; }
+    .swatch-junction { width: 7px; height: 7px; transform: rotate(45deg);
+                       border: 1.5px solid #33dd88; background: #142818; margin: 0 2px; }
 
     /* ---- SMALL ADD BUTTON ---- */
     .add-btn {
@@ -350,15 +367,21 @@
   </div>
   <div class="tool-sep"></div>
   <div class="tool-group">
-    <button class="tool-btn" onclick="addPrimitive('LinePath')">Line</button>
+    <button class="tool-btn" id="tool-line" onclick="setTool('line')" title="Click start, click end (or drag)">Line</button>
     <button class="tool-btn" id="tool-curve" onclick="setTool('curve')">Curve</button>
-    <button class="tool-btn" onclick="addPrimitive('CirclePath')">Circle</button>
-    <button class="tool-btn" onclick="addPrimitive('EllipsePath')">Ellipse</button>
-    <button class="tool-btn" onclick="addPrimitive('RectanglePath')">Rect</button>
+    <button class="tool-btn" id="tool-circle" onclick="setTool('circle')" title="Click centre, click radius (or drag)">Circle</button>
+    <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="Click centre, click a bounding-box corner (or drag)">Ellipse</button>
+    <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="Click a corner, click the opposite corner (or drag)">Rect</button>
   </div>
   <div class="tool-sep"></div>
   <div class="tool-group">
     <button class="tool-btn" id="tool-opening" onclick="setTool('opening')" title="Click a wall to cut a 12 in opening">Opening</button>
+  </div>
+  <div class="tool-sep"></div>
+  <div class="tool-group">
+    <button class="tool-btn" id="btn-undo" onclick="undo()" title="Undo (⌘Z)" disabled>↶ Undo</button>
+    <button class="tool-btn" id="btn-redo" onclick="redo()" title="Redo (⇧⌘Z)" disabled>↷ Redo</button>
+    <button class="tool-btn" id="btn-duplicate" onclick="duplicateSelected()" title="Duplicate the selected path (⌘D). Copy / paste: ⌘C / ⌘V">Duplicate</button>
   </div>
   <div class="tool-sep"></div>
   <button class="tool-btn toggle-on" id="btn-toolpath" onclick="toggleToolpath()">Toolpath ON</button>
@@ -405,17 +428,22 @@
       </div>
 
       <!-- OFFSET TREATMENT -->
-      <div id="offset-section">
-        <div class="section-title">Wall Offsets</div>
+      <details id="offset-section" class="advanced">
+        <summary class="section-title">Advanced: Extra Offsets</summary>
+        <div class="path-type" style="margin:4px 0 6px">
+          Extra parallel beads at a fixed distance from a path. Not the normal way to make a
+          wall — use the path's Wall Thickness.
+        </div>
         <div id="offset-list"></div>
-        <button class="add-btn" onclick="addOffset()" style="margin-top:4px">+ Add Offset</button>
-      </div>
+        <button class="add-btn" onclick="addOffset()" style="margin-top:4px">+ Add Extra Offset</button>
+      </details>
 
-      <!-- LATTICE -->
-      <div id="lattice-section">
-        <div class="section-title">Connecting Geometry</div>
-        <div id="lattice-list"></div>
-        <button class="add-btn" onclick="addLattice()" style="margin-top:4px">+ Add Lattice</button>
+      <!-- INFILL (lattice of a whole wall region) -->
+      <div id="infill-section">
+        <div class="section-title">Infill</div>
+        <div id="infill-list"></div>
+        <button class="add-btn" onclick="addInfill()" style="margin-top:4px"
+                title="Fill the selected path's region (else the outermost closed boundary; closed paths inside it are voids). Closed single-bead boundary → Solid infill; wall with thickness → Wall infill">+ Add Infill</button>
       </div>
 
       <!-- WALL GEOMETRY -->
@@ -423,9 +451,18 @@
         <div class="section-title">Wall Geometry</div>
         <div class="prop-panel">
           <div class="prop-row">
-            <span class="prop-label">Corner R</span>
-            <input type="number" class="prop-input" id="wg-corner-radius"
-                   value="0" min="0" step="1"
+            <span class="prop-label">Junctions</span>
+            <select class="prop-input" id="wg-junction-style"
+                    title="Default for corners created where walls join (each junction can override it)"
+                    onchange="onWallGeometryChange()">
+              <option value="miter">Miter</option>
+              <option value="round">Rounded</option>
+            </select>
+          </div>
+          <div class="prop-row" id="wg-junction-radius-row" style="display:none">
+            <span class="prop-label">Junction R</span>
+            <input type="number" class="prop-input" id="wg-junction-radius"
+                   value="2" min="0" step="0.5"
                    onchange="onWallGeometryChange()">
             <span class="prop-unit">in</span>
           </div>
@@ -456,6 +493,14 @@
             <span class="prop-label">Reverse</span>
             <input type="checkbox" id="override-reverse" onchange="onOverrideChange()">
           </div>
+          <div class="prop-row" title="Make the route continuous by small local edits of the infill instead of printing back over the same bead">
+            <span class="prop-label">Infill repair</span>
+            <input type="checkbox" id="route-returns" checked onchange="onOverrideChange()">
+          </div>
+          <div class="prop-row" title="End where the layer started (next layer starts right above) when that is cheap">
+            <span class="prop-label">Closed loop</span>
+            <input type="checkbox" id="route-closed" checked onchange="onOverrideChange()">
+          </div>
         </div>
       </div>
 
@@ -482,6 +527,8 @@
           <div class="legend-item"><div class="swatch-dot start"></div> Start</div>
           <div class="legend-item"><div class="swatch-dot end"></div> End</div>
           <div class="legend-item"><div class="swatch-diamond"></div> Seam (closed loop)</div>
+          <div class="legend-item"><div class="swatch-junction"></div> Wall-network junction</div>
+          <div class="legend-item"><div class="swatch" style="background:#ff6fa8"></div> Corrective infill strand</div>
         </div>
       </div>
 

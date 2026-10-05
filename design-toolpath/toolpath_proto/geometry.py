@@ -29,6 +29,22 @@ class Strand:
     role: str
     points: list[Vec2]
     closed: bool
+    # Relative cost of RETRACING (printing again) this strand when the
+    # router must pair odd junctions. Visible wall faces are dearer than
+    # internal geometry, so continuity transitions hide inside the wall.
+    retrace_cost: float = 1.0
+    # What the strand IS, for junction rules:
+    #   'face'     visible / structural wall geometry (default)
+    #   'internal' hidden wall geometry (centre lines, intermediate walls)
+    #   'field'    hidden infill / lattice / return paths — a flexible
+    #              routing field. Where a field strand CROSSES another
+    #              hidden strand it is a structural crossing, not a routing
+    #              junction (the nozzle passes straight over it).
+    kind: str = 'face'
+    # Odd ends of this strand may be paired by a short TRAVEL instead of a
+    # retrace when that is shorter (area infill: a hop is better than
+    # printing the perimeter twice). Default: retrace as before.
+    travel_pairing: bool = False
 
     def segments(self) -> list[tuple[Vec2, Vec2]]:
         pts = self.points
