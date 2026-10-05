@@ -22,6 +22,8 @@ from model import (
     OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance,
     PrintLayer, TraversalConstraints, DerivedPath, _offset_polyline,
     _resample, _point_in_polygon, _polygon_area, _lattice_valid_in_cavity,
+    _apply_corner_rounding, _fillet_vertex, _semicircle_cap,
+    _eligible_for_rounding,
 )
 
 
@@ -1061,6 +1063,273 @@ class TestQuadBezierPath:
         assert d['start'] == [0, 0]
         assert d['end'] == [100, 0]
         assert d['control'] == [50, 80]
+
+
+# ---------------------------------------------------------------------------
+# Curve chord dimensions
+# ---------------------------------------------------------------------------
+
+class TestCurveChord:
+    def test_chord_equals_euclidean(self):
+        """Chord length is simply the straight-line distance between endpoints."""
+        p = QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 80))
+        chord = math.hypot(p.end.x - p.start.x, p.end.y - p.start.y)
+        assert chord == pytest.approx(100.0)
+
+    def test_chord_independent_of_control(self):
+        """Moving the bend/control point changes curve length but NOT chord length."""
+        p1 = QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 10))
+        p2 = QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 200))
+        chord1 = math.hypot(p1.end.x - p1.start.x, p1.end.y - p1.start.y)
+        chord2 = math.hypot(p2.end.x - p2.start.x, p2.end.y - p2.start.y)
+        assert chord1 == pytest.approx(chord2)
+        assert chord1 == pytest.approx(100.0)
+        assert p2.arc_length() > p1.arc_length() + 10.0  # obvious difference
+
+    def test_chord_not_in_effective_geometry(self):
+        """Chord is a display-only dimension — never appears as effective/routing geometry."""
+        p = QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 80), id='qb')
+        layer = PrintLayer(id='t', source_paths=[p])
+        paths = layer.effective_paths()
+        assert len(paths) == 1
+        pts = paths[0].sample_points()
+        # If chord were present as a path, it would be a 2-point straight line
+        assert len(pts) > 2
+
+
+# ---------------------------------------------------------------------------
+# Corner rounding (global fillets)
+# ---------------------------------------------------------------------------
+
+class TestCornerRounding:
+    def _rect_pts(self):
+        return [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)]
+
+    def test_zero_radius_rectangle_unchanged(self):
+        """corner_radius = 0 leaves the raw 4-corner polyline alone."""
+        pts = _apply_corner_rounding(self._rect_pts(), 0.0, closed=True)
+        assert len(pts) == 4
+
+    def test_nonzero_radius_rectangle_more_points(self):
+        pts = _apply_corner_rounding(self._rect_pts(), 10.0, closed=True)
+        assert len(pts) > 4
+
+    def test_fillet_radius_approximate(self):
+        """Each 90-degree fillet arc has points at ~radius from its arc center."""
+        pts = _apply_corner_rounding(self._rect_pts(), 10.0, closed=True)
+        # Bottom-left corner's fillet center is at (10, 10). Pick points near it.
+        bl_arc_pts = [p for p in pts if p.x < 15 and p.y < 15]
+        assert len(bl_arc_pts) >= 2
+        for p in bl_arc_pts:
+            r = math.hypot(p.x - 10, p.y - 10)
+            assert abs(r - 10.0) < 0.3, f"Fillet pt {p} radius {r:.3f} != 10"
+
+    def test_fillet_tangent_points_on_segment(self):
+        """Fillet tangent points lie exactly on the adjacent straight segments."""
+        pts = _apply_corner_rounding(self._rect_pts(), 10.0, closed=True)
+        # Points on the bottom edge y=0 should have 10 <= x <= 90 (within tangent range)
+        bottom_pts = [p for p in pts if abs(p.y) < 0.01]
+        for p in bottom_pts:
+            assert 9.9 <= p.x <= 90.1, f"Bottom tangent {p} outside expected range"
+
+    def test_excessive_radius_clamped(self):
+        """R larger than half any adjacent segment is clamped, not degenerate."""
+        # 20x20 rectangle; R=50 would overrun — must clamp to 10 (segment/2)
+        small = [Vec2(0, 0), Vec2(20, 0), Vec2(20, 20), Vec2(0, 20)]
+        pts = _apply_corner_rounding(small, 50.0, closed=True)
+        assert len(pts) >= 4
+        # All points stay inside the 20x20 bounding box (within tiny float tolerance)
+        for p in pts:
+            assert -0.1 <= p.x <= 20.1, f"Clamped-fillet pt {p} x out of range"
+            assert -0.1 <= p.y <= 20.1, f"Clamped-fillet pt {p} y out of range"
+
+    def test_open_polyline_endpoints_preserved(self):
+        """Open polyline rounding keeps the first/last points unchanged."""
+        src = [Vec2(0, 0), Vec2(50, 50), Vec2(100, 0)]
+        pts = _apply_corner_rounding(src, 10.0, closed=False)
+        assert pts[0].x == 0 and pts[0].y == 0
+        assert pts[-1].x == 100 and pts[-1].y == 0
+
+    def test_closed_polygon_rounds_all_corners(self):
+        """Every vertex of a closed polygon receives a fillet arc."""
+        n = 5
+        pentagon = [Vec2(100 * math.cos(2 * math.pi * i / n),
+                        100 * math.sin(2 * math.pi * i / n)) for i in range(n)]
+        pts = _apply_corner_rounding(pentagon, 10.0, closed=True)
+        # Each corner should produce ≥3 arc samples (~5°/sample for a 108° interior fillet)
+        assert len(pts) > n * 3
+
+    def test_rounded_geometry_continuous(self):
+        """
+        Rounded polyline is a single continuous ribbon. Within arcs, points are
+        densely spaced (<= radius). Between arcs are straight segments represented
+        by two tangent points — those gaps match the straight-edge length.
+        No segment should exceed the raw straight edge length of the source.
+        """
+        pts = _apply_corner_rounding(self._rect_pts(), 10.0, closed=True)
+        # Longest raw edge of a 100x100 rectangle is 100 inches.
+        for a, b in zip(pts, pts[1:]):
+            assert a.dist(b) <= 100.0 + 1e-6, \
+                f"Gap {a.dist(b):.2f} between {a} and {b} exceeds edge length"
+        # And every pair must have a non-zero joint — no coincident consecutive duplicates
+        for a, b in zip(pts, pts[1:]):
+            assert a.dist(b) > 1e-9, "Duplicate consecutive point in rounded polyline"
+
+    def test_rounded_rect_offset_approx_constant_spacing(self):
+        """
+        Rounded rect + offset: every offset sample point lies within |D| ± tol
+        of the nearest point on the rounded source. Verifies perpendicular wall
+        spacing is approximately preserved under corner rounding.
+        """
+        rect = RectanglePath(0, 0, 120, 120, id='r')
+        ot = OffsetTreatment(id='o', source_path_id='r', distance=10, role='inner')
+        layer = PrintLayer(id='t', source_paths=[rect],
+                           offset_treatments=[ot], corner_radius=20.0)
+        paths = layer.effective_paths()
+        rect_pts = next(p for p in paths if p.id == 'r').sample_points()
+        off_pts  = next(p for p in paths if p.id == 'o').sample_points()
+        assert rect_pts and off_pts
+        for op in off_pts[::4]:
+            min_d = min(op.dist(rp) for rp in rect_pts)
+            assert abs(min_d - 10.0) < 2.0, f"Wall spacing {min_d:.2f} != 10 at {op}"
+
+
+# ---------------------------------------------------------------------------
+# Open double-wall end-cap styles
+# ---------------------------------------------------------------------------
+
+class TestCapStyles:
+    def _straight_wall_layer(self, cap_style='flat'):
+        line = LinePath(Vec2(0, 50), Vec2(200, 50), id='L')
+        ot = OffsetTreatment(id='O', source_path_id='L', distance=20, role='inner')
+        return PrintLayer(id='t', source_paths=[line],
+                          offset_treatments=[ot], cap_style=cap_style)
+
+    def test_flat_cap_is_two_points(self):
+        paths = self._straight_wall_layer('flat').effective_paths()
+        caps = [p for p in paths if p.role == 'cap']
+        assert len(caps) == 2
+        for cap in caps:
+            assert len(cap.sample_points()) == 2
+
+    def test_round_cap_has_many_points(self):
+        paths = self._straight_wall_layer('round').effective_paths()
+        caps = [p for p in paths if p.role == 'cap']
+        assert len(caps) == 2
+        for cap in caps:
+            assert len(cap.sample_points()) > 10
+
+    def test_round_cap_radius_half_wall_spacing(self):
+        """Round cap has radius equal to half the perpendicular wall distance."""
+        paths = self._straight_wall_layer('round').effective_paths()
+        start_cap = next(p for p in paths if p.label == 'cap_start')
+        pts = start_cap.sample_points()
+        c = pts[0].lerp(pts[-1], 0.5)
+        R = pts[0].dist(c)
+        assert R == pytest.approx(10.0, abs=0.01)  # wall distance = 20, radius = 10
+        for p in pts:
+            assert p.dist(c) == pytest.approx(R, abs=0.1)
+
+    def test_round_cap_tangential_endpoints(self):
+        """Round cap first/last pts exactly match source/offset first pts."""
+        line = LinePath(Vec2(0, 50), Vec2(200, 50), id='L')
+        ot = OffsetTreatment(id='O', source_path_id='L', distance=20)
+        layer = PrintLayer(id='t', source_paths=[line],
+                           offset_treatments=[ot], cap_style='round')
+        paths = layer.effective_paths()
+        src_first = line.sample_points()[0]
+        der_first = next(p for p in paths if p.id == 'O').sample_points()[0]
+        start_cap = next(p for p in paths if p.label == 'cap_start').sample_points()
+        assert start_cap[0].x == pytest.approx(src_first.x, abs=1e-9)
+        assert start_cap[0].y == pytest.approx(src_first.y, abs=1e-9)
+        assert start_cap[-1].x == pytest.approx(der_first.x, abs=1e-9)
+        assert start_cap[-1].y == pytest.approx(der_first.y, abs=1e-9)
+
+    def test_straight_wall_round_caps_zero_travel(self):
+        """Straight open wall + offset + round caps = 1 run, 0 travel."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', '..', 'toolpath_proto'))
+        from graph import route_layer, compute_metrics
+        layer = self._straight_wall_layer('round')
+        moves = route_layer(layer.to_routing_layer())
+        m = compute_metrics(moves)
+        assert m['travel_moves'] == 0
+        assert m['print_runs'] == 1
+
+    def test_quadbezier_round_caps_zero_travel(self):
+        """Curved open wall + offset + round caps = 1 run, 0 travel."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', '..', 'toolpath_proto'))
+        from graph import route_layer, compute_metrics
+        qb = QuadBezierPath(Vec2(0, 100), Vec2(200, 100), Vec2(100, 180), id='qb')
+        ot = OffsetTreatment(id='O', source_path_id='qb', distance=20)
+        layer = PrintLayer(id='t', source_paths=[qb],
+                           offset_treatments=[ot], cap_style='round')
+        moves = route_layer(layer.to_routing_layer())
+        m = compute_metrics(moves)
+        assert m['travel_moves'] == 0
+        assert m['print_runs'] == 1
+
+    def test_reverse_still_zero_travel(self):
+        """Reversed route of a round-cap wall also has zero travel."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', '..', 'toolpath_proto'))
+        from graph import route_layer, compute_metrics
+        layer = self._straight_wall_layer('round')
+        moves = route_layer(layer.to_routing_layer())
+        # Simulate api_route's reverse post-processing
+        from geometry import PrintMove as _PM
+        reversed_moves = [
+            _PM(kind=m.kind, strand_id=m.strand_id, seg_idx=m.seg_idx,
+                start=m.end, end=m.start)
+            for m in reversed(moves)
+        ]
+        rm = compute_metrics(reversed_moves)
+        assert rm['travel_moves'] == 0
+
+
+# ---------------------------------------------------------------------------
+# Lattice interaction with rounded cavity
+# ---------------------------------------------------------------------------
+
+class TestLatticeWithRounding:
+    def test_lattice_inside_rounded_cavity(self):
+        """Zigzag lattice between rounded source + inner offset still generates paths."""
+        rect = RectanglePath(0, 0, 160, 160, id='r', role='outer')
+        ot = OffsetTreatment(id='in', source_path_id='r', distance=20, role='inner')
+        li = LatticeInstance(id='L', generator_name='zigzag',
+                             path_a_id='r', path_b_id='in',
+                             params={'segments': 8, 'connect_ends': False})
+        layer = PrintLayer(id='t', source_paths=[rect],
+                           offset_treatments=[ot], lattice_instances=[li],
+                           corner_radius=20.0)
+        paths = layer.effective_paths()
+        lattice = [p for p in paths if p.role == 'lattice']
+        assert len(lattice) >= 1
+
+    def test_lattice_contained_in_rounded_cavity(self):
+        """
+        Lattice between rounded outer and inner must be valid in the cavity:
+        every segment midpoint inside outer, outside inner, and no crossing of
+        either rounded boundary. Uses _lattice_valid_in_cavity (same rule the
+        zigzag auto-increase enforces) so boundary-touching endpoints are OK.
+        """
+        rect = RectanglePath(0, 0, 160, 160, id='r', role='outer')
+        ot = OffsetTreatment(id='in', source_path_id='r', distance=20, role='inner')
+        li = LatticeInstance(id='L', generator_name='zigzag',
+                             path_a_id='r', path_b_id='in',
+                             params={'segments': 6, 'connect_ends': False})
+        layer = PrintLayer(id='t', source_paths=[rect],
+                           offset_treatments=[ot], lattice_instances=[li],
+                           corner_radius=20.0)
+        paths = layer.effective_paths()
+        outer = next(p for p in paths if p.id == 'r')
+        inner = next(p for p in paths if p.id == 'in')
+        lattice = [p for p in paths if p.role == 'lattice']
+        assert _lattice_valid_in_cavity(lattice, outer, inner)
 
 
 class TestCaseDRouting:

@@ -414,6 +414,28 @@
         <button class="add-btn" onclick="addLattice()" style="margin-top:4px">+ Add Lattice</button>
       </div>
 
+      <!-- WALL GEOMETRY -->
+      <div>
+        <div class="section-title">Wall Geometry</div>
+        <div class="prop-panel">
+          <div class="prop-row">
+            <span class="prop-label">Corner R</span>
+            <input type="number" class="prop-input" id="wg-corner-radius"
+                   value="0" min="0" step="1"
+                   onchange="onWallGeometryChange()">
+            <span class="prop-unit">in</span>
+          </div>
+          <div class="prop-row">
+            <span class="prop-label">End caps</span>
+            <select class="prop-input" id="wg-cap-style"
+                    onchange="onWallGeometryChange()">
+              <option value="flat">Flat</option>
+              <option value="round">Round</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <!-- ROUTING OVERRIDES -->
       <div>
         <div class="section-title">Routing Overrides</div>

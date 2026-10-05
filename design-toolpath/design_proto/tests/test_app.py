@@ -1111,3 +1111,128 @@ class TestQuadBezierPathAPI:
         assert r.status_code == 200, r.get_json().get('error', '')
         data = r.get_json()
         assert len(data['moves']) > 0
+
+
+# ---------------------------------------------------------------------------
+# WALL GEOMETRY — corner_radius and cap_style API tests
+# ---------------------------------------------------------------------------
+
+_RECT_BASE = {
+    'id': 'wg',
+    'label': '',
+    'source_paths': [{
+        'id': 'r', 'type': 'RectanglePath', 'label': 'R',
+        'closed': True, 'role': 'outer', 'visible': True,
+        'x': 0, 'y': 0, 'w': 120, 'h': 120,
+    }],
+    'offset_treatments': [],
+    'lattice_instances': [],
+    'constraints': {'start_path_id': None, 'start_t': None,
+                    'reverse_direction': False, 'component_order': None},
+}
+
+_WALL_BASE = {
+    'id': 'wg_wall',
+    'label': '',
+    'source_paths': [{
+        'id': 'L', 'type': 'LinePath', 'label': 'L',
+        'closed': False, 'role': 'free', 'visible': True,
+        'start': [0, 50], 'end': [200, 50],
+    }],
+    'offset_treatments': [{
+        'id': 'O', 'source_path_id': 'L',
+        'distance': 20, 'role': 'inner', 'label': '',
+    }],
+    'lattice_instances': [],
+    'constraints': {'start_path_id': None, 'start_t': None,
+                    'reverse_direction': False, 'component_order': None},
+}
+
+
+class TestWallGeometryAPI:
+    def test_corner_radius_rounds_rectangle(self, client):
+        """corner_radius > 0 in payload returns a rect with > 4 effective points."""
+        payload = {**_RECT_BASE, 'corner_radius': 20.0, 'cap_style': 'flat'}
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        rect = next(p for p in r.get_json()['paths'] if p['id'] == 'r')
+        assert len(rect['points']) > 4
+
+    def test_missing_corner_radius_defaults_to_zero(self, client):
+        """A payload without corner_radius/cap_style keeps sharp corners and flat caps."""
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(_RECT_BASE),
+                        content_type='application/json')
+        assert r.status_code == 200
+        rect = next(p for p in r.get_json()['paths'] if p['id'] == 'r')
+        assert len(rect['points']) == 4
+
+    def test_round_caps_via_api(self, client):
+        """cap_style='round' makes each cap > 10 points."""
+        payload = {**_WALL_BASE, 'cap_style': 'round'}
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        caps = [p for p in r.get_json()['paths'] if p.get('role') == 'cap']
+        assert len(caps) == 2
+        for c in caps:
+            assert len(c['points']) > 10
+
+    def test_flat_caps_via_api(self, client):
+        """cap_style='flat' preserves the existing 2-point cap behavior."""
+        payload = {**_WALL_BASE, 'cap_style': 'flat'}
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        caps = [p for p in r.get_json()['paths'] if p.get('role') == 'cap']
+        assert len(caps) == 2
+        for c in caps:
+            assert len(c['points']) == 2
+
+    def test_round_cap_wall_zero_travel_api(self, client):
+        """Straight wall + offset + round caps routes with zero travel via API."""
+        payload = {**_WALL_BASE, 'cap_style': 'round'}
+        r = client.post('/api/route',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200, r.get_json().get('error', '')
+        m = r.get_json()['metrics']
+        assert m['travel_moves'] == 0
+        assert m['print_runs'] == 1
+
+    def test_rounded_rect_offset_zigzag_api(self, client):
+        """Rounded outer rect + offset + zigzag lattice routes without error."""
+        payload = {
+            'id': 'rrl',
+            'label': '',
+            'source_paths': [{
+                'id': 'r', 'type': 'RectanglePath', 'label': 'R',
+                'closed': True, 'role': 'outer', 'visible': True,
+                'x': 0, 'y': 0, 'w': 160, 'h': 160,
+            }],
+            'offset_treatments': [{
+                'id': 'in', 'source_path_id': 'r',
+                'distance': 20, 'role': 'inner', 'label': '',
+            }],
+            'lattice_instances': [{
+                'id': 'lat', 'generator': 'zigzag',
+                'path_a_id': 'r', 'path_b_id': 'in',
+                'params': {'segments': 8, 'connect_ends': False},
+                'variation_index': 0, 'label': '',
+            }],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+            'corner_radius': 20.0,
+            'cap_style': 'flat',
+        }
+        r = client.post('/api/route',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200, r.get_json().get('error', '')
+        data = r.get_json()
+        assert len(data['moves']) > 0
+        assert len([p for p in data['layer']['paths'] if p.get('role') == 'lattice']) >= 1

@@ -44,6 +44,8 @@ const layer = {
     reverse_direction: false,
     component_order: null,
   },
+  corner_radius: 0,
+  cap_style: 'flat',
 };
 
 let generators = {};
@@ -1218,6 +1220,56 @@ function addPrimitive(type) {
   setTool('edit'); // auto-return to edit
 }
 
+function _applyCornerRounding(pts, radius, closed) {
+  if (radius <= 0 || pts.length < 3) return pts.slice();
+  const n = pts.length;
+  function filletVertex(A, B, C) {
+    const dBAx = A[0]-B[0], dBAy = A[1]-B[1];
+    const dBCx = C[0]-B[0], dBCy = C[1]-B[1];
+    const lenBA = Math.hypot(dBAx,dBAy), lenBC = Math.hypot(dBCx,dBCy);
+    if (lenBA < 1e-12 || lenBC < 1e-12) return null;
+    const uBAx=dBAx/lenBA, uBAy=dBAy/lenBA, uBCx=dBCx/lenBC, uBCy=dBCy/lenBC;
+    const dot = Math.max(-1,Math.min(1, uBAx*uBCx+uBAy*uBCy));
+    const theta = Math.acos(dot);
+    if (theta < 1e-6 || Math.PI-theta < 1e-6) return null;
+    const half = theta/2, tanH = Math.tan(half);
+    if (Math.abs(tanH) < 1e-12) return null;
+    let t = radius/tanH;
+    t = Math.min(t, lenBA/2, lenBC/2);
+    if (t < 1e-9) return null;
+    const aR = t*tanH;
+    const T1=[B[0]+t*uBAx, B[1]+t*uBAy], T2=[B[0]+t*uBCx, B[1]+t*uBCy];
+    const bx=uBAx+uBCx, by=uBAy+uBCy, bL=Math.hypot(bx,by);
+    if (bL < 1e-12) return [T1,T2];
+    const bux=bx/bL, buy=by/bL;
+    const dC=aR/Math.sin(half);
+    const Cx=B[0]+dC*bux, Cy=B[1]+dC*buy;
+    const t1x=T1[0]-Cx,t1y=T1[1]-Cy, t2x=T2[0]-Cx,t2y=T2[1]-Cy;
+    const crossZ=t1x*t2y-t1y*t2x;
+    const sa=Math.atan2(t1y,t1x);
+    let sw=Math.PI-theta; if (crossZ<0) sw=-sw;
+    const nP=Math.max(3, Math.round(Math.abs(sw)*36/Math.PI)+2);
+    const arc=[];
+    for (let i=0;i<nP;i++){const f=i/(nP-1),a=sa+f*sw;arc.push([Cx+aR*Math.cos(a),Cy+aR*Math.sin(a)]);}
+    return arc;
+  }
+  const result=[];
+  if (closed) {
+    for (let i=0;i<n;i++){
+      const arc=filletVertex(pts[(i+n-1)%n],pts[i],pts[(i+1)%n]);
+      if (arc) result.push(...arc); else result.push(pts[i]);
+    }
+  } else {
+    result.push(pts[0]);
+    for (let i=1;i<n-1;i++){
+      const arc=filletVertex(pts[i-1],pts[i],pts[i+1]);
+      if (arc) result.push(...arc); else result.push(pts[i]);
+    }
+    result.push(pts[n-1]);
+  }
+  return result;
+}
+
 function _computePrimitivePoints(path) {
   if (path.type === 'LinePath') {
     path.points = [path.start, path.end];
@@ -1236,12 +1288,14 @@ function _computePrimitivePoints(path) {
       return [path.cx + lx * cr - ly * sr, path.cy + lx * sr + ly * cr];
     });
   } else if (path.type === 'RectanglePath') {
-    path.points = [
+    const corners = [
       [path.x, path.y],
       [path.x + path.w, path.y],
       [path.x + path.w, path.y + path.h],
       [path.x, path.y + path.h],
     ];
+    const r = (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
+    path.points = r > 0 ? _applyCornerRounding(corners, r, true) : corners;
   } else if (path.type === 'QuadBezierPath') {
     const n = 64;
     path.points = Array.from({ length: n }, (_, i) => {
@@ -1253,7 +1307,11 @@ function _computePrimitivePoints(path) {
       ];
     });
   } else {
-    path.points = path.control_points || path.points;
+    const raw = path.control_points || path.points || [];
+    const r = (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
+    path.points = (r > 0 && raw.length >= 3)
+      ? _applyCornerRounding(raw, r, !!path.closed)
+      : raw;
   }
 }
 
@@ -1759,6 +1817,8 @@ function buildPayload() {
     }),
     lattice_instances: layer.lattice_instances.map(li => ({ ...li })),
     constraints: layer.constraints,
+    corner_radius: layer.corner_radius || 0,
+    cap_style: layer.cap_style || 'flat',
   };
 }
 
@@ -1873,12 +1933,27 @@ function _drawSourceDim(p) {
     case 'QuadBezierPath': {
       const pts = p.points || [];
       if (pts.length < 2) break;
+      // Arc length — label at bezier midpoint t=0.5
       const len = _pathArcLength(pts, false);
-      // Label at bezier midpoint t=0.5: B(0.5) = 0.25*P0 + 0.5*P1 + 0.25*P2
       const mmx = 0.25 * p.start[0] + 0.5 * p.control[0] + 0.25 * p.end[0];
       const mmy = 0.25 * p.start[1] + 0.5 * p.control[1] + 0.25 * p.end[1];
       const [lcx, lcy] = worldToCanvas(mmx, mmy);
       _dimLabel(lcx, lcy - 14, `${len.toFixed(1)} in`);
+      // Chord — faint dotted line from start to end + chord length label
+      const [sx, sy] = worldToCanvas(p.start[0], p.start[1]);
+      const [ex, ey] = worldToCanvas(p.end[0],   p.end[1]);
+      const chordLen = Math.hypot(p.end[0] - p.start[0], p.end[1] - p.start[1]);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(232,204,85,0.4)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      _dimLabel((sx + ex) / 2, (sy + ey) / 2 + 14, `chord ${chordLen.toFixed(1)} in`);
       break;
     }
     case 'CirclePath': {
@@ -1998,6 +2073,18 @@ function onOverrideChange() {
   if (showToolpath) scheduleRefresh();
 }
 
+function onWallGeometryChange() {
+  const crEl = document.getElementById('wg-corner-radius');
+  const csEl = document.getElementById('wg-cap-style');
+  if (crEl) layer.corner_radius = Math.max(0, parseFloat(crEl.value) || 0);
+  if (csEl) layer.cap_style = csEl.value || 'flat';
+  // Recompute all path.points so canvas rendering matches new rounding
+  for (const p of layer.source_paths) _computePrimitivePoints(p);
+  routeResult = null;
+  scheduleRefresh();
+  repaint();
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -2025,6 +2112,12 @@ function clearAll() {
   layer.lattice_instances = [];
   layer.constraints = { start_path_id: null, start_t: null,
                          reverse_direction: false, component_order: null };
+  layer.corner_radius = 0;
+  layer.cap_style = 'flat';
+  const crEl = document.getElementById('wg-corner-radius');
+  const csEl = document.getElementById('wg-cap-style');
+  if (crEl) crEl.value = 0;
+  if (csEl) csEl.value = 'flat';
   selectedId = null;
   routeResult = null;
   derivedPaths = [];

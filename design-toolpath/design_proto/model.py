@@ -325,7 +325,8 @@ class OffsetTreatment:
     role: str = 'inner'
     label: str = ''
 
-    def generate(self, source: Path) -> 'DerivedPath':
+    def generate(self, source: Path,
+                 corner_radius: float = 0.0) -> 'DerivedPath':
         pts = source.sample_points(128)
         if not pts:
             return DerivedPath([], closed=source.closed,
@@ -333,6 +334,8 @@ class OffsetTreatment:
                                role=self.role, label=self.label,
                                source_id=self.source_path_id,
                                treatment_id=self.id)
+        if corner_radius > 0.0 and _eligible_for_rounding(source):
+            pts = _apply_corner_rounding(pts, corner_radius, source.closed)
         offset_pts = _offset_polyline(pts, self.distance, source.closed)
         return DerivedPath(offset_pts, closed=source.closed,
                            id=self.id,
@@ -349,6 +352,112 @@ class OffsetTreatment:
             'role': self.role,
             'label': self.label,
         }
+
+
+def _eligible_for_rounding(path: 'Path') -> bool:
+    """True for piecewise-linear paths with discrete corners that can be filleted."""
+    return isinstance(path, (RectanglePath, ExplicitPath))
+
+
+def _fillet_vertex(A: Vec2, B: Vec2, C: Vec2, radius: float) -> list[Vec2]:
+    """
+    Circular fillet arc replacing vertex B between segments A-B and B-C.
+    Returns arc points [T1, ..., T2] to substitute for B.
+    Returns [] if B is collinear (no fillet needed) or geometry is degenerate.
+    """
+    d_BA = (A - B).normalized()
+    d_BC = (C - B).normalized()
+    if d_BA.length() < 1e-12 or d_BC.length() < 1e-12:
+        return []
+    dot = max(-1.0, min(1.0, d_BA.x * d_BC.x + d_BA.y * d_BC.y))
+    theta = math.acos(dot)
+    if theta < 1e-6 or (math.pi - theta) < 1e-6:
+        return []
+    half = theta / 2.0
+    tan_half = math.tan(half)
+    if abs(tan_half) < 1e-12:
+        return []
+    t = radius / tan_half
+    t = min(t, A.dist(B) / 2.0, B.dist(C) / 2.0)
+    if t < 1e-9:
+        return []
+    actual_r = t * tan_half
+    T1 = Vec2(B.x + t * d_BA.x, B.y + t * d_BA.y)
+    T2 = Vec2(B.x + t * d_BC.x, B.y + t * d_BC.y)
+    bx = d_BA.x + d_BC.x
+    by = d_BA.y + d_BC.y
+    bis_len = math.hypot(bx, by)
+    if bis_len < 1e-12:
+        return [T1, T2]
+    bx /= bis_len
+    by /= bis_len
+    dist_c = actual_r / math.sin(half)
+    Cx = B.x + dist_c * bx
+    Cy = B.y + dist_c * by
+    t1x, t1y = T1.x - Cx, T1.y - Cy
+    t2x, t2y = T2.x - Cx, T2.y - Cy
+    cross_z = t1x * t2y - t1y * t2x
+    start_angle = math.atan2(t1y, t1x)
+    arc_sweep = math.pi - theta
+    if cross_z < 0:
+        arc_sweep = -arc_sweep
+    n_pts = max(3, int(abs(arc_sweep) * 36.0 / math.pi) + 2)
+    result = []
+    for i in range(n_pts):
+        frac = i / (n_pts - 1) if n_pts > 1 else 0.0
+        angle = start_angle + frac * arc_sweep
+        result.append(Vec2(Cx + actual_r * math.cos(angle),
+                           Cy + actual_r * math.sin(angle)))
+    return result
+
+
+def _apply_corner_rounding(pts: list[Vec2], radius: float,
+                            closed: bool) -> list[Vec2]:
+    """Replace each interior corner with a circular fillet arc."""
+    if radius <= 0 or len(pts) < 3:
+        return list(pts)
+    n = len(pts)
+    result: list[Vec2] = []
+    if closed:
+        for i in range(n):
+            arc = _fillet_vertex(pts[(i - 1) % n], pts[i], pts[(i + 1) % n], radius)
+            result.extend(arc if arc else [pts[i]])
+    else:
+        result.append(pts[0])
+        for i in range(1, n - 1):
+            arc = _fillet_vertex(pts[i - 1], pts[i], pts[i + 1], radius)
+            result.extend(arc if arc else [pts[i]])
+        result.append(pts[-1])
+    return result
+
+
+def _semicircle_cap(p0: Vec2, p1: Vec2, outward: Vec2,
+                    n: int = 32) -> list[Vec2]:
+    """
+    Semicircular arc from p0 to p1 that bulges in the outward direction.
+    Endpoints p0/p1 are forced to exact values (no floating-point drift).
+    """
+    Cx = (p0.x + p1.x) / 2.0
+    Cy = (p0.y + p1.y) / 2.0
+    R = math.hypot(p0.x - Cx, p0.y - Cy)
+    if R < 1e-9:
+        return [p0, p1]
+    start_angle = math.atan2(p0.y - Cy, p0.x - Cx)
+    mid_ccw = Vec2(Cx + R * math.cos(start_angle + math.pi / 2),
+                   Cy + R * math.sin(start_angle + math.pi / 2))
+    mid_cw  = Vec2(Cx + R * math.cos(start_angle - math.pi / 2),
+                   Cy + R * math.sin(start_angle - math.pi / 2))
+    ccw_dot = (mid_ccw.x - Cx) * outward.x + (mid_ccw.y - Cy) * outward.y
+    cw_dot  = (mid_cw.x  - Cx) * outward.x + (mid_cw.y  - Cy) * outward.y
+    sign = 1.0 if ccw_dot >= cw_dot else -1.0
+    pts = []
+    for i in range(n):
+        t = i / (n - 1) if n > 1 else 0.0
+        angle = start_angle + sign * math.pi * t
+        pts.append(Vec2(Cx + R * math.cos(angle), Cy + R * math.sin(angle)))
+    pts[0] = p0
+    pts[-1] = p1
+    return pts
 
 
 def _offset_polyline(pts: list[Vec2], dist: float, closed: bool) -> list[Vec2]:
@@ -800,41 +909,67 @@ class PrintLayer:
     offset_treatments: list[OffsetTreatment] = field(default_factory=list)
     lattice_instances: list[LatticeInstance] = field(default_factory=list)
     constraints: TraversalConstraints = field(default_factory=TraversalConstraints)
+    corner_radius: float = 0.0    # global fillet radius; 0 = sharp corners
+    cap_style: str = 'flat'       # 'flat' | 'round' — open double-wall end caps
 
     def _path_by_id(self, pid: str) -> Optional[Path]:
         return next((p for p in self.source_paths if p.id == pid), None)
+
+    def _rounded_pts(self, path: Path) -> list[Vec2]:
+        """Sample path and apply corner rounding if eligible and radius > 0."""
+        pts = path.sample_points()
+        if self.corner_radius > 0.0 and _eligible_for_rounding(path):
+            pts = _apply_corner_rounding(pts, self.corner_radius, path.closed)
+        return pts
 
     def effective_paths(self) -> list[Path]:
         """All printable paths: source + derived. Preserves source order."""
         result: list[Path] = []
 
-        # Source paths
+        # Source paths — eligible ones wrapped in a DerivedPath with rounded geometry
+        # (same ID so lattice lookups and routing work; filtered from derivedPaths in JS)
         for p in self.source_paths:
-            if p.visible:
+            if not p.visible:
+                continue
+            if self.corner_radius > 0.0 and _eligible_for_rounding(p):
+                raw = p.sample_points()
+                rounded = _apply_corner_rounding(raw, self.corner_radius, p.closed)
+                result.append(DerivedPath(rounded, closed=p.closed,
+                                          id=p.id, role=p.role, label=p.label,
+                                          source_id=p.id, treatment_id='round'))
+            else:
                 result.append(p)
 
         # Offset-derived paths + end caps for open sources
         for ot in self.offset_treatments:
             src = self._path_by_id(ot.source_path_id)
             if src is not None:
-                derived = ot.generate(src)
+                derived = ot.generate(src, self.corner_radius)
                 result.append(derived)
-                # Open source: add caps at each end so the double wall forms
-                # a closed loop. Cap endpoints are exact boundary coordinates,
-                # so the routing engine merges nodes → single connected component.
                 if not src.closed:
-                    src_pts = src.sample_points()
+                    # Effective (possibly rounded) source pts for exact cap endpoints
+                    src_pts = self._rounded_pts(src)
                     der_pts = derived.sample_points()
                     if src_pts and der_pts:
+                        if self.cap_style == 'round':
+                            st = ((src_pts[1] - src_pts[0]).normalized()
+                                  if len(src_pts) > 1 else Vec2(1, 0))
+                            et = ((src_pts[-1] - src_pts[-2]).normalized()
+                                  if len(src_pts) > 1 else Vec2(1, 0))
+                            cs_pts = _semicircle_cap(
+                                src_pts[0], der_pts[0], Vec2(-st.x, -st.y))
+                            ce_pts = _semicircle_cap(
+                                src_pts[-1], der_pts[-1], et)
+                        else:
+                            cs_pts = [src_pts[0], der_pts[0]]
+                            ce_pts = [src_pts[-1], der_pts[-1]]
                         result.append(DerivedPath(
-                            [src_pts[0], der_pts[0]],
-                            closed=False, role='cap', label='cap_start',
+                            cs_pts, closed=False, role='cap', label='cap_start',
                             source_id=ot.id, treatment_id=ot.id,
                             id=ot.id + '_cs',
                         ))
                         result.append(DerivedPath(
-                            [src_pts[-1], der_pts[-1]],
-                            closed=False, role='cap', label='cap_end',
+                            ce_pts, closed=False, role='cap', label='cap_end',
                             source_id=ot.id, treatment_id=ot.id,
                             id=ot.id + '_ce',
                         ))
@@ -883,6 +1018,8 @@ class PrintLayer:
             'offset_treatments': [ot.to_dict() for ot in self.offset_treatments],
             'lattice_instances': [li.to_dict() for li in self.lattice_instances],
             'constraints': self.constraints.to_dict(),
+            'corner_radius': self.corner_radius,
+            'cap_style': self.cap_style,
         }
 
 

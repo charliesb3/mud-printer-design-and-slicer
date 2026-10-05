@@ -356,17 +356,17 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
 
-### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + five UX passes)
+### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + six UX passes)
 
-Location: `design-toolpath/design_proto/`. 147 tests passing.
+Location: `design-toolpath/design_proto/`. 174 tests passing.
 
 Files:
-- `model.py` — full data model: Vec2, Path subtypes (incl. QuadBezierPath), OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
+- `model.py` — full data model: Vec2, Path subtypes (incl. QuadBezierPath), OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer (with corner_radius, cap_style), TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
-- `static/index.html` — design canvas UI
-- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay, playback transport
-- `tests/test_model.py` — 97 unit tests covering model layer + geometry validation
-- `tests/test_app.py` — 50 integration + workflow tests
+- `static/index.html` — design canvas UI (incl. WALL GEOMETRY sidebar section)
+- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay (incl. curve chord), playback transport, JS-side corner rounding
+- `tests/test_model.py` — 118 unit tests covering model layer + geometry validation
+- `tests/test_app.py` — 56 integration + workflow tests
 
 **UX pass 2 (14-point spec):** True geometric offset, Add Lattice fix, Role removed from UI, Individual delete, Arrow legibility, Numbers removed, Arrows disabled when Toolpath OFF, Metric label renames, Clear All.
 
@@ -431,6 +431,33 @@ This connects two otherwise-disconnected open strands into an Eulerian circuit. 
 - rAF animation loop at `_PLAYBACK_WORLD_SPEED = 100.0` world in/s at 1×.
 - Playback resets when toolpath is toggled off or Clear All is called.
 
+**UX pass 6 — curve chord dimensions, global corner rounding, round end caps:**
+
+Core architectural rule enforced: **displayed geometry = printed geometry.** Corner rounding and cap styles are applied to effective print geometry before routing, dimensions, arrows, playback — not as cosmetic canvas effects.
+
+**Curve chord dimensions**: When Dimensions is enabled on a QuadBezierPath, a faint dotted line is drawn start→end with a `chord NNN in` label. Arc-length label remains unchanged. The chord is purely visual — never enters `effective_paths()` or routing.
+
+**Global corner rounding (fillets)**: New `corner_radius` field on `PrintLayer` (default 0). When > 0, every eligible source path (`RectanglePath` and `ExplicitPath`) has its sharp corners replaced with true tangent circular arcs via `_apply_corner_rounding(pts, radius, closed)` which calls `_fillet_vertex(A, B, C, r)` per vertex. The fillet geometry:
+- Tangent distance from the vertex `t = r / tan(θ/2)` where θ is the interior angle
+- Automatic clamping: `t ≤ min(len_AB/2, len_BC/2)` so fillets never overrun adjacent segments
+- Actual fillet radius after clamping: `actual_r = t * tan(θ/2)` (equals requested R when not clamped)
+- Arc center on angle bisector, distance `actual_r / sin(θ/2)` from vertex
+- Arc sweep `(π − θ)`, direction chosen so arc replaces the corner (short side)
+- `~5°/sample` density gives smooth polyline approximation
+- Open polylines preserve first/last points; interior vertices are filleted
+- Closed polygons fillet every vertex
+
+**Constant wall spacing under rounding**: Rounding is applied **before** offsetting. `OffsetTreatment.generate(source, corner_radius)` first rounds the source polyline, then calls the existing `_offset_polyline` on the rounded sample. The result is a parallel offset of the rounded shape — wall spacing stays within ~2in of the requested distance everywhere (test: `test_rounded_rect_offset_approx_constant_spacing`).
+
+**Round end caps**: New `cap_style` field on `PrintLayer` (`'flat'` | `'round'`, default `'flat'`). For an open source + offset with `cap_style='round'`, each flat 2-point cap is replaced by `_semicircle_cap(p0, p1, outward, n=32)` — a semicircular arc from `p0` to `p1` bulging in the `outward` direction. The outward direction:
+- Start cap outward = −(forward tangent at source start)
+- End cap outward = +(forward tangent at source end)
+Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]` for start, `src_pts[-1] − src_pts[-2]` for end), so curved walls (QuadBezierPath) produce caps oriented along the local curve tangent. Cap radius = half the wall perpendicular distance. Endpoints are forced to exact `p0`/`p1` so the routing graph merges nodes.
+
+**JS/Python geometry parity**: `_computePrimitivePoints` in `app.js` applies the same corner rounding to `path.points` (used for canvas rendering, hit-testing, and `_offset_polyline` input in the backend), so the on-canvas path matches the backend's effective geometry byte-for-byte. `onWallGeometryChange()` recomputes all source path points and triggers a route refresh.
+
+**WALL GEOMETRY sidebar section**: Corner R number input + End caps Flat/Round select. Both are layer-level (not per-path). Changing either immediately refreshes effective geometry.
+
 **UX pass 5 — editable curved line segments (QuadBezierPath):**
 
 `QuadBezierPath` added as a first-class parametric type. Implements B(t) = (1−t)² P0 + 2(1−t)t P1 + t² P2 where P0=start, P1=control/bend, P2=end.
@@ -482,4 +509,4 @@ This connects two otherwise-disconnected open strands into an Eulerian circuit. 
 
 2026-10-04
 
-Phase 3 UX pass 5 (editable curved segments — QuadBezierPath) complete. Phase 2: 65 tests. Phase 3: 147 tests. All green.
+Phase 3 UX pass 6 (curve chord dimensions, global corner rounding, round end caps) complete. Phase 2: 65 tests. Phase 3: 174 tests. All green.

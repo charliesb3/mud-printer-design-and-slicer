@@ -99,6 +99,9 @@ def _deserialise_layer(data: dict) -> PrintLayer:
         component_order=cd.get('component_order'),
     )
 
+    layer.corner_radius = float(data.get('corner_radius', 0.0))
+    layer.cap_style = data.get('cap_style', 'flat')
+
     return layer
 
 
