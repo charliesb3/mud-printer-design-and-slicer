@@ -384,9 +384,9 @@ Validates Eulerian/Chinese Postman routing for five test geometries.
 Key result: Case D (wall perimeter + internal web) = single continuous path,
 zero travel moves.
 
-### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete + Two UX Passes
+### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete + Three UX Passes
 
-The interactive design canvas prototype is complete. 86 tests passing.
+The interactive design canvas prototype is complete. 113 tests passing.
 
 Location: `design-toolpath/design_proto/`
 
@@ -473,5 +473,5 @@ Allow the architecture to evolve as the machine and software become better under
 2026-10-04
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath Phase 2 (65 tests) and Phase 3 (86 tests, two UX passes) both complete.
+Design + Toolpath Phase 2 (65 tests) and Phase 3 (113 tests, three UX passes) both complete.
 Arduino/GRBL subproject not yet started.

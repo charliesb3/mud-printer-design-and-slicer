@@ -428,6 +428,106 @@ class LatticeGenerator:
 
 
 # ---------------------------------------------------------------------------
+# Geometry validity helpers
+# ---------------------------------------------------------------------------
+
+def _polygon_area(pts: list[Vec2]) -> float:
+    """Shoelace formula — signed area. Positive = CCW winding."""
+    n = len(pts)
+    if n < 3:
+        return 0.0
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += pts[i].x * pts[j].y
+        area -= pts[j].x * pts[i].y
+    return area / 2.0
+
+
+def _point_in_polygon(pt: Vec2, poly: list[Vec2]) -> bool:
+    """Ray-casting point-in-polygon test."""
+    n = len(poly)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i].x, poly[i].y
+        xj, yj = poly[j].x, poly[j].y
+        if ((yi > pt.y) != (yj > pt.y)) and \
+                (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-18) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _segments_intersect(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> bool:
+    """True if segment p1-p2 strictly crosses segment p3-p4 (excludes shared endpoints)."""
+    d1 = p2 - p1
+    d2 = p4 - p3
+    cross = d1.x * d2.y - d1.y * d2.x
+    if abs(cross) < 1e-12:
+        return False
+    t = ((p3.x - p1.x) * d2.y - (p3.y - p1.y) * d2.x) / cross
+    u = ((p3.x - p1.x) * d1.y - (p3.y - p1.y) * d1.x) / cross
+    # Strictly interior to both segments (excludes endpoints)
+    return 1e-6 < t < 1.0 - 1e-6 and 1e-6 < u < 1.0 - 1e-6
+
+
+def _segment_crosses_polyline(a: Vec2, b: Vec2,
+                               poly: list[Vec2], closed: bool) -> bool:
+    """True if segment a-b strictly crosses any edge of poly."""
+    n = len(poly)
+    for i in range(n - 1):
+        if _segments_intersect(a, b, poly[i], poly[i + 1]):
+            return True
+    if closed and n >= 2:
+        if _segments_intersect(a, b, poly[-1], poly[0]):
+            return True
+    return False
+
+
+def _lattice_valid_in_cavity(derived_paths: list['DerivedPath'],
+                              path_a: Path, path_b: Path) -> bool:
+    """
+    Check every lattice segment lies inside the wall cavity (between path_a and
+    path_b). Returns True if all segments are geometrically valid.
+
+    Only applies when both boundaries are closed. For open boundaries, returns
+    True unconditionally (no cavity to validate against).
+    """
+    if not (path_a.closed and path_b.closed):
+        return True
+
+    pts_a = path_a.sample_points(128)
+    pts_b = path_b.sample_points(128)
+
+    # Determine which is outer (larger area)
+    area_a = abs(_polygon_area(pts_a))
+    area_b = abs(_polygon_area(pts_b))
+    if area_a >= area_b:
+        outer_pts, inner_pts = pts_a, pts_b
+    else:
+        outer_pts, inner_pts = pts_b, pts_a
+
+    for dp in derived_paths:
+        seg_pts = dp.sample_points()
+        n = len(seg_pts)
+        for i in range(n - 1):
+            a, b = seg_pts[i], seg_pts[i + 1]
+            # Midpoint must be inside outer AND outside inner
+            mid = a.lerp(b, 0.5)
+            if not _point_in_polygon(mid, outer_pts):
+                return False
+            if _point_in_polygon(mid, inner_pts):
+                return False
+            # Segment must not cross either boundary
+            if _segment_crosses_polyline(a, b, outer_pts, True):
+                return False
+            if _segment_crosses_polyline(a, b, inner_pts, True):
+                return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # ZigzagGenerator
 # ---------------------------------------------------------------------------
 
@@ -441,19 +541,18 @@ class ZigzagGenerator(LatticeGenerator):
         ]
 
     def variation_count(self, path_a: Path, path_b: Path, params: dict) -> int:
-        # Two variations: A→B start vs B→A start
         return 2
 
-    def generate(self, path_a: Path, path_b: Path,
-                 params: dict, variation_index: int = 0) -> list[DerivedPath]:
-        segments = max(2, int(params.get('segments', 6)))
-        connect_ends = bool(params.get('connect_ends', True))
+    def _generate_at_count(self, path_a: Path, path_b: Path,
+                           segments: int, connect_ends: bool,
+                           variation_index: int) -> list[DerivedPath]:
+        """Generate zigzag at a specific segment count."""
+        # For closed paths include the closing segment so all sides are covered
+        pts_a = _resample(path_a.sample_points(), segments + 1,
+                          closed=path_a.closed)
+        pts_b = _resample(path_b.sample_points(), segments + 1,
+                          closed=path_b.closed)
 
-        pts_a = _resample(path_a.sample_points(), segments + 1)
-        pts_b = _resample(path_b.sample_points(), segments + 1)
-
-        # variation_index 0: start A0→B0→A1→B1…
-        # variation_index 1: start B0→A0→B1→A1…
         if variation_index % 2 == 1:
             pts_a, pts_b = pts_b, pts_a
 
@@ -467,11 +566,9 @@ class ZigzagGenerator(LatticeGenerator):
         path = DerivedPath(zigzag_pts, closed=False,
                            role='lattice', label='zigzag',
                            source_id='', treatment_id='')
-
         result = [path]
 
-        if connect_ends and len(pts_a) > 0 and len(pts_b) > 0:
-            # End connector between last zigzag point and the other path endpoint
+        if connect_ends and pts_a and pts_b:
             if segments % 2 == 0:
                 connector = DerivedPath([pts_a[-1], pts_b[-1]],
                                         closed=False, role='lattice',
@@ -486,65 +583,88 @@ class ZigzagGenerator(LatticeGenerator):
 
         return result
 
+    def generate(self, path_a: Path, path_b: Path,
+                 params: dict, variation_index: int = 0) -> list[DerivedPath]:
+        segments_req = max(2, int(params.get('segments', 6)))
+        connect_ends = bool(params.get('connect_ends', True))
+
+        do_validate = path_a.closed and path_b.closed
+
+        result = self._generate_at_count(
+            path_a, path_b, segments_req, connect_ends, variation_index)
+
+        if not do_validate:
+            return result
+
+        # Auto-increase until all segments are geometrically valid in the cavity
+        actual = segments_req
+        MAX_SEGMENTS = 80
+        while actual <= MAX_SEGMENTS:
+            if _lattice_valid_in_cavity(result, path_a, path_b):
+                break
+            actual += 2
+            result = self._generate_at_count(
+                path_a, path_b, actual, connect_ends, variation_index)
+
+        # Record the actual count in the label
+        for dp in result:
+            if dp.label in ('zigzag', 'zigzag_end'):
+                dp.label = f'zigzag_n{actual}'
+
+        return result
+
 
 # ---------------------------------------------------------------------------
-# WaveGenerator
+# WaveGenerator — oscillates between boundary A and boundary B
 # ---------------------------------------------------------------------------
 
 class WaveGenerator(LatticeGenerator):
+    """
+    Wave lattice: smoothly oscillates from boundary A → B → A → repeat.
+    Wall spacing = transverse amplitude (not user-controlled).
+    alpha(s) = 0.5 * (1 - cos(2π * cycles * s + phase_angle))
+    alpha=0 → on A, alpha=1 → on B.
+    """
     name = 'wave'
 
     def parameters(self) -> list[ParameterSpec]:
         return [
-            ParameterSpec('amplitude', 'Amplitude', 5.0, 0.5, 50.0, 0.5),
-            ParameterSpec('frequency', 'Frequency', 3.0, 0.5, 20.0, 0.5),
+            ParameterSpec('cycles', 'Cycles', 3.0, 0.5, 20.0, 0.5),
             ParameterSpec('phase', 'Phase', 0.0, 0.0, 1.0, 0.05),
-            ParameterSpec('samples', 'Samples', 64, 16, 256, 8),
         ]
 
     def variation_count(self, path_a: Path, path_b: Path, params: dict) -> int:
-        return 2  # phase 0 vs phase 0.5
+        return 2  # V1: start on A  |  V2: start on B (half-cycle offset)
 
     def generate(self, path_a: Path, path_b: Path,
                  params: dict, variation_index: int = 0) -> list[DerivedPath]:
-        amplitude = float(params.get('amplitude', 5.0))
-        frequency = float(params.get('frequency', 3.0))
-        phase_base = float(params.get('phase', 0.0))
-        samples = max(16, int(params.get('samples', 64)))
+        cycles = max(0.5, float(params.get('cycles', 3.0)))
+        phase = float(params.get('phase', 0.0))
 
-        phase_offset = 0.5 * (variation_index % 2)
-        phase = phase_base + phase_offset
+        # V2 shifts by half a cycle so the wave starts on B instead of A
+        phase_total = phase + 0.5 * (variation_index % 2)
 
-        pts_a = _resample(path_a.sample_points(), samples)
-        pts_b = _resample(path_b.sample_points(), samples)
+        # Choose sample count from cycles (~32 pts/cycle, min 64)
+        samples = max(64, int(cycles * 32))
+
+        pts_a = _resample(path_a.sample_points(), samples,
+                          closed=path_a.closed)
+        pts_b = _resample(path_b.sample_points(), samples,
+                          closed=path_b.closed)
 
         wave_pts = []
         for i in range(samples):
-            t = i / (samples - 1)
-            t_wave = math.sin(2 * math.pi * (frequency * t + phase))
-            alpha = (t_wave + 1.0) / 2.0  # 0→1
-            a = pts_a[i]
-            b = pts_b[i]
-            wave_pts.append(a.lerp(b, alpha * amplitude / (a.dist(b) + 1e-9)
-                                   if a.dist(b) > 1e-9 else 0.5))
+            # Normalized arc-length position along the perimeter
+            if path_a.closed:
+                t = i / samples
+            else:
+                t = i / (samples - 1) if samples > 1 else 0.0
+            # alpha ∈ [0,1]: 0 = on A, 1 = on B
+            alpha = 0.5 * (1.0 - math.cos(
+                2.0 * math.pi * (cycles * t + phase_total)))
+            wave_pts.append(pts_a[i].lerp(pts_b[i], alpha))
 
-        # Proper interpolation: midpoint + perpendicular offset
-        wave_pts2 = []
-        for i in range(samples):
-            t = i / (samples - 1)
-            mid = pts_a[i].lerp(pts_b[i], 0.5)
-            a_to_b = pts_b[i] - pts_a[i]
-            span = a_to_b.length()
-            if span < 1e-9:
-                wave_pts2.append(mid)
-                continue
-            perp = a_to_b.normalized().perpendicular()
-            t_wave = math.sin(2 * math.pi * (frequency * t + phase))
-            offset = t_wave * amplitude
-            wave_pts2.append(Vec2(mid.x + perp.x * offset,
-                                  mid.y + perp.y * offset))
-
-        return [DerivedPath(wave_pts2, closed=False, role='lattice',
+        return [DerivedPath(wave_pts, closed=False, role='lattice',
                             label='wave', source_id='', treatment_id='')]
 
 
@@ -696,13 +816,26 @@ class PrintLayer:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _resample(pts: list[Vec2], n: int) -> list[Vec2]:
-    """Resample a polyline to exactly n evenly-spaced points by arc length."""
+def _resample(pts: list[Vec2], n: int, closed: bool = False) -> list[Vec2]:
+    """
+    Resample a polyline to exactly n evenly-spaced points by arc length.
+
+    If closed=True, the closing segment (last → first) is included in the
+    total arc length. This ensures closed-path resampling covers the full
+    perimeter including the final edge back to the start point.
+    The n-th sample (at t=1.0) equals the first sample (t=0), so for closed
+    paths use n=segments+1 to get segments+1 points including the wrap-back.
+    """
     if not pts or n < 2:
         return list(pts)
 
+    # For closed paths, append the closing point so the final segment is included
+    working = list(pts)
+    if closed and len(pts) >= 2:
+        working = working + [pts[0]]
+
     lengths = [0.0]
-    for a, b in zip(pts, pts[1:]):
+    for a, b in zip(working, working[1:]):
         lengths.append(lengths[-1] + a.dist(b))
     total = lengths[-1]
 
@@ -716,6 +849,9 @@ def _resample(pts: list[Vec2], n: int) -> list[Vec2]:
             if lengths[j] <= target <= lengths[j + 1]:
                 seg_len = lengths[j + 1] - lengths[j]
                 t = (target - lengths[j]) / seg_len if seg_len > 1e-12 else 0.0
-                result.append(pts[j].lerp(pts[j + 1], t))
+                result.append(working[j].lerp(working[j + 1], t))
                 break
+        else:
+            result.append(working[-1])
+
     return result

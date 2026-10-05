@@ -356,35 +356,62 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
 
-### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + two UX passes)
+### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + three UX passes)
 
-Location: `design-toolpath/design_proto/`. 86 tests passing.
+Location: `design-toolpath/design_proto/`. 113 tests passing.
 
 Files:
 - `model.py` — full data model: Vec2, Path subtypes, OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
 - `static/index.html` — design canvas UI
-- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides
-- `tests/test_model.py` — 58 unit tests covering model layer + offset geometry
-- `tests/test_app.py` — 30 integration + workflow tests
+- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay
+- `tests/test_model.py` — 74 unit tests covering model layer + geometry validation
+- `tests/test_app.py` — 39 integration + workflow tests
 
-**UX pass 2 completed (14-point spec):**
-- **True geometric offset algorithm**: `_offset_polyline` replaced with proper segment-parallel-intersection method. Each segment is shifted parallel by `dist`, adjacent offset segments are intersected (miter join), bevel fallback when miter exceeds 4×dist. Rectangle 10in inset → exact corners. Circle r=60 with 10in offset → radius within 0.2 in of 50 or 70.
-- **Add Lattice fixed**: `addLattice()` now uses `allBoundaries()` (source paths + offset treatments) instead of requiring 2 source paths. Boundary selectors in lattice panel now show both source paths and "Offset of X" entries. `PrintLayer.effective_paths()` allows lattice to reference offset-derived paths by ID. `OffsetTreatment.generate()` now assigns `id=self.id` to derived paths (stable, predictable).
-- **Role removed from UI**: Role field removed from source path Properties panel and from Wall Offsets panel. Kept internally; not exposed to designer.
-- **Individual delete**: "× Delete path" button in path Properties panel. Delete/Backspace key continues to work. Cascade: deleting source path removes its offsets and lattice instances. Removing an offset treatment also removes lattice instances that reference it.
-- **Toolpath arrows**: Redesigned for legibility — white fill with dark outline, size 7 (up from 5), drawn above all geometry in repaint order.
-- **Numbers removed**: Run-sequence numbers removed from toolpath visualization and toolbar.
-- **Arrows grayed when Toolpath OFF**: Arrows button disabled while toolpath is off.
-- **Metric labels**: "% printing" → "Continuous"; "Retrace dist" → "Reprinted" (with tooltip: "Distance printed more than once to maintain a continuous route").
-- **Clear → Clear All** in toolbar.
-- 11 geometry regression tests added (offset distance accuracy, lattice-with-derived-boundary, circle radius verification).
+**UX pass 2 (14-point spec):** True geometric offset, Add Lattice fix, Role removed from UI, Individual delete, Arrow legibility, Numbers removed, Arrows disabled when Toolpath OFF, Metric label renames, Clear All.
+
+**UX pass 3 (14-point spec) — geometry validity pass:**
+
+**Architectural principle established:**
+WALL GEOMETRY → VALID WALL CAVITY → VALID LATTICE GEOMETRY → TOOLPATH / CONTINUITY OPTIMIZATION.
+The routing engine must never rescue geometrically invalid lattice. Validity is the generator's responsibility.
+
+**`_resample` closed-path fix**: Added `closed` parameter. When `closed=True`, the closing segment (last→first) is included in the total arc length before resampling. This ensures closed-path resampling covers the FULL perimeter including the final edge. Root cause of "zigzag covers ~3 sides then stops" on rectangles.
+
+**ZigzagGenerator — closed-loop coverage**: Now calls `_resample(..., closed=path.closed)` for both boundaries. For a closed rectangle with segments=8, all 4 sides are now covered. For closed circles, the full 360° is sampled.
+
+**ZigzagGenerator — geometric validity and auto-increase**:
+- For two closed boundaries, every generated lattice segment is validated against the wall cavity: midpoint must be inside outer and outside inner boundary (point-in-polygon), and the segment must not cross either boundary (_segments_intersect check).
+- If requested segment count produces invalid geometry (e.g., a diagonal chord cuts through the inner circle at low segment counts), the generator auto-increases by 2 until valid or max 80 segments reached.
+- Actual count stored in path label (e.g., `zigzag_n12`).
+
+**WaveGenerator — redesigned**:
+- Old behavior: sinusoidal perpendicular oscillation around midpoint, didn't touch boundaries, folded at high amplitude. Amplitude was user-controlled.
+- New behavior: wave oscillates between boundary A and boundary B by direct lerp. `alpha(s) = 0.5 × (1 − cos(2π × cycles × s + phase_offset))`. alpha=0 → exactly on A, alpha=1 → exactly on B. Inherently valid by construction (alpha always ∈ [0,1]).
+- Parameters removed: `amplitude`, `frequency`, `samples`.
+- Parameters kept/added: `cycles` (default 3, min 0.5, max 20), `phase` (0..1 fraction of cycle).
+- Samples computed internally: `max(64, int(cycles × 32))`.
+- V1: starts on A. V2: half-cycle offset (starts toward B).
+
+**Geometry validation helpers added to model.py**:
+- `_polygon_area(pts)` — shoelace formula
+- `_point_in_polygon(pt, poly)` — ray-casting
+- `_segments_intersect(p1,p2,p3,p4)` — strict interior crossing test
+- `_segment_crosses_polyline(a,b,poly,closed)` — segment vs. polyline
+- `_lattice_valid_in_cavity(derived_paths,path_a,path_b)` — full cavity check
+
+**Dimensions overlay (toolbar toggle "Dimensions")**:
+- Independent of Toolpath toggle.
+- When ON: draws type-specific physical dimension labels on source paths and derived wall offsets. NOT on lattice paths.
+- LinePath: length. CirclePath: `R XX in`. EllipsePath: `Rx, Ry`. RectanglePath: `W × H`. ExplicitPath/other: arc length (`~XX in`).
+- Derived offset paths: radius (for circle sources), W×H (for rect sources), arc length otherwise.
+- Purely visual — no effect on geometry, routing graph, or toolpath export.
 
 **Known limitations / deferred:**
-- Node-drag editing for Circle/Ellipse primitives is approximate (resamples rather than adjusting radius parametrically from drag)
-- Path sections (split points / per-section properties) are in the model but have no UI yet
+- Node-drag editing for Circle/Ellipse primitives is approximate
+- Path sections (split points / per-section properties) in model but no UI yet
 - Multi-layer / physical-Z keyframes deferred (as planned)
-- Offset direction convention assumes CCW winding for "inside" = inward; CW-wound paths will have inside/outside reversed (user can flip direction selector)
+- Offset direction convention assumes CCW winding for "inside" = inward
 
 ---
 
@@ -413,4 +440,4 @@ Files:
 
 2026-10-04
 
-Phase 3 major UX pass complete. Phase 2: 65 tests. Phase 3: 75 tests. All green.
+Phase 3 UX pass 3 (geometry validity) complete. Phase 2: 65 tests. Phase 3: 113 tests. All green.

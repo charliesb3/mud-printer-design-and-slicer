@@ -5,6 +5,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import re
+import math
 import json
 import pytest
 from app import app as flask_app
@@ -624,6 +625,213 @@ class TestWorkflows:
         assert 'inner' in ids
         lattice_paths = [p for p in paths if p.get('role') == 'lattice']
         assert len(lattice_paths) >= 1
+
+    # ------------------------------------------------------------------
+    # Geometry validation test cases (spec items A–G)
+    # ------------------------------------------------------------------
+
+    def _concentric_circles_payload(self, r_outer=60, r_inner=None, offset_dist=10,
+                                    generator='zigzag', gen_params=None):
+        """Payload: single circle + inside offset + lattice."""
+        if r_inner is not None:
+            # Two explicit circles, no offset treatment
+            return {
+                'id': 'cc',
+                'label': '',
+                'source_paths': [
+                    {'id': 'outer', 'type': 'CirclePath', 'label': 'Outer',
+                     'closed': True, 'role': 'outer', 'visible': True,
+                     'cx': 200, 'cy': 200, 'radius': r_outer},
+                    {'id': 'inner', 'type': 'CirclePath', 'label': 'Inner',
+                     'closed': True, 'role': 'inner', 'visible': True,
+                     'cx': 200, 'cy': 200, 'radius': r_inner},
+                ],
+                'offset_treatments': [],
+                'lattice_instances': [{
+                    'id': 'lat', 'generator': generator,
+                    'path_a_id': 'outer', 'path_b_id': 'inner',
+                    'params': gen_params or {'segments': 16, 'connect_ends': False},
+                    'variation_index': 0, 'label': '',
+                }],
+                'constraints': {'start_path_id': None, 'start_t': None,
+                                'reverse_direction': False, 'component_order': None},
+            }
+        return {
+            'id': 'cc',
+            'label': '',
+            'source_paths': [
+                {'id': 'outer', 'type': 'CirclePath', 'label': 'Outer',
+                 'closed': True, 'role': 'outer', 'visible': True,
+                 'cx': 200, 'cy': 200, 'radius': r_outer},
+            ],
+            'offset_treatments': [{
+                'id': 'inner', 'source_path_id': 'outer',
+                'distance': offset_dist, 'role': 'inner', 'label': '',
+            }],
+            'lattice_instances': [{
+                'id': 'lat', 'generator': generator,
+                'path_a_id': 'outer', 'path_b_id': 'inner',
+                'params': gen_params or {'segments': 16, 'connect_ends': False},
+                'variation_index': 0, 'label': '',
+            }],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+
+    def _nested_rects_payload(self, generator='zigzag', gen_params=None):
+        """Payload: outer 100×100 rect + inner 60×60 rect + lattice."""
+        return {
+            'id': 'nr',
+            'label': '',
+            'source_paths': [
+                {'id': 'outer', 'type': 'RectanglePath', 'label': 'Outer',
+                 'closed': True, 'role': 'outer', 'visible': True,
+                 'x': 0, 'y': 0, 'w': 100, 'h': 100},
+                {'id': 'inner', 'type': 'RectanglePath', 'label': 'Inner',
+                 'closed': True, 'role': 'inner', 'visible': True,
+                 'x': 20, 'y': 20, 'w': 60, 'h': 60},
+            ],
+            'offset_treatments': [],
+            'lattice_instances': [{
+                'id': 'lat', 'generator': generator,
+                'path_a_id': 'outer', 'path_b_id': 'inner',
+                'params': gen_params or {'segments': 8, 'connect_ends': False},
+                'variation_index': 0, 'label': '',
+            }],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+
+    def test_wf_geo_a_concentric_circles_zigzag_routes(self, client):
+        """Case A: concentric circles + zigzag routes without error."""
+        payload = self._concentric_circles_payload(r_outer=60, r_inner=40,
+                                                   generator='zigzag',
+                                                   gen_params={'segments': 16, 'connect_ends': False})
+        r = client.post('/api/route', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert len(data['moves']) > 0
+        lattice = [p for p in data['layer']['paths'] if p.get('role') == 'lattice']
+        assert len(lattice) >= 1
+
+    def test_wf_geo_b_concentric_circles_wave_routes(self, client):
+        """Case B: concentric circles + wave routes without error."""
+        payload = self._concentric_circles_payload(r_outer=60, r_inner=40,
+                                                   generator='wave',
+                                                   gen_params={'cycles': 4.0, 'phase': 0.0})
+        r = client.post('/api/route', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert len(data['moves']) > 0
+
+    def test_wf_geo_c_nested_rects_zigzag_routes(self, client):
+        """Case C: nested rectangles + zigzag routes and covers all 4 sides."""
+        payload = self._nested_rects_payload(generator='zigzag',
+                                             gen_params={'segments': 8, 'connect_ends': False})
+        r = client.post('/api/effective_paths', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        paths = r.get_json()['paths']
+        lattice = [p for p in paths if p.get('role') == 'lattice']
+        assert len(lattice) >= 1
+        # Collect all lattice points and check coverage of all 4 sides
+        all_pts = [pt for lp in lattice for pt in lp['points']]
+        near_bottom = any(y < 5 for _, y in all_pts)
+        near_top    = any(y > 95 for _, y in all_pts)
+        near_left   = any(x < 5 for x, _ in all_pts)
+        near_right  = any(x > 95 for x, _ in all_pts)
+        assert near_bottom and near_top and near_left and near_right, \
+            "Zigzag does not cover all 4 sides of the rectangle"
+
+    def test_wf_geo_d_nested_rects_wave_routes(self, client):
+        """Case D: nested rectangles + wave routes without error."""
+        payload = self._nested_rects_payload(generator='wave',
+                                             gen_params={'cycles': 3.0})
+        r = client.post('/api/route', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert len(data['moves']) > 0
+
+    def test_wf_geo_e_low_segment_count_auto_increases(self, client):
+        """Case E: very low segment count on tight circles → auto-increase, no error."""
+        payload = self._concentric_circles_payload(r_outer=60, r_inner=55,
+                                                   generator='zigzag',
+                                                   gen_params={'segments': 2, 'connect_ends': False})
+        r = client.post('/api/effective_paths', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        paths = r.get_json()['paths']
+        lattice = [p for p in paths if p.get('role') == 'lattice']
+        assert len(lattice) >= 1
+        # All lattice points must be in the annular cavity (r ∈ [55, 60])
+        for lp in lattice:
+            for x, y in lp['points']:
+                r_pt = math.hypot(x - 200, y - 200)
+                assert 54.5 <= r_pt <= 60.5, \
+                    f"Auto-increased lattice point r={r_pt:.2f} outside cavity"
+
+    def test_wf_geo_f_irregular_closed_source_offset_lattice(self, client):
+        """Case F: irregular closed source + generated offset + zigzag lattice inside cavity."""
+        payload = {
+            'id': 'irr',
+            'label': '',
+            'source_paths': [{
+                'id': 'wall',
+                'type': 'ExplicitPath',
+                'label': 'Wall',
+                'closed': True,
+                'role': 'outer',
+                'visible': True,
+                'control_points': [[50,200],[100,150],[150,200],[100,250]],
+            }],
+            'offset_treatments': [{
+                'id': 'inner', 'source_path_id': 'wall',
+                'distance': 8, 'role': 'inner', 'label': '',
+            }],
+            'lattice_instances': [{
+                'id': 'lat', 'generator': 'zigzag',
+                'path_a_id': 'wall', 'path_b_id': 'inner',
+                'params': {'segments': 6, 'connect_ends': False},
+                'variation_index': 0, 'label': '',
+            }],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+        r = client.post('/api/effective_paths', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        lattice = [p for p in data['paths'] if p.get('role') == 'lattice']
+        assert len(lattice) >= 1
+
+    def test_wf_geo_g_dimensions_flag_does_not_alter_geometry(self, client):
+        """Case G: adding a 'show_dimensions' flag must not change effective paths."""
+        base_payload = {**SIMPLE_PAYLOAD, 'offset_treatments': [{
+            'id': 'ot1', 'source_path_id': 'p1',
+            'distance': -5, 'role': 'inner', 'label': '',
+        }]}
+        r1 = client.post('/api/effective_paths', data=json.dumps(base_payload),
+                         content_type='application/json')
+        payload_with_flag = {**base_payload, 'show_dimensions': True}
+        r2 = client.post('/api/effective_paths', data=json.dumps(payload_with_flag),
+                         content_type='application/json')
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        pts1 = {p['id']: p['points'] for p in r1.get_json()['paths']}
+        pts2 = {p['id']: p['points'] for p in r2.get_json()['paths']}
+        assert pts1 == pts2, "Dimensions flag altered effective geometry"
+
+    def test_wf_geo_wave_params_no_amplitude(self, client):
+        """Wave generator API must not expose amplitude or samples parameters."""
+        data = client.get('/api/generators').get_json()
+        wave = next(g for g in data if g['name'] == 'wave')
+        param_names = [p['name'] for p in wave['parameters']]
+        assert 'amplitude' not in param_names
+        assert 'samples' not in param_names
+        assert 'cycles' in param_names
 
     def test_wf_g_offset_distance_accuracy(self, client):
         """Rectangle inside offset by 10 in: derived path corners must be exactly 10 in inward."""

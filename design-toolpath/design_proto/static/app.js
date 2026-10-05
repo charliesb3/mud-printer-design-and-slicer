@@ -11,6 +11,7 @@ let _mousePosW = null;       // current mouse world-coords (for snap-to-first pr
 
 let showToolpath = true;
 let showArrows = true;
+let showDimensions = false;
 
 let routeResult = null;
 let derivedPaths = [];       // populated by effective_paths or route on model change
@@ -365,6 +366,7 @@ function repaint() {
   drawGrid();
   drawEffectivePaths();
   if (showToolpath && routeResult) drawToolpath(routeResult.moves);
+  if (showDimensions) drawDimensions();
   if (tool === 'draw' && drawPts.length > 0) drawInProgress();
   if (selectedId) drawHandles(selectedId);
 }
@@ -1209,7 +1211,7 @@ function addLattice() {
 }
 
 function getParamUnit(paramName) {
-  const noUnit = ['segments', 'connect_ends', 'frequency', 'phase', 'samples'];
+  const noUnit = ['segments', 'connect_ends', 'cycles', 'phase'];
   return noUnit.includes(paramName) ? '' : 'in';
 }
 
@@ -1394,6 +1396,146 @@ function updateMetrics(data) {
   const runStr = `${m.print_runs} run${m.print_runs === 1 ? '' : 's'}`;
   const travelStr = m.travel_moves === 0 ? 'no travel' : `${m.travel_moves} travel`;
   setStatus(`${runStr}, ${travelStr}, ${m.pct_printing}% printing`);
+}
+
+// ---------------------------------------------------------------------------
+// Dimensions overlay — purely visual, no effect on geometry or routing
+// ---------------------------------------------------------------------------
+
+function toggleDimensions() {
+  showDimensions = !showDimensions;
+  document.getElementById('btn-dims').classList.toggle('toggle-on', showDimensions);
+  repaint();
+}
+
+function _dimLabel(cx, cy, text) {
+  const w = text.length * 6 + 10;
+  const h = 14;
+  ctx.fillStyle = 'rgba(30,25,10,0.82)';
+  ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
+  ctx.fillStyle = '#e8cc55';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, cx, cy);
+}
+
+function _pathArcLength(pts, closed) {
+  let len = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    len += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  }
+  if (closed && pts.length >= 2) {
+    len += Math.hypot(pts[0][0] - pts[pts.length - 1][0],
+                      pts[0][1] - pts[pts.length - 1][1]);
+  }
+  return len;
+}
+
+function drawDimensions() {
+  ctx.save();
+
+  // Source paths — type-specific labels
+  for (const p of layer.source_paths) {
+    if (!p.visible) continue;
+    _drawSourceDim(p);
+  }
+
+  // Derived offset paths (non-lattice only)
+  for (const dp of derivedPaths) {
+    if (dp.role === 'lattice') continue;
+    _drawDerivedDim(dp);
+  }
+
+  ctx.restore();
+}
+
+function _drawSourceDim(p) {
+  switch (p.type) {
+    case 'LinePath': {
+      const dx = p.end[0] - p.start[0], dy = p.end[1] - p.start[1];
+      const len = Math.hypot(dx, dy);
+      const [mx, my] = worldToCanvas((p.start[0] + p.end[0]) / 2,
+                                     (p.start[1] + p.end[1]) / 2);
+      _dimLabel(mx, my - 14, `${len.toFixed(1)} in`);
+      break;
+    }
+    case 'CirclePath': {
+      const [cx, cy] = worldToCanvas(p.cx, p.cy + p.radius * 0.6);
+      _dimLabel(cx, cy, `R ${p.radius.toFixed(1)} in`);
+      break;
+    }
+    case 'EllipsePath': {
+      const [rx_cx, rx_cy] = worldToCanvas(p.cx + p.rx * 0.6, p.cy);
+      const [ry_cx, ry_cy] = worldToCanvas(p.cx, p.cy + p.ry * 0.6);
+      _dimLabel(rx_cx, rx_cy - 12, `Rx ${p.rx.toFixed(1)} in`);
+      _dimLabel(ry_cx - 28, ry_cy, `Ry ${p.ry.toFixed(1)} in`);
+      break;
+    }
+    case 'RectanglePath': {
+      const [x0, y0] = worldToCanvas(p.x, p.y + p.h);
+      const [x1, y1] = worldToCanvas(p.x + p.w, p.y + p.h);
+      const [xr0, yr0] = worldToCanvas(p.x + p.w, p.y);
+      // Width label below bottom edge
+      _dimLabel((x0 + x1) / 2, Math.max(y0, y1) + 14, `${p.w.toFixed(1)} in`);
+      // Height label right of right edge
+      const [xr1, yr1] = worldToCanvas(p.x + p.w, p.y + p.h);
+      _dimLabel(Math.max(xr0, xr1) + 28, (yr0 + yr1) / 2, `${p.h.toFixed(1)} in`);
+      break;
+    }
+    default: {
+      // ExplicitPath: arc length at centroid
+      const pts = p.points || [];
+      if (pts.length < 2) break;
+      const len = _pathArcLength(pts, p.closed);
+      const cx = pts.reduce((s, q) => s + q[0], 0) / pts.length;
+      const cy = pts.reduce((s, q) => s + q[1], 0) / pts.length;
+      const [scx, scy] = worldToCanvas(cx, cy);
+      _dimLabel(scx, scy - 12, `~${len.toFixed(1)} in`);
+    }
+  }
+}
+
+function _drawDerivedDim(dp) {
+  const pts = dp.points || [];
+  if (pts.length < 2) return;
+
+  // Try to infer source type for better label
+  const ot = layer.offset_treatments.find(x => x.id === dp.id);
+  const srcPath = ot ? layer.source_paths.find(p => p.id === ot.source_path_id) : null;
+
+  if (srcPath && srcPath.type === 'CirclePath') {
+    // Estimate radius from arc length
+    const arcLen = _pathArcLength(pts, dp.closed);
+    const estR = arcLen / (2 * Math.PI);
+    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+    const [scx, scy] = worldToCanvas(cx, cy);
+    _dimLabel(scx, scy - 12, `R~${estR.toFixed(1)} in`);
+    return;
+  }
+
+  if (srcPath && srcPath.type === 'RectanglePath') {
+    // Derived offset rect — compute bounding box from 4 corner points
+    const xs = pts.map(p => p[0]);
+    const ys = pts.map(p => p[1]);
+    const w = Math.max(...xs) - Math.min(...xs);
+    const h = Math.max(...ys) - Math.min(...ys);
+    const [bx0, by0] = worldToCanvas(Math.min(...xs), Math.min(...ys) + h);
+    const [bx1, by1] = worldToCanvas(Math.max(...xs), Math.min(...ys) + h);
+    const [brx, bry] = worldToCanvas(Math.max(...xs), Math.min(...ys));
+    const [brx2, bry2] = worldToCanvas(Math.max(...xs), Math.min(...ys) + h);
+    _dimLabel((bx0 + bx1) / 2, Math.max(by0, by1) + 14, `${w.toFixed(1)} in`);
+    _dimLabel(Math.max(brx, brx2) + 28, (bry + bry2) / 2, `${h.toFixed(1)} in`);
+    return;
+  }
+
+  // Default: arc length
+  const arcLen = _pathArcLength(pts, dp.closed);
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  const [scx, scy] = worldToCanvas(cx, cy);
+  _dimLabel(scx, scy - 12, `~${arcLen.toFixed(1)} in`);
 }
 
 // ---------------------------------------------------------------------------
