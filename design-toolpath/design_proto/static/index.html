@@ -284,6 +284,56 @@
       border-top: 1px solid var(--border);
       flex-shrink: 0;
     }
+
+    /* ---- TRANSPORT BAR ---- */
+    #transport-bar {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(13, 13, 13, 0.94);
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 5px 10px;
+      z-index: 10;
+      min-width: 260px;
+      pointer-events: auto;
+    }
+    #transport-bar.hidden { display: none; }
+    .transport-btn {
+      padding: 3px 8px;
+      background: #252525;
+      border: 1px solid #3a3a3a;
+      color: #aaa;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      border-radius: 3px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .transport-btn:hover { background: #2e2e2e; color: #ddd; }
+    .transport-btn.active { background: #1c3a5a; border-color: var(--accent); color: var(--accent); }
+    #scrubber {
+      flex: 1;
+      min-width: 100px;
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+    #play-speed {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      color: #aaa;
+      font-family: inherit;
+      font-size: 11px;
+      padding: 2px 4px;
+      border-radius: 2px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -316,6 +366,21 @@
 <div class="main">
   <div class="canvas-wrap" id="canvas-wrap">
     <canvas id="canvas"></canvas>
+    <div id="transport-bar" class="hidden">
+      <button class="transport-btn" id="btn-restart" onclick="playbackRestart()" title="Restart">⏮</button>
+      <button class="transport-btn" id="btn-play" onclick="playbackToggle()" title="Play / Pause">▶</button>
+      <input type="range" id="scrubber" min="0" max="1000" value="0" step="1"
+             oninput="playbackScrub(this.value)" title="Scrub position">
+      <select id="play-speed" onchange="playbackSetSpeed(this.value)" title="Playback speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+      </select>
+      <button class="transport-btn" id="btn-playrev" onclick="playbackToggleDir()" title="Toggle reverse">⏪</button>
+    </div>
     <div class="canvas-hint" id="hint">Click to place points. Double-click to finish. Press C to close path.</div>
   </div>
 

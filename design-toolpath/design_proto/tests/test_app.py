@@ -825,13 +825,120 @@ class TestWorkflows:
         assert pts1 == pts2, "Dimensions flag altered effective geometry"
 
     def test_wf_geo_wave_params_no_amplitude(self, client):
-        """Wave generator API must not expose amplitude or samples parameters."""
+        """Wave generator API must not expose amplitude, samples, or phase parameters."""
         data = client.get('/api/generators').get_json()
         wave = next(g for g in data if g['name'] == 'wave')
         param_names = [p['name'] for p in wave['parameters']]
         assert 'amplitude' not in param_names
         assert 'samples' not in param_names
+        assert 'phase' not in param_names
         assert 'cycles' in param_names
+
+    def test_wave_closed_circles_zero_travel(self, client):
+        """Wave lattice on concentric circles routes with zero travel moves."""
+        payload = self._concentric_circles_payload(
+            r_outer=60, r_inner=40,
+            generator='wave',
+            gen_params={'cycles': 3.0},
+        )
+        r = client.post('/api/route', data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data['metrics']['travel_moves'] == 0, \
+            f"Wave on closed circles should have 0 travel, got {data['metrics']['travel_moves']}"
+
+    def test_open_line_offset_generates_caps(self, client):
+        """Open source + offset produces two cap paths in effective_paths."""
+        payload = {
+            'id': 'caps_test',
+            'label': '',
+            'source_paths': [{
+                'id': 'line',
+                'type': 'LinePath',
+                'label': 'Line',
+                'closed': False,
+                'role': 'free',
+                'visible': True,
+                'start': [0, 50],
+                'end': [200, 50],
+            }],
+            'offset_treatments': [{
+                'id': 'ot1', 'source_path_id': 'line',
+                'distance': 20, 'role': 'inner', 'label': '',
+            }],
+            'lattice_instances': [],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        paths = r.get_json()['paths']
+        cap_paths = [p for p in paths if p.get('role') == 'cap']
+        assert len(cap_paths) == 2, f"Expected 2 cap paths, got {len(cap_paths)}"
+
+    def test_open_line_offset_routes_single_run(self, client):
+        """Open source + offset with auto caps routes as 1 run, 0 travel."""
+        payload = {
+            'id': 'openwall',
+            'label': '',
+            'source_paths': [{
+                'id': 'line',
+                'type': 'LinePath',
+                'label': 'Line',
+                'closed': False,
+                'role': 'free',
+                'visible': True,
+                'start': [0, 50],
+                'end': [200, 50],
+            }],
+            'offset_treatments': [{
+                'id': 'ot1', 'source_path_id': 'line',
+                'distance': 20, 'role': 'inner', 'label': '',
+            }],
+            'lattice_instances': [],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+        r = client.post('/api/route',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data['metrics']['travel_moves'] == 0
+        assert data['metrics']['print_runs'] == 1
+
+    def test_reverse_direction_reverses_route_order(self, client):
+        """Reverse direction produces a route traversed in the opposite order."""
+        base = {
+            'id': 'rev_test',
+            'label': '',
+            'source_paths': [{
+                'id': 'p1', 'type': 'ExplicitPath', 'label': 'P',
+                'closed': False, 'role': 'free', 'visible': True,
+                'control_points': [[0, 0], [50, 0], [100, 0]],
+            }],
+            'offset_treatments': [],
+            'lattice_instances': [],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+        fwd = client.post('/api/route', data=json.dumps(base),
+                          content_type='application/json').get_json()
+        rev_payload = {**base, 'constraints': {**base['constraints'],
+                                               'reverse_direction': True}}
+        rev = client.post('/api/route', data=json.dumps(rev_payload),
+                          content_type='application/json').get_json()
+        fwd_start = fwd['moves'][0]['start']
+        fwd_last_end = fwd['moves'][-1]['end']
+        rev_start = rev['moves'][0]['start']
+        # Reversed route starts where the forward route ended
+        assert rev_start[0] == pytest.approx(fwd_last_end[0], abs=0.01)
+        assert rev_start[1] == pytest.approx(fwd_last_end[1], abs=0.01)
+        # Reversed route first start ≠ forward first start
+        assert fwd_start != rev_start
 
     def test_wf_g_offset_distance_accuracy(self, client):
         """Rectangle inside offset by 10 in: derived path corners must be exactly 10 in inward."""

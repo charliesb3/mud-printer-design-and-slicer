@@ -264,7 +264,8 @@ class TestWaveGenerator:
         specs = WaveGenerator().parameters()
         names = [s.name for s in specs]
         assert 'cycles' in names
-        assert 'phase' in names
+        # Phase removed in UX pass 4 (breaks seam bridge; user-verified useless)
+        assert 'phase' not in names
         # Old amplitude/samples/frequency must not be present
         assert 'amplitude' not in names
         assert 'samples' not in names
@@ -292,8 +293,8 @@ class TestWaveGenerator:
         gen = WaveGenerator()
         a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='wa')
         b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='wb')
-        # phase=0, V1: wave starts at alpha=0 → on A
-        result = gen.generate(a, b, {'cycles': 3.0, 'phase': 0.0}, 0)
+        # V1: wave starts at alpha=0 → on A
+        result = gen.generate(a, b, {'cycles': 3.0}, 0)
         pts = result[0].sample_points()
         # First point: t=0, alpha = 0.5*(1-cos(0)) = 0 → on A (y=0)
         assert abs(pts[0].y - 0.0) < 0.01
@@ -303,8 +304,8 @@ class TestWaveGenerator:
         gen = WaveGenerator()
         a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='wa')
         b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='wb')
-        # phase=0, V1: first minimum of alpha=1 at t = 0.5/cycles
-        result = gen.generate(a, b, {'cycles': 1.0, 'phase': 0.0}, 0)
+        # V1: first minimum of alpha=1 at t = 0.5/cycles
+        result = gen.generate(a, b, {'cycles': 1.0}, 0)
         pts = result[0].sample_points()
         # At t=0.5 (midpoint), alpha = 0.5*(1-cos(π)) = 1 → on B (y=30)
         mid_idx = len(pts) // 2
@@ -779,6 +780,138 @@ class TestPolygonHelpers:
 # ---------------------------------------------------------------------------
 # Integration — route Case D geometry via routing engine
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# WaveGenerator — seam bridge (closed boundaries → zero travel)
+# ---------------------------------------------------------------------------
+
+class TestWaveSeamBridge:
+    def test_closed_boundaries_produce_two_paths(self):
+        """Wave on closed boundaries returns wave + seam bridge."""
+        gen = WaveGenerator()
+        outer = CirclePath(200, 200, 60, id='outer')
+        inner = CirclePath(200, 200, 40, id='inner')
+        result = gen.generate(outer, inner, {'cycles': 3.0}, 0)
+        assert len(result) == 2
+        labels = [dp.label for dp in result]
+        assert 'wave' in labels
+        assert 'wave_seam' in labels
+
+    def test_open_boundaries_produce_one_path(self):
+        """Wave on open boundaries returns only the wave (no seam bridge)."""
+        gen = WaveGenerator()
+        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='a')
+        b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='b')
+        result = gen.generate(a, b, {'cycles': 3.0}, 0)
+        assert len(result) == 1
+
+    def test_seam_bridge_v1_endpoint_matches_path_b_start(self):
+        """V1 seam bridge end = path_b.sample_points()[0] exactly."""
+        gen = WaveGenerator()
+        outer = CirclePath(200, 200, 60, id='outer')
+        inner = CirclePath(200, 200, 40, id='inner')
+        result = gen.generate(outer, inner, {'cycles': 3.0}, 0)
+        bridge = next(dp for dp in result if dp.label == 'wave_seam')
+        bridge_pts = bridge.sample_points()
+        expected = inner.sample_points()[0]
+        assert bridge_pts[-1].x == pytest.approx(expected.x, abs=1e-9)
+        assert bridge_pts[-1].y == pytest.approx(expected.y, abs=1e-9)
+
+    def test_seam_bridge_v2_endpoint_matches_path_a_start(self):
+        """V2 seam bridge end = path_a.sample_points()[0] exactly."""
+        gen = WaveGenerator()
+        outer = CirclePath(200, 200, 60, id='outer')
+        inner = CirclePath(200, 200, 40, id='inner')
+        result = gen.generate(outer, inner, {'cycles': 3.0}, 1)
+        bridge = next(dp for dp in result if dp.label == 'wave_seam')
+        bridge_pts = bridge.sample_points()
+        expected = outer.sample_points()[0]
+        assert bridge_pts[-1].x == pytest.approx(expected.x, abs=1e-9)
+        assert bridge_pts[-1].y == pytest.approx(expected.y, abs=1e-9)
+
+    def test_wave_closed_zero_travel(self):
+        """Wave on concentric circles routes with zero travel moves."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
+        from graph import route_layer, compute_metrics
+
+        outer = CirclePath(200, 200, 60, id='outer')
+        inner = CirclePath(200, 200, 40, id='inner')
+        li = LatticeInstance(
+            id='wli', generator_name='wave',
+            path_a_id='outer', path_b_id='inner',
+            params={'cycles': 3.0}, variation_index=0,
+        )
+        pl = PrintLayer(id='wave_test')
+        pl.source_paths = [outer, inner]
+        pl.lattice_instances = [li]
+        rl = pl.to_routing_layer()
+        moves = route_layer(rl)
+        metrics = compute_metrics(moves)
+        assert metrics['travel_moves'] == 0, \
+            f"Wave on closed circles should have 0 travel, got {metrics['travel_moves']}"
+        assert metrics['print_runs'] == 1, \
+            f"Wave on closed circles should have 1 run, got {metrics['print_runs']}"
+
+
+# ---------------------------------------------------------------------------
+# Open wall end caps
+# ---------------------------------------------------------------------------
+
+class TestOpenWallEndCaps:
+    def test_open_source_offset_generates_caps(self):
+        """Open source + offset generates cap_start and cap_end paths."""
+        src = LinePath(Vec2(0, 0), Vec2(100, 0), id='line')
+        ot = OffsetTreatment(id='ot1', source_path_id='line', distance=10)
+        layer = PrintLayer(id='test')
+        layer.source_paths = [src]
+        layer.offset_treatments = [ot]
+        paths = layer.effective_paths()
+        cap_roles = [p.role for p in paths if p.role == 'cap']
+        assert len(cap_roles) == 2
+
+    def test_closed_source_offset_no_caps(self):
+        """Closed source + offset does NOT generate caps."""
+        src = RectanglePath(0, 0, 100, 100, id='rect')
+        ot = OffsetTreatment(id='ot1', source_path_id='rect', distance=10)
+        layer = PrintLayer(id='test')
+        layer.source_paths = [src]
+        layer.offset_treatments = [ot]
+        paths = layer.effective_paths()
+        cap_paths = [p for p in paths if p.role == 'cap']
+        assert len(cap_paths) == 0
+
+    def test_cap_start_endpoints_match_boundaries(self):
+        """cap_start[0] = src[0], cap_start[-1] = derived[0] exactly."""
+        src = LinePath(Vec2(0, 0), Vec2(100, 0), id='line')
+        ot = OffsetTreatment(id='ot1', source_path_id='line', distance=10)
+        layer = PrintLayer(id='test')
+        layer.source_paths = [src]
+        layer.offset_treatments = [ot]
+        paths = layer.effective_paths()
+        cap_start = next(p for p in paths if p.label == 'cap_start')
+        pts = cap_start.sample_points()
+        src_pts = src.sample_points()
+        assert pts[0].x == pytest.approx(src_pts[0].x, abs=1e-9)
+        assert pts[0].y == pytest.approx(src_pts[0].y, abs=1e-9)
+
+    def test_open_double_wall_routes_single_run_zero_travel(self):
+        """Open source + offset + auto caps → routing gives 1 run, 0 travel."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
+        from graph import route_layer, compute_metrics
+
+        src = LinePath(Vec2(0, 50), Vec2(200, 50), id='line')
+        ot = OffsetTreatment(id='ot1', source_path_id='line', distance=20)
+        layer = PrintLayer(id='test')
+        layer.source_paths = [src]
+        layer.offset_treatments = [ot]
+        rl = layer.to_routing_layer()
+        moves = route_layer(rl)
+        metrics = compute_metrics(moves)
+        assert metrics['travel_moves'] == 0
+        assert metrics['print_runs'] == 1
+
 
 class TestCaseDRouting:
     def test_case_d_zero_travel_via_print_layer(self):

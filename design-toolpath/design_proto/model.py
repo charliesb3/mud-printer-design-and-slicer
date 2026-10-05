@@ -622,15 +622,18 @@ class WaveGenerator(LatticeGenerator):
     """
     Wave lattice: smoothly oscillates from boundary A → B → A → repeat.
     Wall spacing = transverse amplitude (not user-controlled).
-    alpha(s) = 0.5 * (1 - cos(2π * cycles * s + phase_angle))
+    alpha(s) = 0.5 * (1 - cos(2π * cycles * s + phase_offset))
     alpha=0 → on A, alpha=1 → on B.
+
+    For closed boundaries a seam bridge is added from the wave end to the
+    other boundary's first node. This creates exactly two odd-degree nodes
+    in the routing graph → Eulerian path → zero travel moves.
     """
     name = 'wave'
 
     def parameters(self) -> list[ParameterSpec]:
         return [
             ParameterSpec('cycles', 'Cycles', 3.0, 0.5, 20.0, 0.5),
-            ParameterSpec('phase', 'Phase', 0.0, 0.0, 1.0, 0.05),
         ]
 
     def variation_count(self, path_a: Path, path_b: Path, params: dict) -> int:
@@ -639,10 +642,9 @@ class WaveGenerator(LatticeGenerator):
     def generate(self, path_a: Path, path_b: Path,
                  params: dict, variation_index: int = 0) -> list[DerivedPath]:
         cycles = max(0.5, float(params.get('cycles', 3.0)))
-        phase = float(params.get('phase', 0.0))
 
         # V2 shifts by half a cycle so the wave starts on B instead of A
-        phase_total = phase + 0.5 * (variation_index % 2)
+        phase_total = 0.5 * (variation_index % 2)
 
         # Choose sample count from cycles (~32 pts/cycle, min 64)
         samples = max(64, int(cycles * 32))
@@ -664,8 +666,26 @@ class WaveGenerator(LatticeGenerator):
                 2.0 * math.pi * (cycles * t + phase_total)))
             wave_pts.append(pts_a[i].lerp(pts_b[i], alpha))
 
-        return [DerivedPath(wave_pts, closed=False, role='lattice',
-                            label='wave', source_id='', treatment_id='')]
+        result = [DerivedPath(wave_pts, closed=False, role='lattice',
+                              label='wave', source_id='', treatment_id='')]
+
+        # Seam bridge for closed boundaries: connects wave end to the other
+        # boundary's first node. This creates exactly two odd-degree nodes
+        # (the touched node on each boundary) → Eulerian path → zero travel.
+        if path_a.closed and path_b.closed:
+            if variation_index % 2 == 0:
+                # V1 starts on A (wave_pts[0] = pts_a[0]); bridge to B[0]
+                seam_end = path_b.sample_points()[0]
+            else:
+                # V2 starts on B (wave_pts[0] = pts_b[0]); bridge to A[0]
+                seam_end = path_a.sample_points()[0]
+            result.append(DerivedPath(
+                [wave_pts[-1], seam_end],
+                closed=False, role='lattice', label='wave_seam',
+                source_id='', treatment_id='',
+            ))
+
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -759,11 +779,31 @@ class PrintLayer:
             if p.visible:
                 result.append(p)
 
-        # Offset-derived paths
+        # Offset-derived paths + end caps for open sources
         for ot in self.offset_treatments:
             src = self._path_by_id(ot.source_path_id)
             if src is not None:
-                result.append(ot.generate(src))
+                derived = ot.generate(src)
+                result.append(derived)
+                # Open source: add caps at each end so the double wall forms
+                # a closed loop. Cap endpoints are exact boundary coordinates,
+                # so the routing engine merges nodes → single connected component.
+                if not src.closed:
+                    src_pts = src.sample_points()
+                    der_pts = derived.sample_points()
+                    if src_pts and der_pts:
+                        result.append(DerivedPath(
+                            [src_pts[0], der_pts[0]],
+                            closed=False, role='cap', label='cap_start',
+                            source_id=ot.id, treatment_id=ot.id,
+                            id=ot.id + '_cs',
+                        ))
+                        result.append(DerivedPath(
+                            [src_pts[-1], der_pts[-1]],
+                            closed=False, role='cap', label='cap_end',
+                            source_id=ot.id, treatment_id=ot.id,
+                            id=ot.id + '_ce',
+                        ))
 
         # Lattice-derived paths — can reference source paths OR offset-derived paths
         all_by_id = {p.id: p for p in result}

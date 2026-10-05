@@ -13,6 +13,17 @@ let showToolpath = true;
 let showArrows = true;
 let showDimensions = false;
 
+// Playback state
+let playbackPos = 0.0;         // 0.0–1.0 fraction of total route distance
+let playbackPlaying = false;
+let playbackSpeed = 1.0;
+let playbackForward = true;
+let _playbackAF = null;
+let _playbackLastTime = null;
+let _routeCumDists = null;     // [{ds, de, m}] cumulative distance per move
+let _routeTotalDist = 0.0;
+const _PLAYBACK_WORLD_SPEED = 100.0; // world inches per second at 1×
+
 let routeResult = null;
 let derivedPaths = [];       // populated by effective_paths or route on model change
 let _refreshTimer = null;
@@ -226,6 +237,7 @@ const ROLE_COLORS = {
   outer:   '#4a9eff',
   inner:   '#44ccaa',
   lattice: '#aa88ff',
+  cap:     '#44ccaa',
   free:    '#aaaaaa',
 };
 
@@ -365,7 +377,13 @@ function repaint() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawGrid();
   drawEffectivePaths();
-  if (showToolpath && routeResult) drawToolpath(routeResult.moves);
+  if (showToolpath && routeResult) {
+    if (playbackPos > 0.0 || playbackPlaying) {
+      drawToolpathWithPlayback(routeResult.moves);
+    } else {
+      drawToolpath(routeResult.moves);
+    }
+  }
   if (showDimensions) drawDimensions();
   if (tool === 'draw' && drawPts.length > 0) drawInProgress();
   if (selectedId) drawHandles(selectedId);
@@ -500,6 +518,210 @@ function drawToolpath(moves) {
   ctx.fillText('START', sx + 8, sy - 6);
   ctx.fillStyle = '#cc3333';
   ctx.fillText('END', ex + 8, ey + 12);
+}
+
+// ---------------------------------------------------------------------------
+// Playback — distance-based interpolation and toolpath draw with nozzle
+// ---------------------------------------------------------------------------
+
+function _drawMoveLine(m) {
+  const [x0, y0] = worldToCanvas(m.start[0], m.start[1]);
+  const [x1, y1] = worldToCanvas(m.end[0], m.end[1]);
+  const color = MOVE_COLORS[m.kind] || MOVE_COLORS.print;
+  const dashed = m.kind === 'travel';
+  const width = m.kind === 'travel' ? 1.2 : (m.kind === 'retrace' ? 1.5 : 2.0);
+  drawLine(x0, y0, x1, y1, color, width, dashed);
+}
+
+function drawToolpathWithPlayback(moves) {
+  if (!_routeCumDists || _routeTotalDist < 1e-6) { drawToolpath(moves); return; }
+  const targetDist = playbackPos * _routeTotalDist;
+
+  // Pass 1: all moves dim (future / unprinted)
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  for (const m of moves) _drawMoveLine(m);
+  ctx.restore();
+
+  // Pass 2: printed portion at full opacity
+  for (const { ds, de, m } of _routeCumDists) {
+    if (ds >= targetDist) break;
+    if (de <= targetDist) {
+      _drawMoveLine(m);
+    } else {
+      const t = (targetDist - ds) / Math.max(1e-12, de - ds);
+      const ex = m.start[0] + t * (m.end[0] - m.start[0]);
+      const ey = m.start[1] + t * (m.end[1] - m.start[1]);
+      const [x0, y0] = worldToCanvas(m.start[0], m.start[1]);
+      const [x1, y1] = worldToCanvas(ex, ey);
+      const color = MOVE_COLORS[m.kind] || MOVE_COLORS.print;
+      drawLine(x0, y0, x1, y1, color,
+               m.kind === 'travel' ? 1.2 : (m.kind === 'retrace' ? 1.5 : 2.0),
+               m.kind === 'travel');
+    }
+  }
+
+  // Arrows + seam markers when route fully played
+  if (playbackPos >= 1.0) {
+    const ARROW_SPACING = 50;
+    buildPrintRuns(moves).forEach(run => {
+      if (showArrows) {
+        let distSinceArrow = ARROW_SPACING;
+        for (const m of run.moves) {
+          if (m.kind !== 'print') continue;
+          distSinceArrow += Math.hypot(m.end[0]-m.start[0], m.end[1]-m.start[1]);
+          if (distSinceArrow >= ARROW_SPACING) {
+            const [x0,y0] = worldToCanvas(m.start[0], m.start[1]);
+            const [x1,y1] = worldToCanvas(m.end[0], m.end[1]);
+            drawArrowhead((x0+x1)/2, (y0+y1)/2, Math.atan2(y1-y0, x1-x0),
+                          7, '#ffffff', 'rgba(0,0,0,0.65)');
+            distSinceArrow = 0;
+          }
+        }
+      }
+      if (Math.hypot(run.endPos[0]-run.startPos[0], run.endPos[1]-run.startPos[1]) < 3) {
+        const [sx,sy] = worldToCanvas(run.startPos[0], run.startPos[1]);
+        drawSeamMarker(sx, sy);
+      }
+    });
+  }
+
+  // Start / end dots
+  const first = moves[0], last = moves[moves.length - 1];
+  const [sx, sy] = worldToCanvas(first.start[0], first.start[1]);
+  const [ex, ey] = worldToCanvas(last.end[0], last.end[1]);
+  drawDot(sx, sy, 6, '#33cc66');
+  drawDot(ex, ey, 6, '#cc3333');
+
+  // Nozzle drawn last — on top of everything
+  const npos = _nozzleAtPos(playbackPos);
+  if (npos) {
+    const [ncx, ncy] = worldToCanvas(npos[0], npos[1]);
+    _drawNozzle(ncx, ncy);
+  }
+}
+
+function _nozzleAtPos(p) {
+  if (!_routeCumDists || _routeTotalDist < 1e-6) return null;
+  const target = p * _routeTotalDist;
+  for (const { ds, de, m } of _routeCumDists) {
+    if (de >= target - 1e-6) {
+      const segLen = de - ds;
+      const t = segLen > 1e-9 ? Math.max(0, Math.min(1, (target - ds) / segLen)) : 0;
+      return [m.start[0] + t * (m.end[0] - m.start[0]),
+              m.start[1] + t * (m.end[1] - m.start[1])];
+    }
+  }
+  const last = _routeCumDists[_routeCumDists.length - 1];
+  return last ? [last.m.end[0], last.m.end[1]] : null;
+}
+
+function _drawNozzle(cx, cy) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+  ctx.strokeStyle = '#ffff00';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffff00';
+  ctx.fill();
+  ctx.restore();
+}
+
+function _setupPlayback(moves) {
+  if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
+  playbackPlaying = false;
+  playbackPos = 0.0;
+  let cum = 0;
+  _routeCumDists = (moves || []).map(m => {
+    const len = Math.hypot(m.end[0] - m.start[0], m.end[1] - m.start[1]);
+    const entry = { ds: cum, de: cum + len, m };
+    cum += len;
+    return entry;
+  });
+  _routeTotalDist = cum;
+  _syncScrubber();
+  _updatePlayBtn();
+}
+
+function playbackToggle() {
+  if (!routeResult || !routeResult.moves || routeResult.moves.length === 0) return;
+  playbackPlaying = !playbackPlaying;
+  if (playbackPlaying) {
+    if (playbackForward && playbackPos >= 1.0) playbackPos = 0.0;
+    if (!playbackForward && playbackPos <= 0.0) playbackPos = 1.0;
+    _playbackLastTime = null;
+    _playbackAF = requestAnimationFrame(_playbackStep);
+  } else {
+    if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
+  }
+  _updatePlayBtn();
+}
+
+function playbackRestart() {
+  if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
+  playbackPlaying = false;
+  playbackPos = 0.0;
+  playbackForward = true;
+  const revBtn = document.getElementById('btn-playrev');
+  if (revBtn) revBtn.classList.remove('active');
+  _syncScrubber();
+  _updatePlayBtn();
+  repaint();
+}
+
+function playbackScrub(v) {
+  playbackPos = parseInt(v, 10) / 1000;
+  repaint();
+}
+
+function playbackSetSpeed(v) {
+  playbackSpeed = parseFloat(v);
+}
+
+function playbackToggleDir() {
+  playbackForward = !playbackForward;
+  const btn = document.getElementById('btn-playrev');
+  if (btn) btn.classList.toggle('active', !playbackForward);
+}
+
+function _playbackStep(timestamp) {
+  if (!playbackPlaying) return;
+  const elapsed = _playbackLastTime ? (timestamp - _playbackLastTime) : 16;
+  _playbackLastTime = timestamp;
+  const fracAdvance = _routeTotalDist > 0
+    ? (_PLAYBACK_WORLD_SPEED * playbackSpeed * elapsed / 1000) / _routeTotalDist
+    : 0;
+  if (playbackForward) {
+    playbackPos = Math.min(1.0, playbackPos + fracAdvance);
+    if (playbackPos >= 1.0) { playbackPlaying = false; _updatePlayBtn(); }
+  } else {
+    playbackPos = Math.max(0.0, playbackPos - fracAdvance);
+    if (playbackPos <= 0.0) { playbackPlaying = false; _updatePlayBtn(); }
+  }
+  _syncScrubber();
+  repaint();
+  if (playbackPlaying) _playbackAF = requestAnimationFrame(_playbackStep);
+}
+
+function _syncScrubber() {
+  const scrubber = document.getElementById('scrubber');
+  if (scrubber) scrubber.value = Math.round(playbackPos * 1000);
+}
+
+function _updatePlayBtn() {
+  const btn = document.getElementById('btn-play');
+  if (btn) {
+    btn.textContent = playbackPlaying ? '⏸' : '▶';
+    btn.classList.toggle('active', playbackPlaying);
+  }
+}
+
+function _showTransport(visible) {
+  const bar = document.getElementById('transport-bar');
+  if (bar) bar.classList.toggle('hidden', !visible);
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,7 +1308,10 @@ function allBoundaries() {
   for (const ot of layer.offset_treatments) {
     const src = layer.source_paths.find(p => p.id === ot.source_path_id);
     const srcLabel = src ? (src.label || src.id) : ot.source_path_id;
-    items.push({ id: ot.id, label: `Offset of ${srcLabel}` });
+    const dir = ot.direction || 'inside';
+    const dirCap = dir.charAt(0).toUpperCase() + dir.slice(1);
+    const dist = ot.distance != null ? ot.distance : 10;
+    items.push({ id: ot.id, label: `${dirCap} offset of ${srcLabel} — ${dist.toFixed(0)} in` });
   }
   return items;
 }
@@ -1211,7 +1436,7 @@ function addLattice() {
 }
 
 function getParamUnit(paramName) {
-  const noUnit = ['segments', 'connect_ends', 'cycles', 'phase'];
+  const noUnit = ['segments', 'connect_ends', 'cycles'];
   return noUnit.includes(paramName) ? '' : 'in';
 }
 
@@ -1322,6 +1547,8 @@ async function runRoute() {
     routeResult = data;
     const sourceIds = new Set(layer.source_paths.map(p => p.id));
     derivedPaths = (data.layer.paths || []).filter(p => !sourceIds.has(p.id));
+    _setupPlayback(data.moves);
+    _showTransport(true);
     updateMetrics(data);
     document.getElementById('metrics-section').style.display = '';
     repaint();
@@ -1441,9 +1668,9 @@ function drawDimensions() {
     _drawSourceDim(p);
   }
 
-  // Derived offset paths (non-lattice only)
+  // Derived offset paths (not lattice or caps)
   for (const dp of derivedPaths) {
-    if (dp.role === 'lattice') continue;
+    if (dp.role === 'lattice' || dp.role === 'cap') continue;
     _drawDerivedDim(dp);
   }
 
@@ -1552,6 +1779,10 @@ function toggleToolpath() {
     if (layer.source_paths.length > 0) runRoute();
     else repaint();
   } else {
+    if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
+    playbackPlaying = false;
+    _updatePlayBtn();
+    _showTransport(false);
     routeResult = null;
     document.getElementById('metrics-section').style.display = 'none';
     repaint();
@@ -1604,6 +1835,13 @@ function clearAll() {
   routeResult = null;
   derivedPaths = [];
   drawPts = [];
+  if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
+  playbackPlaying = false;
+  playbackPos = 0.0;
+  _routeCumDists = null;
+  _routeTotalDist = 0.0;
+  _showTransport(false);
+  _updatePlayBtn();
   updatePathList();
   updatePropPanel();
   updateOffsetList();

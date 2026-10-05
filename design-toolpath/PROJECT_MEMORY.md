@@ -356,17 +356,17 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
 
-### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + three UX passes)
+### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + four UX passes)
 
-Location: `design-toolpath/design_proto/`. 113 tests passing.
+Location: `design-toolpath/design_proto/`. 126 tests passing.
 
 Files:
 - `model.py` — full data model: Vec2, Path subtypes, OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
 - `static/index.html` — design canvas UI
-- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay
-- `tests/test_model.py` — 74 unit tests covering model layer + geometry validation
-- `tests/test_app.py` — 39 integration + workflow tests
+- `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay, playback transport
+- `tests/test_model.py` — 83 unit tests covering model layer + geometry validation
+- `tests/test_app.py` — 43 integration + workflow tests
 
 **UX pass 2 (14-point spec):** True geometric offset, Add Lattice fix, Role removed from UI, Individual delete, Arrow legibility, Numbers removed, Arrows disabled when Toolpath OFF, Metric label renames, Clear All.
 
@@ -407,6 +407,30 @@ The routing engine must never rescue geometrically invalid lattice. Validity is 
 - Derived offset paths: radius (for circle sources), W×H (for rect sources), arc length otherwise.
 - Purely visual — no effect on geometry, routing graph, or toolpath export.
 
+**UX pass 4 (6-point spec) — routing quality + playback:**
+
+**Wave seam bridge (zero-travel for closed walls)**: `WaveGenerator.generate()` now appends a second `DerivedPath` for closed boundaries — a two-point "seam connector" from `wave_pts[-1]` to `path_b.sample_points()[0]` (V1) or `path_a.sample_points()[0]` (V2). This creates exactly 2 odd-degree nodes in the routing graph → Eulerian path → zero travel moves. Node matching is exact because `wave_pts[0]` is always exactly `path_a.sample_points()[0]` (alpha=0 at t=0 → lerp(a,b,0) = a).
+
+**Phase parameter removed**: `phase` removed from `WaveGenerator.parameters()` and `generate()`. Phase breaks the seam bridge (a nonzero phase offset makes `wave_pts[0]` not exactly equal to a boundary node). Phase was also observed to have no useful visual effect in practice. `phase_total = 0.5 * (variation_index % 2)` is now baked in.
+
+**Open double-wall end caps**: `PrintLayer.effective_paths()` auto-generates two `DerivedPath` cap objects for each `OffsetTreatment` whose source path is open (`not src.closed`):
+- `cap_start` (id=`ot.id+'_cs'`, role='cap'): `[src_pts[0], der_pts[0]]`
+- `cap_end` (id=`ot.id+'_ce'`, role='cap'): `[src_pts[-1], der_pts[-1]]`
+This connects two otherwise-disconnected open strands into an Eulerian circuit. Endpoint coordinates are guaranteed exact because `LinePath.sample_points()` always returns `[start, end]` and `_offset_polyline` on a single segment returns the exact offset endpoints.
+
+**Reverse routing override fixed**: `app.py` `api_route()` now post-processes moves when `c.reverse_direction=True` by reversing the list and swapping `start`/`end` of each `PrintMove`. Previously, `reverse_direction` was read from constraints but never actually applied (the routing engine has no such parameter).
+
+**Unique boundary labels**: `allBoundaries()` in `app.js` now generates: `"${dirCap} offset of ${srcLabel} — ${dist.toFixed(0)} in"` (e.g. "Inside offset of Circle — 10 in" vs "Outside offset of Circle — 15 in"). Previously all offset boundaries showed the same generic label.
+
+**Toolpath playback transport bar**: Full play/pause/scrubber/speed/direction transport added in `index.html` + `app.js`.
+- Transport bar appears below canvas when a route is computed; hidden otherwise.
+- Progress is distance-based (world inches), not point- or move-count-based.
+- `_routeCumDists` precomputes `{ds, de, m}` per move; `_nozzleAtPos(p)` interpolates within the current move.
+- Yellow nozzle circle drawn at current position; already-printed moves shown at full opacity, future moves at 18%.
+- Controls: restart (⏮), play/pause (▶/⏸), scrubber (range 0–1000), speed selector (0.25×–8×), reverse toggle (⏪).
+- rAF animation loop at `_PLAYBACK_WORLD_SPEED = 100.0` world in/s at 1×.
+- Playback resets when toolpath is toggled off or Clear All is called.
+
 **Known limitations / deferred:**
 - Node-drag editing for Circle/Ellipse primitives is approximate
 - Path sections (split points / per-section properties) in model but no UI yet
@@ -440,4 +464,4 @@ The routing engine must never rescue geometrically invalid lattice. Validity is 
 
 2026-10-04
 
-Phase 3 UX pass 3 (geometry validity) complete. Phase 2: 65 tests. Phase 3: 113 tests. All green.
+Phase 3 UX pass 4 (routing quality + playback) complete. Phase 2: 65 tests. Phase 3: 126 tests. All green.

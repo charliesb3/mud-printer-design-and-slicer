@@ -178,6 +178,15 @@ def api_route():
             component_order=c.component_order,
         )
 
+        # Reverse direction: reverse move order and swap each move's start/end
+        if c.reverse_direction and moves:
+            from geometry import PrintMove as _PM
+            moves = [
+                _PM(kind=m.kind, strand_id=m.strand_id, seg_idx=m.seg_idx,
+                    start=m.end, end=m.start)
+                for m in reversed(moves)
+            ]
+
         metrics = compute_metrics(moves)
         ginfo = graph_info(routing_layer)
 
