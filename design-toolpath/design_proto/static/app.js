@@ -4,17 +4,22 @@
 // State
 // ---------------------------------------------------------------------------
 
-let tool = 'select';           // 'select' | 'draw'
-let drawPts = [];              // points accumulated while drawing
-let selectedId = null;         // selected path id
+let tool = 'select';
+let drawPts = [];
+let selectedId = null;
 
 let showToolpath = true;
 let showArrows = true;
 let showNumbers = true;
 
-let routeResult = null;        // last /api/route response
+let routeResult = null;
+let derivedPaths = [];       // populated by /api/effective_paths on model change
+let _refreshTimer = null;
 
-// The layer model (serialised as JSON to/from server)
+// Drag state
+let dragging = null;         // { pathId, handleKey, originalState }
+let bodyDragging = null;     // { pathId, startWX, startWY, originalState }
+
 const layer = {
   id: 'design',
   label: '',
@@ -29,7 +34,7 @@ const layer = {
   },
 };
 
-let generators = {};           // name -> { parameters }
+let generators = {};
 
 // ---------------------------------------------------------------------------
 // Canvas setup
@@ -49,7 +54,7 @@ window.addEventListener('resize', resizeCanvas);
 
 // ---------------------------------------------------------------------------
 // Coordinate transform: world ↔ canvas
-// The canvas uses a fixed 400×400 world coordinate space
+// 1 world unit = 1 inch. Canvas represents a 400 in × 400 in workspace.
 // ---------------------------------------------------------------------------
 
 const WORLD = 400;
@@ -62,6 +67,156 @@ function worldToCanvas(x, y) {
 function canvasToWorld(cx, cy) {
   const s = WORLD / canvas.width;
   return [cx * s, WORLD - cy * s];
+}
+
+// ---------------------------------------------------------------------------
+// Semantic handle system
+// ---------------------------------------------------------------------------
+
+function getHandles(path) {
+  switch (path.type) {
+    case 'CirclePath':
+      return [
+        { key: 'center', wx: path.cx, wy: path.cy, shape: 'cross' },
+        { key: 'radius', wx: path.cx + path.radius, wy: path.cy, shape: 'square' },
+      ];
+    case 'EllipsePath':
+      return [
+        { key: 'center', wx: path.cx, wy: path.cy, shape: 'cross' },
+        { key: 'rx', wx: path.cx + path.rx, wy: path.cy, shape: 'square' },
+        { key: 'ry', wx: path.cx, wy: path.cy + path.ry, shape: 'square' },
+      ];
+    case 'LinePath':
+      return [
+        { key: 'start', wx: path.start[0], wy: path.start[1], shape: 'point' },
+        { key: 'end',   wx: path.end[0],   wy: path.end[1],   shape: 'point' },
+      ];
+    case 'RectanglePath':
+      return [
+        { key: 'tl', wx: path.x,           wy: path.y,           shape: 'square' },
+        { key: 'tr', wx: path.x + path.w,  wy: path.y,           shape: 'square' },
+        { key: 'br', wx: path.x + path.w,  wy: path.y + path.h,  shape: 'square' },
+        { key: 'bl', wx: path.x,           wy: path.y + path.h,  shape: 'square' },
+      ];
+    default: {
+      // ExplicitPath — only the user-placed control points
+      const pts = path.control_points || path.points || [];
+      return pts.map((pt, i) => ({ key: `pt${i}`, wx: pt[0], wy: pt[1], shape: 'point' }));
+    }
+  }
+}
+
+function applyHandleDrag(path, handleKey, wx, wy, orig) {
+  switch (path.type) {
+    case 'CirclePath':
+      if (handleKey === 'center') { path.cx = wx; path.cy = wy; }
+      if (handleKey === 'radius') {
+        path.radius = Math.max(1, Math.hypot(wx - path.cx, wy - path.cy));
+      }
+      break;
+    case 'EllipsePath':
+      if (handleKey === 'center') { path.cx = wx; path.cy = wy; }
+      if (handleKey === 'rx') { path.rx = Math.max(1, Math.abs(wx - path.cx)); }
+      if (handleKey === 'ry') { path.ry = Math.max(1, Math.abs(wy - path.cy)); }
+      break;
+    case 'LinePath':
+      if (handleKey === 'start') { path.start = [wx, wy]; }
+      if (handleKey === 'end')   { path.end   = [wx, wy]; }
+      break;
+    case 'RectanglePath': {
+      const fixBRX = orig.x + orig.w, fixBRY = orig.y + orig.h;
+      if (handleKey === 'tl') {
+        path.x = Math.min(wx, fixBRX - 1);
+        path.y = Math.min(wy, fixBRY - 1);
+        path.w = fixBRX - path.x;
+        path.h = fixBRY - path.y;
+      } else if (handleKey === 'tr') {
+        path.y = Math.min(wy, orig.y + orig.h - 1);
+        path.w = Math.max(1, wx - orig.x);
+        path.h = (orig.y + orig.h) - path.y;
+      } else if (handleKey === 'br') {
+        path.w = Math.max(1, wx - orig.x);
+        path.h = Math.max(1, wy - orig.y);
+      } else if (handleKey === 'bl') {
+        const fixTRX = orig.x + orig.w;
+        path.x = Math.min(wx, fixTRX - 1);
+        path.w = fixTRX - path.x;
+        path.h = Math.max(1, wy - orig.y);
+      }
+      break;
+    }
+    default: {
+      // ExplicitPath
+      const idx = parseInt(handleKey.replace('pt', ''), 10);
+      if (!isNaN(idx)) {
+        const pts = path.control_points || path.points;
+        pts[idx] = [wx, wy];
+        path.control_points = pts;
+        path.points = pts;
+      }
+      break;
+    }
+  }
+  _computePrimitivePoints(path);
+}
+
+function capturePathState(path) {
+  const s = {
+    type: path.type,
+    cx: path.cx, cy: path.cy, radius: path.radius,
+    rx: path.rx, ry: path.ry, rotation: path.rotation,
+    x: path.x, y: path.y, w: path.w, h: path.h,
+  };
+  if (path.start) s.start = [...path.start];
+  if (path.end)   s.end   = [...path.end];
+  if (path.control_points) s.control_points = path.control_points.map(p => [...p]);
+  if (path.points) s.points = path.points.map(p => [...p]);
+  return s;
+}
+
+function applyBodyDrag(path, dx, dy, orig) {
+  switch (path.type) {
+    case 'CirclePath':
+      path.cx = orig.cx + dx; path.cy = orig.cy + dy; break;
+    case 'EllipsePath':
+      path.cx = orig.cx + dx; path.cy = orig.cy + dy; break;
+    case 'LinePath':
+      path.start = [orig.start[0] + dx, orig.start[1] + dy];
+      path.end   = [orig.end[0]   + dx, orig.end[1]   + dy];
+      break;
+    case 'RectanglePath':
+      path.x = orig.x + dx; path.y = orig.y + dy; break;
+    default: {
+      const pts = orig.control_points || orig.points || [];
+      path.control_points = pts.map(([px, py]) => [px + dx, py + dy]);
+      path.points = path.control_points;
+      break;
+    }
+  }
+  _computePrimitivePoints(path);
+}
+
+// Sync sidebar number inputs after drag, without rebuilding the panel
+function syncPropPanel(path) {
+  if (!path || path.id !== selectedId) return;
+  const fields = {};
+  switch (path.type) {
+    case 'CirclePath':
+      Object.assign(fields, { cx: path.cx, cy: path.cy, radius: path.radius }); break;
+    case 'EllipsePath':
+      Object.assign(fields, { cx: path.cx, cy: path.cy, rx: path.rx, ry: path.ry }); break;
+    case 'LinePath':
+      Object.assign(fields, { x0: path.start[0], y0: path.start[1],
+                               x1: path.end[0],   y1: path.end[1] }); break;
+    case 'RectanglePath':
+      Object.assign(fields, { x: path.x, y: path.y, w: path.w, h: path.h }); break;
+  }
+  for (const [key, val] of Object.entries(fields)) {
+    const el = document.getElementById('prop-' + key);
+    if (el && document.activeElement !== el) {
+      el.value = typeof val === 'number' ? +val.toFixed(2) : val;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -149,44 +304,60 @@ function drawDot(x, y, r, color) {
   ctx.fill();
 }
 
+function drawHandle(wx, wy, shape) {
+  const [cx, cy] = worldToCanvas(wx, wy);
+  ctx.save();
+  if (shape === 'cross') {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - 7, cy); ctx.lineTo(cx + 7, cy);
+    ctx.moveTo(cx, cy - 7); ctx.lineTo(cx, cy + 7);
+    ctx.stroke();
+    ctx.strokeStyle = '#4a9eff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (shape === 'square') {
+    ctx.strokeStyle = '#4a9eff';
+    ctx.fillStyle = '#1c2a3a';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(cx - 4, cy - 4, 8, 8);
+    ctx.strokeRect(cx - 4, cy - 4, 8, 8);
+  } else {
+    // 'point'
+    ctx.fillStyle = '#4a9eff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // ---------------------------------------------------------------------------
 // Repaint
 // ---------------------------------------------------------------------------
 
 function repaint() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Draw grid (faint)
   drawGrid();
-
-  // Draw effective paths (source + derived)
   drawEffectivePaths();
-
-  // Draw toolpath overlay
-  if (showToolpath && routeResult) {
-    drawToolpath(routeResult.moves);
-  }
-
-  // Draw in-progress freehand
-  if (tool === 'draw' && drawPts.length > 0) {
-    drawInProgress();
-  }
-
-  // Draw node handles for selected path
-  if (selectedId) {
-    drawHandles(selectedId);
-  }
+  if (showToolpath && routeResult) drawToolpath(routeResult.moves);
+  if (tool === 'draw' && drawPts.length > 0) drawInProgress();
+  if (selectedId) drawHandles(selectedId);
 }
 
 function drawGrid() {
-  const step = 40; // world units
+  const step = 40;
   ctx.save();
-  ctx.strokeStyle = '#282828';
+  ctx.strokeStyle = '#252525';
   ctx.lineWidth = 1;
   for (let wx = 0; wx <= WORLD; wx += step) {
     const [cx] = worldToCanvas(wx, 0);
-    const [, cy0] = worldToCanvas(wx, 0);
-    const [, cy1] = worldToCanvas(wx, WORLD);
     ctx.beginPath();
     ctx.moveTo(cx, 0);
     ctx.lineTo(cx, canvas.height);
@@ -208,29 +379,25 @@ function _pathCanvasPts(path) {
 }
 
 function drawEffectivePaths() {
-  // Collect all paths: source + offset-derived + lattice-derived
-  // We recompute locally from layer state (no server round-trip for display)
+  // Source paths
   for (const p of layer.source_paths) {
     if (!p.visible) continue;
     const pts = _pathCanvasPts(p);
-    const color = p.id === selectedId ? '#ffffff' : (ROLE_COLORS[p.role] || '#aaa');
-    drawPolyline(pts, color, p.id === selectedId ? 2.5 : 1.8, false, p.closed);
-    // Endpoint dots for open paths
+    const isSel = p.id === selectedId;
+    const color = isSel ? '#ffffff' : (ROLE_COLORS[p.role] || '#aaa');
+    drawPolyline(pts, color, isSel ? 2.5 : 1.8, false, p.closed);
     if (!p.closed && pts.length >= 2) {
-      drawDot(pts[0][0], pts[0][1], 3, '#888');
-      drawDot(pts[pts.length - 1][0], pts[pts.length - 1][1], 3, '#888');
+      drawDot(pts[0][0], pts[0][1], 3, '#666');
+      drawDot(pts[pts.length - 1][0], pts[pts.length - 1][1], 3, '#666');
     }
   }
 
-  // Draw derived paths from last effective_paths result if available
-  if (routeResult && routeResult.layer && routeResult.layer.paths) {
-    for (const p of routeResult.layer.paths) {
-      // Skip paths already shown as source
-      if (layer.source_paths.find(sp => sp.id === p.id)) continue;
-      const pts = _pathCanvasPts(p);
-      const color = ROLE_COLORS[p.role] || '#aa88ff';
-      drawPolyline(pts, color, 1.5, p.role === 'lattice', p.closed);
-    }
+  // Derived paths (offset, lattice) — populated by fetchEffectivePaths
+  for (const p of derivedPaths) {
+    const pts = _pathCanvasPts(p);
+    if (pts.length < 2) continue;
+    const color = ROLE_COLORS[p.role] || '#aa88ff';
+    drawPolyline(pts, color, 1.5, p.role === 'lattice', p.closed);
   }
 }
 
@@ -241,33 +408,25 @@ function drawToolpath(moves) {
     const [x1, y1] = worldToCanvas(m.end[0], m.end[1]);
     const color = MOVE_COLORS[m.kind] || MOVE_COLORS.print;
     const dashed = m.kind === 'travel';
-    const lw = m.kind === 'travel' ? 1.2 : 2.0;
-    drawLine(x0, y0, x1, y1, color, lw, dashed);
+    drawLine(x0, y0, x1, y1, color, m.kind === 'travel' ? 1.2 : 2.0, dashed);
 
     if (showArrows) {
-      const mx = (x0 + x1) / 2;
-      const my = (y0 + y1) / 2;
-      const angle = Math.atan2(y1 - y0, x1 - x0);
-      drawArrowhead(mx, my, angle, 5, color);
+      const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+      drawArrowhead(mx, my, Math.atan2(y1 - y0, x1 - x0), 5, color);
     }
-
     if (showNumbers) {
-      const nx = x0 + (x1 - x0) * 0.25;
-      const ny = y0 + (y1 - y0) * 0.25;
-      drawNumber(nx, ny, i + 1, color);
+      drawNumber(x0 + (x1 - x0) * 0.25, y0 + (y1 - y0) * 0.25, i + 1, color);
     }
   }
 
   if (moves.length > 0) {
-    const first = moves[0];
-    const last = moves[moves.length - 1];
+    const first = moves[0], last = moves[moves.length - 1];
     const [sx, sy] = worldToCanvas(first.start[0], first.start[1]);
     const [ex, ey] = worldToCanvas(last.end[0], last.end[1]);
     drawDot(sx, sy, 6, '#33cc66');
     drawDot(ex, ey, 6, '#cc3333');
     ctx.font = '9px monospace';
-    ctx.fillStyle = '#33cc66';
-    ctx.textAlign = 'left';
+    ctx.fillStyle = '#33cc66'; ctx.textAlign = 'left';
     ctx.fillText('START', sx + 8, sy - 6);
     ctx.fillStyle = '#cc3333';
     ctx.fillText('END', ex + 8, ey + 12);
@@ -283,14 +442,19 @@ function drawInProgress() {
 function drawHandles(pid) {
   const path = layer.source_paths.find(p => p.id === pid);
   if (!path) return;
-  for (const [wx, wy] of (path.points || [])) {
-    const [cx, cy] = worldToCanvas(wx, wy);
+  for (const h of getHandles(path)) {
+    drawHandle(h.wx, h.wy, h.shape || 'point');
+  }
+  // For circles: draw radius line from center to radius handle
+  if (path.type === 'CirclePath') {
+    const [cx, cy] = worldToCanvas(path.cx, path.cy);
+    const [rx, ry] = worldToCanvas(path.cx + path.radius, path.cy);
     ctx.save();
-    ctx.strokeStyle = '#4a9eff';
+    ctx.strokeStyle = 'rgba(74,158,255,0.35)';
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(rx, ry); ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
   }
 }
@@ -312,11 +476,26 @@ function setTool(t) {
 function updateHint() {
   const hint = document.getElementById('hint');
   if (tool === 'draw') {
-    hint.textContent = 'Click to place points. Double-click or Enter to finish. Press C to close path.';
-  } else {
-    hint.textContent = selectedId
-      ? 'Drag nodes to edit. Click empty area to deselect.'
-      : 'Click a path to select it.';
+    hint.textContent = 'Click to place control points. Double-click or Enter to finish. C to close.';
+    return;
+  }
+  if (!selectedId) {
+    hint.textContent = 'Click a path to select it. Add primitives from the toolbar or use Draw Path.';
+    return;
+  }
+  const path = layer.source_paths.find(p => p.id === selectedId);
+  if (!path) { hint.textContent = ''; return; }
+  switch (path.type) {
+    case 'CirclePath':
+      hint.textContent = 'Drag center ✛ to move. Drag □ radius handle to resize. Edit values in sidebar.'; break;
+    case 'EllipsePath':
+      hint.textContent = 'Drag center ✛ to move. Drag □ rx/ry handles to resize.'; break;
+    case 'RectanglePath':
+      hint.textContent = 'Drag □ corner handles to resize. Drag body to move.'; break;
+    case 'LinePath':
+      hint.textContent = 'Drag ● endpoints to reshape. Drag body to move.'; break;
+    default:
+      hint.textContent = 'Drag ● control points to reshape. Drag path body to move. Del to delete.';
   }
 }
 
@@ -324,36 +503,62 @@ function updateHint() {
 // Canvas mouse events
 // ---------------------------------------------------------------------------
 
-let dragging = null;  // { pathId, ptIdx }
-let lastClick = 0;
-
 canvas.addEventListener('mousedown', onMouseDown);
 canvas.addEventListener('mousemove', onMouseMove);
-canvas.addEventListener('mouseup', onMouseUp);
+document.addEventListener('mouseup', onMouseUp);
 canvas.addEventListener('dblclick', onDblClick);
 
 function onMouseDown(e) {
   const [wx, wy] = canvasFromEvent(e);
+
   if (tool === 'draw') {
-    // Check double-click handled by dblclick
     drawPts.push([wx, wy]);
     repaint();
     return;
   }
+
   if (tool === 'select') {
-    // Try to start dragging a handle node
-    const handle = findHandle(wx, wy);
-    if (handle) {
-      dragging = handle;
+    // 1. Handle on selected path takes priority
+    if (selectedId) {
+      const path = layer.source_paths.find(p => p.id === selectedId);
+      if (path) {
+        const h = findHandle(path, wx, wy);
+        if (h) {
+          dragging = { pathId: selectedId, handleKey: h.key,
+                       originalState: capturePathState(path) };
+          return;
+        }
+      }
+    }
+
+    // 2. Hit test any path
+    const pid = hitTestPath(wx, wy);
+    if (pid) {
+      const switching = pid !== selectedId;
+      selectedId = pid;
+      const path = layer.source_paths.find(p => p.id === pid);
+      if (switching) {
+        updatePathList();
+        updatePropPanel();
+        updateHint();
+      }
+      // Start body drag
+      if (path) {
+        bodyDragging = { pathId: pid, startWX: wx, startWY: wy,
+                         originalState: capturePathState(path) };
+      }
+      repaint();
       return;
     }
-    // Try to select a path
-    const pid = hitTestPath(wx, wy);
-    selectedId = pid;
-    updatePathList();
-    updatePropPanel();
-    updateHint();
-    repaint();
+
+    // 3. Empty canvas — deselect
+    if (selectedId) {
+      selectedId = null;
+      updatePathList();
+      updatePropPanel();
+      updateHint();
+      repaint();
+    }
   }
 }
 
@@ -362,24 +567,37 @@ function onMouseMove(e) {
     const [wx, wy] = canvasFromEvent(e);
     const path = layer.source_paths.find(p => p.id === dragging.pathId);
     if (path) {
-      path.points[dragging.ptIdx] = [wx, wy];
-      if (path.type === 'RectanglePath' || path.type === 'CirclePath' || path.type === 'EllipsePath') {
-        _syncPrimitiveFromPoints(path);
-      }
-      routeResult = null; // invalidate
+      applyHandleDrag(path, dragging.handleKey, wx, wy, dragging.originalState);
+      syncPropPanel(path);
+      routeResult = null;
+      repaint();
+    }
+    return;
+  }
+  if (bodyDragging) {
+    const [wx, wy] = canvasFromEvent(e);
+    const dx = wx - bodyDragging.startWX;
+    const dy = wy - bodyDragging.startWY;
+    if (Math.hypot(dx, dy) < 1) return; // ignore tiny jitter
+    const path = layer.source_paths.find(p => p.id === bodyDragging.pathId);
+    if (path) {
+      applyBodyDrag(path, dx, dy, bodyDragging.originalState);
+      syncPropPanel(path);
+      routeResult = null;
       repaint();
     }
   }
 }
 
-function onMouseUp(e) {
+function onMouseUp() {
+  const wasDragging = dragging !== null || bodyDragging !== null;
   dragging = null;
+  bodyDragging = null;
+  if (wasDragging) scheduleRefresh();
 }
 
 function onDblClick(e) {
-  if (tool === 'draw') {
-    finishDraw(false);
-  }
+  if (tool === 'draw') finishDraw(false);
 }
 
 document.addEventListener('keydown', e => {
@@ -391,15 +609,10 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape') {
     if (tool === 'draw') { drawPts = []; repaint(); }
-    selectedId = null;
-    updatePathList();
-    updatePropPanel();
-    repaint();
+    else { selectedId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
   }
-  if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (selectedId && document.activeElement === document.body) {
-      deletePath(selectedId);
-    }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement === document.body) {
+    if (selectedId) deletePath(selectedId);
   }
 });
 
@@ -412,36 +625,31 @@ function canvasFromEvent(e) {
 // Hit testing
 // ---------------------------------------------------------------------------
 
-const HIT_DIST = 12; // world units
+const HIT_DIST = 10; // world inches
 
 function hitTestPath(wx, wy) {
   for (let i = layer.source_paths.length - 1; i >= 0; i--) {
     const p = layer.source_paths[i];
     const pts = p.points || [];
     for (let j = 0; j < pts.length - 1; j++) {
-      if (distToSegment(wx, wy, pts[j], pts[j + 1]) < HIT_DIST) return p.id;
+      if (distToSeg(wx, wy, pts[j], pts[j + 1]) < HIT_DIST) return p.id;
     }
     if (p.closed && pts.length >= 2) {
-      if (distToSegment(wx, wy, pts[pts.length - 1], pts[0]) < HIT_DIST) return p.id;
+      if (distToSeg(wx, wy, pts[pts.length - 1], pts[0]) < HIT_DIST) return p.id;
     }
   }
   return null;
 }
 
-function findHandle(wx, wy) {
-  if (!selectedId) return null;
-  const path = layer.source_paths.find(p => p.id === selectedId);
-  if (!path) return null;
-  for (let i = 0; i < (path.points || []).length; i++) {
-    const [px, py] = path.points[i];
-    if (Math.hypot(wx - px, wy - py) < 10) {
-      return { pathId: path.id, ptIdx: i };
-    }
+function findHandle(path, wx, wy) {
+  const handles = getHandles(path);
+  for (const h of handles) {
+    if (Math.hypot(wx - h.wx, wy - h.wy) < HIT_DIST) return h;
   }
   return null;
 }
 
-function distToSegment(px, py, [ax, ay], [bx, by]) {
+function distToSeg(px, py, [ax, ay], [bx, by]) {
   const dx = bx - ax, dy = by - ay;
   const lenSq = dx * dx + dy * dy;
   if (lenSq < 1e-10) return Math.hypot(px - ax, py - ay);
@@ -450,13 +658,13 @@ function distToSegment(px, py, [ax, ay], [bx, by]) {
 }
 
 // ---------------------------------------------------------------------------
-// Drawing — finish path
+// Draw tool — finish path
 // ---------------------------------------------------------------------------
 
 function finishDraw(closed) {
   if (drawPts.length < 2) { drawPts = []; repaint(); return; }
   const pts = [...drawPts];
-  // Remove last point if it's the same as second-to-last (double-click adds duplicate)
+  // Remove duplicate last point from double-click
   if (pts.length >= 2) {
     const a = pts[pts.length - 1], b = pts[pts.length - 2];
     if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 8) pts.pop();
@@ -465,18 +673,15 @@ function finishDraw(closed) {
 
   const id = newId();
   layer.source_paths.push({
-    id,
-    type: 'ExplicitPath',
+    id, type: 'ExplicitPath',
     label: `Path ${layer.source_paths.length + 1}`,
-    closed,
-    role: 'free',
-    visible: true,
-    points: pts,
-    control_points: pts,
+    closed, role: 'free', visible: true,
+    points: pts, control_points: pts,
   });
   drawPts = [];
   selectedId = id;
   routeResult = null;
+  scheduleRefresh();
   updatePathList();
   updatePropPanel();
   updateHint();
@@ -484,11 +689,11 @@ function finishDraw(closed) {
 }
 
 // ---------------------------------------------------------------------------
-// Primitives — add at canvas centre
+// Primitives
 // ---------------------------------------------------------------------------
 
 const PRIM_DEFAULTS = {
-  LinePath:      () => ({ start: [150, 200], end: [250, 200] }),
+  LinePath:      () => ({ start: [140, 200], end: [260, 200] }),
   CirclePath:    () => ({ cx: 200, cy: 200, radius: 60 }),
   EllipsePath:   () => ({ cx: 200, cy: 200, rx: 80, ry: 50, rotation: 0 }),
   RectanglePath: () => ({ x: 140, y: 140, w: 120, h: 120 }),
@@ -496,23 +701,21 @@ const PRIM_DEFAULTS = {
 
 function addPrimitive(type) {
   const id = newId();
-  const base = PRIM_DEFAULTS[type]();
   const path = {
-    id,
-    type,
+    id, type,
     label: type.replace('Path', ''),
     closed: type !== 'LinePath',
-    role: 'free',
-    visible: true,
-    ...base,
+    role: 'free', visible: true,
+    ...PRIM_DEFAULTS[type](),
   };
-  // Compute points for display
   _computePrimitivePoints(path);
   layer.source_paths.push(path);
   selectedId = id;
   routeResult = null;
+  scheduleRefresh();
   updatePathList();
   updatePropPanel();
+  updateHint();
   repaint();
 }
 
@@ -520,13 +723,13 @@ function _computePrimitivePoints(path) {
   if (path.type === 'LinePath') {
     path.points = [path.start, path.end];
   } else if (path.type === 'CirclePath') {
-    const n = 48;
+    const n = 64;
     path.points = Array.from({ length: n }, (_, i) => {
       const a = 2 * Math.PI * i / n;
       return [path.cx + path.radius * Math.cos(a), path.cy + path.radius * Math.sin(a)];
     });
   } else if (path.type === 'EllipsePath') {
-    const n = 48;
+    const n = 64;
     const cr = Math.cos(path.rotation || 0), sr = Math.sin(path.rotation || 0);
     path.points = Array.from({ length: n }, (_, i) => {
       const a = 2 * Math.PI * i / n;
@@ -540,30 +743,9 @@ function _computePrimitivePoints(path) {
       [path.x + path.w, path.y + path.h],
       [path.x, path.y + path.h],
     ];
-  }
-}
-
-function _syncPrimitiveFromPoints(path) {
-  // When a handle is dragged, sync back primitive parameters
-  // (only for handles that directly correspond to parameters)
-  if (path.type === 'LinePath') {
-    if (path.points.length >= 2) {
-      path.start = path.points[0];
-      path.end = path.points[1];
-    }
-  } else if (path.type === 'RectanglePath') {
-    // Top-left corner drag
-    if (path.points.length >= 4) {
-      path.x = path.points[0][0];
-      path.y = path.points[0][1];
-      path.w = path.points[1][0] - path.x;
-      path.h = path.points[3][1] - path.y;
-      _computePrimitivePoints(path);
-    }
-  } else if (path.type === 'CirclePath') {
-    // Drag control points resamples — just update centre from point average
-    // (simplified: don't change radius when dragging)
-    _computePrimitivePoints(path);
+  } else {
+    // ExplicitPath — points and control_points are the same
+    path.points = path.control_points || path.points;
   }
 }
 
@@ -577,7 +759,7 @@ function updatePathList() {
   for (const p of layer.source_paths) {
     const item = document.createElement('div');
     item.className = 'path-item' + (p.id === selectedId ? ' selected' : '');
-    item.onclick = () => { selectedId = p.id; updatePathList(); updatePropPanel(); repaint(); };
+    item.onclick = () => { selectedId = p.id; updatePathList(); updatePropPanel(); updateHint(); repaint(); };
 
     const dot = document.createElement('div');
     dot.className = 'role-dot';
@@ -602,87 +784,96 @@ function updatePathList() {
 
 function updatePropPanel() {
   const section = document.getElementById('path-props-section');
-  const panel = document.getElementById('path-props');
+  const panel   = document.getElementById('path-props');
 
-  if (!selectedId) {
-    section.style.display = 'none';
-    return;
-  }
+  if (!selectedId) { section.style.display = 'none'; return; }
   const path = layer.source_paths.find(p => p.id === selectedId);
   if (!path) { section.style.display = 'none'; return; }
   section.style.display = '';
-
   panel.innerHTML = '';
-  addPropRow(panel, 'Label', 'text', path.label || '', v => {
-    path.label = v; updatePathList();
-  });
-  addPropRow(panel, 'Role', 'select', path.role, v => {
-    path.role = v; updatePathList(); repaint();
-  }, ['free', 'outer', 'inner', 'lattice']);
-  addPropRow(panel, 'Closed', 'checkbox', path.closed, v => {
-    path.closed = v; routeResult = null; repaint();
-  });
 
-  // Primitive-specific fields
-  if (path.type === 'CirclePath') {
-    addPropRow(panel, 'CX', 'number', path.cx, v => { path.cx = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'CY', 'number', path.cy, v => { path.cy = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'Radius', 'number', path.radius, v => { path.radius = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-  }
-  if (path.type === 'EllipsePath') {
-    addPropRow(panel, 'CX', 'number', path.cx, v => { path.cx = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'CY', 'number', path.cy, v => { path.cy = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'RX', 'number', path.rx, v => { path.rx = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'RY', 'number', path.ry, v => { path.ry = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-  }
-  if (path.type === 'RectanglePath') {
-    addPropRow(panel, 'X', 'number', path.x, v => { path.x = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'Y', 'number', path.y, v => { path.y = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'W', 'number', path.w, v => { path.w = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'H', 'number', path.h, v => { path.h = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-  }
-  if (path.type === 'LinePath') {
-    addPropRow(panel, 'X0', 'number', path.start[0], v => { path.start[0] = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'Y0', 'number', path.start[1], v => { path.start[1] = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'X1', 'number', path.end[0], v => { path.end[0] = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
-    addPropRow(panel, 'Y1', 'number', path.end[1], v => { path.end[1] = +v; _computePrimitivePoints(path); routeResult = null; repaint(); });
+  addPropRowText(panel, 'Label', path.label || '', v => { path.label = v; updatePathList(); });
+  addPropRowSelect(panel, 'Role', path.role, ['free', 'outer', 'inner', 'lattice'], v => {
+    path.role = v; updatePathList(); repaint();
+  });
+  addPropRowCheck(panel, 'Closed', path.closed, v => { path.closed = v; routeResult = null; scheduleRefresh(); repaint(); });
+
+  switch (path.type) {
+    case 'CirclePath':
+      addPropRowNum(panel, 'Center X', 'cx', path.cx, v => { path.cx = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Center Y', 'cy', path.cy, v => { path.cy = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Radius',   'radius', path.radius, v => { path.radius = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      break;
+    case 'EllipsePath':
+      addPropRowNum(panel, 'Center X', 'cx', path.cx, v => { path.cx = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Center Y', 'cy', path.cy, v => { path.cy = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Radius X', 'rx', path.rx, v => { path.rx = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Radius Y', 'ry', path.ry, v => { path.ry = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      break;
+    case 'RectanglePath':
+      addPropRowNum(panel, 'X',      'x', path.x, v => { path.x = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Y',      'y', path.y, v => { path.y = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Width',  'w', path.w, v => { path.w = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Height', 'h', path.h, v => { path.h = Math.max(1, v); _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      break;
+    case 'LinePath':
+      addPropRowNum(panel, 'Start X', 'x0', path.start[0], v => { path.start[0] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Start Y', 'y0', path.start[1], v => { path.start[1] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'End X',   'x1', path.end[0],   v => { path.end[0]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'End Y',   'y1', path.end[1],   v => { path.end[1]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      break;
   }
 }
 
-function addPropRow(panel, label, type, value, onChange, options) {
+function addPropRowNum(panel, label, fieldKey, value, onChange) {
   const row = document.createElement('div');
   row.className = 'prop-row';
-
   const lbl = document.createElement('span');
   lbl.className = 'prop-label';
   lbl.textContent = label;
-
-  let input;
-  if (type === 'select') {
-    input = document.createElement('select');
-    input.className = 'prop-input';
-    for (const o of (options || [])) {
-      const opt = document.createElement('option');
-      opt.value = o; opt.textContent = o;
-      if (o === value) opt.selected = true;
-      input.appendChild(opt);
-    }
-    input.onchange = () => onChange(input.value);
-  } else if (type === 'checkbox') {
-    input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = !!value;
-    input.onchange = () => onChange(input.checked);
-  } else {
-    input = document.createElement('input');
-    input.type = type;
-    input.className = 'prop-input';
-    input.value = value;
-    input.onchange = () => onChange(input.value);
-  }
-
-  row.append(lbl, input);
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'prop-input';
+  input.id = 'prop-' + fieldKey;
+  input.value = typeof value === 'number' ? +value.toFixed(2) : value;
+  input.onchange = () => onChange(+input.value);
+  const unit = document.createElement('span');
+  unit.className = 'prop-unit';
+  unit.textContent = 'in';
+  row.append(lbl, input, unit);
   panel.appendChild(row);
+}
+
+function addPropRowText(panel, label, value, onChange) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
+  const input = document.createElement('input');
+  input.type = 'text'; input.className = 'prop-input'; input.value = value;
+  input.onchange = () => onChange(input.value);
+  row.append(lbl, input); panel.appendChild(row);
+}
+
+function addPropRowSelect(panel, label, value, options, onChange) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
+  const sel = document.createElement('select'); sel.className = 'prop-input';
+  for (const o of options) {
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = o;
+    if (o === value) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => onChange(sel.value);
+  row.append(lbl, sel); panel.appendChild(row);
+}
+
+function addPropRowCheck(panel, label, value, onChange) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
+  const input = document.createElement('input');
+  input.type = 'checkbox'; input.checked = !!value;
+  input.onchange = () => onChange(input.checked);
+  row.append(lbl, input); panel.appendChild(row);
 }
 
 // ---------------------------------------------------------------------------
@@ -696,23 +887,21 @@ function updateOffsetList() {
     const block = document.createElement('div');
     block.className = 'treatment-block';
 
-    block.innerHTML = `
-      <div class="treatment-header">
-        <span class="treatment-name">Offset</span>
-        <button class="remove-btn" title="Remove">×</button>
-      </div>`;
-
-    block.querySelector('.remove-btn').onclick = () => {
+    const hdr = document.createElement('div');
+    hdr.className = 'treatment-header';
+    const nm = document.createElement('span'); nm.className = 'treatment-name'; nm.textContent = 'Offset';
+    const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
+    rm.onclick = () => {
       layer.offset_treatments = layer.offset_treatments.filter(x => x.id !== ot.id);
-      routeResult = null;
-      updateOffsetList();
-      repaint();
+      routeResult = null; scheduleRefresh(); updateOffsetList(); repaint();
     };
+    hdr.append(nm, rm);
+    block.appendChild(hdr);
 
     const panel = document.createElement('div');
     panel.className = 'prop-panel';
 
-    // Source path selector
+    // Source selector
     const srcRow = document.createElement('div'); srcRow.className = 'prop-row';
     const srcLbl = document.createElement('span'); srcLbl.className = 'prop-label'; srcLbl.textContent = 'Source';
     const srcSel = document.createElement('select'); srcSel.className = 'prop-input';
@@ -722,12 +911,14 @@ function updateOffsetList() {
       if (p.id === ot.source_path_id) opt.selected = true;
       srcSel.appendChild(opt);
     }
-    srcSel.onchange = () => { ot.source_path_id = srcSel.value; routeResult = null; repaint(); };
+    srcSel.onchange = () => { ot.source_path_id = srcSel.value; routeResult = null; scheduleRefresh(); repaint(); };
     srcRow.append(srcLbl, srcSel);
     panel.appendChild(srcRow);
 
-    addPropRowTo(panel, 'Distance', 'number', ot.distance, v => { ot.distance = +v; routeResult = null; repaint(); });
-    addPropRowTo(panel, 'Role', 'select', ot.role, v => { ot.role = v; routeResult = null; repaint(); }, ['inner', 'outer', 'free', 'lattice']);
+    addPropRowNumTo(panel, 'Offset', ot.distance, v => { ot.distance = v; routeResult = null; scheduleRefresh(); repaint(); });
+    addPropRowSelectTo(panel, 'Role', ot.role,
+      ['inner', 'outer', 'free', 'lattice'],
+      v => { ot.role = v; routeResult = null; scheduleRefresh(); repaint(); });
 
     block.appendChild(panel);
     el.appendChild(block);
@@ -744,6 +935,7 @@ function addOffset() {
     label: '',
   });
   routeResult = null;
+  scheduleRefresh();
   updateOffsetList();
 }
 
@@ -760,23 +952,21 @@ function updateLatticeList() {
 
     const genInfo = generators[li.generator] || { parameters: [] };
 
-    block.innerHTML = `
-      <div class="treatment-header">
-        <span class="treatment-name">${li.generator}</span>
-        <button class="remove-btn" title="Remove">×</button>
-      </div>`;
-
-    block.querySelector('.remove-btn').onclick = () => {
+    const hdr = document.createElement('div');
+    hdr.className = 'treatment-header';
+    const nm = document.createElement('span'); nm.className = 'treatment-name';
+    nm.textContent = li.generator.charAt(0).toUpperCase() + li.generator.slice(1) + ' lattice';
+    const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
+    rm.onclick = () => {
       layer.lattice_instances = layer.lattice_instances.filter(x => x.id !== li.id);
-      routeResult = null;
-      updateLatticeList();
-      repaint();
+      routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
     };
+    hdr.append(nm, rm);
+    block.appendChild(hdr);
 
     const panel = document.createElement('div');
     panel.className = 'prop-panel';
 
-    // Path A / Path B selectors
     for (const [key, label] of [['path_a_id', 'Path A'], ['path_b_id', 'Path B']]) {
       const row = document.createElement('div'); row.className = 'prop-row';
       const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
@@ -787,32 +977,54 @@ function updateLatticeList() {
         if (p.id === li[key]) opt.selected = true;
         sel.appendChild(opt);
       }
-      sel.onchange = () => { li[key] = sel.value; routeResult = null; repaint(); };
+      sel.onchange = () => { li[key] = sel.value; routeResult = null; scheduleRefresh(); repaint(); };
       row.append(lbl, sel);
       panel.appendChild(row);
     }
 
-    // Generator parameters
+    // Generator selector
+    const genRow = document.createElement('div'); genRow.className = 'prop-row';
+    const genLbl = document.createElement('span'); genLbl.className = 'prop-label'; genLbl.textContent = 'Type';
+    const genSel = document.createElement('select'); genSel.className = 'prop-input';
+    for (const name of Object.keys(generators)) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      if (name === li.generator) opt.selected = true;
+      genSel.appendChild(opt);
+    }
+    genSel.onchange = () => {
+      li.generator = genSel.value;
+      const newGen = generators[li.generator] || { parameters: [] };
+      for (const p of newGen.parameters) {
+        if (!(p.name in li.params)) li.params[p.name] = p.default;
+      }
+      li.variation_index = 0;
+      routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
+    };
+    genRow.append(genLbl, genSel);
+    panel.appendChild(genRow);
+
     for (const param of genInfo.parameters) {
-      addPropRowTo(panel, param.label, 'number', li.params[param.name] ?? param.default, v => {
-        li.params[param.name] = +v;
-        routeResult = null; repaint();
-      });
+      addPropRowNumTo(panel, param.label,
+        li.params[param.name] ?? param.default,
+        v => { li.params[param.name] = v; routeResult = null; scheduleRefresh(); repaint(); });
     }
 
     // Variation buttons
+    const varLabel = document.createElement('div');
+    varLabel.style.cssText = 'color:#555;font-size:10px;margin-top:4px;';
+    varLabel.textContent = 'Variation';
+    panel.appendChild(varLabel);
     const varRow = document.createElement('div');
     varRow.className = 'variation-row';
-    const varCount = 2; // default; updated after first route
+    const varCount = genInfo.variation_count || 2;
     for (let i = 0; i < varCount; i++) {
       const btn = document.createElement('button');
       btn.className = 'var-btn' + (i === (li.variation_index || 0) ? ' active' : '');
       btn.textContent = `V${i}`;
       btn.onclick = () => {
         li.variation_index = i;
-        routeResult = null;
-        updateLatticeList();
-        repaint();
+        routeResult = null; scheduleRefresh(); updateLatticeList(); repaint();
       };
       varRow.appendChild(btn);
     }
@@ -829,47 +1041,81 @@ function addLattice() {
   const gen = generators[genName] || { parameters: [] };
   const params = {};
   for (const p of gen.parameters) params[p.name] = p.default;
-
   layer.lattice_instances.push({
     id: newId(),
     generator: genName,
     path_a_id: layer.source_paths[0].id,
-    path_b_id: layer.source_paths[1] ? layer.source_paths[1].id : layer.source_paths[0].id,
+    path_b_id: layer.source_paths[1].id,
     params,
     variation_index: 0,
     label: '',
   });
   routeResult = null;
+  scheduleRefresh();
   updateLatticeList();
 }
 
-// Helper for addPropRow that adds to an arbitrary element
-function addPropRowTo(panel, label, type, value, onChange, options) {
-  const row = document.createElement('div');
-  row.className = 'prop-row';
-  const lbl = document.createElement('span');
-  lbl.className = 'prop-label';
-  lbl.textContent = label;
-  let input;
-  if (type === 'select') {
-    input = document.createElement('select');
-    input.className = 'prop-input';
-    for (const o of (options || [])) {
-      const opt = document.createElement('option');
-      opt.value = o; opt.textContent = o;
-      if (o === value) opt.selected = true;
-      input.appendChild(opt);
-    }
-    input.onchange = () => onChange(input.value);
-  } else {
-    input = document.createElement('input');
-    input.type = type;
-    input.className = 'prop-input';
-    input.value = value;
-    input.onchange = () => onChange(input.value);
+// Helpers for building treatment panels
+function addPropRowNumTo(panel, label, value, onChange) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
+  const input = document.createElement('input');
+  input.type = 'number'; input.className = 'prop-input';
+  input.value = typeof value === 'number' ? +value.toFixed(2) : value;
+  input.onchange = () => onChange(+input.value);
+  const unit = document.createElement('span'); unit.className = 'prop-unit'; unit.textContent = 'in';
+  row.append(lbl, input, unit); panel.appendChild(row);
+}
+
+function addPropRowSelectTo(panel, label, value, options, onChange) {
+  const row = document.createElement('div'); row.className = 'prop-row';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
+  const sel = document.createElement('select'); sel.className = 'prop-input';
+  for (const o of options) {
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = o;
+    if (o === value) opt.selected = true;
+    sel.appendChild(opt);
   }
-  row.append(lbl, input);
-  panel.appendChild(row);
+  sel.onchange = () => onChange(sel.value);
+  row.append(lbl, sel); panel.appendChild(row);
+}
+
+// ---------------------------------------------------------------------------
+// Live derived-path refresh
+// ---------------------------------------------------------------------------
+
+function scheduleRefresh() {
+  if (layer.offset_treatments.length === 0 && layer.lattice_instances.length === 0) {
+    derivedPaths = [];
+    repaint();
+    return;
+  }
+  clearTimeout(_refreshTimer);
+  _refreshTimer = setTimeout(fetchEffectivePaths, 120);
+}
+
+async function fetchEffectivePaths() {
+  if (layer.source_paths.length === 0) {
+    derivedPaths = [];
+    repaint();
+    return;
+  }
+  try {
+    const res = await fetch('/api/effective_paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPayload()),
+    });
+    const data = await res.json();
+    if (data.paths) {
+      const sourceIds = new Set(layer.source_paths.map(p => p.id));
+      derivedPaths = data.paths.filter(p => !sourceIds.has(p.id));
+    }
+  } catch (e) {
+    console.warn('fetchEffectivePaths failed', e);
+  }
+  repaint();
 }
 
 // ---------------------------------------------------------------------------
@@ -880,48 +1126,36 @@ async function runRoute() {
   if (layer.source_paths.length === 0) { setStatus('No paths to route.'); return; }
   setStatus('Routing…');
   try {
-    // Build server payload — convert local path format to model format
-    const payload = buildPayload();
     const res = await fetch('/api/route', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(buildPayload()),
     });
     const data = await res.json();
     if (data.error) {
-      setStatus('Route error: ' + data.error.split('\n').pop());
+      setStatus('Routing error — see console for details.');
       console.error(data.error);
       return;
     }
     routeResult = data;
+    // Also update derivedPaths from route result so we don't need a second fetch
+    const sourceIds = new Set(layer.source_paths.map(p => p.id));
+    derivedPaths = (data.layer.paths || []).filter(p => !sourceIds.has(p.id));
     updateMetrics(data);
-    setStatus(`Routed: ${data.moves.length} moves, ${data.metrics.pct_printing}% printing`);
     document.getElementById('metrics-section').style.display = '';
     repaint();
   } catch (e) {
-    setStatus('Route failed: ' + e.message);
+    setStatus('Routing failed: ' + e.message);
   }
 }
 
 function buildPayload() {
-  // Convert local path objects to model.py format
-  const source_paths = layer.source_paths.map(p => {
-    const d = { ...p };
-    // control_points = editable points for ExplicitPath
-    if (p.type === 'ExplicitPath' || !p.type) {
-      d.control_points = p.points;
-    }
-    return d;
-  });
   return {
     id: layer.id,
     label: layer.label,
-    source_paths,
+    source_paths: layer.source_paths.map(p => ({ ...p })),
     offset_treatments: layer.offset_treatments,
-    lattice_instances: layer.lattice_instances.map(li => ({
-      ...li,
-      generator: li.generator,
-    })),
+    lattice_instances: layer.lattice_instances.map(li => ({ ...li })),
     constraints: layer.constraints,
   };
 }
@@ -931,6 +1165,7 @@ function updateMetrics(data) {
   const g = data.graph;
 
   document.getElementById('m-runs').textContent = m.print_runs;
+
   const tEl = document.getElementById('m-travel');
   tEl.textContent = m.travel_moves;
   tEl.className = 'metric-value ' + (m.travel_moves === 0 ? 'good' : 'warn');
@@ -939,43 +1174,44 @@ function updateMetrics(data) {
   pEl.textContent = m.pct_printing + '%';
   pEl.className = 'metric-value ' + (m.pct_printing >= 95 ? 'good' : m.pct_printing >= 80 ? 'warn' : 'bad');
 
-  document.getElementById('m-pdist').textContent = m.print_distance.toFixed(1);
-  document.getElementById('m-tdist').textContent = m.travel_distance.toFixed(1);
-  document.getElementById('m-rdist').textContent = (m.retrace_distance || 0).toFixed(1);
+  document.getElementById('m-pdist').textContent = m.print_distance.toFixed(1) + ' in';
+  document.getElementById('m-tdist').textContent = m.travel_distance.toFixed(1) + ' in';
+  document.getElementById('m-rdist').textContent = (m.retrace_distance || 0).toFixed(1) + ' in';
 
-  document.getElementById('g-nodes').textContent = g.node_count;
-  document.getElementById('g-edges').textContent = g.edge_count;
-  document.getElementById('g-comps').textContent = g.component_count;
-  document.getElementById('g-odd').textContent = g.odd_degree_nodes;
-
+  // Routing quality badge — designer-friendly language
   const badgeEl = document.getElementById('euler-badge-container');
-  let badge, cls;
+  let badge, cls, title;
   if (g.component_count > 1) {
-    badge = `${g.component_count} components`; cls = 'multi';
+    badge = `${g.component_count} disconnected sections`;
+    cls = 'multi';
+    title = 'Travel moves required between sections';
   } else if (g.odd_degree_nodes === 0) {
-    badge = 'Eulerian circuit'; cls = 'circuit';
+    badge = 'Single continuous loop';
+    cls = 'circuit';
+    title = 'All geometry connected — prints as one continuous loop with no travel moves';
   } else if (g.odd_degree_nodes === 2) {
-    badge = 'Eulerian path'; cls = 'path';
+    badge = 'Single continuous path';
+    cls = 'path';
+    title = 'Prints as one continuous path — one start, one end, no travel moves';
   } else {
-    badge = `${g.odd_degree_nodes} odd nodes`; cls = 'augmented';
+    badge = 'Requires backtracking';
+    cls = 'augmented';
+    title = 'Some geometry must be retraced to maintain continuity';
   }
-  badgeEl.innerHTML = `<span class="euler-badge ${cls}">${badge}</span>`;
+  badgeEl.innerHTML = `<span class="euler-badge ${cls}" title="${title}">${badge}</span>`;
+
+  setStatus(`Routing complete — ${m.print_runs} print run${m.print_runs === 1 ? '' : 's'}, ${m.travel_moves} travel, ${m.pct_printing}% continuous`);
 }
 
 // ---------------------------------------------------------------------------
-// Toolpath overlay toggles
+// Toolpath toggles
 // ---------------------------------------------------------------------------
 
 function toggleToolpath() {
   showToolpath = !showToolpath;
   const btn = document.getElementById('btn-toolpath');
-  if (showToolpath) {
-    btn.textContent = 'Toolpath ON';
-    btn.classList.add('toggle-on');
-  } else {
-    btn.textContent = 'Toolpath OFF';
-    btn.classList.remove('toggle-on');
-  }
+  btn.textContent = showToolpath ? 'Toolpath ON' : 'Toolpath OFF';
+  btn.classList.toggle('toggle-on', showToolpath);
   repaint();
 }
 
@@ -1012,10 +1248,12 @@ function deletePath(id) {
   );
   selectedId = null;
   routeResult = null;
+  scheduleRefresh();
   updatePathList();
   updatePropPanel();
   updateOffsetList();
   updateLatticeList();
+  updateHint();
   repaint();
 }
 
@@ -1023,14 +1261,17 @@ function clearAll() {
   layer.source_paths = [];
   layer.offset_treatments = [];
   layer.lattice_instances = [];
-  layer.constraints = { start_path_id: null, start_t: null, reverse_direction: false, component_order: null };
+  layer.constraints = { start_path_id: null, start_t: null,
+                         reverse_direction: false, component_order: null };
   selectedId = null;
   routeResult = null;
+  derivedPaths = [];
   drawPts = [];
   updatePathList();
   updatePropPanel();
   updateOffsetList();
   updateLatticeList();
+  updateHint();
   document.getElementById('metrics-section').style.display = 'none';
   repaint();
 }
@@ -1040,9 +1281,7 @@ function setStatus(msg) {
 }
 
 let _idCounter = 1;
-function newId() {
-  return 'p' + (_idCounter++);
-}
+function newId() { return 'p' + (_idCounter++); }
 
 // ---------------------------------------------------------------------------
 // Init
@@ -1051,58 +1290,44 @@ function newId() {
 async function init() {
   resizeCanvas();
 
-  // Load generators
   try {
     const res = await fetch('/api/generators');
     const gens = await res.json();
-    for (const g of gens) generators[g.name] = g;
+    for (const g of gens) {
+      generators[g.name] = g;
+      g.variation_count = 2; // default; both built-in generators have 2
+    }
   } catch (e) {
     console.warn('Could not load generators', e);
   }
 
-  // Seed with Case D from toolpath_proto as default demonstration
   seedCaseD();
   updatePathList();
   updatePropPanel();
   updateOffsetList();
   updateLatticeList();
+  updateHint();
   repaint();
-  setStatus('Ready. Draw paths or use primitives. Press Route to compute toolpath.');
+  setStatus('Ready — select paths, add offsets or lattice, then press Route.');
 }
 
 function seedCaseD() {
-  // Wall perimeter (closed) — points matching toolpath_proto Case D scaled to world coords
-  // Original: 0..100 x 0..10 → scaled to world 400×400
-  const scale = 3.0;
-  const ox = 20, oy = 160;
-  const perimPts = [
-    [0,0],[25,0],[50,0],[75,0],[100,0],
-    [100,10],[75,10],[50,10],[25,10],[0,10],
-  ].map(([x, y]) => [ox + x * scale, oy + y * scale]);
-
-  const webPts = [
-    [25,10],[25,0],[50,10],[50,0],[75,10],[75,0],
-  ].map(([x, y]) => [ox + x * scale, oy + y * scale]);
+  const scale = 3.0, ox = 20, oy = 160;
+  const perimPts = [[0,0],[25,0],[50,0],[75,0],[100,0],
+                    [100,10],[75,10],[50,10],[25,10],[0,10]]
+    .map(([x, y]) => [ox + x * scale, oy + y * scale]);
+  const webPts = [[25,10],[25,0],[50,10],[50,0],[75,10],[75,0]]
+    .map(([x, y]) => [ox + x * scale, oy + y * scale]);
 
   layer.source_paths.push({
-    id: newId(),
-    type: 'ExplicitPath',
-    label: 'Wall perimeter',
-    closed: true,
-    role: 'outer',
-    visible: true,
-    points: perimPts,
-    control_points: perimPts,
+    id: newId(), type: 'ExplicitPath', label: 'Wall perimeter',
+    closed: true, role: 'outer', visible: true,
+    points: perimPts, control_points: perimPts,
   });
   layer.source_paths.push({
-    id: newId(),
-    type: 'ExplicitPath',
-    label: 'Web',
-    closed: false,
-    role: 'lattice',
-    visible: true,
-    points: webPts,
-    control_points: webPts,
+    id: newId(), type: 'ExplicitPath', label: 'Web',
+    closed: false, role: 'lattice', visible: true,
+    points: webPts, control_points: webPts,
   });
 }
 

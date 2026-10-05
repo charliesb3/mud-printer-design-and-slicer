@@ -295,3 +295,43 @@ class TestEffectivePathsAPI:
                         content_type='application/json')
         data = r.get_json()
         assert len(data['paths']) == 2  # source + derived
+
+    def test_all_paths_have_renderable_points(self, client):
+        """Every path in effective_paths must have ≥2 [x,y] points for canvas rendering."""
+        payload = {
+            **SIMPLE_PAYLOAD,
+            'offset_treatments': [{
+                'id': 'ot1', 'source_path_id': 'p1',
+                'distance': -5, 'role': 'inner', 'label': '',
+            }],
+        }
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        data = r.get_json()
+        for p in data['paths']:
+            assert 'points' in p, f"Path {p.get('id')} missing points"
+            assert len(p['points']) >= 2, f"Path {p.get('id')} has too few points"
+            for pt in p['points']:
+                assert len(pt) == 2, f"Point {pt} is not [x, y]"
+
+    def test_offset_path_differs_from_source(self, client):
+        """Offset-derived path must not be identical to source."""
+        payload = {
+            **SIMPLE_PAYLOAD,
+            'offset_treatments': [{
+                'id': 'ot1', 'source_path_id': 'p1',
+                'distance': -5, 'role': 'inner', 'label': '',
+            }],
+        }
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        data = r.get_json()
+        source = next(p for p in data['paths'] if p['id'] == 'p1')
+        derived = next(p for p in data['paths'] if p['id'] != 'p1')
+        # At least one point must differ
+        assert any(
+            abs(sp[0] - dp[0]) > 0.1 or abs(sp[1] - dp[1]) > 0.1
+            for sp, dp in zip(source['points'], derived['points'])
+        )
