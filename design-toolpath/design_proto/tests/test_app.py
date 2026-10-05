@@ -576,3 +576,87 @@ class TestWorkflows:
         data = r.get_json()
         assert data['metrics']['travel_moves'] == 0
         # An open path is an Eulerian path (2 odd-degree nodes) — still zero travel
+
+    def test_wf_g_lattice_with_offset_boundary_routes(self, client):
+        """1 source + 1 offset + lattice referencing offset id as boundary → routes."""
+        payload = {
+            'id': 'wf_g',
+            'label': '',
+            'source_paths': [{
+                'id': 'wall',
+                'type': 'RectanglePath',
+                'label': 'Wall',
+                'closed': True,
+                'role': 'outer',
+                'visible': True,
+                'x': 0, 'y': 0, 'w': 100, 'h': 100,
+            }],
+            'offset_treatments': [{
+                'id': 'inner',
+                'source_path_id': 'wall',
+                'distance': 10,
+                'role': 'inner',
+                'label': '',
+            }],
+            'lattice_instances': [{
+                'id': 'lat1',
+                'generator': 'zigzag',
+                'path_a_id': 'wall',
+                'path_b_id': 'inner',
+                'params': {'segments': 4, 'connect_ends': False},
+                'variation_index': 0,
+                'label': '',
+            }],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+        r = client.post('/api/route',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert len(data['moves']) > 0
+        assert data['metrics']['print_runs'] >= 1
+        # Effective paths must include both source, derived offset, and lattice
+        paths = data['layer']['paths']
+        ids = {p['id'] for p in paths}
+        assert 'wall' in ids
+        assert 'inner' in ids
+        lattice_paths = [p for p in paths if p.get('role') == 'lattice']
+        assert len(lattice_paths) >= 1
+
+    def test_wf_g_offset_distance_accuracy(self, client):
+        """Rectangle inside offset by 10 in: derived path corners must be exactly 10 in inward."""
+        payload = {
+            'id': 'wf_g2',
+            'label': '',
+            'source_paths': [{
+                'id': 'sq',
+                'type': 'RectanglePath',
+                'label': 'Square',
+                'closed': True,
+                'role': 'outer',
+                'visible': True,
+                'x': 0, 'y': 0, 'w': 100, 'h': 100,
+            }],
+            'offset_treatments': [{
+                'id': 'inner',
+                'source_path_id': 'sq',
+                'distance': 10,
+                'role': 'inner',
+                'label': '',
+            }],
+            'lattice_instances': [],
+            'constraints': {'start_path_id': None, 'start_t': None,
+                            'reverse_direction': False, 'component_order': None},
+        }
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200
+        derived = next(p for p in r.get_json()['paths'] if p['id'] == 'inner')
+        pts = derived['points']
+        xs = sorted(set(round(p[0], 6) for p in pts))
+        ys = sorted(set(round(p[1], 6) for p in pts))
+        assert xs == pytest.approx([10.0, 90.0], abs=1e-6)
+        assert ys == pytest.approx([10.0, 90.0], abs=1e-6)

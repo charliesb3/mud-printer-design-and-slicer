@@ -77,6 +77,7 @@
     .tool-btn:hover { background: #2e2e2e; color: #ddd; }
     .tool-btn.active { background: #1c3a5a; border-color: var(--accent); color: var(--accent); }
     .tool-btn.toggle-on { background: #1a3a1a; border-color: var(--good); color: var(--good); }
+    .tool-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
     /* ---- MAIN ---- */
     .main {
@@ -307,9 +308,8 @@
   <div class="tool-sep"></div>
   <button class="tool-btn toggle-on" id="btn-toolpath" onclick="toggleToolpath()">Toolpath ON</button>
   <button class="tool-btn" id="btn-arrows"   onclick="toggleArrows()">Arrows</button>
-  <button class="tool-btn" id="btn-numbers"  onclick="toggleNumbers()">Numbers</button>
   <div class="tool-sep"></div>
-  <button class="tool-btn" onclick="clearAll()">Clear</button>
+  <button class="tool-btn" onclick="clearAll()">Clear All</button>
 </div>
 
 <div class="main">
@@ -366,9 +366,9 @@
         <div class="metric-row"><span class="metric-label">Travel moves</span><span class="metric-value" id="m-travel">—</span></div>
         <div class="metric-row"><span class="metric-label">Travel dist</span><span class="metric-value" id="m-tdist">—</span></div>
         <div style="margin-top:6px;padding-top:4px;border-top:1px solid #222" class="section-title">Detail</div>
-        <div class="metric-row"><span class="metric-label">% printing</span><span class="metric-value" id="m-pct">—</span></div>
+        <div class="metric-row"><span class="metric-label">Continuous</span><span class="metric-value" id="m-pct">—</span></div>
         <div class="metric-row"><span class="metric-label">Print dist</span><span class="metric-value" id="m-pdist">—</span></div>
-        <div class="metric-row"><span class="metric-label">Retrace dist</span><span class="metric-value" id="m-rdist">—</span></div>
+        <div class="metric-row"><span class="metric-label" title="Distance printed more than once to maintain a continuous route">Reprinted</span><span class="metric-value" id="m-rdist">—</span></div>
       </div>
 
       <!-- LEGEND -->

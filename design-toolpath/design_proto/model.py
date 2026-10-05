@@ -295,11 +295,13 @@ class OffsetTreatment:
         pts = source.sample_points(128)
         if not pts:
             return DerivedPath([], closed=source.closed,
+                               id=self.id,
                                role=self.role, label=self.label,
                                source_id=self.source_path_id,
                                treatment_id=self.id)
         offset_pts = _offset_polyline(pts, self.distance, source.closed)
         return DerivedPath(offset_pts, closed=source.closed,
+                           id=self.id,
                            role=self.role, label=self.label,
                            source_id=self.source_path_id,
                            treatment_id=self.id)
@@ -316,56 +318,60 @@ class OffsetTreatment:
 
 
 def _offset_polyline(pts: list[Vec2], dist: float, closed: bool) -> list[Vec2]:
-    """Offset a polyline by dist (positive = left of travel direction)."""
+    """
+    True 2D polyline offset: shift each segment parallel by dist, then
+    intersect adjacent offset segments to find each vertex (miter join).
+    Falls back to bevel (two points per corner) when miter extension
+    exceeds MITER_LIMIT * abs(dist).
+    Positive dist = left of travel direction.
+    """
     n = len(pts)
     if n < 2:
         return list(pts)
 
-    def seg_normal(a: Vec2, b: Vec2) -> Vec2:
+    MITER_LIMIT = 4.0
+
+    def _seg_offset(a: Vec2, b: Vec2) -> tuple:
         d = (b - a).normalized()
-        return Vec2(-d.y, d.x)  # left normal
+        nx, ny = -d.y * dist, d.x * dist
+        return Vec2(a.x + nx, a.y + ny), Vec2(b.x + nx, b.y + ny)
 
-    # Compute per-segment normals
-    seg_normals = [seg_normal(pts[i], pts[i + 1]) for i in range(n - 1)]
-    if closed:
-        seg_normals.append(seg_normal(pts[-1], pts[0]))
+    def _line_intersect(p1: Vec2, d1: Vec2, p2: Vec2, d2: Vec2):
+        cross = d1.x * d2.y - d1.y * d2.x
+        if abs(cross) < 1e-12:
+            return None
+        t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / cross
+        return Vec2(p1.x + t * d1.x, p1.y + t * d1.y)
 
-    result = []
-    if closed:
-        num = n
-    else:
-        num = n
-
-    for i in range(num):
-        if closed:
-            n0 = seg_normals[(i - 1) % len(seg_normals)]
-            n1 = seg_normals[i % len(seg_normals)]
+    def _join(prev_seg, curr_seg, result_list):
+        """Append miter or bevel join vertex/vertices between two offset segments."""
+        ob0 = prev_seg[1]
+        oa1 = curr_seg[0]
+        d0 = (prev_seg[1] - prev_seg[0]).normalized()
+        d1 = (curr_seg[1] - curr_seg[0]).normalized()
+        pt = _line_intersect(prev_seg[0], d0, curr_seg[0], d1)
+        if pt is None:
+            result_list.append(ob0)
         else:
-            if i == 0:
-                n0 = n1 = seg_normals[0]
-            elif i == n - 1:
-                n0 = n1 = seg_normals[-1]
+            miter_len = ob0.dist(pt)
+            if abs(dist) > 1e-12 and miter_len > MITER_LIMIT * abs(dist):
+                result_list.append(ob0)
+                result_list.append(oa1)
             else:
-                n0 = seg_normals[i - 1]
-                n1 = seg_normals[i]
-        avg = Vec2(n0.x + n1.x, n0.y + n1.y)
-        mag = avg.length()
-        if mag < 1e-12:
-            normal = n1
-        else:
-            normal = avg * (1.0 / mag)
-            # miter limit
-            cos_half = max(n0.x * n1.x + n0.y * n1.y, -1.0)
-            cos_half = min(cos_half, 1.0)
-            sin_half_sq = (1.0 - cos_half) / 2.0
-            if sin_half_sq > 1e-12:
-                miter_len = 1.0 / math.sqrt(sin_half_sq)
-                if miter_len > 4.0:
-                    normal = n1
-                else:
-                    normal = normal * miter_len
-        p = pts[i]
-        result.append(Vec2(p.x + normal.x * dist, p.y + normal.y * dist))
+                result_list.append(pt)
+
+    result: list[Vec2] = []
+
+    if closed:
+        offset_segs = [_seg_offset(pts[i], pts[(i + 1) % n]) for i in range(n)]
+        for i in range(n):
+            _join(offset_segs[(i - 1) % n], offset_segs[i], result)
+    else:
+        offset_segs = [_seg_offset(pts[i], pts[i + 1]) for i in range(n - 1)]
+        result.append(offset_segs[0][0])
+        for i in range(1, n - 1):
+            _join(offset_segs[i - 1], offset_segs[i], result)
+        result.append(offset_segs[-1][1])
 
     return result
 
@@ -639,10 +645,11 @@ class PrintLayer:
             if src is not None:
                 result.append(ot.generate(src))
 
-        # Lattice-derived paths
+        # Lattice-derived paths — can reference source paths OR offset-derived paths
+        all_by_id = {p.id: p for p in result}
         for li in self.lattice_instances:
-            pa = self._path_by_id(li.path_a_id)
-            pb = self._path_by_id(li.path_b_id)
+            pa = all_by_id.get(li.path_a_id)
+            pb = all_by_id.get(li.path_b_id)
             if pa is not None and pb is not None:
                 gen = GENERATORS.get(li.generator_name)
                 if gen:

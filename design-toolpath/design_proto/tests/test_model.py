@@ -19,7 +19,7 @@ import pytest
 from model import (
     Vec2, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
     OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance,
-    PrintLayer, TraversalConstraints, DerivedPath,
+    PrintLayer, TraversalConstraints, DerivedPath, _offset_polyline,
 )
 
 
@@ -413,6 +413,117 @@ class TestTraversalConstraints:
         layer.constraints.start_path_id = 'p1'
         # Source geometry unchanged
         assert layer.source_paths[0].points[0] == Vec2(0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Offset geometry — true perpendicular distance verification
+# ---------------------------------------------------------------------------
+
+class TestOffsetGeometry:
+    """Verify that _offset_polyline produces true constant-distance parallel offsets."""
+
+    def test_rectangle_inside_offset_exact_corners(self):
+        """100×100 closed rectangle offset inward by 10 → corners at (10,10),(90,10),(90,90),(10,90)."""
+        pts = [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)]
+        result = _offset_polyline(pts, 10, closed=True)
+        assert len(result) == 4
+        xs = sorted(p.x for p in result)
+        ys = sorted(p.y for p in result)
+        assert xs == pytest.approx([10, 10, 90, 90], abs=1e-9)
+        assert ys == pytest.approx([10, 10, 90, 90], abs=1e-9)
+
+    def test_rectangle_inside_offset_each_side_exactly_10in(self):
+        """Every side of the offset rectangle is exactly 10 in from the source side."""
+        pts = [Vec2(0, 0), Vec2(100, 0), Vec2(100, 80), Vec2(0, 80)]
+        result = _offset_polyline(pts, 10, closed=True)
+        assert len(result) == 4
+        # Verify corners — inner rect should be (10,10)(90,10)(90,70)(10,70)
+        xs = sorted(p.x for p in result)
+        ys = sorted(p.y for p in result)
+        assert xs == pytest.approx([10, 10, 90, 90], abs=1e-9)
+        assert ys == pytest.approx([10, 10, 70, 70], abs=1e-9)
+
+    def test_rectangle_outside_offset_exact_corners(self):
+        """100×100 rectangle offset outward (negative dist) by 10 → corners at (-10,-10) etc."""
+        pts = [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)]
+        result = _offset_polyline(pts, -10, closed=True)
+        assert len(result) == 4
+        xs = sorted(p.x for p in result)
+        ys = sorted(p.y for p in result)
+        assert xs == pytest.approx([-10, -10, 110, 110], abs=1e-9)
+        assert ys == pytest.approx([-10, -10, 110, 110], abs=1e-9)
+
+    def test_circle_inside_offset_reduces_radius(self):
+        """Circle r=60, offset dist=10: all result points within 0.2 in of radius 50."""
+        cp = CirclePath(200, 200, 60)
+        ot = OffsetTreatment(id='ot', source_path_id='c', distance=10)
+        derived = ot.generate(cp)
+        pts = derived.sample_points()
+        for p in pts:
+            r = math.hypot(p.x - 200, p.y - 200)
+            assert abs(r - 50) < 0.2, f"Point radius {r:.4f} deviates from expected 50"
+
+    def test_circle_outside_offset_increases_radius(self):
+        """Circle r=60, offset dist=-10: all result points within 0.2 in of radius 70."""
+        cp = CirclePath(0, 0, 60)
+        ot = OffsetTreatment(id='ot', source_path_id='c', distance=-10)
+        derived = ot.generate(cp)
+        pts = derived.sample_points()
+        for p in pts:
+            r = math.hypot(p.x, p.y)
+            assert abs(r - 70) < 0.2, f"Point radius {r:.4f} deviates from expected 70"
+
+    def test_open_polyline_left_offset_perpendicular(self):
+        """Open horizontal segment: left offset shifts y by +dist."""
+        pts = [Vec2(0, 50), Vec2(100, 50)]
+        result = _offset_polyline(pts, 10, closed=False)
+        assert len(result) == 2
+        assert result[0].y == pytest.approx(60.0, abs=1e-9)
+        assert result[1].y == pytest.approx(60.0, abs=1e-9)
+        assert result[0].x == pytest.approx(0.0, abs=1e-9)
+        assert result[1].x == pytest.approx(100.0, abs=1e-9)
+
+    def test_open_polyline_right_offset(self):
+        """Open horizontal segment: right offset (negative dist) shifts y by -dist."""
+        pts = [Vec2(0, 50), Vec2(100, 50)]
+        result = _offset_polyline(pts, -10, closed=False)
+        assert len(result) == 2
+        assert result[0].y == pytest.approx(40.0, abs=1e-9)
+        assert result[1].y == pytest.approx(40.0, abs=1e-9)
+
+
+class TestLatticeWithOffsetBoundary:
+    """Verify that lattice can reference offset-derived paths as boundaries."""
+
+    def test_lattice_can_use_offset_derived_path(self):
+        """PrintLayer: source + offset + lattice where path_b_id = offset.id → lattice paths generated."""
+        src = RectanglePath(0, 0, 100, 100, id='wall')
+        ot = OffsetTreatment(id='inner', source_path_id='wall', distance=10)
+        li = LatticeInstance(
+            id='lat1', generator_name='zigzag',
+            path_a_id='wall', path_b_id='inner',
+            params={'segments': 4, 'connect_ends': False},
+        )
+        layer = PrintLayer(id='test')
+        layer.source_paths = [src]
+        layer.offset_treatments = [ot]
+        layer.lattice_instances = [li]
+
+        paths = layer.effective_paths()
+        ids = {p.id for p in paths}
+        # wall (source), inner (offset-derived), and at least one lattice path
+        assert 'wall' in ids
+        assert 'inner' in ids
+        lattice_paths = [p for p in paths if p.role == 'lattice']
+        assert len(lattice_paths) >= 1
+
+    def test_offset_derived_id_is_treatment_id(self):
+        """Derived path from OffsetTreatment must use the treatment's own id."""
+        src = ExplicitPath([Vec2(0,0), Vec2(100,0), Vec2(100,50), Vec2(0,50)],
+                           id='src', closed=True)
+        ot = OffsetTreatment(id='my_offset_id', source_path_id='src', distance=5)
+        derived = ot.generate(src)
+        assert derived.id == 'my_offset_id'
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,6 @@ let _mousePosW = null;       // current mouse world-coords (for snap-to-first pr
 
 let showToolpath = true;
 let showArrows = true;
-let showNumbers = true;
 
 let routeResult = null;
 let derivedPaths = [];       // populated by effective_paths or route on model change
@@ -267,7 +266,7 @@ function drawPolyline(pts, color, width, dashed, closed) {
   ctx.restore();
 }
 
-function drawArrowhead(cx, cy, angle, size, color) {
+function drawArrowhead(cx, cy, angle, size, fillColor, strokeColor) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
@@ -276,7 +275,12 @@ function drawArrowhead(cx, cy, angle, size, color) {
   ctx.lineTo(-size * 0.6, size * 0.5);
   ctx.lineTo(-size * 0.6, -size * 0.5);
   ctx.closePath();
-  ctx.fillStyle = color;
+  if (strokeColor) {
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.fillStyle = fillColor;
   ctx.fill();
   ctx.restore();
 }
@@ -456,13 +460,7 @@ function drawToolpath(moves) {
   const ARROW_SPACING = 50; // world inches between arrows
   const runs = buildPrintRuns(moves);
 
-  runs.forEach((run, runIdx) => {
-    // Print-run number at start
-    if (showNumbers) {
-      const [nx, ny] = worldToCanvas(run.startPos[0], run.startPos[1]);
-      drawNumber(nx, ny - 10, runIdx + 1, MOVE_COLORS.print);
-    }
-
+  runs.forEach((run) => {
     // Sparse direction arrows along print run
     if (showArrows) {
       let distSinceArrow = ARROW_SPACING; // start eager to place first arrow early
@@ -474,7 +472,7 @@ function drawToolpath(moves) {
           const [x0, y0] = worldToCanvas(m.start[0], m.start[1]);
           const [x1, y1] = worldToCanvas(m.end[0], m.end[1]);
           drawArrowhead((x0 + x1) / 2, (y0 + y1) / 2,
-                        Math.atan2(y1 - y0, x1 - x0), 5, MOVE_COLORS.print);
+                        Math.atan2(y1 - y0, x1 - x0), 7, '#ffffff', 'rgba(0,0,0,0.65)');
           distSinceArrow = 0;
         }
       }
@@ -906,9 +904,6 @@ function updatePropPanel() {
   panel.innerHTML = '';
 
   addPropRowText(panel, 'Label', path.label || '', v => { path.label = v; updatePathList(); });
-  addPropRowSelect(panel, 'Role', path.role, ['free', 'outer', 'inner', 'lattice'], v => {
-    path.role = v; updatePathList(); repaint();
-  });
   addPropRowCheck(panel, 'Closed', path.closed, v => {
     path.closed = v; routeResult = null; scheduleRefresh(); repaint();
   });
@@ -938,6 +933,14 @@ function updatePropPanel() {
       addPropRowNum(panel, 'End Y',   'y1', path.end[1],   v => { path.end[1]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       break;
   }
+
+  // Delete button
+  const delBtn = document.createElement('button');
+  delBtn.className = 'add-btn';
+  delBtn.style.cssText = 'margin-top:10px; color:var(--bad); border-color:#553333;';
+  delBtn.textContent = '× Delete path';
+  delBtn.onclick = () => deletePath(path.id);
+  panel.appendChild(delBtn);
 }
 
 function addPropRowNum(panel, label, fieldKey, value, onChange) {
@@ -1007,8 +1010,12 @@ function updateOffsetList() {
     const nm = document.createElement('span'); nm.className = 'treatment-name'; nm.textContent = 'Wall Offset';
     const rm = document.createElement('button'); rm.className = 'remove-btn'; rm.textContent = '×';
     rm.onclick = () => {
-      layer.offset_treatments = layer.offset_treatments.filter(x => x.id !== ot.id);
-      routeResult = null; scheduleRefresh(); updateOffsetList(); repaint();
+      const removedId = ot.id;
+      layer.offset_treatments = layer.offset_treatments.filter(x => x.id !== removedId);
+      layer.lattice_instances = layer.lattice_instances.filter(
+        li => li.path_a_id !== removedId && li.path_b_id !== removedId
+      );
+      routeResult = null; scheduleRefresh(); updateOffsetList(); updateLatticeList(); repaint();
     };
     hdr.append(nm, rm);
     block.appendChild(hdr);
@@ -1045,10 +1052,6 @@ function updateOffsetList() {
     addPropRowNumTo(panel, 'Distance', Math.abs(ot.distance != null ? ot.distance : 10),
       v => { ot.distance = Math.max(0.1, v); routeResult = null; scheduleRefresh(); repaint(); }, 'in');
 
-    addPropRowSelectTo(panel, 'Role', ot.role,
-      ['inner', 'outer', 'free', 'lattice'],
-      v => { ot.role = v; routeResult = null; scheduleRefresh(); repaint(); });
-
     block.appendChild(panel);
     el.appendChild(block);
   }
@@ -1072,6 +1075,19 @@ function addOffset() {
 // ---------------------------------------------------------------------------
 // Connecting geometry (lattice) UI
 // ---------------------------------------------------------------------------
+
+function allBoundaries() {
+  const items = [];
+  for (const p of layer.source_paths) {
+    items.push({ id: p.id, label: p.label || p.id });
+  }
+  for (const ot of layer.offset_treatments) {
+    const src = layer.source_paths.find(p => p.id === ot.source_path_id);
+    const srcLabel = src ? (src.label || src.id) : ot.source_path_id;
+    items.push({ id: ot.id, label: `Offset of ${srcLabel}` });
+  }
+  return items;
+}
 
 function updateLatticeList() {
   const el = document.getElementById('lattice-list');
@@ -1097,15 +1113,16 @@ function updateLatticeList() {
     const panel = document.createElement('div');
     panel.className = 'prop-panel';
 
-    // Boundary A and Boundary B selectors (not "Path A/B")
+    // Boundary A and Boundary B selectors — includes source paths and offset-derived paths
+    const boundaries = allBoundaries();
     for (const [key, label] of [['path_a_id', 'Boundary A'], ['path_b_id', 'Boundary B']]) {
       const row = document.createElement('div'); row.className = 'prop-row';
       const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
       const sel = document.createElement('select'); sel.className = 'prop-input';
-      for (const p of layer.source_paths) {
+      for (const { id, label: bLabel } of boundaries) {
         const opt = document.createElement('option');
-        opt.value = p.id; opt.textContent = p.label || p.id;
-        if (p.id === li[key]) opt.selected = true;
+        opt.value = id; opt.textContent = bLabel;
+        if (id === li[key]) opt.selected = true;
         sel.appendChild(opt);
       }
       sel.onchange = () => { li[key] = sel.value; routeResult = null; scheduleRefresh(); repaint(); };
@@ -1168,7 +1185,11 @@ function updateLatticeList() {
 }
 
 function addLattice() {
-  if (layer.source_paths.length < 2) { setStatus('Add at least two paths first.'); return; }
+  const boundaries = allBoundaries();
+  if (boundaries.length < 2) {
+    setStatus('Add at least two paths (or a path and an offset) first.');
+    return;
+  }
   const genName = Object.keys(generators)[0] || 'zigzag';
   const gen = generators[genName] || { parameters: [] };
   const params = {};
@@ -1176,8 +1197,8 @@ function addLattice() {
   layer.lattice_instances.push({
     id: newId(),
     generator: genName,
-    path_a_id: layer.source_paths[0].id,
-    path_b_id: layer.source_paths[1].id,
+    path_a_id: boundaries[0].id,
+    path_b_id: boundaries[1].id,
     params,
     variation_index: 0,
     label: '',
@@ -1384,6 +1405,7 @@ function toggleToolpath() {
   const btn = document.getElementById('btn-toolpath');
   btn.textContent = showToolpath ? 'Toolpath ON' : 'Toolpath OFF';
   btn.classList.toggle('toggle-on', showToolpath);
+  document.getElementById('btn-arrows').disabled = !showToolpath;
   if (showToolpath) {
     if (layer.source_paths.length > 0) runRoute();
     else repaint();
@@ -1397,12 +1419,6 @@ function toggleToolpath() {
 function toggleArrows() {
   showArrows = !showArrows;
   document.getElementById('btn-arrows').classList.toggle('toggle-on', showArrows);
-  repaint();
-}
-
-function toggleNumbers() {
-  showNumbers = !showNumbers;
-  document.getElementById('btn-numbers').classList.toggle('toggle-on', showNumbers);
   repaint();
 }
 

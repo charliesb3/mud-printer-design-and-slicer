@@ -356,32 +356,29 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
 
-### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + major UX pass)
+### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + two UX passes)
 
-Location: `design-toolpath/design_proto/`. 75 tests passing.
+Location: `design-toolpath/design_proto/`. 86 tests passing.
 
 Files:
 - `model.py` — full data model: Vec2, Path subtypes, OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
 - `static/index.html` — design canvas UI
 - `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides
-- `tests/test_model.py` — 47 unit tests covering model layer
-- `tests/test_app.py` — 28 integration + workflow tests
+- `tests/test_model.py` — 58 unit tests covering model layer + offset geometry
+- `tests/test_app.py` — 30 integration + workflow tests
 
-**Major UX pass completed (18-point spec):**
-- Blank canvas on start (no seeded geometry)
-- "Edit" tool (renamed from "Select"); auto-returns to Edit after path/primitive creation
-- Draw tool snap-to-first-point: green ring highlight + preview line when within 12 in of first point; click to close
-- Offset direction: Inside/Outside (closed paths) / Left/Right (open paths), always positive distance; sign conversion happens in frontend before API call; backend still receives signed float
-- Auto-routing: Route button removed; toolpath auto-computes whenever Toolpath is ON and geometry changes (200ms debounce); toggling Toolpath ON triggers immediate routing
-- Toolpath visualization redesigned: sparse direction arrows (distance-based, every 50 in), print-run numbering (one number per run, not per segment), yellow diamond seam marker on closed loops
-- Metrics reordered: Print runs / Travel moves / Travel distance (primary); % printing / Print distance / Retrace (secondary)
-- Arrows and Numbers are pure visual toggles (no routing trigger)
-- Lattice UI: "Boundary A / Boundary B" labels, "Pattern" for generator type
-- Section labels: "Wall Offsets" and "Connecting Geometry"
-- Rectangle: "Length" label (not "Height") per Z-axis-height-reserved convention
-- Units on all numeric properties (in) including lattice params where applicable
-- 8 workflow tests added (A–F covering all major use cases)
+**UX pass 2 completed (14-point spec):**
+- **True geometric offset algorithm**: `_offset_polyline` replaced with proper segment-parallel-intersection method. Each segment is shifted parallel by `dist`, adjacent offset segments are intersected (miter join), bevel fallback when miter exceeds 4×dist. Rectangle 10in inset → exact corners. Circle r=60 with 10in offset → radius within 0.2 in of 50 or 70.
+- **Add Lattice fixed**: `addLattice()` now uses `allBoundaries()` (source paths + offset treatments) instead of requiring 2 source paths. Boundary selectors in lattice panel now show both source paths and "Offset of X" entries. `PrintLayer.effective_paths()` allows lattice to reference offset-derived paths by ID. `OffsetTreatment.generate()` now assigns `id=self.id` to derived paths (stable, predictable).
+- **Role removed from UI**: Role field removed from source path Properties panel and from Wall Offsets panel. Kept internally; not exposed to designer.
+- **Individual delete**: "× Delete path" button in path Properties panel. Delete/Backspace key continues to work. Cascade: deleting source path removes its offsets and lattice instances. Removing an offset treatment also removes lattice instances that reference it.
+- **Toolpath arrows**: Redesigned for legibility — white fill with dark outline, size 7 (up from 5), drawn above all geometry in repaint order.
+- **Numbers removed**: Run-sequence numbers removed from toolpath visualization and toolbar.
+- **Arrows grayed when Toolpath OFF**: Arrows button disabled while toolpath is off.
+- **Metric labels**: "% printing" → "Continuous"; "Retrace dist" → "Reprinted" (with tooltip: "Distance printed more than once to maintain a continuous route").
+- **Clear → Clear All** in toolbar.
+- 11 geometry regression tests added (offset distance accuracy, lattice-with-derived-boundary, circle radius verification).
 
 **Known limitations / deferred:**
 - Node-drag editing for Circle/Ellipse primitives is approximate (resamples rather than adjusting radius parametrically from drag)
