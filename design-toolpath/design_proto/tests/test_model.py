@@ -18,6 +18,7 @@ import math
 import pytest
 from model import (
     Vec2, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
+    QuadBezierPath,
     OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance,
     PrintLayer, TraversalConstraints, DerivedPath, _offset_polyline,
     _resample, _point_in_polygon, _polygon_area, _lattice_valid_in_cavity,
@@ -911,6 +912,155 @@ class TestOpenWallEndCaps:
         metrics = compute_metrics(moves)
         assert metrics['travel_moves'] == 0
         assert metrics['print_runs'] == 1
+
+
+# ---------------------------------------------------------------------------
+# QuadBezierPath
+# ---------------------------------------------------------------------------
+
+class TestQuadBezierPath:
+    def _curve(self):
+        return QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 80), id='qb')
+
+    def test_preserves_parameters(self):
+        p = self._curve()
+        assert p.start.x == pytest.approx(0.0)
+        assert p.start.y == pytest.approx(0.0)
+        assert p.end.x == pytest.approx(100.0)
+        assert p.end.y == pytest.approx(0.0)
+        assert p.control.x == pytest.approx(50.0)
+        assert p.control.y == pytest.approx(80.0)
+        assert p.__class__.__name__ == 'QuadBezierPath'
+
+    def test_sample_starts_at_start_ends_at_end(self):
+        p = QuadBezierPath(Vec2(10, 20), Vec2(90, 30), Vec2(50, 80))
+        pts = p.sample_points()
+        assert pts[0].x == pytest.approx(10.0, abs=1e-9)
+        assert pts[0].y == pytest.approx(20.0, abs=1e-9)
+        assert pts[-1].x == pytest.approx(90.0, abs=1e-9)
+        assert pts[-1].y == pytest.approx(30.0, abs=1e-9)
+
+    def test_straight_aligned_control_near_straight(self):
+        """Control at midpoint on the segment → all y values ≈ 0."""
+        p = QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 0))
+        for pt in p.sample_points():
+            assert abs(pt.y) < 1e-9
+
+    def test_curve_length_exceeds_chord(self):
+        """A bent curve must be longer than the straight chord."""
+        p = self._curve()
+        chord = math.hypot(100, 0)
+        assert p.arc_length() > chord
+
+    def test_is_open_by_default(self):
+        assert self._curve().closed is False
+
+    def test_sample_count_matches_n(self):
+        p = self._curve()
+        assert len(p.sample_points(32)) == 32
+        assert len(p.sample_points(128)) == 128
+
+    def test_offset_left_shifts_positively(self):
+        """Horizontal bezier (control on line) offset left → y increases."""
+        p = QuadBezierPath(Vec2(0, 50), Vec2(100, 50), Vec2(50, 50), id='crv')
+        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=10)
+        derived = ot.generate(p)
+        for pt in derived.sample_points():
+            assert pt.y > 50 - 0.5  # all points shifted upward
+
+    def test_left_right_offsets_opposite_sides(self):
+        """Left (positive) and right (negative) offsets land on opposite sides."""
+        p = QuadBezierPath(Vec2(0, 50), Vec2(100, 50), Vec2(50, 50), id='crv')
+        ot_left  = OffsetTreatment(id='otl', source_path_id='crv', distance=+10)
+        ot_right = OffsetTreatment(id='otr', source_path_id='crv', distance=-10)
+        left_pts  = ot_left.generate(p).sample_points()
+        right_pts = ot_right.generate(p).sample_points()
+        assert all(pt.y > 50 for pt in left_pts)
+        assert all(pt.y < 50 for pt in right_pts)
+
+    def test_curve_offset_generates_caps(self):
+        """Open curve + offset → 2 cap paths."""
+        crv = QuadBezierPath(Vec2(0, 0), Vec2(100, 0), Vec2(50, 50), id='crv')
+        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=10)
+        layer = PrintLayer(id='test')
+        layer.source_paths = [crv]
+        layer.offset_treatments = [ot]
+        paths = layer.effective_paths()
+        caps = [p for p in paths if p.role == 'cap']
+        assert len(caps) == 2
+
+    def test_curve_offset_routes_zero_travel(self):
+        """Curve + offset + auto-caps → 1 run, 0 travel moves."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
+        from graph import route_layer, compute_metrics
+        crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
+        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=15)
+        layer = PrintLayer(id='test')
+        layer.source_paths = [crv]
+        layer.offset_treatments = [ot]
+        rl = layer.to_routing_layer()
+        moves = route_layer(rl)
+        metrics = compute_metrics(moves)
+        assert metrics['travel_moves'] == 0
+        assert metrics['print_runs'] == 1
+
+    def test_zigzag_between_curve_and_offset(self):
+        """Zigzag lattice can be placed between a curve and its offset."""
+        crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
+        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=20)
+        li = LatticeInstance(id='li1', generator_name='zigzag',
+                             path_a_id='crv', path_b_id='ot1',
+                             params={'segments': 6, 'connect_ends': False})
+        layer = PrintLayer(id='test')
+        layer.source_paths = [crv]
+        layer.offset_treatments = [ot]
+        layer.lattice_instances = [li]
+        paths = layer.effective_paths()
+        assert len([p for p in paths if p.role == 'lattice']) >= 1
+
+    def test_wave_between_curve_and_offset(self):
+        """Wave lattice can be placed between a curve and its offset."""
+        crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
+        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=20)
+        li = LatticeInstance(id='li1', generator_name='wave',
+                             path_a_id='crv', path_b_id='ot1',
+                             params={'cycles': 3.0})
+        layer = PrintLayer(id='test')
+        layer.source_paths = [crv]
+        layer.offset_treatments = [ot]
+        layer.lattice_instances = [li]
+        paths = layer.effective_paths()
+        assert len([p for p in paths if p.role == 'lattice']) >= 1
+
+    def test_delete_cascade_removes_dependents(self):
+        """Removing curve from layer removes dependent offset and lattice."""
+        crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
+        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=20)
+        li = LatticeInstance(id='li1', generator_name='zigzag',
+                             path_a_id='crv', path_b_id='ot1',
+                             params={'segments': 4})
+        layer = PrintLayer(id='test')
+        layer.source_paths = [crv]
+        layer.offset_treatments = [ot]
+        layer.lattice_instances = [li]
+        # Simulate cascade delete
+        layer.source_paths = [p for p in layer.source_paths if p.id != 'crv']
+        layer.offset_treatments = [o for o in layer.offset_treatments
+                                    if o.source_path_id != 'crv']
+        layer.lattice_instances = [l for l in layer.lattice_instances
+                                    if l.path_a_id not in ('crv', 'ot1')
+                                    and l.path_b_id not in ('crv', 'ot1')]
+        assert layer.effective_paths() == []
+
+    def test_to_dict_preserves_type(self):
+        """to_dict must report type as 'QuadBezierPath', not 'Path' or 'ExplicitPath'."""
+        p = self._curve()
+        d = p.to_dict()
+        assert d['type'] == 'QuadBezierPath'
+        assert d['start'] == [0, 0]
+        assert d['end'] == [100, 0]
+        assert d['control'] == [50, 80]
 
 
 class TestCaseDRouting:

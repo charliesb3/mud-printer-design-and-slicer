@@ -356,17 +356,17 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
 
-### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + four UX passes)
+### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + five UX passes)
 
-Location: `design-toolpath/design_proto/`. 126 tests passing.
+Location: `design-toolpath/design_proto/`. 147 tests passing.
 
 Files:
-- `model.py` — full data model: Vec2, Path subtypes, OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
+- `model.py` — full data model: Vec2, Path subtypes (incl. QuadBezierPath), OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer, TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
 - `static/index.html` — design canvas UI
 - `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay, playback transport
-- `tests/test_model.py` — 83 unit tests covering model layer + geometry validation
-- `tests/test_app.py` — 43 integration + workflow tests
+- `tests/test_model.py` — 97 unit tests covering model layer + geometry validation
+- `tests/test_app.py` — 50 integration + workflow tests
 
 **UX pass 2 (14-point spec):** True geometric offset, Add Lattice fix, Role removed from UI, Individual delete, Arrow legibility, Numbers removed, Arrows disabled when Toolpath OFF, Metric label renames, Clear All.
 
@@ -431,6 +431,24 @@ This connects two otherwise-disconnected open strands into an Eulerian circuit. 
 - rAF animation loop at `_PLAYBACK_WORLD_SPEED = 100.0` world in/s at 1×.
 - Playback resets when toolpath is toggled off or Clear All is called.
 
+**UX pass 5 — editable curved line segments (QuadBezierPath):**
+
+`QuadBezierPath` added as a first-class parametric type. Implements B(t) = (1−t)² P0 + 2(1−t)t P1 + t² P2 where P0=start, P1=control/bend, P2=end.
+
+**3-click Curve tool**: "Curve" button in toolbar; click 1 = start, click 2 = end, click 3 = bend/control. Live curved preview after click 2. Auto-returns to Edit mode after placement.
+
+**Three semantic handles**: Start (circle), End (circle), Bend/control (square). Dashed control lines from start→bend and end→bend shown when selected.
+
+**Sidebar fields**: Label, Start X/Y, End X/Y, Bend X/Y. Closed checkbox suppressed for curves (always open).
+
+**Canvas rendering**: Uses `ctx.quadraticCurveTo` for smooth rendering; sampled polyline is stored for hit testing and offset generation only.
+
+**Dimensions**: Shows arc length (sampled polyline arc length), label at t=0.5 midpoint.
+
+**Offsets, end caps, lattice**: Work identically to LinePath — `OffsetTreatment.generate()` calls `source.sample_points(128)` then `_offset_polyline`; end caps and Eulerian zero-travel routing work because `sample_points()[0]` = start exactly and `sample_points()[-1]` = end exactly (B(0) = P0, B(1) = P2 by construction).
+
+**Toolpath, playback, reverse, start/end markers**: All work without modification — QuadBezierPath integrates with existing routing engine transparently.
+
 **Known limitations / deferred:**
 - Node-drag editing for Circle/Ellipse primitives is approximate
 - Path sections (split points / per-section properties) in model but no UI yet
@@ -464,4 +482,4 @@ This connects two otherwise-disconnected open strands into an Eulerian circuit. 
 
 2026-10-04
 
-Phase 3 UX pass 4 (routing quality + playback) complete. Phase 2: 65 tests. Phase 3: 126 tests. All green.
+Phase 3 UX pass 5 (editable curved segments — QuadBezierPath) complete. Phase 2: 65 tests. Phase 3: 147 tests. All green.

@@ -15,6 +15,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from model import (
     PrintLayer, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
+    QuadBezierPath,
     OffsetTreatment, LatticeInstance, TraversalConstraints,
     GENERATORS, Vec2
 )
@@ -54,6 +55,9 @@ def _deserialise_path(d: dict):
                            d.get('rotation', 0.0), **kwargs)
     if kind == 'RectanglePath':
         return RectanglePath(d['x'], d['y'], d['w'], d['h'], **kwargs)
+    if kind == 'QuadBezierPath':
+        s, e, c = d['start'], d['end'], d['control']
+        return QuadBezierPath(Vec2(*s), Vec2(*e), Vec2(*c), **kwargs)
     # Default: ExplicitPath
     pts = [Vec2(p[0], p[1]) for p in d.get('control_points', d.get('points', []))]
     return ExplicitPath(pts, **kwargs)

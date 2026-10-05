@@ -975,3 +975,139 @@ class TestWorkflows:
         ys = sorted(set(round(p[1], 6) for p in pts))
         assert xs == pytest.approx([10.0, 90.0], abs=1e-6)
         assert ys == pytest.approx([10.0, 90.0], abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# QuadBezierPath API integration tests
+# ---------------------------------------------------------------------------
+
+_CURVE_PAYLOAD = {
+    'id': 'curve_test',
+    'label': '',
+    'source_paths': [{
+        'id': 'qb1',
+        'type': 'QuadBezierPath',
+        'label': 'Curve',
+        'closed': False,
+        'role': 'free',
+        'visible': True,
+        'start':   [0,   50],
+        'end':     [200, 50],
+        'control': [100, 150],
+    }],
+    'offset_treatments': [],
+    'lattice_instances': [],
+    'constraints': {'start_path_id': None, 'start_t': None,
+                    'reverse_direction': False, 'component_order': None},
+}
+
+_CURVE_OFFSET_PAYLOAD = {
+    'id': 'curve_offset_test',
+    'label': '',
+    'source_paths': [{
+        'id': 'qb1',
+        'type': 'QuadBezierPath',
+        'label': 'Curve',
+        'closed': False,
+        'role': 'free',
+        'visible': True,
+        'start':   [0,   50],
+        'end':     [200, 50],
+        'control': [100, 150],
+    }],
+    'offset_treatments': [{
+        'id': 'ot1',
+        'source_path_id': 'qb1',
+        'distance': 20,
+        'role': 'inner',
+        'label': '',
+    }],
+    'lattice_instances': [],
+    'constraints': {'start_path_id': None, 'start_t': None,
+                    'reverse_direction': False, 'component_order': None},
+}
+
+
+class TestQuadBezierPathAPI:
+    def test_curve_type_preserved_in_effective_paths(self, client):
+        """QuadBezierPath sent to /api/effective_paths is not silently converted to ExplicitPath."""
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(_CURVE_PAYLOAD),
+                        content_type='application/json')
+        assert r.status_code == 200
+        paths = r.get_json()['paths']
+        curve = next(p for p in paths if p['id'] == 'qb1')
+        assert curve['type'] == 'QuadBezierPath', \
+            f"Expected QuadBezierPath, got {curve['type']}"
+
+    def test_curve_serialization_preserves_fields(self, client):
+        """start, end, and control coordinates survive the round-trip through the API."""
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(_CURVE_PAYLOAD),
+                        content_type='application/json')
+        assert r.status_code == 200
+        paths = r.get_json()['paths']
+        curve = next(p for p in paths if p['id'] == 'qb1')
+        assert curve['start']   == pytest.approx([0,   50],  abs=1e-6)
+        assert curve['end']     == pytest.approx([200, 50],  abs=1e-6)
+        assert curve['control'] == pytest.approx([100, 150], abs=1e-6)
+
+    def test_curve_routes_via_api(self, client):
+        """A lone QuadBezierPath routes successfully and produces print moves."""
+        r = client.post('/api/route',
+                        data=json.dumps(_CURVE_PAYLOAD),
+                        content_type='application/json')
+        assert r.status_code == 200, r.get_json().get('error', '')
+        data = r.get_json()
+        assert len(data['moves']) > 0
+        assert data['metrics']['print_runs'] >= 1
+
+    def test_curve_route_zero_travel(self, client):
+        """A lone open curve (Eulerian path with 2 odd-degree nodes) routes with zero travel."""
+        r = client.post('/api/route',
+                        data=json.dumps(_CURVE_PAYLOAD),
+                        content_type='application/json')
+        assert r.status_code == 200
+        assert r.get_json()['metrics']['travel_moves'] == 0
+
+    def test_curve_offset_generates_caps(self, client):
+        """Open curve + offset treatment auto-generates exactly 2 cap paths."""
+        r = client.post('/api/effective_paths',
+                        data=json.dumps(_CURVE_OFFSET_PAYLOAD),
+                        content_type='application/json')
+        assert r.status_code == 200
+        paths = r.get_json()['paths']
+        caps = [p for p in paths if p.get('role') == 'cap']
+        assert len(caps) == 2, f"Expected 2 cap paths, got {len(caps)}"
+
+    def test_curve_offset_routes_single_run_zero_travel(self, client):
+        """Curve + offset + auto caps routes as exactly 1 print run with zero travel."""
+        r = client.post('/api/route',
+                        data=json.dumps(_CURVE_OFFSET_PAYLOAD),
+                        content_type='application/json')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data['metrics']['travel_moves'] == 0
+        assert data['metrics']['print_runs'] == 1
+
+    def test_curve_offset_zigzag_routes(self, client):
+        """Curve + offset + zigzag lattice between them routes without error."""
+        payload = {
+            **_CURVE_OFFSET_PAYLOAD,
+            'id': 'curve_zigzag_test',
+            'lattice_instances': [{
+                'id': 'li1',
+                'generator': 'zigzag',
+                'path_a_id': 'qb1',
+                'path_b_id': 'ot1',
+                'params': {'segments': 6, 'connect_ends': False},
+                'variation_index': 0,
+                'label': '',
+            }],
+        }
+        r = client.post('/api/route',
+                        data=json.dumps(payload),
+                        content_type='application/json')
+        assert r.status_code == 200, r.get_json().get('error', '')
+        data = r.get_json()
+        assert len(data['moves']) > 0

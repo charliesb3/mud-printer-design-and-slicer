@@ -200,6 +200,40 @@ class LinePath(Path):
         return d
 
 
+class QuadBezierPath(Path):
+    """
+    Quadratic Bézier curve.
+    B(t) = (1−t)² P0 + 2(1−t)t P1 + t² P2
+    P0=start, P1=control (bend), P2=end, t∈[0,1].
+    Always open (closed=False by default).
+    Sampling is an implementation detail — the parametric identity is preserved.
+    """
+    def __init__(self, start: Vec2, end: Vec2, control: Vec2, **kwargs):
+        kwargs.setdefault('closed', False)
+        super().__init__(**kwargs)
+        self.start = start    # P0
+        self.end = end        # P2
+        self.control = control  # P1 (bend)
+
+    def sample_points(self, n: int = 64) -> list[Vec2]:
+        """Return n points along the curve.  pts[0]=start, pts[-1]=end exactly."""
+        pts = []
+        for i in range(n):
+            t = i / (n - 1) if n > 1 else 0.0
+            mt = 1.0 - t
+            x = mt*mt * self.start.x + 2.0*mt*t * self.control.x + t*t * self.end.x
+            y = mt*mt * self.start.y + 2.0*mt*t * self.control.y + t*t * self.end.y
+            pts.append(Vec2(x, y))
+        return pts
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        d['start']   = [self.start.x,   self.start.y]
+        d['end']     = [self.end.x,     self.end.y]
+        d['control'] = [self.control.x, self.control.y]
+        return d
+
+
 class CirclePath(Path):
     def __init__(self, cx: float, cy: float, radius: float, **kwargs):
         kwargs.setdefault('closed', True)

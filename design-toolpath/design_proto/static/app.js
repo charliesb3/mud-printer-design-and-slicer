@@ -103,6 +103,12 @@ function getHandles(path) {
         { key: 'start', wx: path.start[0], wy: path.start[1], shape: 'point' },
         { key: 'end',   wx: path.end[0],   wy: path.end[1],   shape: 'point' },
       ];
+    case 'QuadBezierPath':
+      return [
+        { key: 'start',   wx: path.start[0],   wy: path.start[1],   shape: 'point' },
+        { key: 'end',     wx: path.end[0],     wy: path.end[1],     shape: 'point' },
+        { key: 'control', wx: path.control[0], wy: path.control[1], shape: 'square' },
+      ];
     case 'RectanglePath':
       return [
         { key: 'tl', wx: path.x,           wy: path.y,           shape: 'square' },
@@ -134,6 +140,11 @@ function applyHandleDrag(path, handleKey, wx, wy, orig) {
     case 'LinePath':
       if (handleKey === 'start') { path.start = [wx, wy]; }
       if (handleKey === 'end')   { path.end   = [wx, wy]; }
+      break;
+    case 'QuadBezierPath':
+      if (handleKey === 'start')   { path.start   = [wx, wy]; }
+      if (handleKey === 'end')     { path.end     = [wx, wy]; }
+      if (handleKey === 'control') { path.control = [wx, wy]; }
       break;
     case 'RectanglePath': {
       const fixBRX = orig.x + orig.w, fixBRY = orig.y + orig.h;
@@ -178,8 +189,9 @@ function capturePathState(path) {
     rx: path.rx, ry: path.ry, rotation: path.rotation,
     x: path.x, y: path.y, w: path.w, h: path.h,
   };
-  if (path.start) s.start = [...path.start];
-  if (path.end)   s.end   = [...path.end];
+  if (path.start)   s.start   = [...path.start];
+  if (path.end)     s.end     = [...path.end];
+  if (path.control) s.control = [...path.control];
   if (path.control_points) s.control_points = path.control_points.map(p => [...p]);
   if (path.points) s.points = path.points.map(p => [...p]);
   return s;
@@ -194,6 +206,11 @@ function applyBodyDrag(path, dx, dy, orig) {
     case 'LinePath':
       path.start = [orig.start[0] + dx, orig.start[1] + dy];
       path.end   = [orig.end[0]   + dx, orig.end[1]   + dy];
+      break;
+    case 'QuadBezierPath':
+      path.start   = [orig.start[0]   + dx, orig.start[1]   + dy];
+      path.end     = [orig.end[0]     + dx, orig.end[1]     + dy];
+      path.control = [orig.control[0] + dx, orig.control[1] + dy];
       break;
     case 'RectanglePath':
       path.x = orig.x + dx; path.y = orig.y + dy; break;
@@ -218,6 +235,10 @@ function syncPropPanel(path) {
     case 'LinePath':
       Object.assign(fields, { x0: path.start[0], y0: path.start[1],
                                x1: path.end[0],   y1: path.end[1] }); break;
+    case 'QuadBezierPath':
+      Object.assign(fields, { x0: path.start[0],   y0: path.start[1],
+                               x1: path.end[0],     y1: path.end[1],
+                               bx: path.control[0], by: path.control[1] }); break;
     case 'RectanglePath':
       Object.assign(fields, { x: path.x, y: path.y, w: path.w, h: path.h }); break;
   }
@@ -386,6 +407,7 @@ function repaint() {
   }
   if (showDimensions) drawDimensions();
   if (tool === 'draw' && drawPts.length > 0) drawInProgress();
+  if (tool === 'curve') drawCurveInProgress();
   if (selectedId) drawHandles(selectedId);
 }
 
@@ -419,13 +441,32 @@ function _pathCanvasPts(path) {
 function drawEffectivePaths() {
   for (const p of layer.source_paths) {
     if (!p.visible) continue;
-    const pts = _pathCanvasPts(p);
     const isSel = p.id === selectedId;
     const color = isSel ? '#ffffff' : (ROLE_COLORS[p.role] || '#aaa');
-    drawPolyline(pts, color, isSel ? 2.5 : 1.8, false, p.closed);
-    if (!p.closed && pts.length >= 2) {
-      drawDot(pts[0][0], pts[0][1], 3, '#666');
-      drawDot(pts[pts.length - 1][0], pts[pts.length - 1][1], 3, '#666');
+    const width = isSel ? 2.5 : 1.8;
+
+    if (p.type === 'QuadBezierPath') {
+      // Render as a true bezier curve for smooth appearance
+      const [x0, y0] = worldToCanvas(p.start[0], p.start[1]);
+      const [xc, yc] = worldToCanvas(p.control[0], p.control[1]);
+      const [x2, y2] = worldToCanvas(p.end[0], p.end[1]);
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(xc, yc, x2, y2);
+      ctx.stroke();
+      ctx.restore();
+      drawDot(x0, y0, 3, '#666');
+      drawDot(x2, y2, 3, '#666');
+    } else {
+      const pts = _pathCanvasPts(p);
+      drawPolyline(pts, color, width, false, p.closed);
+      if (!p.closed && pts.length >= 2) {
+        drawDot(pts[0][0], pts[0][1], 3, '#666');
+        drawDot(pts[pts.length - 1][0], pts[pts.length - 1][1], 3, '#666');
+      }
     }
   }
 
@@ -781,6 +822,19 @@ function drawHandles(pid) {
     ctx.setLineDash([]);
     ctx.restore();
   }
+  if (path.type === 'QuadBezierPath') {
+    const [sx, sy] = worldToCanvas(path.start[0],   path.start[1]);
+    const [ex, ey] = worldToCanvas(path.end[0],     path.end[1]);
+    const [bx, by] = worldToCanvas(path.control[0], path.control[1]);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,158,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -792,7 +846,10 @@ function setTool(t) {
   drawPts = [];
   document.getElementById('tool-edit').classList.toggle('active', t === 'edit');
   document.getElementById('tool-draw').classList.toggle('active', t === 'draw');
-  canvas.className = `tool-${t}`;
+  const curveBtn = document.getElementById('tool-curve');
+  if (curveBtn) curveBtn.classList.toggle('active', t === 'curve');
+  // Curve uses crosshair like draw; edit uses default arrow
+  canvas.className = t === 'edit' ? 'tool-edit' : 'tool-draw';
   updateHint();
   repaint();
 }
@@ -801,6 +858,12 @@ function updateHint() {
   const hint = document.getElementById('hint');
   if (tool === 'draw') {
     hint.textContent = 'Click to place control points. Click start point (≥3 pts) to close. Double-click or Enter to finish open path.';
+    return;
+  }
+  if (tool === 'curve') {
+    if (drawPts.length === 0) hint.textContent = 'Click to place curve start point.';
+    else if (drawPts.length === 1) hint.textContent = 'Click to place curve end point.';
+    else hint.textContent = 'Click to set bend/control point — curve will be placed.';
     return;
   }
   if (!selectedId) {
@@ -818,6 +881,8 @@ function updateHint() {
       hint.textContent = 'Drag □ corner handles to resize. Drag body to move.'; break;
     case 'LinePath':
       hint.textContent = 'Drag ● endpoints to reshape. Drag body to move.'; break;
+    case 'QuadBezierPath':
+      hint.textContent = 'Drag ● start/end handles to reshape. Drag □ bend handle to adjust curvature. Drag body to move.'; break;
     default:
       hint.textContent = 'Drag ● control points to reshape. Drag path body to move. Del to delete.';
   }
@@ -846,6 +911,17 @@ function onMouseDown(e) {
     }
     drawPts.push([wx, wy]);
     repaint();
+    return;
+  }
+
+  if (tool === 'curve') {
+    drawPts.push([wx, wy]);
+    if (drawPts.length === 3) {
+      finishCurve();
+    } else {
+      updateHint();
+      repaint();
+    }
     return;
   }
 
@@ -924,6 +1000,8 @@ function onMouseMove(e) {
 
   // During draw: repaint to update snap preview
   if (tool === 'draw' && drawPts.length >= 3) repaint();
+  // During curve: always repaint for live preview
+  if (tool === 'curve') repaint();
 }
 
 function onMouseUp() {
@@ -946,6 +1024,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape') {
     if (tool === 'draw') { drawPts = []; repaint(); }
+    else if (tool === 'curve') { drawPts = []; setTool('edit'); }
     else { selectedId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement === document.body) {
@@ -1024,6 +1103,90 @@ function finishDraw(closed) {
 }
 
 // ---------------------------------------------------------------------------
+// Curve tool — 3-click: start, end, bend/control
+// ---------------------------------------------------------------------------
+
+function finishCurve() {
+  if (drawPts.length < 3) { drawPts = []; repaint(); return; }
+  const [start, end, control] = drawPts;
+  const id = newId();
+  const path = {
+    id, type: 'QuadBezierPath',
+    label: `Curve ${layer.source_paths.length + 1}`,
+    closed: false, role: 'free', visible: true,
+    start, end, control,
+  };
+  _computePrimitivePoints(path);
+  layer.source_paths.push(path);
+  selectedId = id;
+  routeResult = null;
+  drawPts = [];
+  scheduleRefresh();
+  updatePathList();
+  updatePropPanel();
+  updateOffsetList();
+  updateLatticeList();
+  setTool('edit');
+}
+
+function drawCurveInProgress() {
+  const mouse = _mousePosW;
+  if (drawPts.length === 0) {
+    if (mouse) {
+      const [mcx, mcy] = worldToCanvas(mouse[0], mouse[1]);
+      drawDot(mcx, mcy, 4, 'rgba(74,158,255,0.4)');
+    }
+    return;
+  }
+  if (drawPts.length === 1) {
+    const [x0, y0] = worldToCanvas(drawPts[0][0], drawPts[0][1]);
+    drawDot(x0, y0, 4, '#4a9eff');
+    if (mouse) {
+      const [mcx, mcy] = worldToCanvas(mouse[0], mouse[1]);
+      ctx.save();
+      ctx.strokeStyle = '#4a9eff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(mcx, mcy); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      drawDot(mcx, mcy, 3, 'rgba(74,158,255,0.5)');
+    }
+    return;
+  }
+  if (drawPts.length === 2) {
+    const p0 = drawPts[0], p2 = drawPts[1];
+    const p1 = mouse || p2;
+    const [x0, y0] = worldToCanvas(p0[0], p0[1]);
+    const [x2, y2] = worldToCanvas(p2[0], p2[1]);
+    const [xc, yc] = worldToCanvas(p1[0], p1[1]);
+    // Dashed control structure lines
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,158,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(xc, yc); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(xc, yc); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+    // Control point ghost
+    drawDot(xc, yc, 3, 'rgba(74,158,255,0.55)');
+    // Endpoint dots
+    drawDot(x0, y0, 4, '#4a9eff');
+    drawDot(x2, y2, 4, '#4a9eff');
+    // Live bezier
+    ctx.save();
+    ctx.strokeStyle = '#4a9eff';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.quadraticCurveTo(xc, yc, x2, y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Primitives
 // ---------------------------------------------------------------------------
 
@@ -1079,6 +1242,16 @@ function _computePrimitivePoints(path) {
       [path.x + path.w, path.y + path.h],
       [path.x, path.y + path.h],
     ];
+  } else if (path.type === 'QuadBezierPath') {
+    const n = 64;
+    path.points = Array.from({ length: n }, (_, i) => {
+      const t = i / (n - 1);
+      const mt = 1 - t;
+      return [
+        mt*mt * path.start[0] + 2*mt*t * path.control[0] + t*t * path.end[0],
+        mt*mt * path.start[1] + 2*mt*t * path.control[1] + t*t * path.end[1],
+      ];
+    });
   } else {
     path.points = path.control_points || path.points;
   }
@@ -1128,9 +1301,11 @@ function updatePropPanel() {
   panel.innerHTML = '';
 
   addPropRowText(panel, 'Label', path.label || '', v => { path.label = v; updatePathList(); });
-  addPropRowCheck(panel, 'Closed', path.closed, v => {
-    path.closed = v; routeResult = null; scheduleRefresh(); repaint();
-  });
+  if (path.type !== 'QuadBezierPath') {
+    addPropRowCheck(panel, 'Closed', path.closed, v => {
+      path.closed = v; routeResult = null; scheduleRefresh(); repaint();
+    });
+  }
 
   switch (path.type) {
     case 'CirclePath':
@@ -1155,6 +1330,14 @@ function updatePropPanel() {
       addPropRowNum(panel, 'Start Y', 'y0', path.start[1], v => { path.start[1] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       addPropRowNum(panel, 'End X',   'x1', path.end[0],   v => { path.end[0]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       addPropRowNum(panel, 'End Y',   'y1', path.end[1],   v => { path.end[1]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      break;
+    case 'QuadBezierPath':
+      addPropRowNum(panel, 'Start X', 'x0', path.start[0],   v => { path.start[0]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Start Y', 'y0', path.start[1],   v => { path.start[1]   = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'End X',   'x1', path.end[0],     v => { path.end[0]     = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'End Y',   'y1', path.end[1],     v => { path.end[1]     = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Bend X',  'bx', path.control[0], v => { path.control[0] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
+      addPropRowNum(panel, 'Bend Y',  'by', path.control[1], v => { path.control[1] = v; _computePrimitivePoints(path); scheduleRefresh(); repaint(); });
       break;
   }
 
@@ -1685,6 +1868,17 @@ function _drawSourceDim(p) {
       const [mx, my] = worldToCanvas((p.start[0] + p.end[0]) / 2,
                                      (p.start[1] + p.end[1]) / 2);
       _dimLabel(mx, my - 14, `${len.toFixed(1)} in`);
+      break;
+    }
+    case 'QuadBezierPath': {
+      const pts = p.points || [];
+      if (pts.length < 2) break;
+      const len = _pathArcLength(pts, false);
+      // Label at bezier midpoint t=0.5: B(0.5) = 0.25*P0 + 0.5*P1 + 0.25*P2
+      const mmx = 0.25 * p.start[0] + 0.5 * p.control[0] + 0.25 * p.end[0];
+      const mmy = 0.25 * p.start[1] + 0.5 * p.control[1] + 0.25 * p.end[1];
+      const [lcx, lcy] = worldToCanvas(mmx, mmy);
+      _dimLabel(lcx, lcy - 14, `${len.toFixed(1)} in`);
       break;
     }
     case 'CirclePath': {
