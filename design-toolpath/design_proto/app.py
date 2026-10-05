@@ -16,7 +16,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from model import (
     PrintLayer, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
     QuadBezierPath,
-    OffsetTreatment, LatticeInstance, TraversalConstraints,
+    OffsetTreatment, LatticeInstance, TraversalConstraints, Opening,
     GENERATORS, Vec2
 )
 
@@ -103,6 +103,19 @@ def _deserialise_layer(data: dict) -> PrintLayer:
     layer.cap_style = data.get('cap_style', 'flat')
     layer.cap_corner_radius = float(data.get('cap_corner_radius', 0.0))
 
+    # Openings (absent in older payloads → none)
+    for od in data.get('openings', []) or []:
+        layer.openings.append(Opening(
+            id=od['id'],
+            source_path_id=od['source_path_id'],
+            center_s=float(od.get('center_s', 0.0)),
+            width=float(od.get('width', 12.0)),
+            end_treatment=od.get('end_treatment', 'inherit'),
+            z_min=od.get('z_min'),
+            z_max=od.get('z_max'),
+            label=od.get('label', ''),
+        ))
+
     return layer
 
 
@@ -167,7 +180,7 @@ def api_route():
         if proto_dir not in sys.path:
             sys.path.insert(0, proto_dir)
 
-        from graph import route_layer, compute_metrics, graph_info
+        from graph import route_layer, compute_metrics, graph_info, label_passes
 
         # Apply traversal constraints
         c = layer.constraints
@@ -194,6 +207,7 @@ def api_route():
                     start=m.end, end=m.start)
                 for m in reversed(moves)
             ]
+            moves = label_passes(moves)   # first pass prints, later passes retrace
 
         metrics = compute_metrics(moves)
         ginfo = graph_info(routing_layer)

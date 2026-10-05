@@ -47,6 +47,7 @@ const layer = {
   corner_radius: 0,
   cap_style: 'flat',
   cap_corner_radius: 0,
+  openings: [],         // path-relative wall openings (see Openings section)
 };
 
 let generators = {};
@@ -401,6 +402,7 @@ function repaint() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawGrid();
   drawEffectivePaths();
+  drawOpenings();
   if (showToolpath && routeResult) {
     if (playbackPos > 0.0 || playbackPlaying) {
       drawToolpathWithPlayback(routeResult.moves);
@@ -448,6 +450,17 @@ function drawEffectivePaths() {
     const color = isSel ? '#ffffff' : (ROLE_COLORS[p.role] || '#aaa');
     const width = isSel ? 2.5 : 1.8;
 
+    // A wall with openings is drawn as its surviving pieces (same arc-length
+    // cut as the backend); the full path still drives selection/hit-testing.
+    const pieces = _survivingPieces(p);
+    if (pieces) {
+      for (const piece of pieces) {
+        const cp = piece.map(([x, y]) => worldToCanvas(x, y));
+        drawPolyline(cp, color, width, false, false);
+      }
+      continue;
+    }
+
     if (p.type === 'QuadBezierPath') {
       // Render as a true bezier curve for smooth appearance
       const [x0, y0] = worldToCanvas(p.start[0], p.start[1]);
@@ -474,6 +487,7 @@ function drawEffectivePaths() {
   }
 
   for (const p of derivedPaths) {
+    if (p.treatment_id === 'opening_cut') continue;   // source pieces drawn above
     const pts = _pathCanvasPts(p);
     if (pts.length < 2) continue;
     const color = ROLE_COLORS[p.role] || '#aa88ff';
@@ -841,6 +855,378 @@ function drawHandles(pid) {
 }
 
 // ---------------------------------------------------------------------------
+// Openings — path-relative gaps (arc length along the source wall)
+//
+// Geometry is authoritative on the backend (model.Opening / _OpeningPlan).
+// These helpers mirror its arc-length conventions on path.points — which
+// equal the backend's processed source polyline — for live drawing,
+// placement, dragging and dimensions.
+// ---------------------------------------------------------------------------
+
+let selectedOpeningId = null;
+let openingDrag = null;   // { id, mode: 'slide'|'start'|'end', s0, orig: {center_s, width} }
+
+const OPENING_COLOR = '#e070d0';   // distinct from retrace orange
+
+function _cumLen(pts, closed) {
+  const cum = [0];
+  const n = pts.length, m = closed ? n : n - 1;
+  for (let i = 0; i < m; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    cum.push(cum[cum.length - 1] + Math.hypot(b[0] - a[0], b[1] - a[1]));
+  }
+  return cum;
+}
+
+// Point at arc length s ([x, y]) plus the left normal of its segment.
+function _pointAtS(pts, cum, s, closed, forward = true) {
+  const L = cum[cum.length - 1], n = pts.length, m = cum.length - 1;
+  if (closed && L > 0) { s = ((s % L) + L) % L; if (!forward && s <= 1e-12) s = L; }
+  s = Math.max(0, Math.min(L, s));
+  let k = 0;
+  if (forward) { while (k < m - 1 && cum[k + 1] <= s) k++; }
+  else         { while (k < m - 1 && cum[k + 1] < s) k++; }
+  const a = pts[k], b = pts[(k + 1) % n];
+  const seg = cum[k + 1] - cum[k];
+  const t = seg > 1e-12 ? Math.max(0, Math.min(1, (s - cum[k]) / seg)) : 0;
+  const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+  return { pt: [a[0] + t * dx, a[1] + t * dy], normal: [-dy / len, dx / len] };
+}
+
+function _subPolylineS(pts, cum, s0, s1, closed) {
+  const L = cum[cum.length - 1], n = pts.length;
+  if (closed && L > 0) { const sh = Math.floor(s0 / L) * L; s0 -= sh; s1 -= sh; }
+  const out = [_pointAtS(pts, cum, s0, closed, true).pt];
+  const verts = pts.map((p, j) => [cum[j], p]);
+  if (closed) {
+    pts.forEach((p, j) => verts.push([cum[j] + L, p]));
+    verts.push([2 * L, pts[0]]);
+  }
+  for (const [pos, p] of verts) if (pos > s0 + 1e-9 && pos < s1 - 1e-9) out.push(p);
+  out.push(_pointAtS(pts, cum, s1, closed, false).pt);
+  return out;
+}
+
+function _projectS(pts, cum, closed, wx, wy) {
+  const n = pts.length;
+  let best = { s: 0, dist: Infinity };
+  for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+    const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((wx - a[0]) * dx + (wy - a[1]) * dy) / L2));
+    const d = Math.hypot(wx - (a[0] + t * dx), wy - (a[1] + t * dy));
+    if (d < best.dist) best = { s: cum[i] + t * (cum[i + 1] - cum[i]), dist: d };
+  }
+  return best;
+}
+
+// How far the wall system's end treatment protrudes past a cut face
+// (mirrors PrintLayer._opening_cap_reach). Width is the CLEAR opening, so
+// each cut face sits this much further out.
+function _openingCapReach(pathId) {
+  const d = [0];
+  for (const ot of layer.offset_treatments) {
+    if (ot.source_path_id !== pathId) continue;
+    const dir = ot.direction || 'inside';
+    const sign = (dir === 'inside' || dir === 'left') ? 1 : -1;
+    d.push(sign * Math.abs(ot.distance != null ? ot.distance : 10));
+  }
+  const W = Math.max(...d) - Math.min(...d);
+  const style = layer.cap_style === 'round' ? 'full_round' : (layer.cap_style || 'flat');
+  if (W <= 1e-9 || style === 'flat') return 0;
+  if (style === 'full_round') return W / 2;
+  return Math.min(Math.max(0, layer.cap_corner_radius || 0), W / 2);
+}
+
+// Effective [a, b] arc-length CUT interval of one opening (b may exceed L
+// on closed paths — it wraps through the seam). null if it removes nothing.
+function _openingInterval(op, L, closed) {
+  let w = Math.max(0, op.width || 0);
+  if (w <= 1e-9 || L <= 1e-9) return null;
+  w += 2 * _openingCapReach(op.source_path_id);
+  if (closed) {
+    if (w >= L) return [0, L];
+    const a = (((op.center_s - w / 2) % L) + L) % L;
+    return [a, a + w];
+  }
+  const c = Math.max(0, Math.min(L, op.center_s));
+  const a = Math.max(0, c - w / 2), b = Math.min(L, c + w / 2);
+  return b - a > 1e-9 ? [a, b] : null;
+}
+
+function _openingsOf(pathId) {
+  return (layer.openings || []).filter(o => o.source_path_id === pathId);
+}
+
+// Surviving stretches of a source path after its openings (same merge
+// rules as model._opening_removed_intervals / _surviving_intervals).
+function _survivingPieces(path) {
+  const pts = path.points || [];
+  if (pts.length < 2) return [pts];
+  const closed = !!path.closed, cum = _cumLen(pts, closed), L = cum[cum.length - 1];
+  const raw = _openingsOf(path.id).map(o => _openingInterval(o, L, closed)).filter(Boolean);
+  if (!raw.length) return null;
+  if (closed && raw.some(([a, b]) => b - a >= L)) return [];
+  // Union (mirrors model._opening_removed_intervals, OPENING_MERGE_TOL).
+  const tol = 1e-3;
+  raw.sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  for (const [a, b] of raw) {
+    if (merged.length && a <= merged[merged.length - 1][1] + tol)
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b);
+    else merged.push([a, b]);
+  }
+  if (!closed && merged.length) {
+    if (merged[0][0] <= tol) merged[0][0] = 0;
+    if (merged[merged.length - 1][1] >= L - tol) merged[merged.length - 1][1] = L;
+  }
+  while (closed && merged.length > 1 && merged[merged.length - 1][1] - L >= merged[0][0] - tol) {
+    merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], merged[0][1] + L);
+    merged.shift();
+  }
+  const pieces = [];
+  if (closed) {
+    if (merged.length === 1 && merged[0][1] - merged[0][0] >= L - tol) return [];
+    merged.forEach(([, b], i) => {
+      const next = merged[(i + 1) % merged.length][0] + (i === merged.length - 1 ? L : 0);
+      pieces.push([b, next]);
+    });
+  } else {
+    let prev = 0;
+    for (const [a, b] of merged) { pieces.push([prev, a]); prev = b; }
+    pieces.push([prev, L]);
+  }
+  return pieces.filter(([a, b]) => b - a > tol).map(([a, b]) => _subPolylineS(pts, cum, a, b, closed));
+}
+
+function _openingGeom(op) {
+  const path = layer.source_paths.find(p => p.id === op.source_path_id);
+  if (!path || !(path.points || []).length) return null;
+  const pts = path.points, closed = !!path.closed, cum = _cumLen(pts, closed);
+  const L = cum[cum.length - 1];
+  const iv = _openingInterval(op, L, closed);
+  if (!iv) return null;
+  const [a, b] = iv;
+  // Clear opening = cut interval minus the end-treatment reach each side
+  // (open paths may clip the interval at a path end).
+  const reach = Math.min(_openingCapReach(op.source_path_id), (b - a) / 2);
+  const ca = a + reach, cb = b - reach;
+  return {
+    path, pts, cum, closed, L, a, b,
+    width: cb - ca,
+    gap: _subPolylineS(pts, cum, a, b, closed),
+    start: _pointAtS(pts, cum, ca, closed, true),
+    end: _pointAtS(pts, cum, cb, closed, false),
+    mid: _pointAtS(pts, cum, (a + b) / 2, closed, true),
+  };
+}
+
+function drawOpenings() {
+  for (const op of layer.openings || []) {
+    const g = _openingGeom(op);
+    if (!g || !g.path.visible) continue;
+    const sel = op.id === selectedOpeningId;
+    const cpts = g.gap.map(([x, y]) => worldToCanvas(x, y));
+    ctx.save();
+    ctx.globalAlpha = sel ? 0.9 : 0.35;
+    ctx.strokeStyle = OPENING_COLOR;
+    ctx.lineWidth = sel ? 1.5 : 1;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    cpts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Short ticks across the wall at both cut faces
+    for (const e of [g.start, g.end]) {
+      const [x0, y0] = worldToCanvas(e.pt[0] - e.normal[0] * 6, e.pt[1] - e.normal[1] * 6);
+      const [x1, y1] = worldToCanvas(e.pt[0] + e.normal[0] * 6, e.pt[1] + e.normal[1] * 6);
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    }
+    ctx.restore();
+    if (sel) {
+      drawHandle(g.start.pt[0], g.start.pt[1], 'square');
+      drawHandle(g.end.pt[0], g.end.pt[1], 'square');
+    }
+  }
+}
+
+function _fmtIn(v) {
+  return Math.abs(v - Math.round(v)) < 0.05 ? `${Math.round(v)} in` : `${v.toFixed(1)} in`;
+}
+
+function drawOpeningDims() {
+  for (const op of layer.openings || []) {
+    const g = _openingGeom(op);
+    if (!g || !g.path.visible) continue;
+    // Label sits just off the wall, on the left-normal side at the gap centre
+    const [cx, cy] = worldToCanvas(g.mid.pt[0] + g.mid.normal[0] * 14,
+                                   g.mid.pt[1] + g.mid.normal[1] * 14);
+    _dimLabel(cx, cy, _fmtIn(g.width));
+  }
+}
+
+// Opening under the cursor: within HIT_DIST of its gap polyline.
+function hitTestOpening(wx, wy) {
+  for (const op of [...(layer.openings || [])].reverse()) {
+    const g = _openingGeom(op);
+    if (!g || !g.path.visible) continue;
+    for (let j = 0; j < g.gap.length - 1; j++)
+      if (distToSeg(wx, wy, g.gap[j], g.gap[j + 1]) < HIT_DIST) return op.id;
+  }
+  return null;
+}
+
+// Resize handle under the cursor. A click nearer the opening's middle than
+// to an end slides instead, so narrow openings stay draggable.
+function findOpeningHandle(op, wx, wy) {
+  const g = _openingGeom(op);
+  if (!g) return null;
+  const mid = _pointAtS(g.pts, g.cum, (g.a + g.b) / 2, g.closed).pt;
+  const dMid = Math.hypot(wx - mid[0], wy - mid[1]);
+  const dS = Math.hypot(wx - g.start.pt[0], wy - g.start.pt[1]);
+  const dE = Math.hypot(wx - g.end.pt[0], wy - g.end.pt[1]);
+  if (dS < HIT_DIST && dS < dMid && dS <= dE) return 'start';
+  if (dE < HIT_DIST && dE < dMid) return 'end';
+  return null;
+}
+
+// Nearest visible source path to a point: { path, s, dist }.
+function _nearestSourcePoint(wx, wy) {
+  let best = null;
+  for (const p of layer.source_paths) {
+    if (!p.visible || (p.points || []).length < 2) continue;
+    const cum = _cumLen(p.points, !!p.closed);
+    const r = _projectS(p.points, cum, !!p.closed, wx, wy);
+    if (!best || r.dist < best.dist) best = { path: p, s: r.s, dist: r.dist };
+  }
+  return best;
+}
+
+function placeOpening(wx, wy) {
+  const hit = _nearestSourcePoint(wx, wy);
+  if (!hit || hit.dist > HIT_DIST * 1.5) {
+    setStatus('Opening: click on a wall (source path) to place it.');
+    return;
+  }
+  const op = {
+    id: 'o' + (_idCounter++),
+    source_path_id: hit.path.id,
+    center_s: hit.s,
+    width: 12,
+    end_treatment: 'inherit',
+  };
+  layer.openings.push(op);
+  selectOpening(op.id);
+  routeResult = null;
+  scheduleRefresh();
+  setTool('edit');
+}
+
+function selectOpening(id) {
+  selectedOpeningId = id;
+  selectedId = null;
+  updatePathList();
+  updatePropPanel();
+  updateHint();
+  repaint();
+}
+
+// Signed shortest difference between two positions on a loop of length L.
+function _wrapDelta(d, L) {
+  if (L <= 0) return d;
+  d = ((d % L) + L) % L;
+  return d > L / 2 ? d - L : d;
+}
+
+function _normalizeCenter(op, L, closed) {
+  op.center_s = closed && L > 0 ? ((op.center_s % L) + L) % L
+                                : Math.max(0, Math.min(L, op.center_s));
+}
+
+function applyOpeningDrag(wx, wy) {
+  const op = (layer.openings || []).find(o => o.id === openingDrag.id);
+  const path = op && layer.source_paths.find(p => p.id === op.source_path_id);
+  if (!path) return;
+  const pts = path.points, closed = !!path.closed, cum = _cumLen(pts, closed);
+  const L = cum[cum.length - 1];
+  const s = _projectS(pts, cum, closed, wx, wy).s;
+  const o = openingDrag.orig;
+  if (openingDrag.mode === 'slide') {
+    const d = closed ? _wrapDelta(s - openingDrag.s0, L) : s - openingDrag.s0;
+    op.center_s = o.center_s + d;
+  } else {
+    // Keep the opposite end fixed; the dragged end follows the cursor.
+    const a = o.center_s - o.width / 2, b = o.center_s + o.width / 2;
+    let w;
+    if (openingDrag.mode === 'end') {
+      w = closed ? ((s - a) % L + L) % L : s - a;
+      if (closed && w > L - 1) w = 1;         // dragged backwards past start
+      w = Math.max(1, w);
+      op.width = w; op.center_s = a + w / 2;
+    } else {
+      w = closed ? ((b - s) % L + L) % L : b - s;
+      if (closed && w > L - 1) w = 1;
+      w = Math.max(1, w);
+      op.width = w; op.center_s = b - w / 2;
+    }
+  }
+  _normalizeCenter(op, L, closed);
+  _syncOpeningPanel(op);
+  routeResult = null;
+  repaint();
+}
+
+function updateOpeningPropPanel(panel, op) {
+  const path = layer.source_paths.find(p => p.id === op.source_path_id);
+  const title = document.createElement('div');
+  title.className = 'path-type';
+  title.style.cssText = 'color:' + OPENING_COLOR + ';margin-bottom:2px';
+  title.textContent = `Opening in ${path ? (path.label || path.id) : '?'}`;
+  panel.appendChild(title);
+  const L = path ? _cumLen(path.points || [], !!path.closed).slice(-1)[0] : 0;
+  addPropRowNum(panel, 'Width', 'op-width', op.width, v => {
+    op.width = Math.max(1, v); routeResult = null; scheduleRefresh(); repaint();
+  });
+  addPropRowNum(panel, 'Position', 'op-pos', op.center_s, v => {
+    op.center_s = v;
+    if (path) _normalizeCenter(op, L, !!path.closed);
+    _syncOpeningPanel(op); routeResult = null; scheduleRefresh(); repaint();
+  });
+  const hint = document.createElement('div');
+  hint.className = 'path-type';
+  hint.textContent = `centre, along path from its start` +
+    (path && path.closed ? ` (wraps; perimeter ${L.toFixed(1)} in)` : ` (length ${L.toFixed(1)} in)`);
+  panel.appendChild(hint);
+  addPropRowSelect(panel, 'End treatment', 'Inherit', ['Inherit'], () => {});
+  const sel = panel.lastChild.querySelector('select');
+  if (sel) { sel.disabled = true; sel.title = 'Uses the layer End caps setting (Wall Geometry)'; }
+  const delBtn = document.createElement('button');
+  delBtn.className = 'add-btn';
+  delBtn.style.cssText = 'margin-top:10px; color:var(--bad); border-color:#553333;';
+  delBtn.textContent = '× Delete opening';
+  delBtn.onclick = () => deleteOpening(op.id);
+  panel.appendChild(delBtn);
+}
+
+function _syncOpeningPanel(op) {
+  for (const [key, val] of [['op-width', op.width], ['op-pos', op.center_s]]) {
+    const el = document.getElementById('prop-' + key);
+    if (el && document.activeElement !== el) el.value = +val.toFixed(2);
+  }
+}
+
+function deleteOpening(id) {
+  layer.openings = (layer.openings || []).filter(o => o.id !== id);
+  if (selectedOpeningId === id) selectedOpeningId = null;
+  routeResult = null;
+  scheduleRefresh();
+  updatePathList();
+  updatePropPanel();
+  updateHint();
+  repaint();
+}
+
+// ---------------------------------------------------------------------------
 // Tool management
 // ---------------------------------------------------------------------------
 
@@ -851,6 +1237,8 @@ function setTool(t) {
   document.getElementById('tool-draw').classList.toggle('active', t === 'draw');
   const curveBtn = document.getElementById('tool-curve');
   if (curveBtn) curveBtn.classList.toggle('active', t === 'curve');
+  const openBtn = document.getElementById('tool-opening');
+  if (openBtn) openBtn.classList.toggle('active', t === 'opening');
   // Curve uses crosshair like draw; edit uses default arrow
   canvas.className = t === 'edit' ? 'tool-edit' : 'tool-draw';
   updateHint();
@@ -867,6 +1255,14 @@ function updateHint() {
     if (drawPts.length === 0) hint.textContent = 'Click to place curve start point.';
     else if (drawPts.length === 1) hint.textContent = 'Click to place curve end point.';
     else hint.textContent = 'Click to set bend/control point — curve will be placed.';
+    return;
+  }
+  if (tool === 'opening') {
+    hint.textContent = 'Click on a wall to place a 12 in opening centred there.';
+    return;
+  }
+  if (selectedOpeningId) {
+    hint.textContent = 'Drag the opening to slide it along the wall. Drag □ ends to resize. Del to delete.';
     return;
   }
   if (!selectedId) {
@@ -928,7 +1324,22 @@ function onMouseDown(e) {
     return;
   }
 
+  if (tool === 'opening') {
+    placeOpening(wx, wy);
+    return;
+  }
+
   if (tool === 'edit') {
+    // 0. Resize handles of the selected opening
+    if (selectedOpeningId) {
+      const op = layer.openings.find(o => o.id === selectedOpeningId);
+      const end = op && findOpeningHandle(op, wx, wy);
+      if (end) {
+        openingDrag = { id: op.id, mode: end, s0: 0,
+                        orig: { center_s: op.center_s, width: op.width } };
+        return;
+      }
+    }
     // 1. Handle on selected path takes priority
     if (selectedId) {
       const path = layer.source_paths.find(p => p.id === selectedId);
@@ -942,11 +1353,25 @@ function onMouseDown(e) {
       }
     }
 
+    // 1b. An opening gap (slide it) — before the wall body under it
+    const oid = hitTestOpening(wx, wy);
+    if (oid) {
+      const op = layer.openings.find(o => o.id === oid);
+      const path = layer.source_paths.find(p => p.id === op.source_path_id);
+      if (oid !== selectedOpeningId) selectOpening(oid);
+      const cum = _cumLen(path.points, !!path.closed);
+      openingDrag = { id: oid, mode: 'slide',
+                      s0: _projectS(path.points, cum, !!path.closed, wx, wy).s,
+                      orig: { center_s: op.center_s, width: op.width } };
+      return;
+    }
+
     // 2. Hit test any path
     const pid = hitTestPath(wx, wy);
     if (pid) {
-      const switching = pid !== selectedId;
+      const switching = pid !== selectedId || selectedOpeningId !== null;
       selectedId = pid;
+      selectedOpeningId = null;
       const path = layer.source_paths.find(p => p.id === pid);
       if (switching) {
         updatePathList();
@@ -962,8 +1387,9 @@ function onMouseDown(e) {
     }
 
     // 3. Empty click — deselect
-    if (selectedId) {
+    if (selectedId || selectedOpeningId) {
       selectedId = null;
+      selectedOpeningId = null;
       updatePathList();
       updatePropPanel();
       updateHint();
@@ -975,6 +1401,10 @@ function onMouseDown(e) {
 function onMouseMove(e) {
   _mousePosW = canvasFromEvent(e);
 
+  if (openingDrag) {
+    applyOpeningDrag(_mousePosW[0], _mousePosW[1]);
+    return;
+  }
   if (dragging) {
     const [wx, wy] = _mousePosW;
     const path = layer.source_paths.find(p => p.id === dragging.pathId);
@@ -1008,9 +1438,10 @@ function onMouseMove(e) {
 }
 
 function onMouseUp() {
-  const wasDragging = dragging !== null || bodyDragging !== null;
+  const wasDragging = dragging !== null || bodyDragging !== null || openingDrag !== null;
   dragging = null;
   bodyDragging = null;
+  openingDrag = null;
   if (wasDragging) scheduleRefresh();
 }
 
@@ -1028,10 +1459,12 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (tool === 'draw') { drawPts = []; repaint(); }
     else if (tool === 'curve') { drawPts = []; setTool('edit'); }
-    else { selectedId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
+    else if (tool === 'opening') { setTool('edit'); }
+    else { selectedId = null; selectedOpeningId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement === document.body) {
-    if (selectedId) deletePath(selectedId);
+    if (selectedOpeningId) deleteOpening(selectedOpeningId);
+    else if (selectedId) deletePath(selectedId);
   }
 });
 
@@ -1275,13 +1708,13 @@ function _computePrimitivePoints(path) {
   if (path.type === 'LinePath') {
     path.points = [path.start, path.end];
   } else if (path.type === 'CirclePath') {
-    const n = 64;
+    const n = 128;   // = backend _processed_source_pts sampling
     path.points = Array.from({ length: n }, (_, i) => {
       const a = 2 * Math.PI * i / n;
       return [path.cx + path.radius * Math.cos(a), path.cy + path.radius * Math.sin(a)];
     });
   } else if (path.type === 'EllipsePath') {
-    const n = 64;
+    const n = 128;
     const cr = Math.cos(path.rotation || 0), sr = Math.sin(path.rotation || 0);
     path.points = Array.from({ length: n }, (_, i) => {
       const a = 2 * Math.PI * i / n;
@@ -1298,7 +1731,7 @@ function _computePrimitivePoints(path) {
     const r = (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
     path.points = r > 0 ? _applyCornerRounding(corners, r, true) : corners;
   } else if (path.type === 'QuadBezierPath') {
-    const n = 64;
+    const n = 128;
     path.points = Array.from({ length: n }, (_, i) => {
       const t = i / (n - 1);
       const mt = 1 - t;
@@ -1326,7 +1759,7 @@ function updatePathList() {
   for (const p of layer.source_paths) {
     const item = document.createElement('div');
     item.className = 'path-item' + (p.id === selectedId ? ' selected' : '');
-    item.onclick = () => { selectedId = p.id; updatePathList(); updatePropPanel(); updateHint(); repaint(); };
+    item.onclick = () => { selectedId = p.id; selectedOpeningId = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); };
 
     const dot = document.createElement('div');
     dot.className = 'role-dot';
@@ -1342,6 +1775,24 @@ function updatePathList() {
 
     item.append(dot, label, type);
     el.appendChild(item);
+
+    for (const op of _openingsOf(p.id)) {
+      const oi = document.createElement('div');
+      oi.className = 'path-item' + (op.id === selectedOpeningId ? ' selected' : '');
+      oi.style.paddingLeft = '18px';
+      oi.onclick = () => selectOpening(op.id);
+      const od = document.createElement('div');
+      od.className = 'role-dot';
+      od.style.background = OPENING_COLOR;
+      const ol = document.createElement('div');
+      ol.className = 'path-label';
+      ol.textContent = `opening ${_fmtIn(op.width)}`;
+      const ot = document.createElement('div');
+      ot.className = 'path-type';
+      ot.textContent = `@ ${op.center_s.toFixed(0)}`;
+      oi.append(od, ol, ot);
+      el.appendChild(oi);
+    }
   }
 }
 
@@ -1353,6 +1804,15 @@ function updatePropPanel() {
   const section = document.getElementById('path-props-section');
   const panel   = document.getElementById('path-props');
 
+  if (selectedOpeningId) {
+    const op = layer.openings.find(o => o.id === selectedOpeningId);
+    if (op) {
+      section.style.display = '';
+      panel.innerHTML = '';
+      updateOpeningPropPanel(panel, op);
+      return;
+    }
+  }
   if (!selectedId) { section.style.display = 'none'; return; }
   const path = layer.source_paths.find(p => p.id === selectedId);
   if (!path) { section.style.display = 'none'; return; }
@@ -1728,7 +2188,8 @@ function scheduleRefresh() {
     // Auto-route: also updates derivedPaths
     _refreshTimer = setTimeout(runRoute, 200);
   } else {
-    const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0;
+    const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0 ||
+                       (layer.openings || []).length > 0;
     if (hasDerived) {
       _refreshTimer = setTimeout(fetchEffectivePaths, 120);
     } else {
@@ -1821,6 +2282,7 @@ function buildPayload() {
     corner_radius: layer.corner_radius || 0,
     cap_style: layer.cap_style || 'flat',
     cap_corner_radius: layer.cap_corner_radius || 0,
+    openings: (layer.openings || []).map(o => ({ ...o })),
   };
 }
 
@@ -1859,9 +2321,11 @@ function updateMetrics(data) {
     cls = 'path';
     title = 'Prints as one continuous path — one start, one end, no travel moves';
   } else {
-    badge = 'Requires backtracking';
+    badge = 'Continuous, with retrace';
     cls = 'augmented';
-    title = 'Some geometry must be retraced to maintain continuity';
+    title = `One connected section with ${g.odd_degree_nodes} odd junctions: no single ` +
+            `pass covers every edge, so ${(m.retrace_distance || 0).toFixed(1)} in is ` +
+            `retraced (printed again) instead of travelling`;
   }
   badgeEl.innerHTML = `<span class="euler-badge ${cls}" title="${title}">${badge}</span>`;
 
@@ -1913,11 +2377,14 @@ function drawDimensions() {
     _drawSourceDim(p);
   }
 
-  // Derived offset paths (not lattice or caps)
+  // Derived offset paths (not lattice, caps, or opening-cut wall pieces)
   for (const dp of derivedPaths) {
     if (dp.role === 'lattice' || dp.role === 'cap') continue;
+    if (String(dp.id).includes('~')) continue;
     _drawDerivedDim(dp);
   }
+
+  drawOpeningDims();
 
   ctx.restore();
 }
@@ -2101,7 +2568,9 @@ function deletePath(id) {
   layer.lattice_instances = layer.lattice_instances.filter(
     li => li.path_a_id !== id && li.path_b_id !== id
   );
+  layer.openings = (layer.openings || []).filter(o => o.source_path_id !== id);
   selectedId = null;
+  selectedOpeningId = null;
   routeResult = null;
   scheduleRefresh();
   updatePathList();
@@ -2116,6 +2585,9 @@ function clearAll() {
   layer.source_paths = [];
   layer.offset_treatments = [];
   layer.lattice_instances = [];
+  layer.openings = [];
+  selectedOpeningId = null;
+  openingDrag = null;
   layer.constraints = { start_path_id: null, start_t: null,
                          reverse_direction: false, component_order: null };
   layer.corner_radius = 0;

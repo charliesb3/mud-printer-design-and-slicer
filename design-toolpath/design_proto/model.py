@@ -772,9 +772,10 @@ def _trim_offset(raw: list[Vec2], source: list[Vec2],
 
 
 def _wall_system_end_pts(src_pts: list[Vec2],
-                          ots: list,
+                          walls: list[tuple[float, list[Vec2]]],
                           cap_style: str,
-                          cap_corner_radius: float):
+                          cap_corner_radius: float,
+                          landings: tuple = ((), ())):
     """
     One end treatment per wall SYSTEM (source + N parallel offsets).
 
@@ -801,18 +802,25 @@ def _wall_system_end_pts(src_pts: list[Vec2],
     height 0 there (flat face) the wall endpoint itself lies on the cap
     and no extension is needed.
 
+    `walls` are the OTHER walls of the system as (signed offset distance,
+    polyline); the source itself is the distance-0 wall. The same builder
+    closes original open-wall ends and the cut faces left by openings.
+
+    `landings` = (start_points, end_points): extra points lying on the
+    flat end line (e.g. lattice strands clipped at an opening) that must
+    join the cap. They land on the profile exactly like intermediate walls.
+
     Returns (start, end), each (cap_pts, [extension_pts, ...]).
     Cap endpoints and extension endpoints are exact wall-endpoint / cap
     coordinates so the routing graph merges the nodes.
     """
-    if len(src_pts) < 2 or not ots:
+    if len(src_pts) < 2 or not walls:
         return ([], []), ([], [])
 
     # Walls ordered outermost (most positive distance = furthest LEFT of
     # travel) → innermost; the source is the distance-0 wall.
     entries: list[tuple[float, list[Vec2]]] = [(0.0, src_pts)]
-    for ot, derived in ots:
-        entries.append((ot.distance, derived.sample_points()))
+    entries.extend(walls)
     entries.sort(key=lambda e: -e[0])
 
     if cap_style == 'flat':
@@ -872,10 +880,16 @@ def _wall_system_end_pts(src_pts: list[Vec2],
                 prof.append((s, _at(s, r * math.cos(a))))
         prof.append((W, e_in))
 
-        # Intermediate walls land on the profile.
+        # Intermediate walls (and any extra landing points) land on the
+        # profile.
         extensions: list[list[Vec2]] = []
         landing: list[tuple[float, Vec2]] = []
-        for ep in endpoints[1:-1]:
+        extra = landings[0] if end_index == 0 else landings[1]
+        joiners: list[Vec2] = list(endpoints[1:-1])
+        for x in extra:
+            if all(x.dist(q) > 1e-9 for q in endpoints + joiners):
+                joiners.append(x)
+        for ep in joiners:
             s = (ep - e_out).x * u.x + (ep - e_out).y * u.y
             s = max(0.0, min(W, s))
             h = _height(s)
@@ -1286,6 +1300,491 @@ class TraversalConstraints:
 
 
 # ---------------------------------------------------------------------------
+# Openings — path-relative gaps cut through a whole wall assembly
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Opening:
+    """
+    A gap in a wall (future door / window), attached to a SOURCE path.
+
+    It is an interval of ARC LENGTH along that path — not an XY region:
+    centre `center_s` and `width`, both in inches, measured along the
+    processed source polyline (the printed wall: sampled + Corner R) from
+    the path's start. On closed paths positions wrap through the seam, so
+    an opening may span corners and the seam freely.
+
+    The opening cuts the complete wall assembly derived from the source
+    (source + every offset of it + lattice built on those walls); the cut
+    faces are closed by the same wall-end builder as open wall ends.
+
+    end_treatment: 'inherit' = the layer's cap style. The only value for
+        now; the field exists so a per-opening override can be added.
+    z_min / z_max: reserved for physical-Z doors and windows (e.g. a door
+        from Z 0 to 84 in). None = full height. Not used by the geometry
+        yet — this prototype works on a single Z slice.
+    """
+    id: str
+    source_path_id: str
+    center_s: float
+    width: float = 12.0
+    end_treatment: str = 'inherit'
+    z_min: Optional[float] = None
+    z_max: Optional[float] = None
+    label: str = ''
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'type': 'opening',
+            'source_path_id': self.source_path_id,
+            'center_s': self.center_s,
+            'width': self.width,
+            'end_treatment': self.end_treatment,
+            'z_min': self.z_min,
+            'z_max': self.z_max,
+            'label': self.label,
+        }
+
+
+def _cum_lengths(pts: list[Vec2], closed: bool) -> list[float]:
+    """Cumulative arc length at each vertex; closed adds the closing edge."""
+    n = len(pts)
+    cum = [0.0]
+    for i in range(n if closed else n - 1):
+        cum.append(cum[-1] + pts[i].dist(pts[(i + 1) % n]))
+    return cum
+
+
+def _locate_s(pts: list[Vec2], cum: list[float], s: float, closed: bool,
+              forward: bool = True) -> tuple[Vec2, int]:
+    """
+    Point at arc length s and the index of the segment it lies on.
+    At a vertex, `forward` picks the outgoing segment (else the incoming).
+    Closed paths wrap s modulo the perimeter.
+    """
+    import bisect
+    L = cum[-1]
+    m = len(cum) - 1
+    n = len(pts)
+    if closed and L > 0:
+        s = s % L
+        if not forward and s <= 1e-12:
+            s = L
+    s = max(0.0, min(L, s))
+    if forward:
+        k = bisect.bisect_right(cum, s) - 1
+    else:
+        k = bisect.bisect_left(cum, s) - 1
+    k = max(0, min(m - 1, k))
+    a, b = pts[k], pts[(k + 1) % n]
+    seg = cum[k + 1] - cum[k]
+    t = (s - cum[k]) / seg if seg > 1e-12 else 0.0
+    t = max(0.0, min(1.0, t))
+    if t <= 0.0:
+        return a, k
+    if t >= 1.0:
+        return b, k
+    return a.lerp(b, t), k
+
+
+def _sub_polyline(pts: list[Vec2], cum: list[float], s0: float, s1: float,
+                  closed: bool) -> list[Vec2]:
+    """
+    The polyline from arc length s0 forward to s1 (s1 ≥ s0). On closed
+    paths s1 may exceed the perimeter: the piece runs through the seam.
+    """
+    L = cum[-1]
+    n = len(pts)
+    if closed and L > 0:
+        shift = math.floor(s0 / L) * L
+        s0, s1 = s0 - shift, s1 - shift
+    start, _ = _locate_s(pts, cum, s0, closed, forward=True)
+    end, _ = _locate_s(pts, cum, s1, closed, forward=False)
+    verts = [(cum[j], pts[j]) for j in range(n)]
+    if closed:
+        verts += [(cum[j] + L, pts[j]) for j in range(n)] + [(2 * L, pts[0])]
+    eps = 1e-9
+    out = [start] + [p for pos, p in verts if s0 + eps < pos < s1 - eps]
+    out.append(end)
+    return _dedupe_polyline(out, False)
+
+
+def _project_to_polyline(p: Vec2, pts: list[Vec2], cum: list[float],
+                         closed: bool) -> tuple[float, float, Vec2]:
+    """Nearest point on the polyline: (arc length s, distance, foot)."""
+    n = len(pts)
+    best = (0.0, float('inf'), pts[0])
+    for i in range(n if closed else n - 1):
+        a, b = pts[i], pts[(i + 1) % n]
+        dx, dy = b.x - a.x, b.y - a.y
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, (
+            (p.x - a.x) * dx + (p.y - a.y) * dy) / L2))
+        f = Vec2(a.x + t * dx, a.y + t * dy)
+        d = p.dist(f)
+        if d < best[1]:
+            best = (cum[i] + t * (cum[i + 1] - cum[i]), d, f)
+    return best
+
+
+# Openings closer than this along the path are treated as touching: their
+# intervals merge, so no sliver of wall (with two caps) is left between them.
+OPENING_MERGE_TOL = 1e-3
+
+
+def _opening_removed_intervals(openings: list[Opening], L: float,
+                               closed: bool, cap_reach: float = 0.0
+                               ) -> list[tuple[float, float]]:
+    """
+    Merged arc-length intervals removed by openings on one path.
+
+    An opening's `width` is the CLEAR opening. End treatments protrude
+    past the cut face by `cap_reach` (0 flat, r rounded, W/2 full round),
+    so each cut face sits cap_reach further out: the finished ends then
+    stop exactly at the clear width and two caps can never collide.
+    Open paths: clipped to [0, L]. Closed paths: each interval starts in
+    [0, L) and may end past L (wrapping through the seam); a result of
+    [(0, L)] means the whole loop is removed.
+    """
+    raw: list[tuple[float, float]] = []
+    for op in openings:
+        w = max(0.0, float(op.width))
+        if w <= 1e-9 or L <= 1e-9:
+            continue
+        w += 2.0 * max(0.0, cap_reach)
+        if closed:
+            if w >= L - 1e-9:
+                return [(0.0, L)]
+            a = (op.center_s - w / 2.0) % L
+            raw.append((a, a + w))
+        else:
+            c = max(0.0, min(L, op.center_s))
+            a, b = max(0.0, c - w / 2.0), min(L, c + w / 2.0)
+            if b - a > 1e-9:
+                raw.append((a, b))
+    # Union of all openings on the path: overlapping or touching intervals
+    # become ONE removed interval (caps only at its outer boundaries).
+    tol = OPENING_MERGE_TOL
+    raw.sort()
+    merged: list[list[float]] = []
+    for a, b in raw:
+        if merged and a <= merged[-1][1] + tol:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    if not closed:
+        # Snap to the path ends so no sliver survives there either.
+        if merged and merged[0][0] <= tol:
+            merged[0][0] = 0.0
+        if merged and merged[-1][1] >= L - tol:
+            merged[-1][1] = L
+    # Closed: the seam is not a boundary — an interval reaching past L
+    # continues into those starting near 0.
+    while closed and len(merged) > 1 and \
+            merged[-1][1] - L >= merged[0][0] - tol:
+        merged[-1][1] = max(merged[-1][1], merged[0][1] + L)
+        merged.pop(0)
+    if closed and len(merged) == 1 and \
+            merged[0][1] - merged[0][0] >= L - tol:
+        return [(0.0, L)]
+    return [(a, b) for a, b in merged]
+
+
+def _surviving_intervals(removed: list[tuple[float, float]], L: float,
+                         closed: bool) -> list[tuple[float, float]]:
+    """Complement of the removed intervals: the wall pieces that remain."""
+    if closed:
+        if removed == [(0.0, L)]:
+            return []
+        k = len(removed)
+        pieces = [(removed[i][1], removed[(i + 1) % k][0] +
+                   (L if i == k - 1 else 0.0)) for i in range(k)]
+    else:
+        pieces, prev = [], 0.0
+        for a, b in removed:
+            pieces.append((prev, a))
+            prev = b
+        pieces.append((prev, L))
+    return [(a, b) for a, b in pieces if b - a > OPENING_MERGE_TOL]
+
+
+@dataclass
+class _Cut:
+    """One cut face across a wall assembly (one side of an opening)."""
+    point: Vec2                       # cut point on the source
+    normal: Vec2                      # left normal of the source there
+    face: Optional[tuple]             # (outermost, innermost) wall endpoints
+    ends: list = field(default_factory=list)      # every wall endpoint here
+    landings: list = field(default_factory=list)  # lattice ends on the face
+
+
+@dataclass
+class _WallPiece:
+    """A surviving stretch of a wall assembly between cuts / path ends."""
+    src_pts: list
+    walls: list                       # [(OffsetTreatment, polyline)]
+    start_cut: Optional[_Cut]         # None = original open path end
+    end_cut: Optional[_Cut]
+
+
+class _OpeningPlan:
+    """
+    How a source's openings cut its wall assembly. Built from the FULL
+    processed source and FULL offsets, so offsets/trim/caps are computed
+    exactly as without openings and only then segmented.
+    """
+    def __init__(self, src_pts: list[Vec2], closed: bool,
+                 offsets: list, openings: list[Opening],
+                 cap_reach: float = 0.0):
+        self.src_pts = src_pts
+        self.closed = closed
+        self.cum = _cum_lengths(src_pts, closed)
+        self.L = self.cum[-1]
+        self.removed = _opening_removed_intervals(openings, self.L, closed,
+                                                  cap_reach)
+        self.pieces: list[_WallPiece] = []
+        self.cuts: list[_Cut] = []
+        off_info = []
+        for ot, derived in offsets:
+            pts = derived.sample_points()
+            if len(pts) >= 2:
+                off_info.append((ot, pts, _cum_lengths(pts, derived.closed),
+                                 derived.closed))
+        for a, b in _surviving_intervals(self.removed, self.L, closed):
+            sub = _sub_polyline(src_pts, self.cum, a, b, closed)
+            if len(sub) < 2:
+                continue
+            is_start_cut = closed or a > 1e-9
+            is_end_cut = closed or b < self.L - 1e-9
+            walls = []
+            for ot, pts, cum, oclosed in off_info:
+                wp = self._offset_piece(ot, pts, cum, oclosed, a, b,
+                                        is_start_cut, is_end_cut)
+                if wp and len(wp) >= 2:
+                    walls.append((ot, wp))
+            start_cut = self._make_cut(a, True, sub, walls) \
+                if is_start_cut else None
+            end_cut = self._make_cut(b, False, sub, walls) \
+                if is_end_cut else None
+            self.cuts += [c for c in (start_cut, end_cut) if c]
+            self.pieces.append(_WallPiece(sub, walls, start_cut, end_cut))
+
+    def _cut_frame(self, s: float, forward: bool) -> tuple[Vec2, Vec2]:
+        p, k = _locate_s(self.src_pts, self.cum, s, self.closed, forward)
+        n = len(self.src_pts)
+        d = (self.src_pts[(k + 1) % n] - self.src_pts[k]).normalized()
+        return p, Vec2(-d.y, d.x)
+
+    def _offset_pos(self, ot, pts, cum, oclosed, s, forward) -> float:
+        """
+        Arc position on an offset corresponding to source position s: the
+        offset point whose nearest-point projection back onto the source
+        is s (the same correspondence `in_opening` uses, so the cut face
+        IS the opening boundary).
+
+        Start from the offset point nearest the source point pushed out
+        along its normal by the offset distance (exact on straight runs
+        and concentric rounded-corner arcs), then refine locally: on
+        polygon-sampled curves the concave-side miters shift that guess
+        slightly. Where projection jumps (a miter vertex equidistant from
+        two source edges) the bisection settles on the jump, i.e. the
+        miter vertex — the physically right cut.
+        """
+        p, nrm = self._cut_frame(s, forward)
+        target = Vec2(p.x + nrm.x * ot.distance, p.y + nrm.y * ot.distance)
+        pos0 = _project_to_polyline(target, pts, cum, oclosed)[0]
+        Lo = cum[-1]
+
+        def delta(pos):
+            q, _ = _locate_s(pts, cum, pos, oclosed)
+            d = _project_to_polyline(q, self.src_pts, self.cum,
+                                     self.closed)[0] - s
+            if self.closed and self.L > 0:
+                d = (d + self.L / 2) % self.L - self.L / 2
+            return d
+
+        d0 = delta(pos0)
+        if abs(d0) < 1e-9:
+            return pos0
+        span = max(1.0, abs(ot.distance))
+        steps = 32
+        best = None
+        prev_pos, prev_d = pos0, d0
+        for direction in (1.0, -1.0):
+            prev_pos, prev_d = pos0, d0
+            for i in range(1, steps + 1):
+                pos = pos0 + direction * span * i / steps
+                if not oclosed:
+                    pos = max(0.0, min(Lo, pos))
+                dv = delta(pos)
+                if (dv > 0) != (prev_d > 0) and abs(dv - prev_d) < self.L / 4:
+                    cand = (abs(pos - pos0), prev_pos, prev_d, pos, dv)
+                    if best is None or cand[0] < best[0]:
+                        best = cand
+                    break
+                prev_pos, prev_d = pos, dv
+        if best is None:
+            return pos0
+        _, lo, dlo, hi, _ = best
+        for _ in range(48):
+            mid = (lo + hi) / 2
+            dm = delta(mid)
+            if (dm > 0) == (dlo > 0):
+                lo, dlo = mid, dm
+            else:
+                hi = mid
+        pos = (lo + hi) / 2
+        return pos % Lo if oclosed and Lo > 0 else pos
+
+    def _offset_piece(self, ot, pts, cum, oclosed, a, b,
+                      is_start_cut, is_end_cut) -> list[Vec2]:
+        Lo = cum[-1]
+        pa = (self._offset_pos(ot, pts, cum, oclosed, a, True)
+              if is_start_cut else 0.0)
+        pb = (self._offset_pos(ot, pts, cum, oclosed, b, False)
+              if is_end_cut else Lo)
+        if oclosed:
+            span = (pb - pa) % Lo if Lo > 0 else 0.0
+            # The offset's own seam is arbitrary (trimming may rotate it):
+            # walk forward from pa. If the forward span disagrees wildly
+            # with the source piece's share of the perimeter, the two cuts
+            # collapsed onto (nearly) the same offset point — e.g. both
+            # inside one miter — and this wall has no piece here.
+            if abs(span / Lo - (b - a) / self.L) > 0.5:
+                return []
+            return _sub_polyline(pts, cum, pa, pa + span, True)
+        if pb - pa <= 1e-9:
+            return []
+        return _sub_polyline(pts, cum, pa, pb, False)
+
+    def _make_cut(self, s, is_piece_start, sub, walls) -> _Cut:
+        p, nrm = self._cut_frame(s, is_piece_start)
+        idx = 0 if is_piece_start else -1
+        ends = [(0.0, sub[idx])] + [(ot.distance, wp[idx]) for ot, wp in walls]
+        ends.sort(key=lambda e: -e[0])
+        face = (ends[0][1], ends[-1][1]) if walls else None
+        return _Cut(sub[idx], nrm, face, [e for _, e in ends])
+
+    def in_opening(self, q: Vec2) -> bool:
+        """Does q fall inside an opening's cross-section of the wall?
+        (Its nearest-point projection onto the source lies in a removed
+        arc-length interval.)"""
+        s = _project_to_polyline(q, self.src_pts, self.cum, self.closed)[0]
+        for a, b in self.removed:
+            if a - 1e-9 <= s <= b + 1e-9:
+                return True
+            if self.closed and a - 1e-9 <= s + self.L <= b + 1e-9:
+                return True
+        return False
+
+
+def _seg_intersect_param(a: Vec2, b: Vec2, c: Vec2, d: Vec2,
+                         tol: float = 1e-9):
+    """Intersection of segments a-b and c-d → (t on a-b, u on c-d) or None."""
+    r = Vec2(b.x - a.x, b.y - a.y)
+    q = Vec2(d.x - c.x, d.y - c.y)
+    cross = r.x * q.y - r.y * q.x
+    if abs(cross) < 1e-12:
+        return None
+    t = ((c.x - a.x) * q.y - (c.y - a.y) * q.x) / cross
+    u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / cross
+    if -tol <= t <= 1 + tol and -tol <= u <= 1 + tol:
+        return max(0.0, min(1.0, t)), max(0.0, min(1.0, u))
+    return None
+
+
+def _clip_lattice_by_openings(pts: list[Vec2], plans: list[_OpeningPlan]
+                              ) -> list[list[Vec2]]:
+    """
+    Remove every part of a lattice polyline that lies inside an opening.
+
+    Each segment is split where it crosses an opening cut — the cut FACE
+    (outermost → innermost wall endpoint, i.e. the flat end line), or that
+    line continued past the assembly for lattice reaching beyond it (the
+    source normal line when the wall has no offsets). Sub-segments whose
+    midpoint lies inside an opening are dropped, so no lattice crosses,
+    bridges or protrudes into an opening.
+
+    A surviving piece that ends on a cut face is registered as a landing
+    on that cut; the cap builder then joins it to the end geometry (real
+    contact with the end wall, not invented connectivity).
+    """
+    if len(pts) < 2:
+        return [list(pts)]
+    band = 1.0 + max(_project_to_polyline(p, pl.src_pts, pl.cum, pl.closed)[1]
+                     for pl in plans for p in pts)
+    lines = []          # (c, d, cut or None)
+    for pl in plans:
+        for cut in pl.cuts:
+            if cut.face is not None:
+                f0, f1 = cut.face
+                lines.append((f0, f1, cut))
+                # The face line continued beyond the wall assembly.
+                dn = (f1 - f0).normalized()
+                lines.append((f0 - dn * band, f0, None))
+                lines.append((f1, f1 + dn * band, None))
+            else:
+                p, n = cut.point, cut.normal
+                lines.append((Vec2(p.x - n.x * band, p.y - n.y * band),
+                              Vec2(p.x + n.x * band, p.y + n.y * band), None))
+
+    def inside(q: Vec2) -> bool:
+        return any(pl.in_opening(q) for pl in plans)
+
+    pieces: list[tuple[list[Vec2], object, object]] = []
+    cur: list[Vec2] = []
+    cur_cut = None
+
+    def flush(end_cut):
+        nonlocal cur, cur_cut
+        if len(cur) >= 2:
+            pieces.append((cur, cur_cut, end_cut))
+        cur, cur_cut = [], None
+
+    for a, b in zip(pts, pts[1:]):
+        brk = [[0.0, a, None], [1.0, b, None]]
+        for c, d, cut in lines:
+            r = _seg_intersect_param(a, b, c, d)
+            if r is None:
+                continue
+            t, u = r
+            x = c.lerp(d, u)
+            if cut is not None:
+                # Snap onto an exact wall endpoint so graph nodes merge.
+                for e in cut.ends:
+                    if x.dist(e) < 1e-7:
+                        x = e
+            for bp in brk:
+                if bp[1].dist(x) < 1e-9:
+                    if cut is not None:
+                        bp[2] = cut
+                    break
+            else:
+                brk.append([t, x, cut])
+        brk.sort(key=lambda bp: bp[0])
+        for (t0, p0, c0), (t1, p1, c1) in zip(brk, brk[1:]):
+            if p0.dist(p1) < 1e-12:
+                continue
+            if inside(p0.lerp(p1, 0.5)):
+                flush(c0)
+                continue
+            if not cur:
+                cur, cur_cut = [p0], c0
+            cur.append(p1)
+    flush(None)
+
+    out = []
+    for piece, sc, ec in pieces:
+        for end_pt, cut in ((piece[0], sc), (piece[-1], ec)):
+            if cut is not None and cut.face is not None and \
+                    all(end_pt.dist(e) > 1e-9 for e in cut.ends):
+                cut.landings.append(end_pt)
+        out.append(piece)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # PrintLayer — assembles effective print geometry
 # ---------------------------------------------------------------------------
 
@@ -1310,6 +1809,7 @@ class PrintLayer:
     corner_radius: float = 0.0        # global fillet radius; 0 = sharp corners
     cap_style: str = 'flat'           # 'flat' | 'rounded_corners' | 'full_round'
     cap_corner_radius: float = 0.0    # fillet radius for 'rounded_corners' cap
+    openings: list[Opening] = field(default_factory=list)
 
     def _path_by_id(self, pid: str) -> Optional[Path]:
         return next((p for p in self.source_paths if p.id == pid), None)
@@ -1327,14 +1827,31 @@ class PrintLayer:
             return 'rounded_corners'
         return s
 
+    def _opening_cap_reach(self, offsets) -> float:
+        """How far this wall system's end treatment protrudes past a cut
+        face: the effective cap radius for its total thickness W."""
+        dists = [0.0] + [ot.distance for ot, d in offsets
+                         if len(d.sample_points()) >= 2]
+        W = max(dists) - min(dists)
+        style = self._normalized_cap_style()
+        if W <= 1e-9 or style == 'flat':
+            return 0.0
+        if style == 'full_round':
+            return W / 2.0
+        return min(max(0.0, self.cap_corner_radius), W / 2.0)
+
     def effective_paths(self) -> list[Path]:
         """
         Canonical pipeline:
           raw source → _processed_source_pts (ONE per source)
-            → wrap source into result as a DerivedPath carrying processed pts
             → every offset of this source uses the same processed pts
-            → end treatment per wall system (not per offset)
-            → lattice/connecting geometry references result-by-id
+              (offsets are always computed on the FULL, uncut wall)
+            → openings cut the whole wall assembly into open pieces
+            → end treatment per wall-system piece (not per offset); the
+              same builder closes original open ends and opening faces
+            → lattice built on the full walls, clipped out of openings,
+              its cut ends landing on the opening caps
+        Sources without openings produce exactly the pre-opening output.
         """
         result: list[Path] = []
 
@@ -1347,68 +1864,138 @@ class PrintLayer:
             processed[p.id] = _processed_source_pts(p, self.corner_radius)
             source_paths_in_order.append(p)
 
-        # 2) Append each source path to result. If rounding is non-trivial
-        # we wrap it in a DerivedPath (so routing/lattice see the processed
+        # 2) Full (uncut) source geometry. If rounding is non-trivial we
+        # wrap it in a DerivedPath (so routing/lattice see the processed
         # pts); otherwise the parametric source path flows through unchanged.
+        full_sources: dict[str, Path] = {}
         for p in source_paths_in_order:
-            pts = processed[p.id]
-            if (self.corner_radius > 0.0 and _eligible_for_rounding(p)):
-                result.append(DerivedPath(pts, closed=p.closed,
-                                          id=p.id, role=p.role, label=p.label,
-                                          source_id=p.id, treatment_id='round'))
+            if self.corner_radius > 0.0 and _eligible_for_rounding(p):
+                full_sources[p.id] = DerivedPath(
+                    processed[p.id], closed=p.closed, id=p.id, role=p.role,
+                    label=p.label, source_id=p.id, treatment_id='round')
             else:
-                result.append(p)
+                full_sources[p.id] = p
 
-        # 3) Offset-derived paths. All offsets of the same source use the
-        # SAME processed polyline — no re-sampling or re-rounding.
+        # 3) Full offset-derived paths. All offsets of the same source use
+        # the SAME processed polyline — no re-sampling or re-rounding.
         offsets_by_source: dict[str, list[tuple[OffsetTreatment, DerivedPath]]] = {}
+        all_offsets: list[DerivedPath] = []
+        source_of: dict[str, str] = {p.id: p.id for p in source_paths_in_order}
         for ot in self.offset_treatments:
             src = self._path_by_id(ot.source_path_id)
             if src is None or src.id not in processed:
                 continue
-            src_pts = processed[src.id]
-            derived = ot.generate(src_pts, src.closed)
-            result.append(derived)
+            derived = ot.generate(processed[src.id], src.closed)
+            all_offsets.append(derived)
             offsets_by_source.setdefault(src.id, []).append((ot, derived))
+            source_of[ot.id] = src.id
 
-        # 4) Wall-system end treatment — ONE cap_start + ONE cap_end per
-        # wall system (= source + its offsets) when the source is open.
+        # 4) Openings → how each affected wall assembly is cut.
+        plans: dict[str, _OpeningPlan] = {}
+        for p in source_paths_in_order:
+            ops = [o for o in self.openings if o.source_path_id == p.id]
+            if ops and len(processed[p.id]) >= 2:
+                offs = offsets_by_source.get(p.id, [])
+                plan = _OpeningPlan(processed[p.id], p.closed, offs, ops,
+                                    self._opening_cap_reach(offs))
+                if plan.removed:
+                    plans[p.id] = plan
+
+        # 5) Lattice — generated on the FULL walls (so generator validity is
+        # unchanged), then clipped out of any opening of the walls it uses.
+        full_by_id = dict(full_sources)
+        full_by_id.update({d.id: d for d in all_offsets})
+        lattice_paths: list[Path] = []
+        for li in self.lattice_instances:
+            pa = full_by_id.get(li.path_a_id)
+            pb = full_by_id.get(li.path_b_id)
+            gen = GENERATORS.get(li.generator_name)
+            if pa is None or pb is None or not gen:
+                continue
+            generated = li.generate(pa, pb, gen)
+            li_plans = [plans[sid] for sid in
+                        dict.fromkeys((source_of.get(li.path_a_id),
+                                       source_of.get(li.path_b_id)))
+                        if sid in plans]
+            if not li_plans:
+                lattice_paths.extend(generated)
+                continue
+            for dp in generated:
+                for k, piece in enumerate(_clip_lattice_by_openings(
+                        dp.sample_points(), li_plans)):
+                    lattice_paths.append(DerivedPath(
+                        piece, closed=False, role=dp.role, label=dp.label,
+                        source_id=dp.source_id, treatment_id=dp.treatment_id,
+                        id=f'{dp.id}~{k}'))
+
+        # 6) Emit walls. Order: sources, offsets, end treatments, lattice.
+        for p in source_paths_in_order:
+            plan = plans.get(p.id)
+            if plan is None:
+                result.append(full_sources[p.id])
+                continue
+            for k, piece in enumerate(plan.pieces):
+                result.append(DerivedPath(
+                    piece.src_pts, closed=False, id=f'{p.id}~{k}',
+                    role=p.role, label=p.label, source_id=p.id,
+                    treatment_id='opening_cut'))
+        for derived in all_offsets:
+            sid = source_of[derived.id]
+            plan = plans.get(sid)
+            if plan is None:
+                result.append(derived)
+                continue
+            for k, piece in enumerate(plan.pieces):
+                for ot, wp in piece.walls:
+                    if ot.id == derived.id:
+                        result.append(DerivedPath(
+                            wp, closed=False, id=f'{ot.id}~{k}',
+                            role=derived.role, label=derived.label,
+                            source_id=derived.source_id,
+                            treatment_id=derived.treatment_id))
+
+        # 7) Wall-system end treatment — ONE cap per end of each wall-system
+        # piece (= source + its offsets): original open ends and opening
+        # faces alike.
         cap_style = self._normalized_cap_style()
         for src in source_paths_in_order:
-            if src.closed:
-                continue
-            ots = offsets_by_source.get(src.id, [])
-            if not ots:
-                continue
-            src_pts = processed[src.id]
-            ends = _wall_system_end_pts(
-                src_pts, ots, cap_style, self.cap_corner_radius)
-            for (cap_pts, extensions), tag, label in zip(
-                    ends, ('_cs', '_ce'), ('cap_start', 'cap_end')):
-                if cap_pts:
-                    result.append(DerivedPath(
-                        cap_pts, closed=False, role='cap', label=label,
-                        source_id=src.id, treatment_id='wall_system',
-                        id=src.id + tag,
-                    ))
-                # Intermediate walls continuing onto the cap profile.
-                for k, ext in enumerate(extensions):
-                    result.append(DerivedPath(
-                        ext, closed=False, role='cap', label=label + '_ext',
-                        source_id=src.id, treatment_id='wall_system',
-                        id=f'{src.id}{tag}_x{k}',
-                    ))
+            plan = plans.get(src.id)
+            if plan is None:
+                if src.closed:
+                    continue
+                ots = offsets_by_source.get(src.id, [])
+                if not ots:
+                    continue
+                pieces = [(src.id, processed[src.id],
+                           [(ot.distance, d.sample_points()) for ot, d in ots],
+                           ((), ()))]
+            else:
+                pieces = [
+                    (f'{src.id}~{k}', pc.src_pts,
+                     [(ot.distance, wp) for ot, wp in pc.walls],
+                     (pc.start_cut.landings if pc.start_cut else (),
+                      pc.end_cut.landings if pc.end_cut else ()))
+                    for k, pc in enumerate(plan.pieces) if pc.walls]
+            for pid, src_pts, walls, landings in pieces:
+                ends = _wall_system_end_pts(src_pts, walls, cap_style,
+                                            self.cap_corner_radius, landings)
+                for (cap_pts, extensions), tag, label in zip(
+                        ends, ('_cs', '_ce'), ('cap_start', 'cap_end')):
+                    if cap_pts:
+                        result.append(DerivedPath(
+                            cap_pts, closed=False, role='cap', label=label,
+                            source_id=src.id, treatment_id='wall_system',
+                            id=pid + tag,
+                        ))
+                    # Intermediate walls / lattice continuing onto the cap.
+                    for k, ext in enumerate(extensions):
+                        result.append(DerivedPath(
+                            ext, closed=False, role='cap', label=label + '_ext',
+                            source_id=src.id, treatment_id='wall_system',
+                            id=f'{pid}{tag}_x{k}',
+                        ))
 
-        # 5) Lattice-derived paths — can reference source paths OR offsets
-        all_by_id = {p.id: p for p in result}
-        for li in self.lattice_instances:
-            pa = all_by_id.get(li.path_a_id)
-            pb = all_by_id.get(li.path_b_id)
-            if pa is not None and pb is not None:
-                gen = GENERATORS.get(li.generator_name)
-                if gen:
-                    result.extend(li.generate(pa, pb, gen))
-
+        result.extend(lattice_paths)
         return result
 
     def to_routing_layer(self):
@@ -1446,6 +2033,7 @@ class PrintLayer:
             'corner_radius': self.corner_radius,
             'cap_style': self.cap_style,
             'cap_corner_radius': self.cap_corner_radius,
+            'openings': [o.to_dict() for o in self.openings],
         }
 
 

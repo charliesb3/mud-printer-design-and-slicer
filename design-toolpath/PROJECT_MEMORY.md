@@ -102,6 +102,8 @@ Resolved printable geometry for a layer is modeled as a graph:
 
 Eulerian path detection and the Chinese Postman / Route Inspection problem are the correct algorithmic foundation for continuity-first routing.
 
+**Routing objective (lexicographic, adopted 2026-10-05):** (1) never create false printable connections; (2) print all geometry; (3) minimise print runs / travel moves; (4) minimise travel distance; (5) minimise retracing. Consequence: within a connected component the router RETRACES printed edges rather than travelling (see "Routing: retrace augmentation + T-junctions" below). Physical acceptability of double-printed mud on retraced edges is not yet validated on the machine.
+
 **Important constraint:** Simple geometry must remain simple. One continuous wall should not become complicated merely because the software has an internal graph representation. Use graph routing only where it provides genuine value.
 
 ### Simple wall geometry
@@ -289,7 +291,7 @@ The simplest valid design (draw one path → route it → done) must remain simp
 
 Location: `design-toolpath/toolpath_proto/`
 
-Built and tested. 65 tests passing (57 routing/geometry + 8 app integration).
+Built and tested. 65 tests at completion (57 routing/geometry + 8 app integration); 77 after the 2026-10-05 retrace-routing change.
 
 Key result: graph-based Eulerian routing works correctly for all five test geometries.
 
@@ -301,7 +303,7 @@ Key result: graph-based Eulerian routing works correctly for all five test geome
 | B | Two independent walls | 2 | 0 each | 1 | ~99% |
 | C | Outer + inner, no lattice | 2 | 0 each | 1 | ~99% |
 | D | Wall + internal web | 1 | 2 | 0 | 100% |
-| E | Awkward / T-junction | 3 | mixed | 2+ | ~85–95% |
+| E | Awkward / T-junction | 3 | mixed | 2 (was 2+: the T-component now retraces instead of travelling) | ~85–95% |
 
 ### Phase 3 — Design Canvas Prototype — IN PROGRESS
 
@@ -354,19 +356,20 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 ### Phase 2 — Toolpath / Graph Prototype — COMPLETE
 
-Location: `design-toolpath/toolpath_proto/`. 65 tests passing.
+Location: `design-toolpath/toolpath_proto/`. 77 tests passing.
 
 ### Phase 3 — Design Canvas Prototype — COMPLETE (all 13 steps + six UX passes)
 
-Location: `design-toolpath/design_proto/`. 235 tests passing.
+Location: `design-toolpath/design_proto/`. 339 tests passing.
 
 Files:
-- `model.py` — full data model: Vec2, Path subtypes (incl. QuadBezierPath), OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, PrintLayer (with corner_radius, cap_style), TraversalConstraints
+- `model.py` — full data model: Vec2, Path subtypes (incl. QuadBezierPath), OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance, Opening, PrintLayer (with corner_radius, cap_style, cap_corner_radius, openings), TraversalConstraints
 - `app.py` — Flask app; API: GET /api/generators, POST /api/route, POST /api/effective_paths
 - `static/index.html` — design canvas UI (incl. WALL GEOMETRY sidebar section)
 - `static/app.js` — canvas drawing, primitives, offset panel, lattice panel, toolpath overlay, routing overrides, dimensions overlay (incl. curve chord), playback transport, JS-side corner rounding
 - `tests/test_model.py` — unit tests covering model layer + geometry validation
 - `tests/test_app.py` — integration + workflow tests
+- `tests/test_openings.py` (+ `tests/js/ui_openings_smoke.js`) — opening geometry, routing, lattice, caps, serialisation, JS parity, UI smoke
 
 **UX pass 2 (14-point spec):** True geometric offset, Add Lattice fix, Role removed from UI, Individual delete, Arrow legibility, Numbers removed, Arrows disabled when Toolpath OFF, Metric label renames, Clear All.
 
@@ -467,6 +470,32 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - UI: End caps select = Flat / Rounded Corners / Full Round; `End R` input (`cap_corner_radius`, layer-level) shown for Rounded Corners.
 - **Known ambiguous case**: sharp (Corner R = 0) deep notches with a large inside offset — the miter spike at the notch can sever the cavity into islands; only the largest island is kept. True (round-join) distance would keep it connected. Not changed because always-miter is a deliberate decision; revisit if it matters in practice (options: Corner R > 0, round joins at reflex corners, or emit all islands).
 
+**Openings in walls (2026-10-05)** — future doors/windows. Complete; verified by manual UI testing.
+
+- **Data model** — `model.Opening`: `id, source_path_id, center_s, width (default 12), end_treatment='inherit', z_min=None, z_max=None, label`. First-class design object stored on `PrintLayer.openings`; serialised in `to_dict` / `app._deserialise_layer` (payloads without `openings` still work).
+- **Path-relative, not XY**: `center_s` / `width` are inches of arc length along the *processed* source polyline (sampled + Corner R = the printed wall) from the path's start. Editing/moving/resizing the source keeps the stored `center_s`; on open paths it is clamped to the path length (non-destructively), on closed paths it wraps mod perimeter. JS samples Circle/Ellipse/Bézier at 128 points so `path.points` equals the backend processed polyline (parity for placement, handles and drawn gaps).
+- **Width = CLEAR opening** (decision): end treatments protrude past a cut face by the cap reach r (0 flat, min(End R, W/2) rounded, W/2 full round), so each cut face is placed at width/2 + r from the centre. The finished ends then stop exactly at the clear width and two caps can never cross, however narrow the opening. `PrintLayer._opening_cap_reach` / JS `_openingCapReach`.
+- **Pipeline position**: processed source → FULL offsets (miter + `_trim_offset` unchanged) → `_OpeningPlan` cuts the assembly → lattice generated on FULL walls then clipped → caps → emit. Offsets are never computed on cut pieces, so all offset invariants hold. Sources without openings produce exactly the old output and ids.
+- **Cutting**: `_opening_removed_intervals` merges intervals (wrapping through the seam on closed paths; ≥ perimeter removes the whole assembly); `_surviving_intervals` gives the pieces. A closed loop with k openings → k open pieces; an open path → up to k+1. Source pieces via `_sub_polyline` (arc-length, spans any corners/seam). Offset cut points: the offset point whose nearest-point projection onto the source equals the cut s (start from source point + d·normal, then local bisection). Exception inherent to polyline offsets: on a concave side a miter vertex covers a short s-range, so a cut there lands on that miter vertex (also how corner-spanning openings cut an inner wall at a sharp corner).
+- **Ids**: pieces `{src}~k`, `{offset}~k`; caps `{src}~k_cs/_ce` (+ `_x` extensions); lattice `{id}~k`. Source pieces have `treatment_id='opening_cut'` (JS draws sources itself via `_survivingPieces`, so it skips those).
+- **End geometry**: every wall-system piece is capped by the existing `_wall_system_end_pts` (generalised to take `walls=[(distance, polyline)]` plus `landings`), so opening faces inherit Flat / Rounded Corners (End R) / Full Round exactly like original open ends. Intermediate walls extend onto the cap as before. A single wall without offsets gets no caps (as before).
+- **Lattice**: generated on the full boundaries (generator validity unchanged), then `_clip_lattice_by_openings` splits each segment where it crosses a cut face (or the face line continued; source normal line if no offsets) and drops sub-segments whose midpoint projects into a removed interval — nothing crosses, bridges or protrudes into an opening. Lattice ends on a face are registered as cut `landings` and joined to the cap exactly like intermediate walls (real contact with the end wall). Lattice between two independent sources is clipped by openings in either.
+- **Routing**: router solves the real topology. Closed double wall + 1 opening → one Eulerian circuit (outer → face → inner reversed → face): 1 run, 0 travel. 2 openings → 2 components: 2 runs, 1 travel (correct, not avoided). Lattice landings add odd nodes (e.g. ring + zigzag + 1 opening → 4 odd nodes).
+- **UI**: toolbar *Opening* tool (click a wall → 12 in opening centred at the nearest point, back to Edit). Selected opening: sidebar Width / Position (centre, along path) / End treatment = Inherit (disabled), Delete; drag the gap to slide (wraps through the seam), drag □ ends to resize (other end fixed; a click nearer the middle than an end slides). Openings listed under their wall in Paths. Faint dashed gap + face ticks when unselected, magenta accent when selected (distinct from retrace orange). Any number of openings per wall: each is placed, selected, slid, resized, edited and deleted independently. Dimensions: clear width label at each opening (e.g. `36 in`). Deleting a wall deletes its openings.
+- **Future Z**: `z_min`/`z_max` are round-tripped but unused; this prototype is one Z slice. Intended: an opening exists only for layers whose physical Z is within [z_min, z_max] (door 0–84 in, window 36–72 in) — the per-layer plan simply includes/excludes it.
+- **Multiple openings / union**: all openings of a source are unioned in arc length before cutting (`_opening_removed_intervals`): overlapping, contained or touching intervals (gap ≤ `OPENING_MERGE_TOL` = 0.001 in) become ONE removed interval, including across the closed-path seam (an interval running past L absorbs those starting near 0); open-path intervals within tol of an end snap to it. Fragments ≤ tol are dropped. Caps therefore exist only at the outer boundaries of a union; Opening objects stay separate design objects. JS `_survivingPieces` mirrors the same rules (parity tested). Each opening's cut interval is widened by the cap reach before the union.
+- **Tests**: `tests/test_openings.py` (incl. JS helper parity and a node-driven UI smoke test `tests/js/ui_openings_smoke.js`; JS tests skip without node).
+- **Known limitations**: (1) [resolved 2026-10-05 — see retrace routing] router used travel for all odd pairs. (2) Near sharp corners the cut face can be skewed (cross-section through a miter region). (3) Openings are measured on the processed (rounded) path, so changing Corner R shifts positions past rounded corners slightly. (4) Per-opening end treatment and Z range not implemented by design.
+
+**Routing: retrace augmentation + T-junctions (2026-10-05, toolpath_proto/graph.py)** — complete; verified by manual UI testing.
+
+- **Problem found** (rect + inside offset + zigzag + 1 opening, Flat): UI showed 3 runs / 2 travels. Graph: 1 connected component, 4 odd nodes (zigzag start at a wall corner (deg 5), inner corner on the zigzag end-connector (deg 3), the two lattice landings on the opening faces (deg 3)); no unmerged coincident nodes. Old `_augment` paired ALL odd nodes with straight travel edges into a circuit — one travel jumped 12 in straight across the opening. A zero-travel route exists; zero-retrace does not (Euler: > 2 odd nodes). Proven optimum (exhaustive pairing): 1 run, 0 travel, 14.14 in retrace (the zigzag end connector re-traversed once).
+- **Previous approach**: travel-edge augmentation via min-weight matching on Euclidean distance, full circuit. **Changed because** it (a) wasted one pair that could be the trail's ends, (b) used non-printing jumps inside connected geometry — which can cross openings — instead of the legitimate graph.
+- **New `_augment_by_retrace`**: open-trail route inspection — min-weight matching of odd nodes on SHORTEST IN-GRAPH path length, with two zero-cost dummy terminals so exactly two odd nodes remain as trail ends (a pinned odd start is forced to be one); matched paths' edges are duplicated. Travel only between components. `label_passes` marks first traversal 'print', later ones 'retrace' (also re-run after reverse in app.py). `compute_metrics`: a run is continuous extrusion (print + retrace) broken only by travel; adds `retrace_moves`.
+- **T-junctions in `build_graph`**: a strand vertex lying on another segment's interior (≤ `JUNCTION_TOL` 1e-6 in) splits that segment into a shared node (edges carry `sub_idx`). Case D did this by hand; design_proto lattices (zigzag/wave vertices on walls) never did, so lattice touching walls mid-segment was represented as disconnected (e.g. zigzag between two separate walls: 2–3 components before, 1 after). Near-misses (≥ 0.001 in) are not merged.
+- UI badge "Continuous, with retrace" (1 component, > 2 odd nodes) with retrace length in the tooltip.
+- Tests: `toolpath_proto/tests/test_retrace_routing.py` (junctions, near-miss, minimal retrace vs brute force, pinned start, disconnected still travels, Case E); design_proto `TestReportedRoutingCase`.
+
 **UX pass 5 — editable curved line segments (QuadBezierPath):**
 
 `QuadBezierPath` added as a first-class parametric type. Implements B(t) = (1−t)² P0 + 2(1−t)t P1 + t² P2 where P0=start, P1=control/bend, P2=end.
@@ -510,6 +539,8 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - How should the lattice generator accept continuity hints without violating geometry/toolpath separation?
 - How should seam position be managed and optimized across layers?
 - What is the right output format for the Pi Interface to consume?
+- Is retracing (printing a second bead over an existing one) physically acceptable for mud, and is there a length above which a travel would be preferred? Current policy always retraces within a connected component. Needs machine testing.
+- Should opening positions be measured on the unrounded source so Corner R changes don't shift them?
 - Does the keyframe model produce the forms the designer imagines? (Phase 1 will answer)
 
 ---
@@ -518,4 +549,4 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 2026-10-05
 
-Geometry correctness pass (offset trimming, wall-system caps with End R) complete and manually verified in the UI. Phase 2: 65 tests. Phase 3: 235 tests. All green.
+Geometry correctness pass committed (dd527a4). Openings in walls (multiple per wall, unioned) and retrace routing + T-junction graph merging complete and manually verified in the UI (committed together). Phase 2: 77 tests. Phase 3: 339 tests. All green.

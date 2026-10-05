@@ -376,7 +376,8 @@ See `pi-interface/PROJECT_MEMORY.md` for full details.
 
 ### Design + Toolpath — Phase 2 (Toolpath) Prototype Complete
 
-The graph-based toolpath prototype is complete. 65 tests passing.
+The graph-based toolpath prototype is complete. 77 tests passing.
+Routing objective: no false connections → print everything → fewest runs/travels → least travel → least retrace. Connected non-Eulerian geometry prints as one run by retracing printed edges; travel only between disconnected sections. Geometry that touches mid-segment (T-junctions) shares graph nodes.
 
 Location: `design-toolpath/toolpath_proto/`
 
@@ -386,7 +387,7 @@ zero travel moves.
 
 ### Design + Toolpath — Phase 3 (Design Canvas) Prototype Complete + Four UX Passes
 
-The interactive design canvas prototype is complete. 235 tests passing.
+The interactive design canvas prototype is complete. 339 tests passing.
 
 Location: `design-toolpath/design_proto/`
 
@@ -403,6 +404,8 @@ Implements the full path-first design model:
 - Wave seam bridge for zero-travel closed-wall routing
 - Open wall end caps for Eulerian open-wall routing
 - Toolpath playback transport (scrub, play/pause, speed, reverse)
+- Corner R fillets, trimmed (never self-crossing) offsets, wall-system end caps (Flat / Rounded Corners + End R / Full Round)
+- Openings (future doors/windows; any number per wall, overlapping/touching ones unioned): path-relative arc-length intervals on a source wall that cut the whole wall assembly (source, offsets, lattice); cut faces reuse the wall-end cap system; routing solves the resulting topology. Designed to gain physical-Z ranges (z_min/z_max) later.
 
 See `design-toolpath/PROJECT_MEMORY.md` for full details.
 
@@ -473,8 +476,8 @@ Allow the architecture to evolve as the machine and software become better under
 
 ## Last Updated
 
-2026-10-04
+2026-10-05
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath Phase 2 (65 tests) and Phase 3 (126 tests, four UX passes) both complete.
+Design + Toolpath Phase 2 (77 tests, retrace routing) and Phase 3 (339 tests, incl. geometry correctness pass and multiple wall openings) complete; openings + retrace routing manually verified in the UI and committed.
 Arduino/GRBL subproject not yet started.

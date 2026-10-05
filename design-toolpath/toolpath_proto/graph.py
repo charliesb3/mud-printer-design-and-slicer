@@ -6,9 +6,21 @@ Printable geometry is modeled as an undirected multigraph:
   - edges  = printable segments (kind='print') or travel gaps (kind='travel')
 
 A fully continuous print corresponds to an Eulerian traversal.
-When the graph is non-Eulerian, minimum-weight travel edges are added to
-pair up odd-degree nodes (analogous to the Chinese Postman / Route Inspection
-problem), so the total non-printing travel is minimised.
+
+Objective, lexicographic:
+  1. never create false printable connections (only real contact merges
+     nodes: shared vertices, or a vertex lying on another segment),
+  2. print every edge,
+  3. minimise print runs / travel moves — travel happens ONLY between
+     disconnected components,
+  4. minimise travel distance,
+  5. minimise retracing.
+
+Within a connected component that is not Eulerian, odd-degree nodes are
+paired by RETRACING existing printable edges along shortest in-graph paths
+(route inspection / Chinese postman), leaving one pair as the trail's
+start and end. The result is one continuous run per component; the
+re-traversed edges are reported as 'retrace' moves.
 """
 from __future__ import annotations
 import math
@@ -25,17 +37,65 @@ def _pt(v: Vec2) -> tuple[float, float]:
     return (v.x, v.y)
 
 
+JUNCTION_TOL = 1e-6     # a vertex this close to a segment touches it
+
+
+def _junction_splits(layer: Layer) -> dict:
+    """
+    T-junctions: for each segment (strand_id, seg_idx), the vertices of any
+    strand that lie on its INTERIOR. Geometry that physically meets in the
+    middle of a segment (e.g. a lattice vertex on a wall) must share a graph
+    node, or the router would see disconnected geometry. Only exact contact
+    (within JUNCTION_TOL) qualifies — no gaps are bridged.
+    """
+    verts = {_pt(p) for st in layer.strands for p in st.points}
+    cell = 10.0
+    grid: dict = {}
+    for v in verts:
+        grid.setdefault((math.floor(v[0] / cell), math.floor(v[1] / cell)),
+                        []).append(v)
+    splits: dict = {}
+    for st in layer.strands:
+        for idx, (a, b) in enumerate(st.segments()):
+            dx, dy = b.x - a.x, b.y - a.y
+            L2 = dx * dx + dy * dy
+            if L2 < 1e-18:
+                continue
+            L = math.sqrt(L2)
+            x0 = math.floor((min(a.x, b.x) - JUNCTION_TOL) / cell)
+            x1 = math.floor((max(a.x, b.x) + JUNCTION_TOL) / cell)
+            y0 = math.floor((min(a.y, b.y) - JUNCTION_TOL) / cell)
+            y1 = math.floor((max(a.y, b.y) + JUNCTION_TOL) / cell)
+            hits = []
+            for gx in range(x0, x1 + 1):
+                for gy in range(y0, y1 + 1):
+                    for v in grid.get((gx, gy), ()):
+                        t = ((v[0] - a.x) * dx + (v[1] - a.y) * dy) / L2
+                        if t * L <= JUNCTION_TOL or (1 - t) * L <= JUNCTION_TOL:
+                            continue
+                        if abs((v[0] - a.x) * dy - (v[1] - a.y) * dx) / L \
+                                <= JUNCTION_TOL:
+                            hits.append((t, v))
+            if hits:
+                splits[(st.id, idx)] = [v for _, v in sorted(hits)]
+    return splits
+
+
 def build_graph(layer: Layer) -> nx.MultiGraph:
     G = nx.MultiGraph()
+    splits = _junction_splits(layer)
     for strand in layer.strands:
         for idx, (a, b) in enumerate(strand.segments()):
-            G.add_edge(
-                _pt(a), _pt(b),
-                strand_id=strand.id,
-                seg_idx=idx,
-                kind='print',
-                length=round(a.dist(b), 6),
-            )
+            chain = [_pt(a)] + splits.get((strand.id, idx), []) + [_pt(b)]
+            for sub, (u, v) in enumerate(zip(chain, chain[1:])):
+                G.add_edge(
+                    u, v,
+                    strand_id=strand.id,
+                    seg_idx=idx,
+                    sub_idx=sub,
+                    kind='print',
+                    length=round(_euclid(u, v), 6),
+                )
     return G
 
 
@@ -47,29 +107,51 @@ def _euclid(u: tuple, v: tuple) -> float:
     return math.sqrt((u[0] - v[0]) ** 2 + (u[1] - v[1]) ** 2)
 
 
-def _augment(G: nx.MultiGraph) -> nx.MultiGraph:
+def _augment_by_retrace(G: nx.MultiGraph,
+                        pinned: tuple | None = None) -> nx.MultiGraph:
     """
-    Return a copy of G with minimum-weight travel edges added between
-    odd-degree node pairs so that the result has an Eulerian circuit.
-    Uses minimum-weight perfect matching on the complete graph of odd nodes.
+    Route inspection for an OPEN trail on one connected component.
+
+    Pair odd-degree nodes by minimum total shortest-path length THROUGH the
+    printable graph and duplicate those edges (to be re-traversed while
+    still printing). Exactly two odd nodes are left unpaired — the trail's
+    start and end — via two zero-cost dummy terminals in the matching. If
+    a pinned start is odd it is forced to be one of them.
+
+    No edge is added that is not already printable geometry: retracing
+    never jumps across a gap or an opening.
     """
     odd = [n for n, d in G.degree() if d % 2 == 1]
-    if not odd:
+    if len(odd) <= 2:
         return G
-
-    pairs_graph = nx.Graph()
+    dist, paths = {}, {}
+    for u in odd:
+        d, p = nx.single_source_dijkstra(G, u, weight='length')
+        dist[u], paths[u] = d, p
+    H = nx.Graph()
     for i, u in enumerate(odd):
         for v in odd[i + 1:]:
-            pairs_graph.add_edge(u, v, weight=_euclid(u, v))
-
-    matching = nx.min_weight_matching(pairs_graph)
+            H.add_edge(u, v, weight=dist[u][v])
+    ends = ('__end_a__', '__end_b__')
+    for v in odd:
+        if pinned in odd:
+            if v == pinned:
+                H.add_edge(ends[0], v, weight=0.0)
+            else:
+                H.add_edge(ends[1], v, weight=0.0)
+        else:
+            H.add_edge(ends[0], v, weight=0.0)
+            H.add_edge(ends[1], v, weight=0.0)
+    matching = nx.min_weight_matching(H)
 
     aug = G.copy()
     for u, v in matching:
-        aug.add_edge(u, v,
-                     strand_id=None, seg_idx=None,
-                     kind='travel',
-                     length=round(_euclid(u, v), 6))
+        if u in ends or v in ends:
+            continue
+        route = paths[u][v]
+        for x, y in zip(route, route[1:]):
+            key = min(G[x][y], key=lambda k: G[x][y][k]['length'])
+            aug.add_edge(x, y, **G[x][y][key])
     return aug
 
 
@@ -110,8 +192,7 @@ def _route_component(
     G_work is the possibly-augmented graph; callers MUST use it for edge
     attribute lookup — augmented travel edges do not exist in the original comp.
     """
-    odd = [n for n, d in comp.degree() if d % 2 == 1]
-    G_work = _augment(comp) if len(odd) > 2 else comp
+    G_work = _augment_by_retrace(comp, pinned_start)
 
     source = _choose_source(G_work, current, pinned_start)
 
@@ -180,7 +261,26 @@ def route_layer(
 
         current_pos = path[-1][1]
 
-    return moves
+    return label_passes(moves)
+
+
+def label_passes(moves: list[PrintMove]) -> list[PrintMove]:
+    """First traversal of each printable edge is 'print'; any later
+    traversal of the same edge is 'retrace'. Call again after reordering
+    (e.g. reversing) a route."""
+    seen = set()
+    out = []
+    for m in moves:
+        if m.kind == 'travel':
+            out.append(m)
+            continue
+        ends = tuple(sorted(((m.start.x, m.start.y), (m.end.x, m.end.y))))
+        key = (m.strand_id, m.seg_idx, ends)
+        kind = 'retrace' if key in seen else 'print'
+        seen.add(key)
+        out.append(m if m.kind == kind else
+                   PrintMove(kind, m.strand_id, m.seg_idx, m.start, m.end))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -192,14 +292,16 @@ def compute_metrics(moves: list[PrintMove]) -> dict:
     travel_dist = sum(m.length for m in moves if m.kind == 'travel')
     retrace_dist = sum(m.length for m in moves if m.kind == 'retrace')
 
+    # A run is continuous extrusion: printing and retracing, broken only by
+    # travel.
     print_runs = 0
-    in_print = False
+    in_run = False
     for m in moves:
-        if m.kind == 'print' and not in_print:
+        if m.kind != 'travel' and not in_run:
             print_runs += 1
-            in_print = True
-        elif m.kind != 'print':
-            in_print = False
+            in_run = True
+        elif m.kind == 'travel':
+            in_run = False
 
     travel_count = sum(1 for m in moves if m.kind == 'travel')
     total = print_dist + travel_dist + retrace_dist
@@ -210,6 +312,7 @@ def compute_metrics(moves: list[PrintMove]) -> dict:
         'retrace_distance': round(retrace_dist, 2),
         'print_runs': print_runs,
         'travel_moves': travel_count,
+        'retrace_moves': sum(1 for m in moves if m.kind == 'retrace'),
         'pct_printing': round(100 * print_dist / total, 1) if total > 0 else 0.0,
         'total_moves': len(moves),
     }
