@@ -390,8 +390,9 @@ perimeter + internal web prints as one continuous path with zero travel.
 ### Design + Toolpath — Phase 3 (Design Canvas) Prototype
 
 Interactive path-first design canvas (`design-toolpath/design_proto/`,
-750 tests incl. 3 UI smoke tests). Checkpointed in commit 414c283; the work
-since wall networks still awaits manual browser verification.
+889 tests incl. 3 UI smoke tests). Checkpointed in commit 414c283 (+ cleanup
+51387d3); Pass 8 (infill geometry) is uncommitted, and the work since wall
+networks still awaits manual browser verification.
 
 Major capabilities:
 - Path-first, non-destructive design: parametric primitives, curves, drawn
@@ -399,7 +400,8 @@ Major capabilities:
   rotate, parametric inset / outset.
 - Walls: a source path is reference geometry; Wall Thickness + Alignment
   make it a wall. Touching / crossing walls form wall networks with
-  junctions (miter / rounded); openings cut clear gaps; nested closed
+  junctions (miter / rounded); openings cut clear gaps through the whole wall
+  (also when its two faces are two linked paths); nested closed
   boundaries can be linked as a parametric wall relationship.
 - Three layers are kept distinct: DESIGN GEOMETRY → WALL / REGION SEMANTICS
   (thickness, regions + voids by geometric nesting, wall vs solid, openings)
@@ -410,10 +412,18 @@ Major capabilities:
   caps, a maximum unsupported distance. Spacing is a target. Regions too
   wide to be a wall use a field generator with local repair (provisional
   wall / area threshold).
-- Solid infill is conventional area fill (rectilinear / serpentine) whose
-  turns land on the outer and void boundaries.
+- Solid infill: perimeters and infill are distinct structural roles,
+  printed as coherent phases (each perimeter one complete loop). Fills:
+  conventional rectilinear, or a serpentine WEB of smooth anti-phase waves
+  touching at alternating apexes. Zero travel is a preference, not the
+  objective: a short travel beats distorted print geometry.
 - Guiding rule: pattern parameters are preferences; structural support and
-  topology are constraints.
+  topology are constraints; physically sensible paths beat continuity metrics.
+- Walls are normally authored with Wall Thickness + Alignment (parametric);
+  linking two drawn boundaries and inset / outset are advanced operations.
+- Wall infill and openings share one wall-MATERIAL region (a boundary minus
+  its voids): an opening is a subtraction through the complete wall, never
+  new wall topology.
 - Toolpath overlay with playback; routing diagnostics.
 
 See `design-toolpath/PROJECT_MEMORY.md` for decisions, history and details.
@@ -488,5 +498,5 @@ Allow the architecture to evolve as the machine and software become better under
 2026-10-05
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas through pass 7 checkpointed in commit 414c283 (750 tests, all green), followed by a behaviour-preserving cleanup; manual browser verification pending.
+Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas through pass 7 checkpointed in commit 414c283, behaviour-preserving cleanup 51387d3; Pass 8 (wall wave / dead-end / openings — approved) + correction (solid routing and serpentine web, wall-authoring UI) + wall regions / doorways implemented, uncommitted, 889 tests green; manual browser verification pending.
 Arduino/GRBL subproject not yet started.

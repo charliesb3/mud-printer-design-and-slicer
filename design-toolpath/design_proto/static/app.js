@@ -479,6 +479,29 @@ function _networkTrimmed() {
   return new Set((networkInfo && networkInfo.modified_sources) || []);
 }
 
+// Selected wall: its DERIVED face(s) (Wall Thickness offsets) are traced
+// in a dashed accent with the thickness — the relationship is visible only
+// while the driving boundary is selected.
+function _drawDerivedWallFaces() {
+  const sel = selectedId && layer.source_paths.find(p => p.id === selectedId);
+  const w = sel && sel.wall && sel.wall.thickness > 0 ? sel.wall : null;
+  if (!w) return;
+  const faces = derivedPaths.filter(d => d.source_id === sel.id && String(d.id).startsWith(sel.id + '.wall'));
+  for (const f of faces) {
+    const cp = _pathCanvasPts(f);
+    if (cp.length < 2) continue;
+    drawPolyline(cp, '#7fd4ff', 1.2, true, f.closed);
+  }
+  const f0 = faces.find(f => (f.points || []).length >= 2);
+  if (f0) {
+    const [x, y] = worldToCanvas(f0.points[0][0], f0.points[0][1]);
+    ctx.save();
+    ctx.fillStyle = '#7fd4ff'; ctx.font = '11px sans-serif';
+    ctx.fillText(`derived face · ${w.thickness} in ${_alignLabel(w.align, sel.closed).toLowerCase()}`, x + 6, y - 6);
+    ctx.restore();
+  }
+}
+
 function drawEffectivePaths() {
   const trimmed = _networkTrimmed();
   const dragged = _draggedPathId();
@@ -532,6 +555,7 @@ function drawEffectivePaths() {
     }
   }
 
+  _drawDerivedWallFaces();
   for (const p of derivedPaths) {
     const srcPiece = p.treatment_id === 'opening_cut' || p.treatment_id === 'network_src';
     if (srcPiece) {
@@ -2420,10 +2444,8 @@ function updatePropPanel() {
   if (path.type === 'ExplicitPath' || !path.type) _addCornerRRow(panel, path);
   if (path.type === 'InsetPath') _addInsetChildRows(panel, path);
   else if (!_isDriven(path)) _addTransformRows(panel, path);
-  if (path.closed && ['RectanglePath', 'CirclePath', 'EllipsePath'].includes(path.type))
-    _addWallRelationRows(panel, path);
-  if (path.closed) _addInsetCreateRows(panel, path);
-  _addWallRows(panel, path);
+  _addWallRows(panel, path);                // PRIMARY: Wall Thickness + Alignment
+  _addAdvancedGeometryRows(panel, path);    // special relationships / CAD operations
 
   // Delete button
   const delBtn = document.createElement('button');
@@ -2521,6 +2543,14 @@ function _addWallRows(panel, path) {
   _addNote(panel, centred
     ? 'Thickness is split evenly on both sides of the path; the path itself is a reference line.'
     : `The path is one face of the wall; the thickness lies ${_alignLabel(own.align, path.closed).toLowerCase()}.`);
+  if (own && own.thickness > 0) {
+    // the normal PARAMETRIC wall: the other face is derived, never drawn by hand
+    const n = document.createElement('div');
+    n.className = 'path-type'; n.id = 'wall-derived-note';
+    n.textContent = `${own.thickness} in wall ${_alignLabel(own.align, path.closed).toLowerCase()} this ${path.closed ? 'boundary' : 'path'}` +
+                    ' — the other face is derived and follows every edit (size, move, rotate, Corner R, thickness).';
+    panel.appendChild(n);
+  }
   const net = _networkOf()[path.id];
   if (net && _netWallFor(net.ids)) {
     _addButton(panel, `Use network ${net.label} wall instead`, () => { path.wall = null; refresh(); });
@@ -2647,6 +2677,12 @@ function addPathPickerRow(panel, label, currentId, onChange, excludeId, filterFn
   // class (rebuilding the node under the pointer could swallow the click).
   const render = () => {
     list.innerHTML = '';
+    if (!items.length) {
+      const it = document.createElement('div');
+      it.className = 'path-picker-item empty';
+      it.textContent = 'no valid choice';
+      list.appendChild(it);
+    }
     nodes = items.map((p, i) => {
       const it = document.createElement('div');
       it.textContent = `${p.label || p.id}  ·  ${(TYPE_NAMES[p.type] || 'Path').toLowerCase()}`;
@@ -2901,6 +2937,30 @@ function updateInfillList() {
       }, prm.name === 'angle' ? '°' : prm.name === 'perimeters' ? '' : 'in');
     }
     if (f.kind === 'solid') {
+      const sact = _solidActual(f);
+      if (sact) {
+        const d = document.createElement('div');
+        d.className = 'path-type';
+        d.textContent = sact;
+        panel.appendChild(d);
+      }
+      // Advanced: boundary support bound (Pass 8)
+      const sadv = document.createElement('details');
+      sadv.className = 'advanced';
+      const ssm = document.createElement('summary');
+      ssm.textContent = 'Advanced';
+      sadv.appendChild(ssm);
+      const sp = document.createElement('div');
+      addPropRowNumTo(sp, 'Max unsupported', f.params.max_unsupported || 0, v => {
+        f.params.max_unsupported = Math.max(0, v);         // 0 = automatic
+        routeResult = null; scheduleRefresh(); repaint();
+      }, 'in');
+      const sh = document.createElement('div');
+      sh.className = 'path-type';
+      sh.textContent = '0 = off (diagnostic only). A limit bends the nearest passes onto the boundary where needed.';
+      sp.appendChild(sh);
+      sadv.appendChild(sp);
+      panel.appendChild(sadv);
       block.appendChild(panel);
       el.appendChild(block);
       continue;                       // no wall-field phase variation
@@ -3984,18 +4044,42 @@ function _applyDerivedSources() {
   if (changed) repaint();
 }
 
+// Advanced (collapsed): the special-case wall relationship between two
+// separately drawn boundaries, and the general geometry operation Inset /
+// Outset. The normal way to make a wall is Wall Thickness (above).
+function _addAdvancedGeometryRows(panel, path) {
+  const relOK = path.closed && RELATION_TYPES.includes(path.type);
+  if (!relOK && !path.closed) return;
+  const adv = document.createElement('details');
+  adv.className = 'advanced';
+  adv.id = 'adv-geometry';
+  const sm = document.createElement('summary');
+  sm.textContent = 'Advanced: linked boundaries · inset / outset';
+  adv.appendChild(sm);
+  const body = document.createElement('div');
+  adv.appendChild(body);
+  if (relOK) _addWallRelationRows(body, path);
+  if (path.closed) _addInsetCreateRows(body, path);
+  if (relOK && _relationOf(path.id)) adv.open = true;     // an active link stays visible
+  panel.appendChild(adv);
+}
+
 function _addInsetCreateRows(panel, path) {
+  _addSubTitle(panel, 'Create inset / outset path');
+  _addNote(panel, 'Geometry operation: makes a NEW closed path that follows this one at a distance. ' +
+                  'For a wall, use Wall Thickness.');
   const row = document.createElement('div'); row.className = 'prop-row';
   row.title = 'Parametric: a closed path kept this far inside / outside this one; it follows every edit';
-  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = 'Inset / Outset';
+  const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = 'Distance';
   const input = document.createElement('input');
   input.type = 'number'; input.className = 'prop-input'; input.value = 10; input.min = 0.1;
+  input.id = 'inset-distance';
   input.style.minWidth = '42px';
   const bi = document.createElement('button');
-  bi.className = 'mini-btn'; bi.textContent = '+ In';
+  bi.className = 'mini-btn'; bi.textContent = 'Inset'; bi.id = 'inset-create';
   bi.onclick = () => createInset(path.id, +input.value, 'inset');
   const bo = document.createElement('button');
-  bo.className = 'mini-btn'; bo.textContent = '+ Out';
+  bo.className = 'mini-btn'; bo.textContent = 'Outset'; bo.id = 'outset-create';
   bo.onclick = () => createInset(path.id, +input.value, 'outset');
   row.append(lbl, input, bi, bo);
   panel.appendChild(row);
@@ -4091,6 +4175,17 @@ function _latticeActual(f) {
   let txt = `Actual: ${a === b ? a : a + '–' + b} in`;
   if (lat.max_unsupported != null)
     txt += ` · Max unsupported: ${lat.max_unsupported.toFixed(1)} in (limit ${lat.max_unsupported_limit.toFixed(1)})`;
+  return txt;
+}
+
+// Solid infill: boundary support and topology (read-only diagnostic).
+function _solidActual(f) {
+  const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
+  const so = info && info.solid;
+  if (!so || so.max_unsupported == null) return '';
+  let txt = `Longest boundary stretch without a tie: ${so.max_unsupported.toFixed(1)} in`;
+  txt += so.max_unsupported_limit ? ` (limit ${so.max_unsupported_limit.toFixed(1)})` : '';
+  if (so.web_contacts) txt += ` · web contacts: ${so.web_contacts}`;
   return txt;
 }
 
@@ -4238,12 +4333,15 @@ function setRelationDriver(relId, driver) {
   return true;
 }
 
+// Candidate partners for linking: closed paths of the same shape type
+// nested inside / around this one and not linked yet.
+function _relationCandidates(path) {
+  return layer.source_paths.filter(p => p.id !== path.id && p.type === path.type && p.closed &&
+                                        !_relationOf(p.id) && (_contains(p, path) || _contains(path, p)));
+}
+
 function _addWallRelationRows(panel, path) {
-  const title = document.createElement('div');
-  title.className = 'section-title';
-  title.style.marginTop = '8px';
-  title.textContent = 'Wall relationship';
-  panel.appendChild(title);
+  _addSubTitle(panel, 'Link two boundaries as one wall');
   const r = _relationOf(path.id);
   if (r) {
     const rel = r.rel;
@@ -4263,18 +4361,30 @@ function _addWallRelationRows(panel, path) {
     panel.appendChild(br);
     return;
   }
+  const kind = (TYPE_NAMES[path.type] || 'path').toLowerCase();
+  if (!_relationCandidates(path).length) {
+    // nothing to link with: say so instead of a dead-looking control
+    const n = document.createElement('div');
+    n.className = 'path-type'; n.id = 'relation-none';
+    n.textContent = `For two separately drawn boundaries that should stay one wall apart. ` +
+                    `Draw another ${kind} inside or around this one to link them.`;
+    panel.appendChild(n);
+    return;
+  }
+  _addNote(panel, `This ${kind} and another ${kind} drawn inside / around it become the two faces of ` +
+                  `one wall that keeps its thickness. Hover a choice to see it on the canvas.`);
   let other = null;
-  const pk = addPathPickerRow(panel, 'Wall with', null, id => { other = id; pk.btn.textContent = _pathName(id) + ' ▾'; },
-                              path.id, p => p.type === path.type && p.closed && !_relationOf(p.id) &&
-                              (_contains(p, path) || _contains(path, p)));
-  pk.btn.textContent = 'choose boundary ▾';
+  const pk = addPathPickerRow(panel, 'Other boundary', null, id => { other = id; pk.btn.textContent = _pathName(id) + ' ▾'; },
+                              path.id, p => _relationCandidates(path).some(c => c.id === p.id));
+  pk.btn.textContent = 'choose ▾';
+  pk.btn.id = 'relation-picker';
   const row = document.createElement('div'); row.className = 'prop-row';
   const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = 'Thickness';
   const input = document.createElement('input');
   input.type = 'number'; input.className = 'prop-input'; input.value = 10; input.min = 0.1;
   input.style.minWidth = '42px';
   const go = document.createElement('button');
-  go.className = 'mini-btn'; go.textContent = 'Link';
+  go.className = 'mini-btn'; go.textContent = 'Link'; go.id = 'relation-link';
   go.onclick = () => { if (other) createWallRelation(path.id, other, +input.value); else setStatus('Choose the other boundary first.'); };
   row.append(lbl, input, go);
   panel.appendChild(row);

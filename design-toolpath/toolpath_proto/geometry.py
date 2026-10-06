@@ -45,6 +45,14 @@ class Strand:
     # retrace when that is shorter (area infill: a hop is better than
     # printing the perimeter twice). Default: retrace as before.
     travel_pairing: bool = False
+    # Optional JOIN GROUP (e.g. one solid infill web): geometry of the same
+    # group (or two ungrouped strands) joins wherever it touches, as always.
+    # Contact BETWEEN different groups is a routing junction only at the
+    # strand's `join_points` (x, y); elsewhere the beads touch physically
+    # but the route passes straight on (e.g. infill tied to a perimeter
+    # without splitting the perimeter into pieces).
+    join_group: str | None = None
+    join_points: list | None = None
 
     def segments(self) -> list[tuple[Vec2, Vec2]]:
         pts = self.points

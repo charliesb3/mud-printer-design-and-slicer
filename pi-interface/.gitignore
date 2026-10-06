@@ -10,7 +10,7 @@ venv/
 .env
 
 # Job storage (runtime data, not committed)
-jobs/
+/jobs/
 
 # OS
 .DS_Store

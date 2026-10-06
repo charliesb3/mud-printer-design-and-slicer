@@ -1783,6 +1783,117 @@ def _opening_removed_intervals(openings: list[Opening], L: float,
     return [(a, b) for a, b in merged]
 
 
+def _merge_closed_intervals(raw: list, L: float) -> list:
+    """Union of arc intervals (a, b) on a closed ring (a in [0, L), b may
+    pass L through the seam)."""
+    raw = sorted(((a % L, (a % L) + (b - a)) for a, b in raw if b - a > 1e-9))
+    merged: list = []
+    tol = OPENING_MERGE_TOL
+    for a, b in raw:
+        if merged and a <= merged[-1][1] + tol:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    while len(merged) > 1 and merged[-1][1] - L >= merged[0][0] - tol:
+        merged[-1][1] = max(merged[-1][1], merged[0][1] + L)
+        merged.pop(0)
+    if len(merged) == 1 and merged[0][1] - merged[0][0] >= L - tol:
+        return [(0.0, L)]
+    return [(a, b) for a, b in merged]
+
+
+def _ray_ring_hit(o: Vec2, d: Vec2, rings: dict, skip_t: float = 1e-6):
+    """Nearest hit of the ray o + t·d (t > skip_t) with any ring:
+    (t, ring id, point) or None."""
+    best = None
+    for rid, ring in rings.items():
+        n = len(ring)
+        for i in range(n):
+            a, b = ring[i], ring[(i + 1) % n]
+            ex, ey = b.x - a.x, b.y - a.y
+            den = d.x * ey - d.y * ex
+            if abs(den) < 1e-12:
+                continue
+            wx, wy = a.x - o.x, a.y - o.y
+            t = (wx * ey - wy * ex) / den
+            u = (wx * d.y - wy * d.x) / den
+            if t > skip_t and -1e-9 <= u <= 1 + 1e-9 and (best is None or t < best[0]):
+                best = (t, rid, Vec2(o.x + t * d.x, o.y + t * d.y))
+    return best
+
+
+def _region_corridor(face_id: str, a: float, b: float, rings: dict,
+                     in_material, depth_max: float):
+    """An opening interval [a, b] on face `face_id` of a wall MATERIAL
+    region (rings: outer + voids, closed) → the corridor it cuts THROUGH
+    the material: each end of the interval is carried along the face's
+    local normal INTO the material to the first boundary it meets (the
+    opposite face). Both ends (and the middle) must reach the SAME ring
+    within depth_max, else None (no defensible opposite face — never cut
+    across a room). Returns (opposite ring id, (ga, gb) interval on it,
+    corridor polygon, (cut face a, cut face b))."""
+    F = rings[face_id]
+    cumF = _cum_lengths(F, True)
+    L = cumF[-1]
+    hits = []
+    n_F = len(F)
+
+    def seg_normal(k, pt):
+        e = F[(k + 1) % n_F] - F[k]
+        if e.length() < 1e-12:
+            return None
+        e = e * (1.0 / e.length())
+        # which side is material: tested off the segment's MIDDLE (at a
+        # vertex the test point could fall on another edge's extension)
+        mid = F[k].lerp(F[(k + 1) % n_F], 0.5)
+        for cand in (Vec2(-e.y, e.x), Vec2(e.y, -e.x)):
+            if in_material(Vec2(mid.x + 0.25 * cand.x, mid.y + 0.25 * cand.y)):
+                return cand
+        return None
+    for s_, lim in ((a, 1.5), ((a + b) / 2.0, 1.0), (b, 1.5)):
+        pt, k = _locate_s(F, cumF, s_ % L, True, forward=(s_ == a))
+        nrm = seg_normal(k, pt)
+        # exactly at a vertex (a corner): the bisector of both edges'
+        # inward normals (else a ray could run along the next edge)
+        for j in (k, (k + 1) % n_F):
+            if F[j].dist(pt) < 1e-6:
+                n0, n1 = seg_normal((j - 1) % n_F, pt), seg_normal(j, pt)
+                if n0 is not None and n1 is not None:
+                    m = n0 + n1
+                    if m.length() > 1e-9:
+                        nrm = m * (1.0 / m.length())
+        if nrm is None:
+            return None
+        h = _ray_ring_hit(pt, nrm, rings)
+        if h is None or h[0] > lim * depth_max:
+            return None
+        hits.append((pt, h))
+    gid = hits[1][1][1]
+    if any(h[1] != gid for _, h in hits):
+        return None
+    G = rings[gid]
+    cumG = _cum_lengths(G, True)
+    LG = cumG[-1]
+    ga = _project_to_polyline(hits[0][1][2], G, cumG, True)[0]
+    gb = _project_to_polyline(hits[2][1][2], G, cumG, True)[0]
+    # the arc between the two hits that passes the middle hit
+    gm = _project_to_polyline(hits[1][1][2], G, cumG, True)[0]
+    lo, hi = (ga, gb) if (gb - ga) % LG <= (ga - gb) % LG else (gb, ga)
+    if (gm - lo) % LG > (hi - lo) % LG + 1e-6:
+        lo, hi = hi, lo
+    span = (hi - lo) % LG
+    if gid == face_id:
+        return None
+    side_f = _sub_polyline(F, cumF, a, b, True)
+    side_g = _sub_polyline(G, cumG, lo, lo + span, True)
+    pa, pb = side_f[0], side_f[-1]
+    # orient the opposite side to run from b's hit back to a's hit
+    if side_g[0].dist(hits[2][1][2]) > side_g[-1].dist(hits[2][1][2]):
+        side_g = list(reversed(side_g))
+    poly = side_f + side_g
+    return gid, (lo, lo + span), poly, ([pa, side_g[-1]], [pb, side_g[0]])
+
+
 def _surviving_intervals(removed: list[tuple[float, float]], L: float,
                          closed: bool) -> list[tuple[float, float]]:
     """Complement of the removed intervals: the wall pieces that remain."""
@@ -1799,6 +1910,16 @@ def _surviving_intervals(removed: list[tuple[float, float]], L: float,
             prev = b
         pieces.append((prev, L))
     return [(a, b) for a, b in pieces if b - a > OPENING_MERGE_TOL]
+
+
+@dataclass
+class _FaceWall:
+    """Another SOURCE path acting as a wall of a source's assembly for
+    openings (the inner face of a two-path wall): quacks like the
+    OffsetTreatment parts the opening machinery reads."""
+    id: str
+    distance: float
+    source_path_id: str
 
 
 @dataclass
@@ -2182,6 +2303,167 @@ class PrintLayer:
             return 'rounded_corners'
         return s
 
+    def _anchor(self, inf) -> str:
+        """The source an infill is anchored to (an inner face absorbed into
+        an opened two-face wall anchors to that wall's outer face)."""
+        return getattr(self, '_absorbed', {}).get(inf.path_id, inf.path_id)
+
+    def _opening_partners(self, sources, processed, offsets_by_source) -> dict:
+        """Two-face wall assemblies whose faces are two closed SOURCE paths
+        → {outer id: inner id}. Only explicit links count: a wall
+        relationship, or a parametric InsetPath and its parent when the
+        outer one carries WALL infill (the material between them is
+        declared a wall). (Openings in a wall-infill region with arbitrary
+        voids are handled as material subtraction: _region_openings.) A
+        face that has its own offsets (its own assembly) is never
+        absorbed."""
+        by_id = {p.id: p for p in sources}
+        cand = []
+        for rel in self.wall_relations:
+            if (getattr(self, '_relation_status', {}).get(rel.id) or {}).get('status') == 'ok':
+                cand.append((rel.outer_id, rel.inner_id))
+        wall_regions = {inf.path_id for inf in self.infills if inf.kind == 'wall'}
+        for p in sources:
+            if isinstance(p, InsetPath) and p.parent_id in by_id:
+                o, i = (p.parent_id, p.id) if p.mode == 'inset' else (p.id, p.parent_id)
+                if o in wall_regions:
+                    cand.append((o, i))
+        out, used = {}, set()
+        for o, i in cand:
+            if o in used or i in used or o not in by_id or i not in by_id:
+                continue
+            if not (by_id[o].closed and by_id[i].closed) or offsets_by_source.get(i):
+                continue
+            if len(processed.get(o, ())) < 3 or len(processed.get(i, ())) < 3:
+                continue
+            out[o] = i
+            used |= {o, i}
+        return out
+
+    def _region_openings(self, sources, processed, offsets_by_source, partners) -> dict:
+        """OPENINGS IN A WALL MATERIAL REGION. A WALL infill on a closed
+        single-bead boundary declares its inside, minus the closed voids
+        nested in it, to be wall material (Region: Rect 1 · Voids: Rect 2,
+        Rect 3). An opening placed on that boundary or on one of the voids
+        is a SUBTRACTION from that same material: a corridor from the
+        clicked face through the material to the opposite face (local
+        inward normal, nearest boundary, within the lattice's wall depth
+        WIDE × spacing). Both faces get a gap; the corridor's two sides
+        are CUT FACES (printed, flat). The region itself stays defined by
+        the FULL closed rings — the corridor is a void subtracted from it,
+        never new wall topology. Explicitly linked two-path walls
+        (relationship / inset) keep their assembly treatment."""
+        import wall_lattice as WL
+        by_id = {p.id: p for p in sources}
+        linked = set(partners) | set(partners.values())
+        nest = self._nesting(processed)
+        out = {'cuts': {}, 'faces': {}, 'voids': {}, 'rings': {}, 'status': {}, 'handled': set()}
+        for inf in self.infills:
+            O = inf.path_id
+            if inf.kind != 'wall' or O not in by_id or not by_id[O].closed or O in linked \
+                    or offsets_by_source.get(O) or len(processed.get(O, ())) < 3:
+                continue
+            voids = [k for k, par in nest.items() if par == O and k in by_id and
+                     not offsets_by_source.get(k) and k not in linked and len(processed.get(k, ())) >= 3]
+            members = [O] + voids
+            ops = [o for o in self.openings if o.source_path_id in members and o.id not in out['handled']]
+            if not ops:
+                continue
+            rings = {pid: processed[pid] for pid in members}
+            outer = processed[O]
+
+            def in_material(q, outer=outer, voids=voids):
+                return _point_in_polygon(q, outer) and not any(_point_in_polygon(q, processed[v]) for v in voids)
+            depth = WL.WIDE * float(inf.params.get('spacing', 20.0))
+            cuts: dict = {}
+            faces, polys = [], []
+            for pid in members:
+                mine = [o for o in ops if o.source_path_id == pid]
+                if not mine:
+                    continue
+                L = _cum_lengths(processed[pid], True)[-1]
+                for (a, b) in _opening_removed_intervals(mine, L, True):
+                    if (a, b) == (0.0, L):
+                        for o in mine:
+                            out['status'][o.id] = 'opening covers the whole boundary'
+                        continue
+                    cor = _region_corridor(pid, a, b, rings, in_material, depth)
+                    if cor is None:
+                        for o in mine:
+                            out['status'].setdefault(o.id, 'no opposite wall face within the wall depth — not cut')
+                        continue
+                    gid, gint, poly, fcs = cor
+                    cuts.setdefault(pid, []).append((a, b))
+                    cuts.setdefault(gid, []).append(gint)
+                    polys.append(poly)
+                    faces.extend(fcs)
+                    for o in mine:
+                        out['status'][o.id] = 'ok'
+            for o in ops:
+                out['handled'].add(o.id)
+            if not polys:
+                continue
+            # cut faces lying inside ANOTHER corridor are interior to a
+            # merged doorway (an opening placed from both faces): dropped
+            keep = []
+            for j, f in enumerate(faces):
+                m = f[0].lerp(f[1], 0.5)
+                if any(min(f[0].dist(g[0]) + f[1].dist(g[1]), f[0].dist(g[1]) + f[1].dist(g[0])) < 1e-6
+                       for g in keep):
+                    continue                      # the same face from both sides
+                inside_other = False
+                for k, pl in enumerate(polys):
+                    if k == j // 2 or not _point_in_polygon(m, pl):
+                        continue
+                    cum_pl = _cum_lengths(pl, True)
+                    if _project_to_polyline(m, pl, cum_pl, True)[1] > 1e-6:
+                        inside_other = True       # interior of a merged doorway
+                if not inside_other:
+                    keep.append(f)
+            for pid, raw in cuts.items():
+                L = _cum_lengths(processed[pid], True)[-1]
+                out['cuts'][pid] = _merge_closed_intervals(raw, L)
+            out['faces'][O] = keep
+            out['voids'][O] = polys
+            out['rings'][O] = [processed[O]] + [processed[v] for v in voids]
+        return out
+
+    def _partner_openings(self, part_id, prim, processed) -> list:
+        """Openings placed on the inner face, re-expressed on the outer
+        face's arc length (the nearest point of its centre)."""
+        out = []
+        pts_i, pts_o = processed[part_id], processed[prim.id]
+        cum_i, cum_o = _cum_lengths(pts_i, True), _cum_lengths(pts_o, prim.closed)
+        for o in self.openings:
+            if o.source_path_id != part_id:
+                continue
+            c, _ = _locate_s(pts_i, cum_i, o.center_s % cum_i[-1], True)
+            s_o = _project_to_polyline(c, pts_o, cum_o, prim.closed)[0]
+            out.append(Opening(o.id, prim.id, s_o, o.width, o.end_treatment,
+                               o.z_min, o.z_max, o.label))
+        return out
+
+    def _partner_face(self, prim, part_id, processed):
+        """The inner face as one more wall of the outer face's assembly:
+        (wall, DerivedPath) with the wall's signed distance (left of the
+        outer face's direction = +), measured as the mean gap."""
+        pts_o, pts_i = processed[prim.id], processed[part_id]
+        cum_o = _cum_lengths(pts_o, prim.closed)
+        n = len(pts_o)
+        tot, sgn = 0.0, 0.0
+        for q in pts_i:
+            s_, d, foot = _project_to_polyline(q, pts_o, cum_o, prim.closed)
+            _, k = _locate_s(pts_o, cum_o, s_, prim.closed)
+            a, b = pts_o[k], pts_o[(k + 1) % n]
+            sgn += (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)
+            tot += d
+        dist = (tot / len(pts_i)) * (1.0 if sgn >= 0 else -1.0)
+        part = self._path_by_id(part_id)
+        derived = DerivedPath(list(pts_i), closed=True, id=part_id, role=part.role,
+                              label=part.label, source_id=part_id,
+                              treatment_id='opening_cut')
+        return _FaceWall(part_id, dist, prim.id), derived
+
     def _opening_cap_reach(self, offsets) -> float:
         """How far this wall system's end treatment protrudes past a cut
         face: the effective cap radius for its total thickness W."""
@@ -2295,16 +2577,44 @@ class PrintLayer:
             offsets_by_source.setdefault(src.id, []).append((ot, derived))
             source_of[ot.id] = src.id
 
-        # 4) Openings → how each affected wall assembly is cut.
+        # 4) Openings → how each affected wall assembly is cut. A wall whose
+        # two faces are two SOURCE paths (an explicit wall relationship, or
+        # a parametric inset bounding a wall-infill region with its parent)
+        # is ONE assembly: an opening on either face cuts both. The inner
+        # face joins the outer's assembly as one more wall (like an offset),
+        # so the cut, both cap faces and the infill clipping are exactly
+        # those of a Wall-Thickness wall. Only done where an opening
+        # actually cuts; otherwise the two faces stay separate sources.
         plans: dict[str, _OpeningPlan] = {}
-        for p in source_paths_in_order:
-            ops = [o for o in self.openings if o.source_path_id == p.id]
+        self._absorbed = {}
+        partners = self._opening_partners(source_paths_in_order, processed,
+                                          offsets_by_source)
+        region_ops = self._region_openings(source_paths_in_order, processed,
+                                           offsets_by_source, partners)
+        self._region_ops = region_ops
+        order = sorted(source_paths_in_order, key=lambda q: q.id not in partners)
+        for p in order:
+            if p.id in self._absorbed:
+                continue
+            ops = [o for o in self.openings if o.source_path_id == p.id
+                   and o.id not in region_ops['handled']]
+            part = partners.get(p.id)
+            extra = []
+            if part is not None:
+                ops = ops + self._partner_openings(part, p, processed)
+                if ops:
+                    extra = [self._partner_face(p, part, processed)]
             if ops and len(processed[p.id]) >= 2:
-                offs = offsets_by_source.get(p.id, [])
+                offs = offsets_by_source.get(p.id, []) + extra
                 plan = _OpeningPlan(processed[p.id], p.closed, offs, ops,
                                     self._opening_cap_reach(offs))
                 if plan.removed:
                     plans[p.id] = plan
+                    for ot, derived in extra:
+                        offsets_by_source.setdefault(p.id, []).append((ot, derived))
+                        all_offsets.append(derived)
+                        source_of[part] = p.id
+                        self._absorbed[part] = p.id
 
         # 5) Lattice — generated on the FULL walls (so generator validity is
         # unchanged), then clipped out of any opening of the walls it uses.
@@ -2342,9 +2652,23 @@ class PrintLayer:
         # 6) Wall-system pieces (the unit of end treatment and of networks).
         net_pieces: list = []
         for p in source_paths_in_order:
+            if p.id in self._absorbed:
+                continue        # a face of another source's assembly now
             plan = plans.get(p.id)
             offs = [(ot, d) for ot, d in offsets_by_source.get(p.id, [])
                     if len(d.sample_points()) >= 2]
+            rcut = region_ops['cuts'].get(p.id)
+            if rcut is not None:
+                # a face of a wall-material region with a doorway: open
+                # pieces whose ends are CUT ends (never joins / branches)
+                pts_r = processed[p.id]
+                cum_r = _cum_lengths(pts_r, True)
+                for k, (a, b) in enumerate(_surviving_intervals(rcut, cum_r[-1], True)):
+                    sub = _sub_polyline(pts_r, cum_r, a, b, True)
+                    if len(sub) >= 2:
+                        net_pieces.append(N.NetPiece(
+                            p.id, f'{p.id}~{k}', False, [(0.0, sub, f'{p.id}~{k}')], ['cut', 'cut']))
+                continue
             if plan is None:
                 walls = [(0.0, processed[p.id], p.id)] + \
                         [(ot.distance, d.sample_points(), d.id) for ot, d in offs]
@@ -2376,8 +2700,19 @@ class PrintLayer:
 
         # 7) Emit walls. Order: sources, offsets, end treatments, lattice.
         for p in source_paths_in_order:
-            if p.id in ref_only:
-                continue        # centred wall: the reference is not printed
+            if p.id in ref_only or p.id in self._absorbed:
+                continue        # centred wall reference / absorbed face
+            rcut = region_ops['cuts'].get(p.id)
+            if rcut is not None:
+                pts_r = processed[p.id]
+                cum_r = _cum_lengths(pts_r, True)
+                for k, (a, b) in enumerate(_surviving_intervals(rcut, cum_r[-1], True)):
+                    sub = _sub_polyline(pts_r, cum_r, a, b, True)
+                    if len(sub) >= 2:
+                        _emit(DerivedPath(sub, closed=False, id=f'{p.id}~{k}', role=p.role,
+                                          label=p.label, source_id=p.id,
+                                          treatment_id='opening_cut'), p.id)
+                continue
             plan = plans.get(p.id)
             if plan is None:
                 _emit(full_sources[p.id], p.id)
@@ -2387,6 +2722,17 @@ class PrintLayer:
                     piece.src_pts, closed=False, id=f'{p.id}~{k}',
                     role=p.role, label=p.label, source_id=p.id,
                     treatment_id='opening_cut'), p.id)
+        # cut faces of doorways through wall-material regions: boundary
+        # geometry of the SUBTRACTION (printed), not wall-source geometry
+        for anchor, fcs in region_ops['faces'].items():
+            for j, f in enumerate(fcs):
+                if f[0].dist(f[1]) < 1e-6:
+                    continue
+                cf = DerivedPath(list(f), closed=False, role='cap', label='opening_face',
+                                 source_id=anchor, treatment_id='opening_face',
+                                 id=f'{anchor}_cut{j}')
+                _emit(cf, anchor)
+                cls_of[id(cf)] = N.FACE
         for derived in all_offsets:
             sid = source_of[derived.id]
             plan = plans.get(sid)
@@ -2407,6 +2753,8 @@ class PrintLayer:
         # faces alike.
         cap_style = self._normalized_cap_style()
         for src in source_paths_in_order:
+            if src.id in self._absorbed:
+                continue
             plan = plans.get(src.id)
             if plan is None:
                 if src.closed:
@@ -2471,6 +2819,11 @@ class PrintLayer:
         regions = network.pop('_rings', [])
         jobs = network.pop('_infill_jobs', [])
         network['reference_only'] = sorted(ref_only)
+        network['opening_status'] = dict(region_ops['status'])
+        # faces cut on behalf of a doorway (room faces, absorbed inner faces)
+        # are drawn from the backend pieces, like network-trimmed sources
+        network['modified_sources'] = sorted(set(network.get('modified_sources', [])) |
+                                             set(region_ops['cuts']) | set(self._absorbed))
         network['wall_relations'] = dict(getattr(self, '_relation_status', {}))
         network['derived_sources'] = {
             p.id: [[q.x, q.y] for q in p.points]
@@ -2604,6 +2957,11 @@ class PrintLayer:
                     dp = DerivedPath(poly, closed=False, role='lattice',
                                      label='solid', source_id=inf.id,
                                      treatment_id='solid_infill', id=f"{job['key']}.s{j}")
+                    # routing: ONE hand-off per boundary ring (sp.attach);
+                    # every other boundary contact is a physical tie the
+                    # route passes over (perimeters print as whole loops)
+                    dp.join_group = f"solid:{job['key']}"
+                    dp.join_points = list(sp.attach)
                     cls_of[id(dp)] = N.INTERNAL
                     result.append(dp)
                 for j, c in enumerate(sp.connectors):
@@ -2627,7 +2985,8 @@ class PrintLayer:
                     if not isinstance(v, (int, float)):
                         r[k] = v
                     else:
-                        r[k] = max(r.get(k, 0), v) if k == 'max_connector' else r.get(k, 0) + v
+                        r[k] = max(r.get(k, 0), v) if k in ('max_connector', 'max_unsupported', 'max_unsupported_limit') \
+                            else r.get(k, 0) + v
             for info in network['infills']:
                 if info['id'] in solid_rep:
                     info['solid'] = solid_rep[info['id']]
@@ -2808,7 +3167,20 @@ class PrintLayer:
         by_sys = {}
         for pc in net_pieces:
             by_sys.setdefault(pc.sys_id, []).append(pc)
+        reg_ops = getattr(self, '_region_ops', None) or {'rings': {}, 'voids': {}}
         for inf in infills:
+            if inf.path_id in getattr(self, '_absorbed', {}):
+                continue        # its face belongs to another assembly now
+            if inf.path_id in reg_ops['rings']:
+                # a wall-material region with doorways: still defined by
+                # its FULL closed rings (the doorways are subtracted below)
+                rings = reg_ops['rings'][inf.path_id]
+                declared[inf.path_id] = rings
+                for sid, others in by_sys.items():
+                    if sid != inf.path_id and any(_point_in_polygon(w[1][0], rings[0])
+                                                  for pc in others for w in pc.walls):
+                        uf.union(f'S:{inf.path_id}', f'S:{sid}')
+                continue
             pcs = by_sys.get(inf.path_id, [])
             if len(pcs) != 1 or not pcs[0].closed or pcs[0].thick:
                 continue
@@ -2824,7 +3196,7 @@ class PrintLayer:
                     uf.union(f'S:{inf.path_id}', f'S:{sid}')
             declared[inf.path_id] = rings
         net_roots = {uf.find(a) for a in foreign} | \
-            {uf.find(f'S:{inf.path_id}') for inf in infills}
+            {uf.find(f'S:{self._anchor(inf)}') for inf in infills}
         if not net_roots:
             return result, summary
         filled: dict = {}                        # (root, comp id) → infill id
@@ -2885,6 +3257,13 @@ class PrintLayer:
                     voids.append(N.Shape([ring]))
                     beads.append(N.Bead(f'{sid}_clear{k}', ring, True,
                                         N.VIRTUAL, f'S:{sid}'))
+            # Doorways through wall-material regions: corridors subtracted
+            # from the material (their boundary is in the arrangement so the
+            # cut is exact) — subtraction, never new wall topology.
+            for sid in sorted(sys_ids):
+                for k, poly in enumerate(reg_ops['voids'].get(sid, [])):
+                    voids.append(N.Shape([poly]))
+                    beads.append(N.Bead(f'{sid}_door{k}', poly, True, N.VIRTUAL, f'S:{sid}'))
             overrides = []
             for ro in self.region_overrides:
                 if ro.path_id in sys_ids and ro.path_id in processed:
@@ -2957,9 +3336,10 @@ class PrintLayer:
         import infill as IF
         arr = res.arrangement
         for inf in infills:
-            if inf.path_id not in sys_ids:
+            anchor = self._anchor(inf)
+            if anchor not in sys_ids:
                 continue
-            elem = f'S:{inf.path_id}'
+            elem = f'S:{anchor}'
             targets = set()
             for (u, v), owners in arr.edges.items():
                 if any(res.beads[b].bead.element == elem for b in owners):
@@ -2969,7 +3349,7 @@ class PrintLayer:
             # A declared (closed single-bead) region also owns the ISLANDS
             # nested in its voids — material components not touching the
             # anchor but lying inside it (even-odd nesting).
-            ring = (declared or {}).get(inf.path_id, [None])[0]
+            ring = (declared or {}).get(anchor, [None])[0]
             if ring is not None:
                 for k in set(comp_of.values()):
                     outer = comps[k].rings[0] if comps[k].rings else None
@@ -3148,6 +3528,8 @@ class PrintLayer:
                 # than printing the perimeter twice
                 travel_pairing=getattr(path, 'treatment_id', '') in (
                     'solid_infill', 'solid_link', 'solid_perimeter'),
+                join_group=getattr(path, 'join_group', None),
+                join_points=getattr(path, 'join_points', None),
             ))
         return RoutingLayer(z_height=0.0, strands=strands, label=self.label)
 

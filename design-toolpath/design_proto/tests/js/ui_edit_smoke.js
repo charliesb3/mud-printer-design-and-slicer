@@ -384,6 +384,92 @@ eval(src + `
   check(txt.length > 0, 'infill panel renders with the Advanced section');
   networkInfo = null; layer.infills = [];
 
+  // ===== pass 8 correction: wall authoring UI =============================
+  const flat = el => [el].concat(...(el.children || []).map(flat));
+  const panelNodes = () => { resetEl('path-props'); updatePropPanel(); return flat(document.getElementById('path-props')); };
+  clearAll();
+  setTool('rect'); onMouseDown(ev(100, 100)); onMouseDown(ev(300, 220));
+  const [WO] = layer.source_paths;
+  selectedId = WO.id;
+  let nodes = panelNodes();
+  const iWall = nodes.findIndex(n => n.textContent === 'Wall Thickness');
+  const iAdv = nodes.findIndex(n => n.id === 'adv-geometry');
+  check(iWall >= 0 && iAdv > iWall, 'Wall Thickness is the primary wall control (before the Advanced section)');
+  check(nodes.find(n => n.id === 'adv-geometry').open !== true, 'Advanced (link / inset) starts collapsed');
+  check(nodes.some(n => n.id === 'relation-none') && !nodes.some(n => n.id === 'relation-picker'),
+        'no candidate → an explanation, not a dead picker');
+  // Wall Thickness still works
+  WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
+  check(buildPayload().source_paths[0].wall.thickness === 10, 'Wall Thickness kept in the payload');
+  nodes = panelNodes();
+  const dn = nodes.find(n => n.id === 'wall-derived-note');
+  check(dn && dn.textContent.startsWith('10 in wall inside this boundary'), 'Wall section explains the derived parametric face');
+  derivedPaths = [{ id: WO.id + '.wall', source_id: WO.id, treatment_id: WO.id + '.wall', closed: true,
+                    points: [[110, 110], [290, 110], [290, 210], [110, 210]] }];
+  _drawDerivedWallFaces();                       // selection trace + label (no throw)
+  check(true, 'selected wall traces its derived face');
+  derivedPaths = [];
+  WO.wall = { thickness: 12, align: 'inside' }; scheduleRefresh();
+  undo();
+  check(byId(WO.id).wall.thickness === 10, 'undo a Wall Thickness change (12 → 10)');
+  redo();
+  check(byId(WO.id).wall.thickness === 12, 'redo it');
+  byId(WO.id).wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
+  WO.wall = null; scheduleRefresh();
+  // a nested rectangle → link via the real controls
+  setTool('rect'); onMouseDown(ev(130, 125)); onMouseDown(ev(270, 195));
+  const WI = layer.source_paths[1];
+  selectedId = WO.id;
+  nodes = panelNodes();
+  const pbtn = nodes.find(n => n.id === 'relation-picker');
+  check(!!pbtn && !nodes.some(n => n.id === 'relation-none'), 'with a nested boundary the picker is offered');
+  pbtn.onclick();                                         // open
+  check(highlightPathId === WI.id, 'the candidate boundary is highlighted on the canvas while choosing');
+  const plist = flat(document.getElementById('path-props')).find(n => n.className === 'path-picker-list');
+  check(plist && plist.children.length === 1, 'exactly one candidate listed');
+  plist.children[0].onmouseenter && plist.children[0].onmouseenter();
+  check(highlightPathId === WI.id, 'hovering a candidate highlights it');
+  plist.children[0].onmousedown({ preventDefault() {} });
+  check(highlightPathId === null, 'highlight cleared after choosing');
+  const s0w = steps();
+  nodes.find(n => n.id === 'relation-link').onclick();
+  check(layer.wall_relations.length === 1 && layer.wall_relations[0].inner_id === WI.id, 'Link creates the relationship');
+  check(steps() === s0w + 1, 'linking is one undo step');
+  nodes = panelNodes();
+  check(nodes.find(n => n.id === 'adv-geometry').open === true, 'an active link keeps the Advanced section open');
+  undo();
+  check(layer.wall_relations.length === 0, 'undo link');
+  redo();
+  check(layer.wall_relations.length === 1, 'redo link');
+  breakWallRelation(layer.wall_relations[0].id);
+  check(layer.wall_relations.length === 0, 'unlink');
+  undo();
+  check(layer.wall_relations.length === 1, 'undo unlink');
+  layer.wall_relations = []; scheduleRefresh();
+  // inset / outset through the relabelled controls
+  selectedId = WO.id;
+  nodes = panelNodes();
+  nodes.find(n => n.id === 'inset-distance').value = '8';
+  const nIns = layer.source_paths.length;
+  nodes.find(n => n.id === 'inset-create').onclick();
+  const NI = layer.source_paths[layer.source_paths.length - 1];
+  check(layer.source_paths.length === nIns + 1 && NI.type === 'InsetPath' && NI.distance === 8 && NI.mode === 'inset',
+        'Create inset (8 in) makes a new parametric path');
+  undo();
+  check(layer.source_paths.length === nIns, 'undo inset');
+  redo();
+  check(layer.source_paths.length === nIns + 1, 'redo inset');
+  nodes = panelNodes();
+  nodes.find(n => n.id === 'outset-create').onclick();
+  check(layer.source_paths[layer.source_paths.length - 1].mode === 'outset', 'Create outset');
+  // an empty picker says so (also the Extra Offset picker)
+  const box = document.createElement('div');
+  const epk = addPathPickerRow(box, 'X', null, () => {}, null, () => false);
+  epk.open();
+  check(epk.list.children.length === 1 && epk.list.children[0].textContent === 'no valid choice',
+        'an empty picker shows "no valid choice"');
+  epk.close(false);
+
   console.log('UI EDIT SMOKE PASSED');
 })();
 `);

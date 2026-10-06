@@ -56,6 +56,7 @@ def _junction_splits(layer: Layer) -> dict:
     qualifies — no gaps are bridged.
     """
     verts = {_pt(p) for st in layer.strands for p in st.points}
+    owners = _vertex_owners(layer)
     cell = 10.0
     grid: dict = {}
     for v in verts:
@@ -81,20 +82,60 @@ def _junction_splits(layer: Layer) -> dict:
                         if t * L <= JUNCTION_TOL or (1 - t) * L <= JUNCTION_TOL:
                             continue
                         if abs((v[0] - a.x) * dy - (v[1] - a.y) * dx) / L \
-                                <= JUNCTION_TOL:
+                                <= JUNCTION_TOL and _may_join(v, owners[v], st):
                             hits.append((t, v))
             if hits:
                 splits[(st.id, idx)] = hits
     for key, t, p in _crossings(layer):
         splits.setdefault(key, []).append((t, p))
     out = {}
+    group_of = {st.id: getattr(st, 'join_group', None) for st in layer.strands}
     for key, hits in splits.items():
         seq = []
         for _, v in sorted(hits):
             if not seq or _euclid(seq[-1], v) > JUNCTION_TOL:
                 seq.append(v)
-        out[key] = seq
+        out[key] = [_node(v, group_of[key[0]], owners) for v in seq]
     return out
+
+
+def _vertex_owners(layer: Layer) -> dict:
+    """vertex (x, y) → {(join group, is a declared join point)} over all
+    strands having it as a vertex."""
+    own: dict = {}
+    for st in layer.strands:
+        g = getattr(st, 'join_group', None)
+        jp = {tuple(q) for q in (getattr(st, 'join_points', None) or ())}
+        for p in st.points:
+            v = _pt(p)
+            own.setdefault(v, set()).add((g, v in jp))
+    return own
+
+
+def _may_join(v: tuple, v_owners: set, st) -> bool:
+    """May vertex v (owned by v_owners) split a segment of strand st?
+    Same group (or both ungrouped): always. Across groups: only where v
+    is a declared join point of every grouped side."""
+    g = getattr(st, 'join_group', None)
+    jp_st = {tuple(q) for q in (getattr(st, 'join_points', None) or ())}
+    for og, is_jp in v_owners:
+        if og == g:
+            return True
+        if (og is None or is_jp) and (g is None or v in jp_st):
+            return True
+    return False
+
+
+def _node(v: tuple, group, owners: dict) -> tuple:
+    """Graph node of vertex v for a strand of `group`. A grouped strand's
+    vertex that merely COINCIDES with other groups' geometry (not a join
+    point) gets its own node, nudged by 1e-9 in x, so it does not merge."""
+    if group is None:
+        return v
+    own = owners.get(v, ())
+    if any(og != group for og, _ in own) and not any(og == group and jp for og, jp in own):
+        return (v[0] + 1e-9, v[1])
+    return v
 
 
 def _crossings(layer: Layer):
@@ -110,8 +151,10 @@ def _crossings(layer: Layer):
     """
     segs = []
     kind_of = {}
+    group_of = {}
     for st in layer.strands:
         kind_of[st.id] = getattr(st, 'kind', 'face')
+        group_of[st.id] = getattr(st, 'join_group', None)
         n_seg = len(st.segments())
         for idx, (a, b) in enumerate(st.segments()):
             segs.append((st.id, idx, n_seg, st.closed, a, b))
@@ -138,6 +181,8 @@ def _crossings(layer: Layer):
                     continue                     # consecutive: share a vertex
                 if not _crossing_is_junction(kind_of[s1], kind_of[s2]):
                     continue
+                if group_of[s1] != group_of[s2]:
+                    continue                     # different join groups pass over
                 rx, ry = b.x - a.x, b.y - a.y
                 qx, qy = d.x - c.x, d.y - c.y
                 L1, L2 = math.hypot(rx, ry), math.hypot(qx, qy)
@@ -162,10 +207,13 @@ def _crossing_is_junction(k1: str, k2: str) -> bool:
 def build_graph(layer: Layer) -> nx.MultiGraph:
     G = nx.MultiGraph()
     splits = _junction_splits(layer)
+    owners = _vertex_owners(layer)
     for strand in layer.strands:
         factor = getattr(strand, 'retrace_cost', 1.0)
+        g = getattr(strand, 'join_group', None)
         for idx, (a, b) in enumerate(strand.segments()):
-            chain = [_pt(a)] + splits.get((strand.id, idx), []) + [_pt(b)]
+            chain = [_node(_pt(a), g, owners)] + splits.get((strand.id, idx), []) + \
+                [_node(_pt(b), g, owners)]
             for sub, (u, v) in enumerate(zip(chain, chain[1:])):
                 if u == v:
                     continue
@@ -348,7 +396,23 @@ def route_layer(
     current_pos: tuple | None = _pt(start) if start else None
     pinned = _pt(start) if start else None
 
-    for comp_idx, comp in enumerate(ordered_comps):
+    def _entry_dist(comp, pos):
+        if pos is None:
+            return 0.0
+        odd = [n for n, d in comp.degree() if d % 2 == 1]
+        return min(_euclid(pos, n) for n in (odd or comp.nodes))
+
+    pending = list(ordered_comps)
+    comp_idx = -1
+    while pending:
+        comp_idx += 1
+        if comp_idx == 0 or component_order:
+            comp = pending.pop(0)
+        else:
+            # nearest next component (its nearest possible start) — short
+            # travel between disconnected pieces
+            k = min(range(len(pending)), key=lambda i: _entry_dist(pending[i], current_pos))
+            comp = pending.pop(k)
         # Only apply pinned start to the very first component
         pin = pinned if comp_idx == 0 else None
 

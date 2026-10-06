@@ -248,10 +248,12 @@ def test_solid_serpentine_is_smooth_and_bounded():
     pts = [q for l in lines for q in l]
     assert max(len(l) for l in lines) > 30                  # curved, not straight
     # every point stays within the wave amplitude of its hatch line (y = 10 + 20k)
+    # (Pass 8 correction: the serpentine is a WEB — amplitude ½ spacing so
+    # neighbours touch; the web invariants are tested in test_pass8.py)
     for q in pts:
         if 1e-6 < q.x < 300 - 1e-6 and 1e-6 < q.y < 200 - 1e-6:
             dev = abs((q.y - 10) - 20 * round((q.y - 10) / 20))
-            assert dev <= SO.WAVE_AMP * 20 + 1e-6 or abs(q.x) < 25 or abs(q.x - 300) < 25
+            assert dev <= SO.WEB_AMP * 20 + 1e-6 or abs(q.x) < 25 or abs(q.x - 300) < 25
     # smooth: no sharp kinks along a line body (away from the boundary turns)
     for l in lines:
         for a, b, c in zip(l, l[1:], l[2:]):

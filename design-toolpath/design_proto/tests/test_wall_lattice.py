@@ -143,40 +143,52 @@ def test_even_landings_along_a_straight_wall():
 
 
 # ---------------------------------------------------------------------------
-# Dead ends: complementary-phase out-and-back
+# Dead ends: mirrored-phase out-and-back (Pass 8)
 # ---------------------------------------------------------------------------
 
-def test_dead_end_return_interleaves_at_combined_target_density():
-    # Pass 7 density semantics: Target Spacing is the COMBINED density. The
-    # outgoing and return phases interleave — each at ~2 × target, offset by
-    # ~one target — so support stations (either face) are ~target apart and
-    # no station is landed twice (no doubled density, no retrace).
-    L, q = M('05 four-arm junction')
+def _face_stations(L, y_face, x_min=206):
+    """Landing x positions on one face (y = y_face) of the +x arm."""
     paths, _ = L._build_effective()
-    pts = [q_ for p in paths if getattr(p, 'treatment_id', '') == 'infill'
-           for q_ in p.sample_points()]
-    # the arm along +x: walls at y = 195 / 205, from the junction (x ≈ 205)
-    top = sorted({round(p.x, 6) for p in pts if abs(p.y - 205) < 1e-6 and p.x > 206})
-    bot = sorted({round(p.x, 6) for p in pts if abs(p.y - 195) < 1e-6 and p.x > 206})
-    # interleaved, not doubled: no station landed on both faces — except the
-    # last one, where both phases end and the cap V joins them
-    assert len(set(top) & set(bot)) <= 1
-    stations = sorted(set(top + bot))
-    gaps = [b - a for a, b in zip(stations, stations[1:])]
-    assert len(stations) >= 4 and max(gaps) <= 1.375 * 20 + 1e-6
-    assert 0.6 * 20 <= sum(gaps) / len(gaps) <= 1.25 * 20  # combined ≈ target
+    return sorted({round(q.x, 6) for p in paths if getattr(p, 'treatment_id', '') == 'infill'
+                   for q in p.sample_points() if abs(q.y - y_face) < 1e-6 and q.x > x_min})
+
+
+@pytest.mark.parametrize('sp', [14, 16, 20, 24])
+def test_dead_end_out_and_back_supports_each_face_evenly(sp):
+    # Pass 8: outgoing and return phases are half a cycle apart (mirrored):
+    # every station lands BOTH faces (one phase each), so the combined
+    # support on EACH face is regular at ≈ the target — no alternating
+    # tight / wide gaps (pass 7's quarter-cycle interleave gave ~S / ~3S).
+    L = WF.arms(4, sp=sp)
+    q = RQ.wall_metrics(L)
+    for y in (195, 205):                       # both faces of the +x arm
+        st = _face_stations(L, y)
+        gaps = [b - a for a, b in zip(st, st[1:])]
+        assert len(gaps) >= 2
+        assert max(gaps) <= 1.1 * min(gaps)                     # even
+        assert 0.8 * sp <= sum(gaps) / len(gaps) <= 1.25 * sp   # ≈ target
+        assert max(gaps) <= 1.375 * sp + 1e-6                   # max unsupported
+    assert _face_stations(L, 195) == _face_stations(L, 205)     # mirrored
     for r in runs_of(L):
         assert r['motif'] == 'out_and_back' and r['passes'] == 2
-    assert q['interior_retrace'] == 0
-    # density not doubled: wall crossings (stitches) ≈ arm length / target
-    # (≈ 105 / 20), not twice that as with two complementary passes at the
-    # target. (Bead LENGTH stays ~1.8 × one zigzag: an out-and-back must
-    # travel the arm twice whatever its pitch — but it is less than the
-    # former doubled lattice.)
-    assert 0.75 * 105 / 20 <= len(stations) <= 1.3 * 105 / 20 + 1
-    per_arm = q['generated_length'] / 4
-    doubled = 2 * 105 / 20 * math.hypot(20, 10)
-    assert per_arm < doubled
+    assert q['interior_retrace'] < 1e-6
+    assert q['tiny_cells'] == 0
+    assert q['congestion_max_generated'] <= 2.0 + RQ.HOTSPOT_TOL
+
+
+@pytest.mark.parametrize('sp', [12, 16, 20, 24])
+@pytest.mark.parametrize('name', ['05 four-arm junction', '06 four curved arms',
+                                  '07 six-arm star', '11 unequal branches'])
+def test_dead_end_networks_support_every_face_evenly(name, sp):
+    # Networks made only of out-and-back arms: the longest stretch of any
+    # face between landings stays near the target everywhere (incl. curved
+    # arms and junction corners). Pass 7 measured 2.3–3.3 × target here.
+    L = WF.FIXTURES[name](sp)
+    gaps = [g for ring in RQ.face_support(L) for g in ring['gaps']]
+    assert max(gaps) <= 1.8 * sp
+    q = RQ.wall_metrics(L)
+    assert q['interior_retrace'] < 1e-6
+    assert q['congestion_hotspots'] == 0 and q['tiny_cells'] == 0
 
 
 def test_junction_centre_has_no_knot():
@@ -337,3 +349,91 @@ def test_performance_is_interactive():
     t = time.time()
     WF.curved_arms(6, length=160).effective_paths()
     assert time.time() - t < 3.0
+
+
+# ---------------------------------------------------------------------------
+# Pass 8: WAVE is a smooth wave (measured on the printable geometry)
+# ---------------------------------------------------------------------------
+
+def _turns(poly):
+    out = [0.0]
+    for a, b, c in zip(poly, poly[1:], poly[2:]):
+        v1, v2 = b - a, c - b
+        l1, l2 = v1.length(), v2.length()
+        out.append(0.0 if l1 < 1e-9 or l2 < 1e-9 else math.degrees(math.acos(
+            max(-1.0, min(1.0, (v1.x * v2.x + v1.y * v2.y) / (l1 * l2))))))
+    return out + [0.0]
+
+
+def _wave_defects(L):
+    """(spikes, max turn) of the wave infill AWAY from sharp boundary
+    points (wall corners, cap corners, junction corners: within 1.5 ×
+    thickness the structural brace / cap V / hand-off may turn sharply).
+    A spike is a vertex turning much more than both neighbours — the V a
+    polyline zigzag has at every landing; a sampled smooth curve has none."""
+    paths, meta = L._build_effective()
+    thick = max(r['thickness'] for v in meta['network']['lattice'].values() for r in v['regions'])
+    sharp = [(c[0], c[1]) for c in RQ.corner_support(L, 30.0)]
+    spikes, worst = [], 0.0
+    for p in paths:
+        if getattr(p, 'treatment_id', '') != 'infill':
+            continue
+        poly = p.sample_points()
+        T = _turns(poly)
+        for k in range(1, len(poly) - 1):
+            q = poly[k]
+            if any(math.dist((q.x, q.y), s) <= 1.5 * thick for s in sharp):
+                continue
+            worst = max(worst, T[k])
+            if T[k] > max(12.0, 2.2 * max(T[k - 1], T[k + 1])):
+                spikes.append((round(q.x, 1), round(q.y, 1), round(T[k], 1)))
+    return spikes, worst
+
+
+WAVE_FIXTURES = {
+    'straight': lambda sp: WF.straight(sp, pat='wave'),
+    'curved': lambda sp: WF.curved(sp, pat='wave'),
+    'rect loop': lambda sp: WF.rect_loop(sp, pat='wave'),
+    'rounded rect': lambda sp: WF.rounded_rect_loop(sp, pat='wave'),
+    'triangle': lambda sp: WF.polygon_wall(3, sp=sp, pat='wave'),
+    'four arms': lambda sp: WF.arms(4, sp=sp, pat='wave'),
+    'four curved arms': lambda sp: WF.curved_arms(4, sp=sp, pat='wave'),
+    'six-arm star': lambda sp: WF.star(sp, pat='wave'),
+    'rect + branch': lambda sp: WF.rect_branches(1, sp, pat='wave'),
+    'openings': lambda sp: WF.openings(sp, pat='wave'),
+}
+
+
+@pytest.mark.parametrize('sp', [12, 16, 20, 24])
+@pytest.mark.parametrize('name', list(WAVE_FIXTURES))
+def test_wave_is_smooth_away_from_structural_transitions(name, sp):
+    # Pass 7's wave (0.4 straight + 0.6 sine, coarse samples) had a ~40° V
+    # at every landing: 8–42 spikes per fixture. A wave is a half sine
+    # TANGENT to both faces, finely sampled: no spikes, gentle turning.
+    L = WAVE_FIXTURES[name](sp)
+    spikes, worst = _wave_defects(L)
+    assert spikes == []
+    assert worst <= 25.0
+
+
+@pytest.mark.parametrize('name', list(WAVE_FIXTURES))
+def test_wave_keeps_structure(name):
+    # smoothness never costs support, congestion or retrace
+    L = WAVE_FIXTURES[name](20)
+    q = RQ.wall_metrics(L)
+    assert q['interior_retrace'] < 1e-6
+    assert q['congestion_hotspots'] == 0 and q['tiny_cells'] == 0
+    assert q['cross_ratio'] >= 0.95
+    for reg in L.network_summary()['lattice']['I']['regions']:
+        assert reg['max_unsupported'] <= reg['max_unsupported_limit'] + 1e-6
+    _assert_internal_inside(L)
+    thick = 10.0
+    for x, y, turn, d in RQ.corner_support(L):
+        assert d <= thick + 1e-6, (x, y, turn, d)        # corners / caps landed
+    # the angular share is small: long straight infill segments only where
+    # a brace / cap leg must be straight
+    paths, _ = L._build_effective()
+    polys = [p.sample_points() for p in paths if getattr(p, 'treatment_id', '') == 'infill']
+    tot = sum(a.dist(b) for pl in polys for a, b in zip(pl, pl[1:]))
+    straight = sum(a.dist(b) for pl in polys for a, b in zip(pl, pl[1:]) if a.dist(b) >= 10.0)
+    assert straight <= 0.1 * tot

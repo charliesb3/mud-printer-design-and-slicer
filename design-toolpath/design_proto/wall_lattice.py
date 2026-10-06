@@ -67,7 +67,8 @@ from infill import _Region, _strut_ok
 
 _DEBUG = False
 CAP = 2              # landing 'side' meaning: on the wall's end face (cap)
-WAVE_SINE = 0.6     # share of the sine in a wave stitch profile
+MID = 3              # 'side': mid-wall apex of a turnaround with no cap landing
+WAVE_SAMPLES = 16    # points per wave stitch (smooth: ≲ 10° turn per vertex)
 WIDE = 1.6            # local thickness > WIDE × spacing → not a wall (fallback)
 PRUNE = 1.2           # × thickness: shorter side branches are corner noise
 MERGE = 1.0           # × thickness: junctions closer than this are one cluster
@@ -909,6 +910,18 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             geo.cache[(id(r), CAP, round(s_end, 9))] = res
         return res
 
+    def mid_apex(r, s_end):
+        """Fallback turnaround apex: the centre line half a thickness on
+        from s_end (towards the dead end), if both legs stay inside."""
+        L = r.length
+        toward_end = s_end > 0.5 * L
+        q = geo.centre(r, min(L, s_end + 0.5 * thick) if toward_end else max(0.0, s_end - 0.5 * thick))
+        a0, a1 = geo.landing(r, 0, s_end), geo.landing(r, 1, s_end)
+        if q.dist(a0.lerp(a1, 0.5)) < 0.2 * thick or not (_strut_ok(a0, q, region) and _strut_ok(q, a1, region)):
+            return None
+        geo.cache[(id(r), MID, round(s_end, 9))] = q
+        return q
+
     def segments(r):
         """Fixed support points of a run (ends / corners) → segments with
         their station-parameter length U."""
@@ -962,16 +975,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         segs = segments(r)
         ncorner = len(corners(r))
         if mode == 'two':
-            res = []
-            # the dead-end segment is the one at the dead end (first when
-            # the run starts at the dead end, else last)
-            dead_i = (0 if r.a[0] == 'E' else len(segs) - 1) if _dead_end_last(r) else -1
-            for i, (a, b, U) in enumerate(segs):
-                dead = i == dead_i
-                # between fixed points: odd (both phases end on opposite
-                # faces); the dead-end segment: any count (cap V turnaround)
-                opts = seg_options(U, None if dead else 1, 1, b - a, r, a, b)
-                res.append(opts[0])
+            # mirrored phases land every station (one on each face), so
+            # any count works: both phases always end on opposite faces
+            res = [seg_options(U, None, 1, b - a, r, a, b)[0] for a, b, U in segs]
             cost = sum(_spacing_cost(U, n, S) for (a, b, U), n in zip(segs, res))
             count_cache[key] = (res, cost)
             return count_cache[key]
@@ -1042,48 +1048,36 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     x1, sd1 = seq[-1]
                     seq = seq + [(x1, CAP), (x1, 1 - sd1)]
             return [seq]
-        # two phases, oriented from the junction end (out-and-back)
+        # Two MIRRORED phases (half a cycle apart), oriented from the
+        # junction end: at every station A lands one face and B the other,
+        # so each face is landed at EVERY station (combined support on a
+        # face ≈ the target, evenly) and the phases cross mid-wall between
+        # stations. (Pass 7 interleaved them a quarter cycle apart: each
+        # face then had alternating ~S / ~3S gaps.)
         rev = (not r.cycle and r.a[0] == 'E')
         segs_o = [(b, a, U) for a, b, U in reversed(segs)] if rev else segs
         ns_o = list(reversed(ns_)) if rev else ns_
         A, B = [(segs_o[0][0], s0)], [(segs_o[0][0], 1 - s0)]
-        aA = s0
-        dead_last = _dead_end_last(r)
-        for i, ((a, b, U), n) in enumerate(zip(segs_o, ns_o)):
+        sa = s0
+        for (a, b, U), n in zip(segs_o, ns_o):
             st = seg_stations(r, a, b, n) if not rev else \
                 list(reversed(seg_stations(r, b, a, n)))
-            final_dead = dead_last and i == len(segs_o) - 1
-            sa, sb = aA, 1 - aA
-            if final_dead:
-                # TURNAROUND = CAP V: both phases end at the last station on
-                # opposite faces, joined through a landing ON the cap — the
-                # end, both cap corners and the cap face are supported, no
-                # rung, no retrace.
-                # n odd: A and B both end at the last station, on opposite
-                # faces; n even: A ends there, B one station before (on the
-                # other face). Either way the cap landing sits within half a
-                # thickness of both cap corners.
-                for k in range(2, n, 2):
-                    sa = 1 - sa
-                    A.append((st[k], sa))
-                sa = 1 - sa
-                A.append((st[n], sa))
-                for k in range(1, n + 1, 2):
-                    sb = 1 - sb
-                    B.append((st[k], sb))
-                cap = [(st[n], CAP)] if cap_point(r, st[n]) is not None else []
-                if not cap and n % 2 == 0:
-                    return [A + list(reversed(B))]        # natural last stitch
-                return [A + cap + list(reversed(B))]
-            for k in range(2, n, 2):
+            for k in range(1, n + 1):
                 sa = 1 - sa
                 A.append((st[k], sa))
-            sa = 1 - sa
-            A.append((st[n], sa))
-            for k in range(1, n + 1, 2):
-                sb = 1 - sb
-                B.append((st[k], sb))
-            aA = sa
+                B.append((st[k], 1 - sa))
+        if _dead_end_last(r):
+            # TURNAROUND = CAP V: both phases end at the last station on
+            # opposite faces, joined through a landing ON the cap — the end,
+            # both cap corners and the cap face are supported; no rung, no
+            # retrace. Without a cap landing the V's apex is the centre line
+            # half a thickness on (still no rung across the wall).
+            x = A[-1][0]
+            if cap_point(r, x) is not None:
+                return [A + [(x, CAP)] + list(reversed(B))]
+            if mid_apex(r, x) is not None:
+                return [A + [(x, MID)] + list(reversed(B))]
+            return [A + list(reversed(B))]
         return [A, B]
 
     # -- 2. sides at run ends, junction pairing, stitch counts -------------
@@ -1201,31 +1195,54 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         """One stitch from face side_a at station s_a to the opposite face
         at s_b, following the wall between them: each point lies on the
         local face-to-face chord (straight walls: a straight stitch; curved
-        walls: it bends with the wall). Wave: a sine blended with the
-        straight crossing (WAVE_SINE), leaving a face at an angle. A corner
-        brace (same station, both faces) is straight."""
+        walls: it bends with the wall). Wave: a half sine tangent to both
+        faces, so the pass is one smooth wave through its landings. A
+        corner brace (same station, both faces) and cap-V legs are
+        straight."""
         pa, pb = geo.landing(r, side_a, s_a), geo.landing(r, side_b, s_b)
-        if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b):
+        if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b) or MID in (side_a, side_b):
             return [pa, pb]
         at_junction = (not r.cycle) and ((min(s_a, s_b) <= 1e-9 and r.a[0] == 'J') or
                                          (max(s_a, s_b) >= r.length - 1e-9 and r.b[0] == 'J'))
         at_corner = any(abs(c['s'] - x) < 1e-9 for c in corners(r) for x in (s_a, s_b % r.length if r.cycle else s_b))
         straight_ok = _strut_ok(pa, pb, region)
-        curved = pattern == 'wave' or not _straight(geo, r, s_a, s_b)
-        if (at_junction or (at_corner and pattern != 'wave')) and straight_ok:
-            curved = False              # junction / corner stitches: straight
+        wave = pattern == 'wave'
+        curved = wave or not _straight(geo, r, s_a, s_b)
+        if not wave and (at_junction or at_corner) and straight_ok:
+            curved = False              # zigzag junction / corner stitches: straight
         if not curved:
             return [pa, pb]
+        if wave:
+            # WAVE: a half sine TANGENT to both faces — consecutive stitches
+            # join smoothly at every landing (a continuous wave, no V). The
+            # ends are blended onto the actual landing points (junction /
+            # corner points may sit off the nominal face point) with a
+            # smoothstep, which keeps the tangency.
+            n = WAVE_SAMPLES
+            ea = pa - geo.side_point(r, side_a, s_a)
+            eb = pb - geo.side_point(r, side_b, s_b)
+            out = [pa]
+            for k in range(1, n):
+                f = k / n
+                s_ = s_a + f * (s_b - s_a)
+                w = (1 - math.cos(math.pi * f)) / 2
+                q = geo.side_point(r, side_a, s_).lerp(geo.side_point(r, side_b, s_), w)
+                out.append(q + ea * (1 - w) + eb * w)
+            out.append(pb)
+            if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(out, out[1:])):
+                return _no_foldback(out)
+            # beside a corner the face-to-face construction can leave the
+            # wall: a Hermite curve leaving / meeting each face along it
+            # (still tangent, still a wave) before falling back to straight
+            h = hermite(r, s_a, side_a, pa, s_b, side_b, pb)
+            if h is not None:
+                return h
+            return [pa, pb] if straight_ok else out
         out = [pa]
         for k in range(1, 8):
             f = k / 8
             s_ = s_a + f * (s_b - s_a)
-            # wave: a sine blended with the straight crossing, so it leaves
-            # a face at an angle rather than running along it (interleaved
-            # phases land one station apart on the same face)
-            w = f if pattern != 'wave' else \
-                (1 - WAVE_SINE) * f + WAVE_SINE * (1 - math.cos(math.pi * f)) / 2
-            out.append(geo.side_point(r, side_a, s_).lerp(geo.side_point(r, side_b, s_), w))
+            out.append(geo.side_point(r, side_a, s_).lerp(geo.side_point(r, side_b, s_), f))
         out.append(pb)
         if straight_ok and not all(_strut_ok(u, v, region) or u.dist(v) < 1e-9
                                    for u, v in zip(out, out[1:])):
@@ -1239,10 +1256,46 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             del out[1]
         return out
 
+    def hermite(r, s_a, side_a, pa, s_b, side_b, pb):
+        """Cubic Hermite stitch from pa to pb, tangent to the face at each
+        landing (direction of travel along the wall), inside the wall."""
+        sg = 1.0 if s_b > s_a else -1.0
+        d = max(0.5, 0.25 * thick)
+        # from the actual landing (a pinned corner point is not the
+        # nominal face point of its station)
+        ta = geo.side_point(r, side_a, s_a + sg * d) - pa
+        tb = pb - geo.side_point(r, side_b, s_b - sg * d)
+        if ta.length() < 1e-9 or tb.length() < 1e-9:
+            return None
+        ta, tb = ta * (1.0 / ta.length()), tb * (1.0 / tb.length())
+        D = pa.dist(pb)
+        for mag in (1.0, 0.6, 0.35):
+            m = mag * D
+            pts = [pa]
+            for k in range(1, WAVE_SAMPLES):
+                t = k / WAVE_SAMPLES
+                t2, t3 = t * t, t * t * t
+                h00, h10 = 2 * t3 - 3 * t2 + 1, t3 - 2 * t2 + t
+                h01, h11 = -2 * t3 + 3 * t2, t3 - t2
+                pts.append(Vec2(h00 * pa.x + h10 * m * ta.x + h01 * pb.x + h11 * m * tb.x,
+                                h00 * pa.y + h10 * m * ta.y + h01 * pb.y + h11 * m * tb.y))
+            pts.append(pb)
+            if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(pts, pts[1:])):
+                return _no_foldback(pts)
+        return None
+
+    stitch_memo = {}
+
     def emit(r, seq):
         poly = [geo.landing(r, seq[0][1], seq[0][0])]
         for (xa, sa), (xb, sb) in zip(seq, seq[1:]):
-            poly.extend(stitch(r, xa, sa, xb, sb)[1:])
+            # memoised by the actual landing points (junction hand-off
+            # points may be moved after a first emission)
+            pa, pb = geo.landing(r, sa, xa), geo.landing(r, sb, xb)
+            key = (id(r), round(xa, 9), sa, round(xb, 9), sb, pa.x, pa.y, pb.x, pb.y)
+            if key not in stitch_memo:
+                stitch_memo[key] = stitch(r, xa, sa, xb, sb)
+            poly.extend(stitch_memo[key][1:])
         return poly
 
     def run_crowding(r, sq):
@@ -1446,6 +1499,23 @@ def _straight(geo, r, s_a, s_b):
         if abs((pm.x - p0.x) * d.y - (pm.y - p0.y) * d.x) / L > 1e-3:
             return False
     return True
+
+
+def _no_foldback(poly):
+    """Drop interior points where the polyline reverses on itself (a
+    curve sample overshooting a landing in a tight inner bend)."""
+    out = list(poly)
+    changed = True
+    while changed and len(out) > 2:
+        changed = False
+        for k in range(1, len(out) - 1):
+            a, b, c = out[k - 1], out[k], out[k + 1]
+            v1, v2 = b - a, c - b
+            if v1.length() > 1e-9 and v2.length() > 1e-9 and v1.x * v2.x + v1.y * v2.y < 0:
+                del out[k]
+                changed = True
+                break
+    return out
 
 
 def _simplify(poly):

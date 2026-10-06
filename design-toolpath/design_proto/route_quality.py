@@ -482,6 +482,30 @@ def solid_metrics(layer, rho=CLEARANCE_RADIUS):
     }
 
 
+def face_support(layer):
+    """Support of each WALL boundary ring by the lattice: arc positions
+    of the lattice landings ON the ring and the gaps between consecutive
+    landings. Returns [{'length', 'landings', 'gaps'}] per ring. (Junction
+    hand-offs sit just inside the wall, so a gap may span a junction
+    corner.)"""
+    paths, meta = layer._build_effective()
+    lat = meta['network'].get('lattice') or {}
+    rings = [[tuple(q) for q in ring] for v in lat.values() for reg in v['regions']
+             for ring in reg.get('rings', [])]
+    gen = [[(q.x, q.y) for q in (meta['pts'].get(id(p)) or p.sample_points())]
+           for p in paths if getattr(p, 'treatment_id', '') == 'infill']
+    out = []
+    for ri, ring in enumerate(rings):
+        n = len(ring)
+        L = sum(math.dist(ring[i], ring[(i + 1) % n]) for i in range(n))
+        pos = sorted({round(rp[1], 4) for poly in gen for q in poly
+                      for rp in [_ring_pos([ring], q)] if rp is not None})
+        gaps = [b - a for a, b in zip(pos, pos[1:])] + ([pos[0] + L - pos[-1]] if pos else [L])
+        out.append({'length': round(L, 2), 'landings': len(pos),
+                    'gaps': [round(g, 3) for g in gaps]})
+    return out
+
+
 def corner_support(layer, turn_deg=35.0):
     """For every sharp vertex of the wall boundary (rings of the lattice
     regions; turning ≥ turn_deg within a short window), the distance to the
