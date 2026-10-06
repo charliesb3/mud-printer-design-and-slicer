@@ -18,6 +18,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
+from material import MaterialSpec
+
 # ---------------------------------------------------------------------------
 # Vec2
 # ---------------------------------------------------------------------------
@@ -1481,6 +1483,38 @@ class Opening:
 
 
 @dataclass
+class Trim:
+    """
+    A suppressed SECTION of a source path: the stretch between two
+    consecutive contacts with other source paths (or a contact and an open
+    end). Non-destructive — the source keeps its parametric identity; the
+    trim only removes that section from the effective design geometry.
+
+    It is stored as a topological SIGNATURE, not as coordinates, so it
+    follows parametric edits (trim.py resolves it on every build):
+      start / end: ids of the source(s) bounding the section at each
+                   contact ([] = the path's own open end)
+      inside:      {closed bounding source id: section midpoint inside it?}
+      u_mid:       midpoint as a fraction of the source's length — only a
+                   tie-break between sections with the same signature.
+    A trim that matches no current section (an intersection is gone) or
+    several (a tie u_mid cannot break) is UNRESOLVED: kept, but nothing is
+    suppressed.
+    """
+    id: str
+    source_path_id: str
+    start: list = field(default_factory=list)
+    end: list = field(default_factory=list)
+    inside: dict = field(default_factory=dict)
+    u_mid: float = 0.5
+
+    def to_dict(self) -> dict:
+        return {'id': self.id, 'source_path_id': self.source_path_id,
+                'start': list(self.start), 'end': list(self.end),
+                'inside': dict(self.inside), 'u_mid': self.u_mid}
+
+
+@dataclass
 class RegionOverride:
     """
     Explicit wall / void classification of one region of a wall network
@@ -1755,6 +1789,11 @@ def _opening_removed_intervals(openings: list[Opening], L: float,
             a, b = max(0.0, c - w / 2.0), min(L, c + w / 2.0)
             if b - a > 1e-9:
                 raw.append((a, b))
+    return _merge_removed(raw, L, closed)
+
+
+def _merge_removed(raw: list, L: float, closed: bool) -> list[tuple[float, float]]:
+    """Union of removed arc intervals on one path (openings, trims)."""
     # Union of all openings on the path: overlapping or touching intervals
     # become ONE removed interval (caps only at its outer boundaries).
     tol = OPENING_MERGE_TOL
@@ -1930,6 +1969,7 @@ class _Cut:
     face: Optional[tuple]             # (outermost, innermost) wall endpoints
     ends: list = field(default_factory=list)      # every wall endpoint here
     landings: list = field(default_factory=list)  # lattice ends on the face
+    trim: bool = False                # a trim boundary (free end), not an opening
 
 
 @dataclass
@@ -1949,13 +1989,23 @@ class _OpeningPlan:
     """
     def __init__(self, src_pts: list[Vec2], closed: bool,
                  offsets: list, openings: list[Opening],
-                 cap_reach: float = 0.0):
+                 cap_reach: float = 0.0, trims: list = ()):
         self.src_pts = src_pts
         self.closed = closed
         self.cum = _cum_lengths(src_pts, closed)
         self.L = self.cum[-1]
-        self.removed = _opening_removed_intervals(openings, self.L, closed,
-                                                  cap_reach)
+        # TRIMS (resolved sections, trim.py) remove arc intervals too, but
+        # they are not openings: no clear void, no cap-reach widening, and
+        # their boundaries are FREE ends (they may join the wall they meet).
+        self.opening_removed = _opening_removed_intervals(openings, self.L, closed,
+                                                          cap_reach)
+        # trims: (a, b[, exact point at a, at b]) — a trimmed end is placed
+        # exactly on the contact point it shares with the path it meets
+        self.trim_bounds = [(t[0], t[2] if len(t) > 2 else None) for t in trims] + \
+                           [(t[1], t[3] if len(t) > 3 else None) for t in trims]
+        self.removed = (_merge_removed(list(self.opening_removed) + [(t[0], t[1]) for t in trims],
+                                       self.L, closed)
+                        if trims else self.opening_removed)
         self.pieces: list[_WallPiece] = []
         self.cuts: list[_Cut] = []
         off_info = []
@@ -1968,6 +2018,10 @@ class _OpeningPlan:
             sub = _sub_polyline(src_pts, self.cum, a, b, closed)
             if len(sub) < 2:
                 continue
+            for idx, s_ in ((0, a), (-1, b)):
+                q = self._trim_point(s_)
+                if q is not None and q.dist(sub[idx]) <= 1e-6:
+                    sub[idx] = q
             is_start_cut = closed or a > 1e-9
             is_end_cut = closed or b < self.L - 1e-9
             walls = []
@@ -1980,8 +2034,29 @@ class _OpeningPlan:
                 if is_start_cut else None
             end_cut = self._make_cut(b, False, sub, walls) \
                 if is_end_cut else None
+            for c, s in ((start_cut, a), (end_cut, b)):
+                if c is not None:
+                    c.trim = self.is_trim_bound(s)
             self.cuts += [c for c in (start_cut, end_cut) if c]
             self.pieces.append(_WallPiece(sub, walls, start_cut, end_cut))
+
+    def _trim_bound(self, s: float):
+        for t, q in self.trim_bounds:
+            d = abs(s - t)
+            if self.closed and self.L > 0:
+                d = min(d % self.L, self.L - d % self.L)
+            if d <= OPENING_MERGE_TOL:
+                return (t, q)
+        return None
+
+    def is_trim_bound(self, s: float) -> bool:
+        """Is arc position s a trim boundary (a free end, not an opening cut)?"""
+        return self._trim_bound(s) is not None
+
+    def _trim_point(self, s: float):
+        """The exact shared contact point of a trim boundary at s (or None)."""
+        tb = self._trim_bound(s)
+        return tb[1] if tb else None
 
     def _cut_frame(self, s: float, forward: bool) -> tuple[Vec2, Vec2]:
         p, k = _locate_s(self.src_pts, self.cum, s, self.closed, forward)
@@ -2096,7 +2171,7 @@ class _OpeningPlan:
         if hi[0] - lo[0] <= 1e-9:
             return []
         out = []
-        for a, b in self.removed:
+        for a, b in self.opening_removed:     # trims leave no clear void
             ca = a + cap_reach if (self.closed or a > 1e-9) else a
             cb = b - cap_reach if (self.closed or b < self.L - 1e-9) else b
             if cb - ca <= 1e-6:
@@ -2262,6 +2337,7 @@ class PrintLayer:
     cap_style: str = 'flat'           # 'flat' | 'rounded_corners' | 'full_round'
     cap_corner_radius: float = 0.0    # fillet radius for 'rounded_corners' cap
     openings: list[Opening] = field(default_factory=list)
+    trims: list[Trim] = field(default_factory=list)
     region_overrides: list[RegionOverride] = field(default_factory=list)
     infills: list[RegionInfill] = field(default_factory=list)
     junction_style: str = 'miter'     # default for every junction corner
@@ -2275,6 +2351,14 @@ class PrintLayer:
     # closed (start = end) layer route when it is cheap.
     return_paths: bool = True
     prefer_closed: bool = True
+    # MATERIAL / BEAD (material.py): the physical bead deposited around each
+    # printable centerline. First pass: carried, not yet used by geometry.
+    material: MaterialSpec = field(default_factory=MaterialSpec)
+    # ROUTE ORIGINS: where a CLOSED printable component's circuit begins and
+    # returns, chosen by the designer — [{'strand': printable strand id,
+    # 'u': fraction of its length}] (resolve_route_origins). A routing
+    # preference only: never changes geometry.
+    route_origins: list = field(default_factory=list)
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -2329,9 +2413,12 @@ class PrintLayer:
                 if o in wall_regions:
                     cand.append((o, i))
         out, used = {}, set()
+        trimmed = getattr(self, '_trimmed', set())
         for o, i in cand:
             if o in used or i in used or o not in by_id or i not in by_id:
                 continue
+            if o in trimmed or i in trimmed:
+                continue        # a trimmed boundary is no longer a closed face
             if not (by_id[o].closed and by_id[i].closed) or offsets_by_source.get(i):
                 continue
             if len(processed.get(o, ())) < 3 or len(processed.get(i, ())) < 3:
@@ -2358,9 +2445,11 @@ class PrintLayer:
         linked = set(partners) | set(partners.values())
         nest = self._nesting(processed)
         out = {'cuts': {}, 'faces': {}, 'voids': {}, 'rings': {}, 'status': {}, 'handled': set()}
+        trimmed = getattr(self, '_trimmed', set())
         for inf in self.infills:
             O = inf.path_id
             if inf.kind != 'wall' or O not in by_id or not by_id[O].closed or O in linked \
+                    or O in trimmed \
                     or offsets_by_source.get(O) or len(processed.get(O, ())) < 3:
                 continue
             voids = [k for k, par in nest.items() if par == O and k in by_id and
@@ -2464,13 +2553,21 @@ class PrintLayer:
                               treatment_id='opening_cut')
         return _FaceWall(part_id, dist, prim.id), derived
 
-    def _opening_cap_reach(self, offsets) -> float:
+    def _cap_style_of(self, sid) -> str:
+        """End treatment of a wall system: the layer's cap style, except a
+        physical RETURN-LANE (two-pass) wall, which turns round in a
+        semicircle (its "cap" is the nozzle's U-turn, not architecture)."""
+        if sid in getattr(self, '_return_lanes', ()):
+            return 'full_round'
+        return self._normalized_cap_style()
+
+    def _opening_cap_reach(self, offsets, sid=None) -> float:
         """How far this wall system's end treatment protrudes past a cut
         face: the effective cap radius for its total thickness W."""
         dists = [0.0] + [ot.distance for ot, d in offsets
                          if len(d.sample_points()) >= 2]
         W = max(dists) - min(dists)
-        style = self._normalized_cap_style()
+        style = self._cap_style_of(sid)
         if W <= 1e-9 or style == 'flat':
             return 0.0
         if style == 'full_round':
@@ -2532,6 +2629,16 @@ class PrintLayer:
         snapped = self._snap_source_ends(source_paths_in_order, processed,
                                          N.SNAP_TOL)
 
+        # 1c) TRIMS: sections of sources between their contacts with other
+        # sources (design geometry, untrimmed), and the sections the layer's
+        # trims name. A trimmed source keeps its parametric identity; its
+        # removed intervals cut its whole wall assembly in stage 4 (as open
+        # pieces with FREE ends) and it no longer bounds a closed region.
+        import trim as TR
+        trim_secs = TR.sections(source_paths_in_order, processed)
+        trim_removed, trim_status = TR.resolve(self.trims, trim_secs, set(processed))
+        self._trimmed = {pid for pid, iv in trim_removed.items() if iv}
+
         # 2) Full (uncut) source geometry = the processed polyline. If
         # rounding (or an end snap) changed it we wrap it in a DerivedPath;
         # otherwise the parametric source path flows through unchanged
@@ -2577,6 +2684,20 @@ class PrintLayer:
             offsets_by_source.setdefault(src.id, []).append((ot, derived))
             source_of[ot.id] = src.id
 
+        # 3b) PHYSICAL: a return-lane (two-pass) branch ending on a SINGLE-BEAD
+        # host joins it: the host is cut exactly across the branch mouth
+        # (between the two lanes' landings — the trim machinery, exact shared
+        # points) and the branch has no U-turn there, so host → lane → U-turn
+        # → lane → host is one closed circuit (no degree-3 landings).
+        self._wire_attached = []               # (source id, end point) without a cap
+        self._mouths = []                      # (branch id, landing, landing)
+        self._mouth_cut = set()
+        if self.material.physical:
+            for host_id, iv in self._mouth_cuts(N, source_paths_in_order, processed,
+                                                offsets_by_source).items():
+                trim_removed.setdefault(host_id, []).extend(iv)
+                self._mouth_cut.add(host_id)
+
         # 4) Openings → how each affected wall assembly is cut. A wall whose
         # two faces are two SOURCE paths (an explicit wall relationship, or
         # a parametric inset bounding a wall-infill region with its parent)
@@ -2604,10 +2725,11 @@ class PrintLayer:
                 ops = ops + self._partner_openings(part, p, processed)
                 if ops:
                     extra = [self._partner_face(p, part, processed)]
-            if ops and len(processed[p.id]) >= 2:
+            trims = trim_removed.get(p.id, [])
+            if (ops or trims) and len(processed[p.id]) >= 2:
                 offs = offsets_by_source.get(p.id, []) + extra
                 plan = _OpeningPlan(processed[p.id], p.closed, offs, ops,
-                                    self._opening_cap_reach(offs))
+                                    self._opening_cap_reach(offs, p.id), trims)
                 if plan.removed:
                     plans[p.id] = plan
                     for ot, derived in extra:
@@ -2681,10 +2803,12 @@ class PrintLayer:
                 walls = [(0.0, pc.src_pts, f'{p.id}~{k}')] + \
                         [(ot.distance, wp, f'{ot.id}~{k}') for ot, wp in pc.walls]
                 walls.sort(key=lambda w: -w[0])
+                # opening faces are CUT ends; path ends and trim ends are
+                # FREE (a trimmed wall may join the wall it now ends on)
                 net_pieces.append(N.NetPiece(
                     p.id, f'{p.id}~{k}', False, walls,
-                    ['cut' if pc.start_cut else 'free',
-                     'cut' if pc.end_cut else 'free']))
+                    ['cut' if pc.start_cut and not pc.start_cut.trim else 'free',
+                     'cut' if pc.end_cut and not pc.end_cut.trim else 'free']))
         for pc in net_pieces:
             pc.ref_only = pc.sys_id in ref_only
         piece_by_key = {pc.key: pc for pc in net_pieces}
@@ -2774,10 +2898,13 @@ class PrintLayer:
                     for k, pc in enumerate(plan.pieces) if pc.walls]
             for pid, src_pts, walls, landings in pieces:
                 npc = piece_by_key.get(pid)
-                ends = _wall_system_end_pts(src_pts, walls, cap_style,
+                ends = _wall_system_end_pts(src_pts, walls, self._cap_style_of(src.id),
                                             self.cap_corner_radius, landings)
                 for which, ((cap_pts, extensions), tag, label) in enumerate(zip(
                         ends, ('_cs', '_ce'), ('cap_start', 'cap_end'))):
+                    e_pt = src_pts[0] if which == 0 else src_pts[-1]
+                    if any(sid == src.id and e_pt.dist(q) < 1e-9 for sid, q in self._wire_attached):
+                        continue        # joins a single-bead host: no U-turn here
                     if cap_pts:
                         cap = DerivedPath(
                             cap_pts, closed=False, role='cap', label=label,
@@ -2819,11 +2946,16 @@ class PrintLayer:
         regions = network.pop('_rings', [])
         jobs = network.pop('_infill_jobs', [])
         network['reference_only'] = sorted(ref_only)
+        network['return_lanes'] = sorted(getattr(self, '_return_lanes', ()))
         network['opening_status'] = dict(region_ops['status'])
         # faces cut on behalf of a doorway (room faces, absorbed inner faces)
         # are drawn from the backend pieces, like network-trimmed sources
         network['modified_sources'] = sorted(set(network.get('modified_sources', [])) |
-                                             set(region_ops['cuts']) | set(self._absorbed))
+                                             set(region_ops['cuts']) | set(self._absorbed) |
+                                             self._trimmed)
+        # trimmable sections (for the Trim tool's hover) and each trim's state
+        network['trim_sections'] = [s.to_dict() for secs in trim_secs.values() for s in secs]
+        network['trims'] = trim_status
         network['wall_relations'] = dict(getattr(self, '_relation_status', {}))
         network['derived_sources'] = {
             p.id: [[q.x, q.y] for q in p.points]
@@ -2865,9 +2997,12 @@ class PrintLayer:
                 # WALL regions: route-aware stitching motifs (wall_lattice);
                 # wide regions (areas, not walls) keep the field generator +
                 # local repair below.
+                phys = self.material.physical
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
-                             self.prefer_closed,
-                             float(inf.params.get('max_unsupported', 0) or 0) or None)
+                             self.prefer_closed or phys,
+                             float(inf.params.get('max_unsupported', 0) or 0) or None,
+                             contact=self.material.contact_separation() if phys else 0.0,
+                             closed=phys)
                 if lp is not None:
                     for j, poly in enumerate(lp.polylines):
                         dp = DerivedPath(poly, closed=False, role='lattice',
@@ -3005,8 +3140,9 @@ class PrintLayer:
     def _nesting(self, processed) -> dict:
         """Closed paths → the smallest closed path that contains them (or
         None): the geometric region / void tree."""
+        trimmed = getattr(self, '_trimmed', set())     # trimmed: no longer closed
         closed = [p for p in self.source_paths if p.closed and p.id in processed
-                  and len(processed[p.id]) >= 3]
+                  and p.id not in trimmed and len(processed[p.id]) >= 3]
         area = {p.id: abs(_polygon_area(processed[p.id])) for p in closed}
         parent = {}
         for p in closed:
@@ -3076,18 +3212,96 @@ class PrintLayer:
         network's NetworkWall."""
         net_of = {pid: ids for ids in source_nets for pid in ids}
         out, ref_only = [], set()
+        self._return_lanes = set()
+        mat = self.material
+        extra = {ot.source_path_id for ot in self.offset_treatments}
         for p in sources:
             spec = p.wall
             if spec is None:
                 nw = self._network_wall_for(net_of.get(p.id, [p.id]))
                 if nw is not None:
                     spec = WallSpec(nw.thickness, nw.align, nw.print_reference)
+            opened = p.id in {o.source_path_id for o in self.openings} and \
+                p.id not in {inf.path_id for inf in self.infills}
+            if spec is None and mat.physical and (not p.closed or opened) and p.id not in extra:
+                # PHYSICAL: a single-bead OPEN wall (or a closed one that an
+                # opening opens) cannot print out and back over itself — it
+                # becomes a TWO-PASS wall: the passes are a RETURN LANE apart
+                # (W − R), joined by a U-turn; the drawn path is their
+                # (unprinted) centre reference.
+                spec = WallSpec(mat.return_separation(), 'center', False)
+                self._return_lanes.add(p.id)
             if spec is not None:
                 offs = spec.offsets(p.id, p.closed, processed[p.id])
                 out.extend(offs)
                 if offs and not spec.reference_printed(p.closed):
                     ref_only.add(p.id)
         return out, ref_only
+
+    def _mouth_cuts(self, N, sources, processed, offsets_by_source) -> dict:
+        """{host id: [(a, b, pa, pb)]} — for each end of a RETURN-LANE wall
+        lying on a single-bead host: the host interval between the two lane
+        landings (each lane's end carried along the branch's end tangent to
+        the host). The lanes' end points are moved exactly onto the
+        landings; that end gets no U-turn (self._wire_attached)."""
+        lanes = getattr(self, '_return_lanes', set())
+        by_id = {p.id: p for p in sources}
+        hosts = [p for p in sources if p.id not in lanes and not offsets_by_source.get(p.id)
+                 and len(processed.get(p.id, ())) >= 2]
+        out: dict = {}
+        for bid in sorted(lanes):
+            b = by_id.get(bid)
+            faces = [d for _, d in offsets_by_source.get(bid, [])]
+            if b is None or b.closed or len(faces) != 2:
+                continue
+            bpts = processed[bid]
+            for which in (0, -1):
+                E = bpts[which]
+                host = None
+                for h in hosts:
+                    hp = processed[h.id]
+                    if N.dist_to_polyline(E, hp, h.closed) > 1e-6:
+                        continue
+                    if not h.closed and min(E.dist(hp[0]), E.dist(hp[-1])) < 1e-6:
+                        continue                 # end to end: not a branch mouth
+                    host = h
+                    break
+                if host is None:
+                    continue
+                hp = processed[host.id]
+                out_dir = N._end_dir(bpts, which) * -1.0      # leaving the branch
+                hits = []
+                for d in faces:
+                    F = d._points[which]
+                    hs = N._ray_hits(F, out_dir, hp, host.closed, -3.0 * F.dist(E) - 1.0,
+                                     3.0 * F.dist(E) + 1.0)
+                    if not hs:
+                        break
+                    hits.append((d, min(hs, key=lambda h_: abs(h_[0]))[1]))
+                if len(hits) != 2:
+                    continue
+                cum = _cum_lengths(hp, host.closed)
+                L = cum[-1]
+                (d1, H1), (d2, H2) = hits
+                s1 = _project_to_polyline(H1, hp, cum, host.closed)[0]
+                s2 = _project_to_polyline(H2, hp, cum, host.closed)[0]
+                if s1 > s2:
+                    (s1, H1), (s2, H2) = (s2, H2), (s1, H1)
+                if host.closed and s2 - s1 > L / 2:          # the short way round
+                    s1, s2, H1, H2 = s2, s1 + L, H2, H1
+                if s2 - s1 <= 1e-6:
+                    continue
+                for d, H in hits:                            # lanes land exactly
+                    if d._points[which].dist(H) > 1e-9:
+                        if which == 0:
+                            d._points.insert(0, H)
+                        else:
+                            d._points.append(H)
+                    d._points[which] = H
+                out.setdefault(host.id, []).append((s1, s2, H1, H2))
+                self._wire_attached.append((bid, E))
+                self._mouths.append((bid, H1, H2))
+        return out
 
     def _snap_source_ends(self, sources, processed, tol) -> set:
         """Move open source ends lying within tol (but not exactly on)
@@ -3182,8 +3396,9 @@ class PrintLayer:
                         uf.union(f'S:{inf.path_id}', f'S:{sid}')
                 continue
             pcs = by_sys.get(inf.path_id, [])
-            if len(pcs) != 1 or not pcs[0].closed or pcs[0].thick:
-                continue
+            if inf.path_id not in getattr(self, '_mouth_cut', ()) and \
+                    (len(pcs) != 1 or not pcs[0].closed or pcs[0].thick):
+                continue        # (a branch mouth does not open a declared region)
             ring = processed[inf.path_id]
             rings = [ring]
             for sid, others in by_sys.items():
@@ -3222,6 +3437,11 @@ class PrintLayer:
             for jn in joins:
                 beads.extend(jn.beads)
                 material.extend(jn.material)
+            # a two-pass branch's mouth on a single-bead host closes its band
+            # for classification, but is never printed
+            for k, (bid, a, b) in enumerate(getattr(self, '_mouths', [])):
+                if f'S:{bid}' in elems:
+                    beads.append(N.Bead(f'{bid}_mouth{k}', [a, b], False, N.SPLIT, f'S:{bid}'))
             # Lattice between two separate systems: its cavity is wall,
             # except the inside of closed walls lying within it (islands).
             for e in sorted(elems):
@@ -3249,7 +3469,7 @@ class PrintLayer:
                     continue
                 offs = offsets_by_source.get(sid, [])
                 for k, (ring, _, _) in enumerate(plan.clear_voids(
-                        offs, self._opening_cap_reach(offs))):
+                        offs, self._opening_cap_reach(offs, sid))):
                     # The whole clear-void boundary must be in the
                     # arrangement (its sides follow walls the opening has
                     # cut away), so anything crossing the doorway is split
@@ -3277,7 +3497,8 @@ class PrintLayer:
             # Junction corners: treated by the layer's junction settings,
             # independent of every source's own Corner R.
             corners = N.junction_corners(res)
-            fillets = N.round_junctions(res, corners, self._junction_radius)
+            fillets = N.round_junctions(res, corners, self._junction_radius,
+                                        max((pc.width for pc in comp_pieces), default=0.0))
             self._emit_network(N, res, replaced, appended, cls_of, summary)
             ci = len(summary['components'])
             summary['components'].append({
@@ -3326,6 +3547,12 @@ class PrintLayer:
                         treatment=js.treatment if js else self.junction_style,
                         radius=js.radius if js else self.junction_radius,
                         override=js is not None)
+            # radius actually built: limited by the geometry, or derived for
+            # the inner face of a wall turn (concentric with its outer face)
+            info.update(actual_radius=getattr(corner, 'actual', None),
+                        limited=bool(getattr(corner, 'limited', False)),
+                        partner=getattr(corner, 'partner', None),
+                        derived=getattr(corner, 'requested', 0) is None)
         return info
 
     def _region_infill(self, N, res, comps, comp_of, fillets, infills,
@@ -3490,6 +3717,15 @@ class PrintLayer:
             replaced[id(p)] = pieces
         summary['modified_sources'] = sorted(set(summary['modified_sources']))
 
+    def printable_centerlines(self, paths=None, meta=None) -> list:
+        """The resolved PRINTABLE centerlines — exactly the strands the
+        router prints (so reference lines, construction geometry and
+        non-printed region boundaries never get a bead):
+        [{'id', 'pts': [[x, y]…], 'closed'}]."""
+        rl = self.to_routing_layer(paths, meta)
+        return [{'id': s.id, 'pts': [[q.x, q.y] for q in s.points], 'closed': bool(s.closed)}
+                for s in rl.strands]
+
     def to_routing_layer(self, paths=None, meta=None):
         """
         Convert effective paths to the Strand/Layer format expected by the
@@ -3555,6 +3791,49 @@ class PrintLayer:
             'return_paths': self.return_paths,
             'prefer_closed': self.prefer_closed,
         }
+
+
+def resolve_route_origins(strands, origins) -> tuple[list, list]:
+    """ROUTE ORIGIN → a routing node. Each origin names a printable strand
+    (stable id of the router's strand) and a fraction u of its length; the
+    point there is inserted into that strand as a vertex (a collinear
+    split — the geometry is unchanged) so the route can begin there.
+    Returns (points, report). An origin whose strand no longer exists is
+    'missing' and the route falls back to automatic selection — it is never
+    moved onto other geometry. (Whether the strand's component is closed is
+    decided by the router: an open component ignores its origin.)"""
+    by_id = {st.id: st for st in strands}
+    pts, report = [], []
+    for o in origins or []:
+        sid, u = o.get('strand'), float(o.get('u', 0.0) or 0.0)
+        st = by_id.get(sid)
+        if st is None or len(st.points) < 2:
+            report.append({'strand': sid, 'u': u, 'status': 'missing'})
+            continue
+        P = st.points
+        ring = list(P) + ([P[0]] if st.closed else [])
+        lens = [ring[i].dist(ring[i + 1]) for i in range(len(ring) - 1)]
+        L = sum(lens)
+        if L <= 1e-9:
+            report.append({'strand': sid, 'u': u, 'status': 'missing'})
+            continue
+        target = (u % 1.0 if st.closed else max(0.0, min(1.0, u))) * L
+        acc, k = 0.0, 0
+        while k < len(lens) - 1 and acc + lens[k] < target:
+            acc += lens[k]
+            k += 1
+        f = 0.0 if lens[k] < 1e-12 else (target - acc) / lens[k]
+        a, b = ring[k], ring[k + 1]
+        q = type(a)(a.x + f * (b.x - a.x), a.y + f * (b.y - a.y))
+        if q.dist(a) < 1e-9:
+            q = a
+        elif q.dist(b) < 1e-9:
+            q = b
+        else:
+            st.points = list(P[:k + 1]) + [q] + list(P[k + 1:])
+        pts.append(q)
+        report.append({'strand': sid, 'u': u, 'x': q.x, 'y': q.y, 'status': 'ok'})
+    return pts, report
 
 
 def _same_polyline(a: list[Vec2], b: list[Vec2]) -> bool:

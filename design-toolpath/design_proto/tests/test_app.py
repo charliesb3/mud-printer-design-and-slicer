@@ -50,6 +50,72 @@ class TestStaticAssets:
                 f"Link href '{href}' returned {resp.status_code}"
 
 
+class TestWorkspaceLayout:
+    """Three-column workspace: DESIGN (what exists) left, canvas centre,
+    PRINT / TOOLPATH (how it prints) right; global tools stay in the toolbar."""
+
+    @staticmethod
+    def _regions(html):
+        from html.parser import HTMLParser
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack, self.where, self.ids = [], {}, []
+
+            VOID = ('input', 'br', 'meta', 'img', 'link')
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                region = self.stack[-1] if self.stack else None
+                if a.get('id') in ('sidebar-design', 'sidebar-print', 'sidebar-material', 'canvas-wrap'):
+                    region = a['id']
+                elif 'toolbar' in (a.get('class') or '').split():
+                    region = 'toolbar'
+                if a.get('id'):
+                    self.ids.append(a['id'])
+                    self.where[a['id']] = region
+                if tag not in self.VOID:
+                    self.stack.append(region)
+
+            def handle_endtag(self, tag):
+                if tag not in self.VOID and self.stack:
+                    self.stack.pop()
+
+        p = P()
+        p.feed(html)
+        return p
+
+    def test_controls_are_split_design_left_print_right(self, client):
+        p = self._regions(client.get('/').data.decode())
+        assert len(p.ids) == len(set(p.ids)), 'duplicate element ids'
+        design = ['path-list', 'path-props-section', 'path-props', 'offset-section', 'offset-list',
+                  'junction-props-section', 'junction-props',
+                  'wg-junction-style', 'wg-junction-radius', 'wg-cap-style', 'wg-cap-corner-radius',
+                  'network-section', 'network-props']
+        prnt = ['infill-section', 'infill-list', 'override-reverse', 'route-returns', 'route-closed', 'metrics-section', 'm-runs']
+        tools = ['tool-edit', 'tool-draw', 'tool-line', 'tool-curve', 'tool-circle', 'tool-ellipse',
+                 'tool-rect', 'tool-opening', 'tool-trim', 'btn-undo', 'btn-redo', 'btn-duplicate',
+                 'btn-toolpath', 'btn-arrows', 'btn-dims']
+        for i in design:
+            assert p.where.get(i) == 'sidebar-design', f'{i} should be in the Design sidebar'
+        for i in prnt:
+            assert p.where.get(i) == 'sidebar-print', f'{i} should be in the Print / Toolpath sidebar'
+        for i in tools:
+            assert p.where.get(i) == 'toolbar', f'{i} should stay in the top toolbar'
+        for i in ('canvas', 'transport-bar', 'hint', 'zoom-readout'):
+            assert p.where.get(i) == 'canvas-wrap'
+        for i in ('bead-show', 'bead-width'):
+            assert p.where.get(i) == 'sidebar-material', f'{i} should be in Material / Bead'
+        assert p.where.get('btn-beads') == 'toolbar'
+
+    def test_canvas_sits_between_the_sidebars(self, client):
+        html = client.get('/').data.decode()
+        order = [html.index(f'id="{i}"') for i in ('sidebar-design', 'canvas-wrap',
+                                                     'sidebar-material', 'sidebar-print')]
+        assert order == sorted(order)
+
+
 # ---------------------------------------------------------------------------
 # API — generators
 # ---------------------------------------------------------------------------
@@ -1289,3 +1355,12 @@ class TestRoundedCornersEndRadiusAPI:
         assert resp.status_code == 200
         m = resp.get_json()['metrics']
         assert m['travel_moves'] == 0 and m['print_runs'] == 1
+
+
+@pytest.mark.skipif(__import__('shutil').which('node') is None, reason='node not installed')
+def test_ui_view_smoke():
+    """Zoom / pan (world ↔ canvas), interactions under zoom, Beads OFF / ON."""
+    import subprocess
+    script = os.path.join(os.path.dirname(__file__), 'js', 'ui_view_smoke.js')
+    proc = subprocess.run(['node', script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr

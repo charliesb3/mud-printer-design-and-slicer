@@ -12,6 +12,8 @@ let _mousePosW = null;       // current mouse world-coords (for snap-to-first pr
 let showToolpath = true;
 let showArrows = true;
 let showDimensions = false;
+let showBeads = false;       // view: physical bead footprint (Material / Bead)
+let printable = [];          // resolved PRINTABLE centerlines from the backend
 
 // Playback state
 let playbackPos = 0.0;         // 0.0–1.0 fraction of total route distance
@@ -50,6 +52,8 @@ const layer = {
   cap_style: 'flat',
   cap_corner_radius: 0,
   openings: [],         // path-relative wall openings (see Openings section)
+  trims: [],            // suppressed source sections (see Trim section)
+  route_origins: [],    // [{ strand, u }] where closed routes begin (see Route origin)
   region_overrides: [], // wall-network region paint (wall/void); no UI yet
   infills: [],          // wall-region infill (lattice of a whole wall region)
   junction_style: 'miter',   // default treatment of network junction corners
@@ -57,6 +61,8 @@ const layer = {
   junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
   network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
   wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
+  // MATERIAL / BEAD (physical deposit; see Bead section)
+  material: { bead_width: 3.0, contact_overlap: 0.75, return_overlap: 0.75, physical: true },
   return_paths: true,        // "Infill repair": repair of the wide-region field fallback
   prefer_closed: true,       // prefer a closed (start = end) layer route
 };
@@ -87,14 +93,65 @@ window.addEventListener('resize', resizeCanvas);
 
 const WORLD = 400;
 
+// VIEW (zoom / pan) — part of the world ↔ canvas transform, so every hit
+// test, drag and snap works at any zoom. View only: never geometry.
+// zoom 1, offset 0 = "100 %" (the whole 400 in workspace fits the canvas).
+const view = { z: 1, px: 0, py: 0 };
+const VIEW_MIN = 0.25, VIEW_MAX = 24;
+
+function _viewScale() { return canvas.width / WORLD * view.z; }     // px per inch
+
 function worldToCanvas(x, y) {
-  const s = canvas.width / WORLD;
-  return [x * s, (WORLD - y) * s];
+  const s = _viewScale();
+  return [x * s + view.px, (WORLD - y) * s + view.py];
 }
 
 function canvasToWorld(cx, cy) {
-  const s = WORLD / canvas.width;
-  return [cx * s, WORLD - cy * s];
+  const s = _viewScale();
+  return [(cx - view.px) / s, WORLD - (cy - view.py) / s];
+}
+
+// world-unit tolerances follow the zoom (constant on screen)
+function _applyViewTolerances() {
+  HIT_DIST = 10 / view.z;
+  SNAP_RADIUS = 12 / view.z;
+}
+
+function setView(z, px, py) {
+  view.z = Math.max(VIEW_MIN, Math.min(VIEW_MAX, z));
+  view.px = px; view.py = py;
+  _applyViewTolerances();
+  const el = document.getElementById('zoom-readout');
+  if (el) el.textContent = Math.round(view.z * 100) + '%';
+  repaint();
+}
+
+// zoom by `factor` keeping the world point under canvas point (cx, cy) fixed
+function zoomAt(cx, cy, factor) {
+  const [wx, wy] = canvasToWorld(cx, cy);
+  const z = Math.max(VIEW_MIN, Math.min(VIEW_MAX, view.z * factor));
+  const s = canvas.width / WORLD * z;
+  setView(z, cx - wx * s, cy - (WORLD - wy) * s);
+}
+
+function panBy(dx, dy) { setView(view.z, view.px + dx, view.py + dy); }
+
+function viewReset() { setView(1, 0, 0); }        // "100 %"
+
+// Fit: frame the current print / design geometry
+function viewFit() {
+  const pts = [];
+  for (const c of printable || []) for (const q of c.pts || []) pts.push(q);
+  if (!pts.length) for (const p of layer.source_paths) for (const q of p.points || []) pts.push(q);
+  for (const d of derivedPaths || []) for (const q of d.points || []) pts.push(q);
+  if (!pts.length) { viewReset(); return; }
+  const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const s0 = canvas.width / WORLD;
+  const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
+  const z = Math.max(VIEW_MIN, Math.min(VIEW_MAX, 0.85 * Math.min(canvas.width / (w * s0), canvas.height / (h * s0))));
+  const s = s0 * z, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  setView(z, canvas.width / 2 - cx * s, canvas.height / 2 - (WORLD - cy) * s);
 }
 
 // ---------------------------------------------------------------------------
@@ -400,21 +457,6 @@ function drawHandle(wx, wy, shape) {
   ctx.restore();
 }
 
-function drawSeamMarker(cx, cy) {
-  const r = 5;
-  ctx.save();
-  ctx.strokeStyle = '#ffdd00';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - r);
-  ctx.lineTo(cx + r, cy);
-  ctx.lineTo(cx, cy + r);
-  ctx.lineTo(cx - r, cy);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.restore();
-}
-
 // ---------------------------------------------------------------------------
 // Repaint
 // ---------------------------------------------------------------------------
@@ -422,9 +464,12 @@ function drawSeamMarker(cx, cy) {
 function repaint() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawGrid();
+  drawBeads();
+  if (!showBeads && !(showToolpath && routeResult)) drawPrintableLines();
   drawEffectivePaths();
   drawOpenings();
   drawJunctions();
+  drawTrimHover();
   if (showToolpath && routeResult) {
     if (playbackPos > 0.0 || playbackPlaying) {
       drawToolpathWithPlayback(routeResult.moves);
@@ -506,11 +551,31 @@ function drawEffectivePaths() {
   const trimmed = _networkTrimmed();
   const dragged = _draggedPathId();
   const refOnly = new Set((networkInfo && networkInfo.reference_only) || []);
+  // PRINTABLE VIEW (whenever the resolved printable centrelines are known):
+  // printed geometry is drawn ONLY as itself — Beads OFF: one thin blue
+  // line (drawPrintableLines / the toolpath print moves); Beads ON: one
+  // thick blue bead (drawBeads). Nothing else is layered on it — only the
+  // SELECTED path (thin highlight / its reference line) and a path being
+  // dragged (live) are drawn from the design here.
+  const beadView = printable.length > 0;
   for (const p of layer.source_paths) {
     if (!p.visible) continue;
+    if (beadView && p.id !== dragged && p.id !== selectedId) continue;
+    if (beadView && p.id === selectedId && p.id !== dragged && !refOnly.has(p.id)) {
+      for (const v of _visibleSourcePolys(p))                              // selection
+        drawPolyline(v.pts.map(([x, y]) => worldToCanvas(x, y)), '#ffffff', 1.2, false, v.closed);
+      continue;
+    }
     if (refOnly.has(p.id) && p.id !== dragged) {
       // a centred wall's reference line: construction geometry, not printed
+      // (a trimmed one: only its remaining sections)
       const isSel = p.id === selectedId;
+      const secs = ((networkInfo && networkInfo.trim_sections) || []).filter(q => q.source === p.id);
+      if (secs.some(q => q.trimmed_by)) {
+        for (const q of secs.filter(q => !q.trimmed_by))
+          drawPolyline(q.pts.map(([x, y]) => worldToCanvas(x, y)), isSel ? '#ffffff' : '#777', isSel ? 1.6 : 1, true, false);
+        continue;
+      }
       drawPolyline(_pathCanvasPts(p), isSel ? '#ffffff' : '#777', isSel ? 1.6 : 1, true, p.closed);
       continue;
     }
@@ -556,6 +621,7 @@ function drawEffectivePaths() {
   }
 
   _drawDerivedWallFaces();
+  if (beadView) return;
   for (const p of derivedPaths) {
     const srcPiece = p.treatment_id === 'opening_cut' || p.treatment_id === 'network_src';
     if (srcPiece) {
@@ -691,6 +757,18 @@ function updateJunctionPropPanel(panel) {
   const faces = jn.key.split('#')[0].split('|').map(_faceName);
   info.textContent = `Corner where ${faces.join(' meets ')}`;
   panel.appendChild(info);
+  const fmt = v => (+v).toFixed(1).replace(/\.0$/, '');
+  if (jn.derived) {
+    // the inner face of a wall turn: concentric with its outer corner
+    const n = document.createElement('div');
+    n.className = 'path-type'; n.id = 'jn-actual';
+    n.textContent = `Inner face of a wall turn — follows its outer corner (concentric: outer R − wall thickness). ` +
+      `Radius here: ${jn.actual_radius > 0 ? fmt(jn.actual_radius) + ' in' : 'sharp'}` +
+      (jn.limited ? ' (geometry limit).' : '.') + ' Set the radius on the outer corner.';
+    if (jn.limited) n.style.color = 'var(--warn)';
+    panel.appendChild(n);
+    return;
+  }
   const ov = (layer.junction_overrides || []).find(o => o.key === jn.key);
   const dflt = `Default (${layer.junction_style === 'round' ? 'Rounded ' + (layer.junction_radius || 0) + ' in' : 'Miter'})`;
   const cur = ov ? (ov.treatment === 'round' ? 'Rounded' : 'Miter') : dflt;
@@ -706,6 +784,14 @@ function updateJunctionPropPanel(panel) {
     addPropRowNum(panel, 'Radius', 'jn-radius', ov.radius, v => {
       ov.radius = Math.max(0, v); routeResult = null; scheduleRefresh(); repaint();
     });
+  }
+  if (jn.limited && jn.actual_radius != null) {
+    const req = ov ? ov.radius : (layer.junction_radius || 0);
+    const n = document.createElement('div');
+    n.className = 'path-type'; n.id = 'jn-actual';
+    n.style.color = 'var(--warn)';
+    n.textContent = `Requested ${fmt(req)} in · Actual ${fmt(jn.actual_radius)} in (geometry limit)`;
+    panel.appendChild(n);
   }
   const hint = document.createElement('div');
   hint.className = 'path-type';
@@ -742,8 +828,10 @@ function buildPrintRuns(moves) {
 function drawToolpath(moves) {
   if (!moves || moves.length === 0) return;
 
-  // Pass 1: draw all move lines
+  // Pass 1: draw all move lines. With Beads ON the printed lines ARE the
+  // bead (drawn by drawBeads); only travel is drawn here.
   for (const m of moves) {
+    if (showBeads && m.kind !== 'travel') continue;
     const [x0, y0] = worldToCanvas(m.start[0], m.start[1]);
     const [x1, y1] = worldToCanvas(m.end[0], m.end[1]);
     const color = MOVE_COLORS[m.kind] || MOVE_COLORS.print;
@@ -774,26 +862,8 @@ function drawToolpath(moves) {
       }
     }
 
-    // Seam marker where a closed run rejoins its start
-    const dx = run.endPos[0] - run.startPos[0];
-    const dy = run.endPos[1] - run.startPos[1];
-    if (Math.hypot(dx, dy) < 3) {
-      const [sx, sy] = worldToCanvas(run.startPos[0], run.startPos[1]);
-      drawSeamMarker(sx, sy);
-    }
   });
-
-  // Start / end dots
-  const first = moves[0], last = moves[moves.length - 1];
-  const [sx, sy] = worldToCanvas(first.start[0], first.start[1]);
-  const [ex, ey] = worldToCanvas(last.end[0], last.end[1]);
-  drawDot(sx, sy, 6, '#33cc66');
-  drawDot(ex, ey, 6, '#cc3333');
-  ctx.font = '9px monospace';
-  ctx.fillStyle = '#33cc66'; ctx.textAlign = 'left';
-  ctx.fillText('START', sx + 8, sy - 6);
-  ctx.fillStyle = '#cc3333';
-  ctx.fillText('END', ex + 8, ey + 12);
+  _drawRouteMarkers(moves, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -813,15 +883,17 @@ function drawToolpathWithPlayback(moves) {
   if (!_routeCumDists || _routeTotalDist < 1e-6) { drawToolpath(moves); return; }
   const targetDist = playbackPos * _routeTotalDist;
 
-  // Pass 1: all moves dim (future / unprinted)
+  // Pass 1: all moves dim (future / unprinted); with Beads ON the beads
+  // show the printed geometry, the nozzle shows the progress
   ctx.save();
   ctx.globalAlpha = 0.18;
-  for (const m of moves) _drawMoveLine(m);
+  for (const m of moves) if (!showBeads || m.kind === 'travel') _drawMoveLine(m);
   ctx.restore();
 
   // Pass 2: printed portion at full opacity
   for (const { ds, de, m } of _routeCumDists) {
     if (ds >= targetDist) break;
+    if (showBeads && m.kind !== 'travel') continue;
     if (de <= targetDist) {
       _drawMoveLine(m);
     } else {
@@ -855,19 +927,9 @@ function drawToolpathWithPlayback(moves) {
           }
         }
       }
-      if (Math.hypot(run.endPos[0]-run.startPos[0], run.endPos[1]-run.startPos[1]) < 3) {
-        const [sx,sy] = worldToCanvas(run.startPos[0], run.startPos[1]);
-        drawSeamMarker(sx, sy);
-      }
     });
   }
-
-  // Start / end dots
-  const first = moves[0], last = moves[moves.length - 1];
-  const [sx, sy] = worldToCanvas(first.start[0], first.start[1]);
-  const [ex, ey] = worldToCanvas(last.end[0], last.end[1]);
-  drawDot(sx, sy, 6, '#33cc66');
-  drawDot(ex, ey, 6, '#cc3333');
+  _drawRouteMarkers(moves, false);
 
   // Nozzle drawn last — on top of everything
   const npos = _nozzleAtPos(playbackPos);
@@ -1004,7 +1066,7 @@ function _showTransport(visible) {
 // Draw-in-progress (with snap-to-first-point highlight)
 // ---------------------------------------------------------------------------
 
-const SNAP_RADIUS = 12; // world inches
+let SNAP_RADIUS = 12; // world inches at 100 % (follows the zoom: _applyViewTolerances)
 
 function drawInProgress() {
   const cpts = drawPts.map(([wx, wy]) => worldToCanvas(wx, wy));
@@ -1060,12 +1122,14 @@ function drawHandles(pid) {
     ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
   }
-  for (const h of getHandles(path)) {
+  const vh = visibleHandles(path);
+  for (const h of vh) {
     drawHandle(h.wx, h.wy, h.shape || 'point');
   }
-  if (path.type === 'CirclePath') {
+  const rad = path.type === 'CirclePath' && vh.find(h => h.key === 'radius');
+  if (rad) {
     const [cx, cy] = worldToCanvas(path.cx, path.cy);
-    const [rx, ry] = worldToCanvas(path.cx + path.radius, path.cy);
+    const [rx, ry] = worldToCanvas(rad.wx, rad.wy);
     ctx.save();
     ctx.strokeStyle = 'rgba(74,158,255,0.35)';
     ctx.lineWidth = 1;
@@ -1573,6 +1637,234 @@ function deleteOpening(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Route origin — where a CLOSED printable route (start = end) begins and
+// returns. Stored as design state: layer.route_origins = [{ strand, u }] —
+// a printable strand id (the router's strand) + fraction u of its length,
+// at most one per connected component. The backend inserts that point as a
+// vertex (no geometry change) and starts the component's circuit there;
+// an origin whose strand is gone falls back to automatic selection. Open
+// components (that the physical rules could not close) keep Start / End.
+// The marker is dragged along the printable strands of its own run.
+// ---------------------------------------------------------------------------
+const ORIGIN_COLOR = '#33cc66';
+let originDrag = null;       // { strands: Set, pos, strand, u } while dragging
+
+function _runIsClosed(run) {
+  return Math.hypot(run.endPos[0] - run.startPos[0], run.endPos[1] - run.startPos[1]) < 1e-6;
+}
+
+// Markers of a route: ONE origin per closed run; Start + End per open run.
+function routeMarkers(moves) {
+  const out = [];
+  buildPrintRuns(moves || []).forEach((run, i) => {
+    if (_runIsClosed(run)) out.push({ kind: 'origin', pos: run.startPos, run: i });
+    else {
+      out.push({ kind: 'start', pos: run.startPos, run: i });
+      out.push({ kind: 'end', pos: run.endPos, run: i });
+    }
+  });
+  return out;
+}
+
+function _drawRouteMarkers(moves, labels) {
+  const runs = buildPrintRuns(moves || []);
+  for (const mk of routeMarkers(moves)) {
+    let pos = mk.pos;
+    if (mk.kind === 'origin' && originDrag && originDrag.run === mk.run && originDrag.pos) pos = originDrag.pos;
+    const [x, y] = worldToCanvas(pos[0], pos[1]);
+    if (mk.kind === 'origin') { drawDot(x, y, 6, ORIGIN_COLOR); continue; }
+    drawDot(x, y, 6, mk.kind === 'start' ? '#33cc66' : '#cc3333');
+    if (labels) {
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = mk.kind === 'start' ? '#33cc66' : '#cc3333';
+      ctx.fillText(mk.kind === 'start' ? 'START' : 'END', x + 8, mk.kind === 'start' ? y - 6 : y + 12);
+    }
+  }
+}
+
+// Any route marker under the pointer (Toolpath ON): it wins hit-testing
+// over every path / opening / handle beneath it — a marker is toolpath UI,
+// never a handle on design geometry.
+function hitTestRouteMarker(wx, wy) {
+  if (!showToolpath || !routeResult || !routeResult.moves) return null;
+  let best = null;
+  for (const mk of routeMarkers(routeResult.moves)) {
+    const d = Math.hypot(mk.pos[0] - wx, mk.pos[1] - wy);
+    if (d < HIT_DIST * 0.8 && (!best || d < best.d)) best = { ...mk, d };
+  }
+  return best;
+}
+
+function hitTestOrigin(wx, wy) {
+  const mk = hitTestRouteMarker(wx, wy);
+  return mk && mk.kind === 'origin' ? mk : null;
+}
+
+// Nearest point of the given printable strands: { strand, u, pos }.
+function _projectOnStrands(wx, wy, ids) {
+  let best = null;
+  for (const c of printable || []) {
+    if (!ids.has(c.id) || (c.pts || []).length < 2) continue;
+    const ring = c.closed ? [...c.pts, c.pts[0]] : c.pts;
+    const lens = ring.slice(1).map((q, i) => Math.hypot(q[0] - ring[i][0], q[1] - ring[i][1]));
+    const L = lens.reduce((a, b) => a + b, 0);
+    if (L < 1e-9) continue;
+    let acc = 0;
+    for (let i = 0; i < lens.length; i++) {
+      const [ax, ay] = ring[i], [bx, by] = ring[i + 1];
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      const t = l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((wx - ax) * dx + (wy - ay) * dy) / l2));
+      const px = ax + t * dx, py = ay + t * dy;
+      const d = Math.hypot(wx - px, wy - py);
+      if (!best || d < best.d) best = { d, strand: c.id, u: (acc + t * lens[i]) / L, pos: [px, py] };
+      acc += lens[i];
+    }
+  }
+  return best;
+}
+
+function startOriginDrag(mk) {
+  const run = buildPrintRuns(routeResult.moves)[mk.run];
+  const strands = new Set(run.moves.map(m => m.strand_id).filter(Boolean));
+  originDrag = { run: mk.run, strands, pos: mk.pos, strand: null, u: null };
+}
+
+function moveOriginDrag(wx, wy) {
+  const p = _projectOnStrands(wx, wy, originDrag.strands);
+  if (p) Object.assign(originDrag, { pos: p.pos, strand: p.strand, u: p.u });
+  repaint();
+}
+
+function commitOriginDrag() {
+  const d = originDrag;
+  originDrag = null;
+  if (!d || !d.strand) { repaint(); return false; }
+  // one origin per component: replace any origin on this run's strands
+  layer.route_origins = (layer.route_origins || []).filter(o => !d.strands.has(o.strand))
+    .concat([{ strand: d.strand, u: d.u }]);
+  scheduleRefresh();                 // ONE undo step; reroute from the new origin
+  setStatus('Route origin moved — the geometry is unchanged; the closed route now begins and ends here.');
+  repaint();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Trim — non-destructive suppression of a SECTION of a source path: the
+// stretch between two contacts with other paths (or a contact and an open
+// end), as in CAD Trim. The backend finds the sections on the design
+// geometry (trim.py) and returns them with the network info; a trim stores
+// the section's SIGNATURE (the paths bounding it, inside / outside of closed
+// bounding paths, its position as a tie-break), never its coordinates, so it
+// follows the section when either path is edited. A trim that no longer
+// matches is kept but suppresses nothing (shown in the path's Properties).
+// ---------------------------------------------------------------------------
+const TRIM_COLOR = '#ff5a36';
+const TRIM_HINT = 'Trim: hover a section between intersections, click to remove it (non-destructive — Undo restores). Esc exits.';
+let trimHover = null;        // the section under the pointer in Trim mode
+let _netState = null;        // layer state networkInfo was computed from
+
+function _trimsOf(pathId) { return (layer.trims || []).filter(t => t.source_path_id === pathId); }
+
+// Sections are only offered when they describe the CURRENT design (not a
+// response still pending after an edit).
+function _sectionsCurrent() { return !!networkInfo && _netState === _histState(); }
+
+// Nearest section (trimmed or not) within the hit distance.
+function hitTestTrimSection(wx, wy) {
+  if (!_sectionsCurrent()) return null;
+  let best = null, bd = HIT_DIST;
+  for (const sec of networkInfo.trim_sections || []) {
+    const src = layer.source_paths.find(p => p.id === sec.source);
+    if (!src || !src.visible) continue;
+    const pts = sec.pts || [];
+    for (let j = 0; j < pts.length - 1; j++) {
+      const d = distToSeg(wx, wy, pts[j], pts[j + 1]);
+      if (d < bd) { bd = d; best = sec; }
+    }
+  }
+  return best;
+}
+
+function _boundName(ids) { return ids.length ? ids.map(_pathName).join(' + ') : 'its end'; }
+
+function _updateTrimHover(wx, wy) {
+  const prev = trimHover;
+  const sec = hitTestTrimSection(wx, wy);
+  trimHover = sec && !sec.trimmed_by ? sec : null;
+  const hint = document.getElementById('hint');
+  if (!_sectionsCurrent()) hint.textContent = 'Trim: updating sections…';
+  else if (trimHover) hint.textContent = `Click to trim this section of ${_pathName(sec.source)} ` +
+    `(between ${_boundName(sec.start)} and ${_boundName(sec.end)}). Esc exits Trim.`;
+  else if (sec) hint.textContent = 'This section is already trimmed — Undo, or Restore in the path\'s Properties.';
+  else {
+    const pid = hitTestPath(wx, wy);
+    hint.textContent = pid ? `${_pathName(pid)}: no section here between intersections — it touches no other path, so there is nothing to trim (use Delete).`
+                           : TRIM_HINT;
+  }
+  if (prev !== trimHover) repaint();
+}
+
+function trimSection(sec) {
+  if (!sec || sec.trimmed_by) return null;
+  const t = { id: newId(), source_path_id: sec.source, start: [...sec.start], end: [...sec.end],
+              inside: { ...sec.inside }, u_mid: sec.u_mid };
+  layer.trims = layer.trims || [];
+  layer.trims.push(t);
+  sec.trimmed_by = t.id;          // no second trim of it before the refresh
+  trimHover = null;
+  routeResult = null;
+  scheduleRefresh();              // ONE undo step per clicked trim
+  updatePathList();
+  if (selectedId === sec.source) updatePropPanel();
+  setStatus(`Trimmed a section of ${_pathName(sec.source)} — Undo restores it.`);
+  repaint();
+  return t;
+}
+
+function drawTrimHover() {
+  if (tool !== 'trim' || !trimHover) return;
+  const cp = (trimHover.pts || []).map(([x, y]) => worldToCanvas(x, y));
+  if (cp.length < 2) return;
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  drawPolyline(cp, TRIM_COLOR, 5, false, false);
+  ctx.restore();
+  for (const q of [cp[0], cp[cp.length - 1]]) drawDot(q[0], q[1], 4, TRIM_COLOR);
+}
+
+// After every backend response: refresh what depends on it.
+function _afterNetworkUpdate() {
+  if (!_isTyping()) updateNetworkSection();
+  // Wall Geometry: say when rounded junctions are limited by the geometry
+  const lim = ((networkInfo && networkInfo.junctions) || []).filter(j => j.limited && !j.derived);
+  const wn = document.getElementById('wg-junction-note');
+  if (wn) wn.textContent = lim.length
+    ? `${lim.length} junction${lim.length > 1 ? 's' : ''} limited by the geometry — select its ◆ for the actual radius.` : '';
+  if (selectedJunction || (selectedId && _trimsOf(selectedId).length && !_isTyping())) updatePropPanel();
+  if (tool === 'trim' && _mousePosW) _updateTrimHover(_mousePosW[0], _mousePosW[1]);
+}
+
+function _addTrimRows(panel, path) {
+  const mine = _trimsOf(path.id);
+  if (!mine.length) return;
+  _addSubTitle(panel, 'Trimmed sections');
+  const st = (networkInfo && networkInfo.trims) || {};
+  const bad = mine.filter(t => st[t.id] && st[t.id].status !== 'ok');
+  const n = document.createElement('div');
+  n.className = 'path-type'; n.id = 'trim-note';
+  n.textContent = `${mine.length} section${mine.length > 1 ? 's' : ''} trimmed — non-destructive: ` +
+    `the ${(TYPE_NAMES[path.type] || 'path').toLowerCase()} itself is unchanged.` +
+    (bad.length ? ` ${bad.length} ${st[bad[0].id].status} (shown untrimmed): ${st[bad[0].id].reason}.` : '');
+  if (bad.length) n.style.color = 'var(--warn)';
+  panel.appendChild(n);
+  _addButton(panel, 'Restore trimmed sections', () => {
+    layer.trims = (layer.trims || []).filter(t => t.source_path_id !== path.id);
+    routeResult = null; scheduleRefresh(); updatePathList(); updatePropPanel(); repaint();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tool management
 // ---------------------------------------------------------------------------
 
@@ -1581,7 +1873,8 @@ function setTool(t) {
   drawPts = [];
   snapHint = null;
   _shapeDown = null;
-  for (const name of ['edit', 'draw', 'curve', 'opening', 'line', 'rect', 'circle', 'ellipse']) {
+  if (t !== 'trim') trimHover = null;
+  for (const name of ['edit', 'draw', 'curve', 'opening', 'trim', 'line', 'rect', 'circle', 'ellipse']) {
     const btn = document.getElementById('tool-' + name);
     if (btn) btn.classList.toggle('active', t === name);
   }
@@ -1607,6 +1900,10 @@ function updateHint() {
     hint.textContent = 'Click on a wall to place a 12 in opening centred there.';
     return;
   }
+  if (tool === 'trim') {
+    hint.textContent = TRIM_HINT;
+    return;
+  }
   if (SHAPE_TOOLS[tool]) {
     const first = { line: 'start point', rect: 'first corner', circle: 'centre', ellipse: 'centre' }[tool];
     const second = { line: 'end point', rect: 'opposite corner', circle: 'a point on the circle',
@@ -1621,7 +1918,7 @@ function updateHint() {
     return;
   }
   if (selectedJunction) {
-    hint.textContent = 'Junction selected: set its corner treatment in the sidebar (independent of Corner R).';
+    hint.textContent = 'Junction selected: set its corner treatment in the Design sidebar (independent of Corner R).';
     return;
   }
   if (!selectedId) {
@@ -1632,7 +1929,7 @@ function updateHint() {
   if (!path) { hint.textContent = ''; return; }
   switch (path.type) {
     case 'CirclePath':
-      hint.textContent = 'Drag center ✛ to move. Drag □ handle to resize. Edit values in sidebar.'; break;
+      hint.textContent = 'Drag center ✛ to move. Drag □ handle to resize. Edit values in the Design sidebar.'; break;
     case 'EllipsePath':
       hint.textContent = 'Drag center ✛ to move. Drag □ rx/ry handles to resize.'; break;
     case 'RectanglePath':
@@ -1652,10 +1949,29 @@ function updateHint() {
 
 canvas.addEventListener('mousedown', onMouseDown);
 canvas.addEventListener('mousemove', onMouseMove);
+canvas.addEventListener('wheel', onWheel, { passive: false });
+canvas.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+
+// ---- view navigation: wheel / pinch = zoom at the pointer; Space + drag
+// or middle-drag = pan. View only — handled before any tool. -------------
+let panDrag = null;          // { x, y } last client position while panning
+let spaceDown = false;
+
+function onWheel(e) {
+  if (e.preventDefault) e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const k = e.ctrlKey ? 0.01 : 0.0015;              // pinch gestures arrive as ctrl+wheel
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-(e.deltaY || 0) * k));
+}
 document.addEventListener('mouseup', onMouseUp);
 canvas.addEventListener('dblclick', onDblClick);
 
 function onMouseDown(e) {
+  if (e.button === 1 || spaceDown) {                // pan: never a tool action
+    panDrag = { x: e.clientX, y: e.clientY };
+    if (e.preventDefault) e.preventDefault();
+    return;
+  }
   const [wx, wy] = canvasFromEvent(e);
 
   if (tool === 'draw') {
@@ -1691,6 +2007,13 @@ function onMouseDown(e) {
     return;
   }
 
+  if (tool === 'trim') {
+    const sec = hitTestTrimSection(wx, wy);
+    if (sec && !sec.trimmed_by) trimSection(sec);
+    else _updateTrimHover(wx, wy);
+    return;
+  }
+
   if (SHAPE_TOOLS[tool]) {
     _mousePosW = [wx, wy];
     const pt = _shapePoint(wx, wy, e.altKey);
@@ -1706,6 +2029,14 @@ function onMouseDown(e) {
   }
 
   if (tool === 'edit') {
+    // 00. The route origin of a closed route (Toolpath ON): drag it along
+    // its printable route
+    const rm = hitTestRouteMarker(wx, wy);
+    if (rm) {
+      if (rm.kind === 'origin') startOriginDrag(rm);
+      else setStatus('This route is OPEN (its start and end differ): it has no route origin to move.');
+      return;                       // never falls through to the geometry beneath
+    }
     // 0. Resize handles of the selected opening
     if (selectedOpeningId) {
       const op = layer.openings.find(o => o.id === selectedOpeningId);
@@ -1796,8 +2127,17 @@ function onMouseDown(e) {
 }
 
 function onMouseMove(e) {
+  if (panDrag) {
+    panBy(e.clientX - panDrag.x, e.clientY - panDrag.y);
+    panDrag = { x: e.clientX, y: e.clientY };
+    return;
+  }
   _mousePosW = canvasFromEvent(e);
 
+  if (originDrag) {
+    moveOriginDrag(_mousePosW[0], _mousePosW[1]);
+    return;
+  }
   if (openingDrag) {
     applyOpeningDrag(_mousePosW[0], _mousePosW[1]);
     return;
@@ -1846,6 +2186,10 @@ function onMouseMove(e) {
     return;
   }
 
+  if (tool === 'trim') {
+    _updateTrimHover(_mousePosW[0], _mousePosW[1]);
+    return;
+  }
   // Shape tools: live preview + snap indicator.
   if (SHAPE_TOOLS[tool]) {
     snapHint = findSnap(_mousePosW[0], _mousePosW[1], null, e.altKey);
@@ -1871,7 +2215,9 @@ function onMouseUp(e) {
     createShape(SHAPE_TOOLS[tool], drawPts[0], pt);
     return;
   }
+  if (panDrag) { panDrag = null; return; }
   _shapeDown = null;
+  if (originDrag) { commitOriginDrag(); return; }
   const wasDragging = dragging !== null || bodyDragging !== null || openingDrag !== null ||
                       rotateDrag !== null;
   snapHint = null;
@@ -1893,7 +2239,17 @@ function _isTyping() {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el.isContentEditable;
 }
 
+document.addEventListener('keyup', e => {
+  if (e.key === ' ') { spaceDown = false; canvas.style.cursor = ''; }
+});
+
 document.addEventListener('keydown', e => {
+  if (e.key === ' ' && !_isTyping()) {             // Space held: pan mode
+    if (e.preventDefault) e.preventDefault();
+    spaceDown = true;
+    canvas.style.cursor = 'grab';
+    return;
+  }
   const mod = e.metaKey || e.ctrlKey;
   if (mod && !_isTyping()) {
     const k = (e.key || '').toLowerCase();
@@ -1913,7 +2269,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (tool === 'draw') { drawPts = []; repaint(); }
     else if (tool === 'curve') { drawPts = []; setTool('edit'); }
-    else if (tool === 'opening' || SHAPE_TOOLS[tool]) { setTool('edit'); }
+    else if (tool === 'opening' || tool === 'trim' || SHAPE_TOOLS[tool]) { setTool('edit'); }
     else { selectedId = null; selectedOpeningId = null; selectedJunction = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); }
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !_isTyping()) {
@@ -1931,24 +2287,71 @@ function canvasFromEvent(e) {
 // Hit testing
 // ---------------------------------------------------------------------------
 
-const HIT_DIST = 10; // world inches
+let HIT_DIST = 10; // world inches at 100 % (follows the zoom: _applyViewTolerances)
+
+// The VISIBLE design source: the parametric source minus its trimmed
+// sections (the Trim tool's section data). Selection, hover highlight, hit
+// testing and outline handles use it, so trimmed-away parts never come back
+// as ghost geometry. The parametric source itself is unchanged; when no
+// trim applies (or after Undo) this is simply the whole source.
+function _visibleSourcePolys(p) {
+  const secs = ((networkInfo && networkInfo.trim_sections) || []).filter(q => q.source === p.id);
+  if (p.id !== _draggedPathId() && secs.some(q => q.trimmed_by)) {
+    return secs.filter(q => !q.trimmed_by).map(q => ({ pts: q.pts, closed: false }));
+  }
+  return [{ pts: p.points || [], closed: !!p.closed }];
+}
+
+function _isTrimmedSource(p) {
+  return ((networkInfo && networkInfo.trim_sections) || []).some(q => q.source === p.id && q.trimmed_by)
+         && p.id !== _draggedPathId();
+}
+
+function _distToPolys(wx, wy, polys) {
+  let best = Infinity;
+  for (const { pts, closed } of polys) {
+    for (let j = 0; j < pts.length - 1; j++) best = Math.min(best, distToSeg(wx, wy, pts[j], pts[j + 1]));
+    if (closed && pts.length >= 2) best = Math.min(best, distToSeg(wx, wy, pts[pts.length - 1], pts[0]));
+  }
+  return best;
+}
+
+// Handles on visible geometry only: an outline handle (a rectangle corner,
+// a line end …) lying only on trimmed-away geometry is not offered; the
+// circle's radius handle moves to the visible arc (its drag only uses the
+// distance to the centre). Off-outline handles (centre, bend) stay.
+function visibleHandles(path) {
+  const hs = getHandles(path);
+  if (!_isTrimmedSource(path)) return hs;
+  const vis = _visibleSourcePolys(path);
+  const full = [{ pts: path.points || [], closed: !!path.closed }];
+  const out = [];
+  for (const h of hs) {
+    if (path.type === 'CirclePath' && h.key === 'radius') {
+      const longest = vis.reduce((a, b) => (b.pts.length > a.pts.length ? b : a), vis[0]);
+      if (longest && longest.pts.length) {
+        const q = longest.pts[Math.floor(longest.pts.length / 2)];
+        out.push({ ...h, wx: q[0], wy: q[1] });
+      }
+      continue;
+    }
+    const onOutline = _distToPolys(h.wx, h.wy, full) < 0.5;
+    if (onOutline && _distToPolys(h.wx, h.wy, vis) > 0.5) continue;    // trimmed away
+    out.push(h);
+  }
+  return out;
+}
 
 function hitTestPath(wx, wy) {
   for (let i = layer.source_paths.length - 1; i >= 0; i--) {
     const p = layer.source_paths[i];
-    const pts = p.points || [];
-    for (let j = 0; j < pts.length - 1; j++) {
-      if (distToSeg(wx, wy, pts[j], pts[j + 1]) < HIT_DIST) return p.id;
-    }
-    if (p.closed && pts.length >= 2) {
-      if (distToSeg(wx, wy, pts[pts.length - 1], pts[0]) < HIT_DIST) return p.id;
-    }
+    if (_distToPolys(wx, wy, _visibleSourcePolys(p)) < HIT_DIST) return p.id;
   }
   return null;
 }
 
 function findHandle(path, wx, wy) {
-  for (const h of getHandles(path)) {
+  for (const h of visibleHandles(path)) {
     if (Math.hypot(wx - h.wx, wy - h.wy) < HIT_DIST) return h;
   }
   return null;
@@ -2365,8 +2768,15 @@ function updatePathList() {
 // ---------------------------------------------------------------------------
 
 function updatePropPanel() {
+  updateNetworkSection();
   const section = document.getElementById('path-props-section');
   const panel   = document.getElementById('path-props');
+  // A junction is a corner where walls of the network meet: its treatment is
+  // physical wall geometry, shown in the Design sidebar next to the layer
+  // junction default (Wall Geometry).
+  const jSection = document.getElementById('junction-props-section');
+  const jPanel   = document.getElementById('junction-props');
+  jSection.style.display = 'none';
 
   if (selectedOpeningId) {
     const op = layer.openings.find(o => o.id === selectedOpeningId);
@@ -2378,9 +2788,10 @@ function updatePropPanel() {
     }
   }
   if (selectedJunction) {
-    section.style.display = '';
-    panel.innerHTML = '';
-    updateJunctionPropPanel(panel);
+    section.style.display = 'none';
+    jSection.style.display = '';
+    jPanel.innerHTML = '';
+    updateJunctionPropPanel(jPanel);
     return;
   }
   if (!selectedId) { section.style.display = 'none'; return; }
@@ -2446,6 +2857,7 @@ function updatePropPanel() {
   else if (!_isDriven(path)) _addTransformRows(panel, path);
   _addWallRows(panel, path);                // PRIMARY: Wall Thickness + Alignment
   _addAdvancedGeometryRows(panel, path);    // special relationships / CAD operations
+  _addTrimRows(panel, path);                // non-destructive trims of its sections
 
   // Delete button
   const delBtn = document.createElement('button');
@@ -2563,12 +2975,43 @@ function _netWallFor(ids) {
   return (layer.network_walls || []).find(w => ids.includes(w.path_id)) || null;
 }
 
-function _addNetworkPanel(panel, path) {
+// WALL NETWORK — a persistent Design-sidebar section (layer-level, like
+// Wall Geometry): the selected path's network, else the one picked in the
+// selector (several networks), else the first. No selection needed.
+let networkPick = null;      // label ('N1', …) of the network being edited
+
+function updateNetworkSection() {
+  const sec = document.getElementById('network-section');
+  const panel = document.getElementById('network-props');
+  const nets = ((networkInfo && networkInfo.source_networks) || []).filter(n => n.sources.length > 1);
+  if (!nets.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  panel.innerHTML = '';
+  const bySel = selectedId && nets.find(n => n.sources.includes(selectedId));
+  const cur = bySel || nets.find(n => n.id === networkPick) || nets[0];
+  networkPick = cur.id;
+  if (nets.length > 1) {
+    const label = n => `${n.id} (${n.sources.map(_pathName).join(', ')})`;
+    addPropRowSelect(panel, 'Network', label(cur), nets.map(label), v => {
+      networkPick = nets.find(n => label(n) === v).id;
+      updateNetworkSection();
+    });
+  }
+  const anchor = layer.source_paths.find(p => p.id === cur.sources[0]);
+  if (anchor) _addNetworkPanel(panel, anchor, true);
+}
+
+function _addNetworkPanel(panel, path, inSection = false) {
   const net = _networkOf()[path.id];
   if (!net || net.ids.length < 2) return;
-  _addSubTitle(panel, `Wall network ${net.label}`, JUNCTION_COLOR);
+  if (!inSection) {
+    // in the path's Properties: membership only (settings live in Wall Network)
+    _addNote(panel, `Member of wall network ${net.label} (${net.ids.length} paths) — its settings are in Wall Network.`);
+    return;
+  }
+  _addSubTitle(panel, inSection ? net.label : `Wall network ${net.label}`, JUNCTION_COLOR);
   _addNote(panel, `${net.ids.length} connected paths: ${net.names.join(', ')}`);
-  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); repaint(); };
+  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updateNetworkSection(); repaint(); };
   const nw = _netWallFor(net.ids);
   addPropRowNum(panel, 'Network Wall Thickness', 'net-wall-t', nw ? nw.thickness : 0, v => {
     let w = _netWallFor(net.ids);
@@ -2622,12 +3065,15 @@ function setHighlight(id) {
 function drawHighlight() {
   const p = highlightPathId && layer.source_paths.find(s => s.id === highlightPathId);
   if (!p || !(p.points || []).length) return;
-  const cp = p.points.map(([x, y]) => worldToCanvas(x, y));
+  const vis = _visibleSourcePolys(p).filter(v => v.pts.length >= 2);
+  if (!vis.length) return;
+  const cps = vis.map(v => ({ cp: v.pts.map(([x, y]) => worldToCanvas(x, y)), closed: v.closed }));
   ctx.save();
   ctx.globalAlpha = 0.35;
-  drawPolyline(cp, HIGHLIGHT_COLOR, 9, false, p.closed);
+  for (const { cp, closed } of cps) drawPolyline(cp, HIGHLIGHT_COLOR, 9, false, closed);
   ctx.globalAlpha = 1;
-  drawPolyline(cp, HIGHLIGHT_COLOR, 2.5, false, p.closed);
+  for (const { cp, closed } of cps) drawPolyline(cp, HIGHLIGHT_COLOR, 2.5, false, closed);
+  const cp = cps.reduce((a, b) => (b.cp.length > a.cp.length ? b : a), cps[0]).cp;
   const mid = cp[Math.floor(cp.length / 2)];
   const label = p.label || p.id;
   ctx.font = 'bold 11px monospace';
@@ -3075,6 +3521,7 @@ function scheduleRefresh() {
     derivedPaths = [];
     networkInfo = null;
     routeResult = null;
+    printable = [];
     repaint();
     return;
   }
@@ -3085,8 +3532,9 @@ function scheduleRefresh() {
     // ≥ 2 paths may form a wall network (junction markers, trimmed faces)
     const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0 ||
                        (layer.infills || []).length > 0 ||
-                       (layer.openings || []).length > 0 || layer.source_paths.length > 1;
-    if (hasDerived) {
+                       (layer.openings || []).length > 0 || (layer.trims || []).length > 0 ||
+                       layer.source_paths.length > 1;
+    if (hasDerived || showBeads) {           // beads need the resolved printable set
       _refreshTimer = setTimeout(fetchEffectivePaths, 120);
     } else {
       derivedPaths = [];
@@ -3102,6 +3550,7 @@ async function fetchEffectivePaths() {
     return;
   }
   try {
+    const sent = _histState();
     const res = await fetch('/api/effective_paths', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3112,10 +3561,12 @@ async function fetchEffectivePaths() {
       const sourceIds = new Set(layer.source_paths.map(p => p.id));
       derivedPaths = data.paths.filter(p => !sourceIds.has(p.id));
       networkInfo = data.network || null;
+      printable = data.printable || [];
+      _netState = sent;
       _applyDerivedSources();
       updatePathList();
       updateInfillList();
-      if (selectedJunction) updatePropPanel();
+      _afterNetworkUpdate();
     }
   } catch (e) {
     console.warn('fetchEffectivePaths failed', e);
@@ -3137,6 +3588,7 @@ async function runRoute() {
   }
   setStatus('Routing…');
   try {
+    const sent = _histState();
     const res = await fetch('/api/route', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3152,10 +3604,12 @@ async function runRoute() {
     const sourceIds = new Set(layer.source_paths.map(p => p.id));
     derivedPaths = (data.layer.paths || []).filter(p => !sourceIds.has(p.id));
     networkInfo = data.network || null;
+    printable = data.printable || [];
+    _netState = sent;
     _applyDerivedSources();
     updatePathList();
     updateInfillList();
-    if (selectedJunction) updatePropPanel();
+    _afterNetworkUpdate();
     _setupPlayback(data.moves);
     _showTransport(true);
     updateMetrics(data);
@@ -3185,6 +3639,9 @@ function buildPayload() {
     }),
     lattice_instances: layer.lattice_instances.map(li => ({ ...li })),
     infills: (layer.infills || []).map(f => ({ ...f, params: { ...f.params } })),
+    trims: (layer.trims || []).map(t => ({ ...t, start: [...t.start], end: [...t.end], inside: { ...t.inside } })),
+    material: { ...(layer.material || { bead_width: BEAD_DEFAULT }) },
+    route_origins: (layer.route_origins || []).map(o => ({ ...o })),
     junction_style: layer.junction_style || 'miter',
     junction_radius: layer.junction_radius || 0,
     junction_overrides: (layer.junction_overrides || []).map(o => ({ ...o })),
@@ -3219,6 +3676,13 @@ function updateMetrics(data) {
 
   document.getElementById('m-pdist').textContent = m.print_distance.toFixed(1) + ' in';
   document.getElementById('m-rdist').textContent = (m.retrace_distance || 0).toFixed(1) + ' in';
+  const cl = data.closure;
+  const cEl = document.getElementById('m-closed');
+  if (cEl) {
+    cEl.textContent = cl && cl.physical ? `${cl.closed} / ${cl.components}` : '—';
+    cEl.className = 'metric-value' + (cl && cl.physical ? (cl.open.length ? ' bad' : ' good') : '');
+    cEl.title = cl && cl.open.length ? `${cl.open.length} component(s) cannot close: their geometry has odd ends (shown as travel)` : '';
+  }
 
   // Routing quality badge
   const badgeEl = document.getElementById('euler-badge-container');
@@ -3270,6 +3734,159 @@ function updateMetrics(data) {
 // ---------------------------------------------------------------------------
 // Dimensions overlay — purely visual, no effect on geometry or routing
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Material / Bead — the PHYSICAL mud bead deposited around each printable
+// centerline (material.py). Bead Width is a material property of the layer
+// (stored, undoable, sent to the backend for future geometry rules such as
+// Contact Overlap); for now it is VISUAL ONLY. The footprint is the
+// centerline swept by a disk of the bead width: a strip of half-width w/2
+// with round ends and round joins (a straight open line is a capsule).
+// Only the backend's resolved PRINTABLE centerlines (the router's strands)
+// get a bead; all beads are drawn into one offscreen layer and composited
+// once, so overlapping beads union with no seams.
+// ---------------------------------------------------------------------------
+const BEAD_DEFAULT = 3.0;
+const BEAD_STEP = 0.25;
+const BEAD_CAP = 'round';
+const BEAD_JOIN = 'round';
+const BEAD_COLOR = '#4a9eff';      // the print colour: the bead IS the printed line (opaque, once)
+const BEAD_ALPHA = 1.0;
+let _beadCanvas = null;
+
+function _beadWidth() {
+  const w = layer.material && +layer.material.bead_width;
+  return w > 0 ? w : BEAD_DEFAULT;
+}
+
+// The strokes that make up the bead footprint, in canvas pixels.
+function _beadStrokes() {
+  const scale = _viewScale();                       // px per inch (zoom included)
+  const width = _beadWidth() * scale;
+  return (printable || []).filter(c => (c.pts || []).length >= 2 && !_staleStrand(c.id)).map(c => ({
+    id: c.id, closed: !!c.closed, width,
+    pts: c.pts.map(([x, y]) => worldToCanvas(x, y)),
+  }));
+}
+
+// strands of the path being dragged are stale until the refresh: not drawn
+function _staleStrand(id) {
+  const d = _draggedPathId();
+  return !!d && (id === d || /^[.~_]/.test(id.slice(d.length)) && id.startsWith(d));
+}
+
+// Beads OFF, no toolpath shown: each printable centreline = ONE thin blue line
+function drawPrintableLines() {
+  for (const c of printable || []) {
+    if ((c.pts || []).length < 2 || _staleStrand(c.id)) continue;
+    drawPolyline(c.pts.map(([x, y]) => worldToCanvas(x, y)), MOVE_COLORS.print, 2.0, false, !!c.closed);
+  }
+}
+
+function drawBeads() {
+  if (!showBeads) return;
+  const strokes = _beadStrokes();
+  if (!strokes.length) return;
+  if (!_beadCanvas) _beadCanvas = document.createElement('canvas');
+  _beadCanvas.width = canvas.width;
+  _beadCanvas.height = canvas.height;
+  const b = _beadCanvas.getContext('2d');
+  b.clearRect(0, 0, _beadCanvas.width, _beadCanvas.height);
+  b.strokeStyle = BEAD_COLOR;                      // opaque: overlaps union
+  b.lineCap = BEAD_CAP;
+  b.lineJoin = BEAD_JOIN;
+  for (const st of strokes) {
+    b.lineWidth = st.width;
+    b.beginPath();
+    b.moveTo(st.pts[0][0], st.pts[0][1]);
+    for (const [x, y] of st.pts.slice(1)) b.lineTo(x, y);
+    if (st.closed) b.closePath();
+    b.stroke();
+  }
+  ctx.save();
+  ctx.globalAlpha = BEAD_ALPHA;    // opaque: overlaps never darken (one union)
+  ctx.drawImage(_beadCanvas, 0, 0);
+  ctx.restore();
+}
+
+function toggleBeads(on) {
+  showBeads = on === undefined ? !showBeads : !!on;
+  document.getElementById('btn-beads').classList.toggle('toggle-on', showBeads);
+  const cb = document.getElementById('bead-show');
+  if (cb) cb.checked = showBeads;
+  if (showBeads && layer.source_paths.length && !printable.length) scheduleRefresh();
+  repaint();
+}
+
+function onBeadWidthChange() {
+  const el = document.getElementById('bead-width');
+  const v = parseFloat(el.value);
+  let w = Math.round((Number.isFinite(v) ? v : _beadWidth()) / BEAD_STEP) * BEAD_STEP;
+  w = Math.max(BEAD_STEP, w);
+  el.value = w.toFixed(2);
+  layer.material = { ...(layer.material || {}), bead_width: w };
+  _applyMaterial();
+}
+
+// PHYSICAL RULES (material.py): Contact Overlap and Return-Lane Overlap are
+// two DISTINCT physical operations (centreline separation W − O at a side
+// contact / W − R beside a return lane); both 0 ≤ overlap ≤ W, the return
+// lane < W (R = W would be an exact retrace). With physical rules on they
+// shape generated geometry, so every change regenerates.
+const RETURN_MIN = BEAD_STEP;
+
+function _material() {
+  const m = layer.material || {};
+  return { bead_width: _beadWidth(),
+           contact_overlap: m.contact_overlap ?? 0.75,
+           return_overlap: m.return_overlap ?? 0.75,
+           physical: m.physical !== false };
+}
+
+function onMaterialChange(field) {
+  const m = _material();
+  if (field === 'physical') {
+    m.physical = !!document.getElementById('phys-rules').checked;
+  } else {
+    const el = document.getElementById(field === 'contact_overlap' ? 'contact-overlap' : 'return-overlap');
+    const v = parseFloat(el.value);
+    m[field] = Number.isFinite(v) ? Math.round(v / BEAD_STEP) * BEAD_STEP : m[field];
+  }
+  layer.material = m;
+  _applyMaterial();
+}
+
+// clamp the overlaps to the bead width (visibly), sync the controls, regenerate
+function _applyMaterial() {
+  const m = _material();
+  const notes = [];
+  const cMax = m.bead_width, rMax = m.bead_width - RETURN_MIN;
+  if (m.contact_overlap > cMax) { m.contact_overlap = cMax; notes.push(`Contact overlap reduced to ${cMax.toFixed(2)} in (≤ bead width)`); }
+  if (m.contact_overlap < 0) m.contact_overlap = 0;
+  if (m.return_overlap > rMax) { m.return_overlap = rMax; notes.push(`Return-lane overlap reduced to ${rMax.toFixed(2)} in (a full overlap would be an exact retrace)`); }
+  if (m.return_overlap < 0) m.return_overlap = 0;
+  layer.material = m;
+  _syncMaterialControls();
+  if (notes.length) setStatus(notes.join(' · '));
+  if (m.physical) { routeResult = null; scheduleRefresh(); }   // geometry depends on it
+  else { historyCheckpoint(); updateUndoButtons(); }           // legacy: visual only
+  repaint();
+}
+
+function _syncMaterialControls() {
+  const m = _material();
+  const set = (id, prop, v) => { const el = document.getElementById(id); if (el) el[prop] = v; };
+  set('bead-width', 'value', m.bead_width.toFixed(2));
+  set('contact-overlap', 'value', m.contact_overlap.toFixed(2));
+  set('return-overlap', 'value', m.return_overlap.toFixed(2));
+  set('phys-rules', 'checked', m.physical);
+  const W = m.bead_width;
+  const rs = Math.max(RETURN_MIN, W - m.return_overlap);
+  set('material-derived', 'textContent', m.physical
+    ? `Contact: centrelines ${(W - m.contact_overlap).toFixed(2)} in apart · return lane: ${rs.toFixed(2)} in apart ` +
+      `(single-line wall ≈ ${(W + rs).toFixed(2)} in wide, printed out and back). No pass prints over another.`
+    : 'Physical rules off: zero-width centrelines (beads are visual only).');
+}
 
 function toggleDimensions() {
   showDimensions = !showDimensions;
@@ -3517,6 +4134,9 @@ function deletePath(id) {
     li => li.path_a_id !== id && li.path_b_id !== id
   );
   layer.openings = (layer.openings || []).filter(o => o.source_path_id !== id);
+  // its own trims go with it; trims of OTHER paths bounded by it are kept
+  // (they become unresolved and suppress nothing — Undo brings them back)
+  layer.trims = (layer.trims || []).filter(t => t.source_path_id !== id);
   layer.region_overrides = (layer.region_overrides || []).filter(r => r.path_id !== id);
   layer.infills = (layer.infills || []).filter(f => f.path_id !== id);
   // A network wall anchored to the deleted path moves to another member.
@@ -3544,6 +4164,10 @@ function clearAll() {
   layer.offset_treatments = [];
   layer.lattice_instances = [];
   layer.openings = [];
+  layer.trims = [];
+  trimHover = null;
+  layer.route_origins = [];
+  originDrag = null;
   layer.region_overrides = [];
   layer.infills = [];
   layer.network_walls = [];
@@ -3582,6 +4206,7 @@ function clearAll() {
   selectedId = null;
   routeResult = null;
   derivedPaths = [];
+  printable = [];
   drawPts = [];
   if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
   playbackPlaying = false;
@@ -3626,7 +4251,7 @@ const HISTORY_MAX_BYTES = 64 * 1024 * 1024;
 const _hist = { undo: [], redo: [], current: null, bytes: 0 };
 
 function _histState() { return JSON.stringify(layer); }
-function _gestureActive() { return !!(dragging || bodyDragging || openingDrag || rotateDrag); }
+function _gestureActive() { return !!(dragging || bodyDragging || openingDrag || rotateDrag || originDrag); }
 function _histSize(e) { return e.state.length * 2; }
 
 function historyCheckpoint() {
@@ -3715,6 +4340,7 @@ function _syncLayerControls() {
   if (jrow) jrow.style.display = layer.junction_style === 'round' ? '' : 'none';
   set('wg-cap-style', 'value', layer.cap_style || 'flat');
   set('wg-cap-corner-radius', 'value', layer.cap_corner_radius || 0);
+  _syncMaterialControls();
 }
 
 _hist.current = { state: _histState(), sel: null };
@@ -4408,6 +5034,7 @@ async function init() {
     console.warn('Could not load infill patterns', e);
   }
 
+  _syncMaterialControls();
   updatePathList();
   updatePropPanel();
   updateOffsetList();

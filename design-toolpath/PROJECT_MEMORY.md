@@ -108,7 +108,7 @@ Eulerian path detection and the Chinese Postman / Route Inspection problem are t
 
 **Routing objective — REVISED 2026-10-05 (route planning, superseded the same day by physical quality):** (1) never leave printable wall material except unavoidable travel between disconnected components; (2) keep visible faces clean (never moved); (3) continuous extrusion; (4) prefer a NEW hidden return path through the wall over exact retrace; (5) short / smooth; (6) keep the infill pattern where practical (local deviations allowed); (7) exact retrace only as last resort (e.g. single-bead dead ends). Previous objective (kept below for history) made retrace the normal solution; changed because a mud bead has width and depth, so printing back over the same bead is not neutral, while the inside of a thick wall is free to change. See "Route planning" section.
 
-**Routing objective (lexicographic, adopted 2026-10-05; SUPERSEDED for wall infill by the objectives above — still the router's generic objective, with one exception: odd ends of solid-infill strands (`travel_pairing`) are joined by a short travel instead of retrace):** (1) never create false printable connections; (2) print all geometry; (3) minimise print runs / travel moves; (4) minimise travel distance; (5) minimise retracing — WEIGHTED (since wall networks, 2026-10-05): retracing a visible wall face / single-bead wall costs `FACE_RETRACE_COST` = 3 × its length, internal geometry (lattice, centre lines, junction connectors) 1 ×, so continuity transitions hide inside the wall. Consequence: within a connected component the router RETRACES printed edges rather than travelling (see "Routing: retrace augmentation + T-junctions" below). Physical acceptability of double-printed mud on retraced edges is not yet validated on the machine.
+**Routing objective (lexicographic, adopted 2026-10-05; SUPERSEDED for wall infill by the objectives above — still the router's generic objective, with one exception: odd ends of solid-infill strands (`travel_pairing`) are joined by a short travel instead of retrace):** (1) never create false printable connections; (2) print all geometry; (3) minimise print runs / travel moves; (4) minimise travel distance; (5) minimise retracing — WEIGHTED (since wall networks, 2026-10-05): retracing a visible wall face / single-bead wall costs `FACE_RETRACE_COST` = 3 × its length, internal geometry (lattice, centre lines, junction connectors) 1 ×, so continuity transitions hide inside the wall. Consequence: within a connected component the router RETRACES printed edges rather than travelling (see "Routing: retrace augmentation + T-junctions" below). Physical acceptability of double-printed mud on retraced edges is not yet validated on the machine. *(Under PHYSICAL RULES 2026-10-06 the router never retraces: odd components are paired by visible travel and reported.)*
 
 **Important constraint:** Simple geometry must remain simple. One continuous wall should not become complicated merely because the software has an internal graph representation. Use graph routing only where it provides genuine value.
 
@@ -364,9 +364,9 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 Location: `design-toolpath/toolpath_proto/`. 90 tests passing.
 
-### Phase 3 — Design Canvas Prototype — 13 steps + six UX passes + wall networks + passes 1–7 (checkpoint 414c283, cleanup 51387d3) + Pass 8 (uncommitted)
+### Phase 3 — Design Canvas Prototype — 13 steps + six UX passes + wall networks + passes 1–7 (checkpoint 414c283, cleanup 51387d3) + Pass 8 (checkpoint 0898d16)
 
-Location: `design-toolpath/design_proto/`. 889 tests passing (incl. 3 node UI smoke tests); toolpath_proto 90. Pass 8 + its correction + the wall-region pass are uncommitted, awaiting browser inspection (Pass 8's wall work was manually approved).
+Location: `design-toolpath/design_proto/`. 1059 tests passing (incl. 8 node UI smoke tests); toolpath_proto 90. Pass 8 + its correction + the wall-region pass were checkpointed in commit 0898d16, still awaiting browser inspection (Pass 8's wall work was manually approved).
 
 How to read this file: the pass sections below are kept as HISTORY (newest decisions win). Where a later pass replaced an approach the older text is marked SUPERSEDED. Current behaviour in one paragraph: wall infill = `wall_lattice.py` motifs (corners braced, max unsupported distance, MIRRORED out-and-back with cap V; wave = tangent half sines, smooth); regions too wide to be a wall (thickness > 1.6 × target, provisional) fall back to the `infill.py` field + `route_plan.py` repair; solid infill = `solid.py` (perimeter and infill printed as distinct coherent phases — boundary contacts are ties, one routing hand-off per ring; rectilinear = conventional boustrophedon; serpentine = interconnected web of anti-phase waves touching at alternating apexes; boundary support measured, landings only with a user limit); short travel accepted where the field is split; openings cut through the complete wall: assemblies (Wall Thickness, linked two-path walls) are cut as assemblies; in a wall-infill MATERIAL region (outer boundary minus any number of voids) an opening is a corridor SUBTRACTED from the material, from the clicked face to the opposite face.
 
@@ -509,7 +509,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - **Tests**: `tests/test_openings.py` (incl. JS helper parity and a node-driven UI smoke test `tests/js/ui_openings_smoke.js`; JS tests skip without node).
 - **Known limitations**: (1) [resolved 2026-10-05 — see retrace routing] router used travel for all odd pairs. (2) Near sharp corners the cut face can be skewed (cross-section through a miter region). (3) Openings are measured on the processed (rounded) path, so changing Corner R shifts positions past rounded corners slightly. (4) Per-opening end treatment and Z range not implemented by design.
 
-**Routing: retrace augmentation + T-junctions (2026-10-05, toolpath_proto/graph.py)** — complete; verified by manual UI testing.
+**Routing: retrace augmentation + T-junctions (2026-10-05, toolpath_proto/graph.py)** — complete; verified by manual UI testing. *(SUPERSEDED under PHYSICAL RULES 2026-10-06: exact print retrace is forbidden and every connected component must close — see "Physical deposition rules".)*
 
 - **Problem found** (rect + inside offset + zigzag + 1 opening, Flat): UI showed 3 runs / 2 travels. Graph: 1 connected component, 4 odd nodes (zigzag start at a wall corner (deg 5), inner corner on the zigzag end-connector (deg 3), the two lattice landings on the opening faces (deg 3)); no unmerged coincident nodes. Old `_augment` paired ALL odd nodes with straight travel edges into a circuit — one travel jumped 12 in straight across the opening. A zero-travel route exists; zero-retrace does not (Euler: > 2 odd nodes). Proven optimum (exhaustive pairing): 1 run, 0 travel, 14.14 in retrace (the zigzag end connector re-traversed once).
 - **Previous approach**: travel-edge augmentation via min-weight matching on Euclidean distance, full circuit. **Changed because** it (a) wasted one pair that could be the trail's ends, (b) used non-printing jumps inside connected geometry — which can cross openings — instead of the legitimate graph.
@@ -548,7 +548,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - **Centred wall reference not printed (decision)**: WallSpec / NetworkWall `print_reference` (default False): a CENTRED wall's reference path is construction geometry (drawn dashed in the UI; `network.reference_only`), because a bead down the middle crosses every infill strut (local mud build-up) and adds odd junctions. Inside / outside / left / right walls keep the reference as a printed face. Explicit Extra Offsets keep the old behaviour (source printed). "Print reference line" opt-in restores a printed centre line (its user-authored junctions stay legal at any degree).
 - **Junction-arc precision fix**: trimmed faces now start exactly at the fillet arc end (a float gap left an outline open).
 - **Wall authoring UI**: path Properties start with a prominent name header; Wall section: "Wall Thickness" + "Wall Alignment" (closed: Inside / Centered / Outside, open: Centered / Left / Right; default Inside / Centered) + "Print reference line" for Centered; a networked path without its own wall shows "Wall Thickness N in · … — inherited from network N1" + "Override for this path"; an overriding path offers "Use network N1 wall instead". Network panel: "Network Wall Thickness" + "Wall Alignment (Default / Centered / Inside / Outside)" + who overrides it. Extra Offsets moved into a collapsed "Advanced: Extra Offsets" section with an explanation. Path identification: a custom path picker (Extra Offset source) — hovering / arrow-keying an item highlights that path on the canvas (yellow glow + transient name label); path-list hover and the properties header highlight too; no permanent canvas labels. Routing: "Infill repair" toggle; status shows local infill edits.
-- **Remaining unavoidable cases**: a single-bead (no-thickness) dead end retraces its length (no material to edit); a wall without infill whose faces are separate loops travels between them (no hidden bridge is invented — possible future option); two overlapping user-requested legacy lattices (pairwise) are not a repairable field: their own landing points stack (congestion reported, ~2.9 beads); wide regions get a sparser, irregular web than the old 6-way triangulation; wave infill becomes straight where struts meet interior points or would leave the wall; closing the loop (start = end) is chosen less often now (closing must also be a cheap local edit).
+- **Remaining unavoidable cases**: a single-bead (no-thickness) dead end retraces its length (no material to edit); a wall without infill whose faces are separate loops travels between them (no hidden bridge is invented — possible future option); two overlapping user-requested legacy lattices (pairwise) are not a repairable field: their own landing points stack (congestion reported, ~2.9 beads); wide regions get a sparser, irregular web than the old 6-way triangulation; wave infill becomes straight where struts meet interior points or would leave the wall; closing the loop (start = end) is chosen less often now (closing must also be a cheap local edit). *(SUPERSEDED 2026-10-06 under physical rules: a single-bead open wall becomes a two-pass return-lane wall.)*
 
 **Route planning, parametric walls, network-level walls, interactive shape tools (2026-10-05)** — the return-path planner described here was SUPERSEDED the same day by "Physical route quality" above (kept for history). — implemented and tested (automated + headless-browser); NOT yet manually verified, NOT committed.
 
@@ -573,7 +573,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - **Generator (`infill.py`)**: rings sampled at one global pitch (`spacing`); sharp turns (> 35° within half a pitch — sharp vertices and small junction fillets, not large Corner R arcs or circles) are always samples; each run between corners chooses the offset that best STAGGERS it against existing samples (facing walls alternate → zigzag, not rungs); interior points on a global hex grid where the region is wider than the pitch; Delaunay (Bowyer–Watson, deterministic jitter); a triangle edge is a strut iff not a boundary piece and entirely inside the material (spatial-indexed crossing / inside tests). Struts chained into polylines. Patterns: `zigzag` (straight struts) and `wave` (each strut a Hermite curve tangent to the walls; straight where a curve would leave the wall). V1/V2 = half-pitch phase shift. **Phase ownership**: one pitch and one phase per infill = per region; no restart per branch.
 - **Routing**: unchanged. Infill is INTERNAL (retrace cost 1); struts land on boundary samples on the faces (graph T junctions); in bands boundary nodes are even-degree, junction zones add a few odd nodes → retrace on internal geometry. Connected → zero travel (tested incl. 1–5 holes).
 - **Corner R per source (decision)**: `Path.corner_radius` (Rect / drawn paths in the UI, in the path's Properties next to X/Y/Width/Length); fillets only that path's original corners; offsets still generated from the processed (rounded) source. Previous: layer-wide `PrintLayer.corner_radius` (kept only as a legacy fallback when a path's value is None; removed from the UI).
-- **Junction corners (decision)**: corners CREATED by the network — where the printed faces of two different wall systems end at one boundary node (T splices, X crossings, hub mitres, inner corners) — are a separate concept from source corners and never take a source's Corner R. Treatment: layer default (`junction_style` 'miter' | 'round', `junction_radius`) + per-junction `JunctionSetting(key, treatment, radius)`. Rounding (`network.round_junctions`): tangent arc of radius r (clamped to 45 % of either leg), the two face chains trimmed, a FACE bead `junction:<key>`; the same fillet is applied to the material rings so infill lands on the rounded wall. Default 'miter' = previous output exactly.
+- **Junction corners (decision)**: corners CREATED by the network — where the printed faces of two different wall systems end at one boundary node (T splices, X crossings, hub mitres, inner corners) — are a separate concept from source corners and never take a source's Corner R. Treatment: layer default (`junction_style` 'miter' | 'round', `junction_radius`) + per-junction `JunctionSetting(key, treatment, radius)`. Rounding (`network.round_junctions`): tangent arc of radius r (clamped to 45 % of either leg), the two face chains trimmed, a FACE bead `junction:<key>` *(SUPERSEDED 2026-10-05: rounding is decided per wall junction — see "Rounded junctions as wall assemblies")*; the same fillet is applied to the material rings so infill lands on the rounded wall. Default 'miter' = previous output exactly.
 - **Junction identity (temporary, documented)**: key = the two wall FACES that meet (source / offset ids, joins mapped to the face they extend), sorted, + `#ordinal` among corners of that face pair ordered by position. Survives moving/reshaping as long as the same faces meet; if topology changes the setting no longer matches (falls back to the default; the override stays in the data and re-applies if that junction reappears). Ordinal can swap if two junctions of the same face pair cross over in position. Compatible with persistent attachments: an attachment id can later replace / prefix the face pair. Internal junctions (e.g. a centre line meeting a face) are markers but not corners (no treatment).
 - **UI**: INFILL section replaces "Connecting Geometry" (+ Add Infill → the selected path's wall region; label "Fills wall network N1 (…)" + status: ok / shadowed / no wall material); Pattern, Spacing, Variation. Corner R row in Rectangle / drawn-path Properties. WALL GEOMETRY: Junctions Miter/Rounded + Junction R (default for all). Click a ◆ junction diamond (filled = corner, hollow = internal) → Properties "Junction": Treatment Default / Miter / Rounded + Radius. `/api/infill_patterns`; network summary `junctions` are now objects {x, y, key, corner, treatment, radius, override}; `infills` [{id, regions, holes, shadowed_by, status}].
 - **Ambiguities (require a user decision eventually, via RegionOverride / a paint tool)**: (a) nested closed single-bead walls with an infill are read even-odd — if an inner loop is meant as a free-standing thin wall inside solid material (not a hole), the software can't know; (b) a lone closed single-bead wall with an infill becomes a solid slab (only reading available); (c) thick walls: the room inside a ring is always void — a filled room needs an override; (d) a single-bead wall lying inside wall material is crossed by infill rather than treated as a boundary.
@@ -592,7 +592,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - **Limitations:** region doorway cut faces are FLAT (the cap styles — Full Round / End R — apply to wall assemblies only); a doorway ending exactly at a void's corner gets a diagonal side; an opening whose opposite face is farther than the wall depth is not cut (reported); thick (Wall-Thickness) voids inside a wall-infill region are not region voids for doorways; the corridor sides follow the local normals (for strongly non-parallel faces the doorway widens / narrows across the wall).
 
 **Pass 8 correction — solid infill + wall-authoring UI (2026-10-05)** — implemented and tested; UNCOMMITTED, awaiting browser inspection. Manual inspection of Pass 8 approved: dead-end out-and-back, multi-arm coherence, openings in normal wall assemblies (multiple / moving / corner-spanning), wall corners, editing (drag, resize, copy, rotate, playback, undo / redo), wall wave. Rejected: the solid hairpin strategy.
-- **Design decision (user):** "Zero travel is a preference, not the objective. A short travel move is preferable to distorting otherwise good print geometry merely to make a route continuous." Start = end is desirable, not mandatory. Priority: structural geometry → smooth intentional paths → material distribution → coherent perimeter printing → coherent infill → minimal retrace → minimal travel → start / end convenience.
+- **Design decision (user):** "Zero travel is a preference, not the objective. A short travel move is preferable to distorting otherwise good print geometry merely to make a route continuous." Start = end is desirable, not mandatory. Priority: structural geometry → smooth intentional paths → material distribution → coherent perimeter printing → coherent infill → minimal retrace → minimal travel → start / end convenience. *(CONFLICT 2026-10-06: the physical rules require zero travel inside a connected component; solid infill still uses in-component travel hops and is reported as an open component — decision pending, see Open Questions.)*
 - **Perimeter and infill have distinct structural roles:** a perimeter is normally completed as one coherent loop; the infill is its own phase; no alternating perimeter → infill → perimeter to save a travel; never reprint / retrace a perimeter for continuity.
 - **Cause of the hairpin playback (found):** every point where solid infill touched the printed boundary was a ROUTING JUNCTION (T-split of the perimeter), so the Euler route could leave / re-enter the perimeter at dozens of points; Pass 8's hairpin loops (all line ends paired into closed loops) made the whole layer one circuit through those junctions → perimeter printed in fragments interleaved with infill.
 - **Routing fix (toolpath_proto, opt-in, generic):** `Strand.join_group` / `join_points`. Geometry of the same group (or two ungrouped strands) joins as before; contact BETWEEN groups is a junction only at declared join points — elsewhere beads touch physically and the route passes on (coincident non-join vertices get their own node, nudged 1e-9). Solid strands form a group per infill region with ONE join point per boundary ring (`SolidPlan.attach`: a trail end on the ring if possible) → each ring is a loop hanging at one node: printed whole, once. Ungrouped strands (all walls) route exactly as before (36 wall cases identical). Also: components are visited nearest-next (was arbitrary graph order).
@@ -620,6 +620,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 **Structural infill rules — pass 7 (2026-10-05)** — implemented and tested (automated + headless browser); NOT yet manually verified; committed in checkpoint 414c283. Principle: PATTERN PARAMETERS ARE PREFERENCES; STRUCTURAL SUPPORT AND TOPOLOGY ARE CONSTRAINTS.
 - **Wall-lattice priority order (decision, encoded in wall_lattice.py + tests):** (1) never enter openings / voids, (2) never exact-retrace interior lattice, (3) positively support corners, junctions, dead ends / caps, (4) never exceed the maximum unsupported distance if avoidable, (5) no congestion hotspots, (6) continuous printing, (7) a coherent repeated motif, (8) approach Target Spacing, (9) visual regularity.
 - **Motif vocabulary:** ordinary stitch · CORNER BRACE · junction hand-off · CAP V (dead-end turnaround / open-end support). A run is laid out in SEGMENTS between fixed support points (junction ends, dead ends, corners); each segment gets its own whole stitch count.
+  *(Future direction, 2026-10-06: a wider generator-side library of corner / junction motifs — see Open Questions, "Wall-lattice corner / junction motif vocabulary". Not implemented.)*
 - **Corners (decision):** detected along each run where the smoothed centre line turns ≥ 30° within 2 thicknesses (a 140° interior corner turns ~35° there; gentle curves ~10°). Corner points: INNER = boundary point nearest the corner on the inside of the turn (reflex vertex / inner arc apex), OUTER = boundary point farthest along the corner bisector (convex vertex / outer arc apex); bisector from the inner face either side of the inner point. Single-pass runs: the corner is a double station — arrive at one corner point, a BRACE diagonal to the other, continue (one extra stitch; parity accounted). Two-phase runs: each phase lands one corner point; the start side is chosen by measuring both options (hotspots, tiny cells, multiplicity). Corner landings do not move with Target Spacing. Closed-loop seam: corner window wraps.
 - **Maximum unsupported distance (decision):** the longest distance along the wall between consecutive lattice supports (landings on either face). Default 1.375 × target (16 → 22 in); wall-infill param `max_unsupported` (UI: Advanced, 0 = auto). It wins over target spacing: segment counts are raised (and stations redistributed) until no real centre-line gap exceeds it — never a tiny extra stitch. Report: `max_unsupported`, `max_unsupported_limit`; UI "Actual: a–b in · Max unsupported: x in (limit y)".
 - **Out-and-back density (decision, changed from pass 6; SUPERSEDED by Pass 8: mirrored phases at the target):** Target Spacing = COMBINED density. The two phases interleave on one station grid (each at ~2 × target, offset by one station), so supports are ~target apart and wall crossings ≈ length / target. Pass 6 used two complementary passes at the target (every station landed on both faces) = twice the crossings — changed because the user's spec defines target as the combined density. Trade-off (reported): with interleaving, each face's landings come in pairs (gaps alternate ~S and ~3S); bead LENGTH is still ~1.8 × a single zigzag because an out-and-back must traverse the arm twice.
@@ -635,7 +636,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 **Wall lattice (motif-based, route-aware) — 2026-10-05** — implemented and tested (automated + headless browser); NOT yet manually verified; committed in checkpoint 414c283. *(Out-and-back density, turnaround and wave profile below were SUPERSEDED by pass 7 — see above.)* `wall_lattice.py`, used for every WALL infill region whose local thickness ≤ 1.6 × target (wider regions = areas → old field generator + repair as fallback).
 - **Where the old bow ties / boxes / retrace came from (investigated):** (a) generation — each face run sampled independently at the exact pitch + Delaunay + degree-capped `select` left odd nodes at arm ends, junctions and remainders; (b) `route_plan.repair` then toggled struts: removing a diagonal merged triangles → boxes; adding skip struts across existing ones → bow ties; bent supports → diamonds; tier-2 alternating chains → abrupt phase switches mid-run; each arm repaired independently → different strategies per arm; (c) whatever parity was left (dead-end arms always end odd) → router exact retrace. Measured before/after on the regression fixtures (tests/wall_fixtures.py).
 - **Skeleton (chordal axis):** densely sampled wall rings (h ≈ thickness/3) → own incremental Delaunay (no scipy; walking Bowyer–Watson, super triangle 1000 × span — 50 × left hull triangles missing) with conforming refinement → inside triangles classified by internal chords: 1 = wall END, 2 = SLEEVE, 3 = JUNCTION. Sleeve chains = wall RUNS (each chord spans face to face → exact face correspondence on curves). Short side branches (< 1.2 t; convex-corner noise) pruned; junctions joined by runs < t merged into one CLUSTER. Centre line = smoothed chord midpoints. Face point of a station = nearest point of that side's face to the centre-line point (side and ±45°-of-normal constrained, so never the cap / far face); junction run ends use the exact corner vertices.
-- **Motifs:** a PASS is a zigzag/wave landing alternately on the two faces at evenly distributed stations; interior landings add degree 2 (even), so layer parity depends only on pass ENDS. Through run between junctions → 1 pass; closed loop without junction → 1 circulating pass, even N; dead-end arm → OUT-AND-BACK: 2 passes in complementary phase + a square turnaround rung half a thickness before the cap (every station landed on both faces, no interior retrace, returns to its junction); lone run (no junction) → 1 pass, open route (decision; see Open Questions). *(SUPERSEDED, pass 7: out-and-back = interleaved phases at combined target density joined by a cap V; no rung.)*
+- **Motifs:** a PASS is a zigzag/wave landing alternately on the two faces at evenly distributed stations; interior landings add degree 2 (even), so layer parity depends only on pass ENDS. Through run between junctions → 1 pass; closed loop without junction → 1 circulating pass, even N; dead-end arm → OUT-AND-BACK: 2 passes in complementary phase + a square turnaround rung half a thickness before the cap (every station landed on both faces, no interior retrace, returns to its junction); lone run (no junction) → 1 pass, open route (decision; see Open Questions). *(SUPERSEDED under physical rules 2026-10-06: a lone run gets a CLOSED out-and-back loop — the second wave.)* *(SUPERSEDED, pass 7: out-and-back = interleaved phases at combined target density joined by a cap V; no rung.)*
 - **Network coherence:** passes per run chosen for the whole network by route inspection on the skeleton (min-weight matching of odd junctions, doubling the cheapest runs; dead ends always doubled when closed routes are preferred) → equivalent arms get the same motif. Junctions: pass ends pair up at shared corners (min-weight matching per cluster; single-pass runs choose start face + stitch-count parity jointly, brute force ≤ 6 runs else coordinate descent); rounded corners: both passes meet at one point just inside the fillet (moved off the arc only as far as needed for straight stitches to stay inside); fallback connector only when no corner pairing exists. Stitches touching a junction are straight. Nothing is generated in the junction centre.
 - **Target spacing:** N = nearest admissible integer to U / S (parity only when a junction or loop requires it), actual pitch = U / N exactly (91 in @ 20 → 5 × 18.2). U = station parameter: ½ centre-line length + ½ progress of the SHORTER face, so tight bends / reflex corners get fewer, wider stitches (no inner crowding). Report: `network.lattice[id].regions[].runs` (motif, passes, stitches, pitch, length, ends), `infills[i].lattice` (pitch_min/max) → UI "Target Spacing" + read-only "Actual: a–b in".
 - **Wave:** same machinery, stitch weight (1 − cos πf)/2 (tangent to the faces), complementary phases; junction stitches straight. *(SUPERSEDED, pass 7: profile = 0.4 straight + 0.6 sine (leaves faces at an angle); out-and-back phases interleave.)*
@@ -678,6 +679,234 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - Multi-layer / physical-Z keyframes deferred (as planned)
 - Offset direction convention assumes CCW winding for "inside" = inward
 
+### UI organization — Design / Print sidebars (2026-10-05, Designer checkpoint 2026-10-06)
+
+**Decision:** the workspace has three columns. On the left is **DESIGN**, "what am I designing?". In the center is the canvas, which takes all the remaining width. On the right is **PRINT / TOOLPATH**, "how will it print?". The single long right sidebar was replaced because it scrolled a lot while horizontal space went unused. The split follows the project's DESIGN GEOMETRY → WALL / REGION SEMANTICS → TOOLPATH layers. It is not meant to balance the amount of content on each side. This pass is layout only: no behavior, API payload, keyboard shortcut or toolbar change.
+- **Left (`#sidebar-design`):**
+  - the Paths list
+  - Properties of the selected path: label, closed, position and dimensions, Corner R, rotate / angle, and inset-child rows
+  - Wall Thickness / Alignment / Print reference line (a property of the designed wall)
+  - Advanced (linked boundaries, inset / outset)
+  - Delete path
+  - the Wall network panel (Network Wall Thickness / Alignment)
+  - the selected opening's Width / Position / Delete
+  - Selected Junction (`#junction-props-section`, rendered by `updatePropPanel` instead of `#path-props`)
+  - Wall Geometry: layer junction and end-cap defaults
+  - Advanced: Extra Offsets
+- **Right (`#sidebar-print`):**
+  - Infill: kind, pattern, target / actual spacing, Advanced
+  - Routing Overrides
+  - Routing metrics
+  - Legend
+- **Changed (same day, at the designer's request):** Wall Geometry and the selected junction's treatment first went to the RIGHT, as corners and ends generated by resolving the network. They moved to the LEFT because junction and end-cap treatment describe the physical wall geometry. The selected junction sits next to Wall Geometry.
+- **Ambiguous placements:**
+  - An opening's disabled "End treatment: Inherit" row stays with the opening on the left.
+  - The network panel's "+ Add infill to network" shortcut stays in the network panel.
+- Both sidebars are 230 px (the old width) and scroll independently, and the page itself never scrolls. The canvas hint now wraps inside the center column instead of being clipped.
+- **Tests:** `test_app.py::TestWorkspaceLayout` checks the left / right / toolbar placement of control ids and the column order. `ui_network_smoke.js` checks that the junction panel renders in its own section, not in the path Properties.
+
+### Trim ghost fix (2026-10-06, Designer checkpoint 2026-10-06)
+
+- **Bug (manual):** trimmed circle × rectangle (10 in walls); selecting the rectangle drew a ghost of the untrimmed rectangle: selection outline, hover highlight, outline handles, and hit-testing on trimmed-away sections.
+- **Root cause:** all selection / editing visuals and `hitTestPath` used the parametric source polyline (`path.points`), unaware of Trim.
+- **Fix (UI only; Trim semantics and geometry unchanged):** `_visibleSourcePolys(p)` returns the source minus its trimmed sections, from the Trim section data. The selection outline, hover highlight and hit-testing use it.
+  - `visibleHandles(p)` drops outline handles lying only on trimmed-away geometry (e.g. a rectangle corner inside the circle). The circle's radius handle moves onto the visible arc, since its drag uses only the distance to the centre. Off-outline handles (centre, bend) and the rotation handle stay, so move / resize / rotate keep working.
+  - Without trims, or after Undo, everything is the normal full representation.
+- **Superseded:** the Trim smoke check "clicking a trimmed section still selects the line" — selection now favours visible geometry.
+- **Test:** `tests/test_trim_ghost.py` + `tests/js/ui_trim_ghost_smoke.js`, built from real backend sections.
+
+### View navigation, persistent Wall Network, printable-line rendering (2026-10-06, Designer checkpoint 2026-10-06)
+
+- **Rendering rule (decision; SUPERSEDES the earlier views):** whenever the resolved printable centrelines are known, printed geometry is drawn ONLY as itself.
+  - **Beads OFF:** ONE thin blue line per printable centreline: the toolpath print moves, or `drawPrintableLines` when no route is shown.
+  - **Beads ON:** ONE thick blue bead.
+  - Nothing is layered under or through it. No role-coloured effective faces (the old "sandwich": teal faces / caps under blue print lines), no reference line except the selected path's.
+  - The design is drawn only for the SELECTED path (thin white) and a path being dragged (live; its stale strands are hidden).
+  - Indicators stay on top: openings, junction diamonds, arrows, markers, travel.
+- **Wall Network = a persistent Design-sidebar section** (below Wall Geometry), no selection needed. It shows the selected path's network, else the one picked in a compact selector (only with several networks), else the first.
+  - It holds Network Wall Thickness / Alignment / members / "+ Add infill to network".
+  - A path's Properties show only its membership (plus its inherited-wall / override rows). Semantics unchanged.
+- **Zoom / pan (view only):** part of the world ↔ canvas transform (`view = {z, px, py}`), not a CSS transform, so every hit test, drag, snap and draw works at any zoom.
+  - Wheel / pinch zooms at the pointer: the world point under the cursor stays put. Range 25 %–2400 %.
+  - Space + drag or middle-drag pans.
+  - Canvas overlay: Fit (frames the printable / design geometry), 100 % (the default view: the 400 in workspace), and a % readout.
+  - `HIT_DIST` / `SNAP_RADIUS` scale with 1 / zoom (constant on screen). Bead width follows the zoom.
+- **Tests:**
+  - `tests/js/ui_view_smoke.js` (via test_app.py): round trips, zoom at the cursor, clamps, pan, wheel, Space / middle drag, Fit, 100 %; selection, body / handle drag, drawing, opening place + slide, Trim hover / click, junction selection and Route Origin drag, all at zoom + pan; Beads OFF / ON rendering.
+  - `ui_network_smoke.js`: the section shows without a selection; a selector appears with 2 networks.
+  - Layout test: `network-section` is in Design; the view controls are on the canvas.
+
+### Attached single-bead branches close; markers never edit geometry; blue beads (2026-10-06, Designer checkpoint 2026-10-06)
+
+**Bug (manual):** single-bead rect + open single-bead branch + an opening, physical ON → 1 component, 1 travel, Start ≠ End, Closed 0/1.
+- **Root cause** (4 odd nodes):
+  - (1) The branch became two lanes, but they landed on the rect's single bead, which stayed whole across the branch mouth: WIRE beads are always kept, and the network only joins thick-into-thick. That left degree-3 landings.
+  - (2) The opening left the single-bead rect with two dead ends; the return-lane rule only covered open SOURCES.
+- **Fix — geometry, not routing (decision):**
+  - (a) A closed single-bead wall carrying an opening is a RETURN-LANE wall too (U-turns at the cut). Not done when it anchors an infill.
+  - (b) **Mouth cut** (`PrintLayer._mouth_cuts`): where a return-lane branch ends on a single-bead host, the host is cut exactly between the two lanes' landings. It reuses the trim cutting with exact shared points; each lane is carried along the branch's end tangent to the host. The branch gets no U-turn there.
+  - The mouth is a new **`network.SPLIT`** bead: it splits regions for classification but is NEVER printed. Without it the branch band merged with the room and its faces were dropped as void|void.
+  - A declared infill region survives a mouth cut.
+- **Result:** one closed run, 0 travel, 0 retrace; lanes W − R apart. This generalizes to oblique branches, inside branches, a circle host, two branches, and an open host line (which is itself two-pass). This resolves physical-rules limitation (4).
+
+**Route markers win hit-testing (decision):** with Toolpath ON, any route marker under the pointer takes the click before paths, openings and handles.
+- The origin drags and changes only `route_origins`.
+- The Start / End of an OPEN route just explain themselves. Previously, clicking the green START of the then-open route fell through to the opening beneath and dragged it.
+
+**Bead rendering (SUPERSEDES the opaque-mud + hairline rendering above):** Beads ON = every printable centreline drawn ONLY as one solid blue stroke (the print colour), Bead Width wide, round caps, composited once, opaque.
+- Nothing is drawn through it: no centreline, no print / retrace toolpath line, no reference line except the selected path's.
+- Travel, arrows, markers and junctions stay on top. Beads OFF = the normal vector view.
+
+**Tests:**
+- `tests/test_attached_branch.py` (18): the regression fixture with and without the opening is one closed run; lanes = W − R over a sweep of R; lanes join the host exactly (no U-turn at the host, no printed mouth); the opening stays open; generalizations; the origin around the circuit changes only the start; legacy unchanged.
+- `ui_origin_smoke.js`: origin over an opening drags the origin only; an open route's Start over an opening moves nothing; one blue stroke per printable; nothing drawn through the bead.
+- Fixtures: `physicalFixture('rect_branch' | 'rect_branch_closed')`.
+
+### Route Origin + solid bead rendering (2026-10-06, Designer checkpoint 2026-10-06)
+
+**Route Origin (decision):** the point on a CLOSED printable route (start = end) where traversal begins and returns. A closed circuit has no intrinsic start, so the designer chooses it.
+- **Stored as design state** (undoable, in every payload): `layer.route_origins = [{strand, u}]`. `strand` is a printable strand id (the router's strand, stable across ordinary rebuilds); `u` is the fraction of its length. At most one origin per connected component.
+- **Backend:** `model.resolve_route_origins` inserts the point as a collinear vertex, so the geometry is unchanged. `graph.route_layer(origins=…)` starts that component's circuit there; components are also entered there.
+  - An OPEN component (one the rules could not close) ignores its origin and keeps its own Start / End.
+  - A missing strand → `status: 'missing'` → automatic selection. The origin is never moved onto other geometry.
+  - If the strand still exists after an edit (e.g. a moved wall), the origin keeps its fraction u along it.
+  - `/api/route` returns `origins` (resolved / missing).
+- **UI:**
+  - ONE green dot per closed run (no START / END labels); START + END dots and labels only for open runs. The legend is updated, and the old yellow seam diamond is removed (the origin marks that point).
+  - With Toolpath ON, the origin dot is dragged in Edit mode. It is projected onto the printable strands of ITS OWN run (not free XY), and release is one undo step.
+  - Playback begins at the route start, i.e. the first component's origin.
+- Groundwork for multi-layer seam / origin planning; component ordering stays future work.
+- **Limitations:** the strand id of a network-modified chain (`…~nK`) can be renumbered by a topology change, and the origin then falls back to automatic. The older `constraints.start_path_id / start_t` (no UI) still pins only the first component when no origin applies.
+
+**Bead rendering (clarification):**
+- The bead layer is composited OPAQUE: one solid mud strip, all beads drawn into one layer once, so overlaps never darken.
+- With Beads ON, centrelines and toolpath lines become hairlines (≤ 0.75 px, 60 % opacity) on top. The rendering itself adds no apparent thickness, so a 0.75 in contact overlap can be judged visually.
+- Arrows and origin / Start / End dots stay on top. Rendering only: no geometry change.
+
+**Tests:**
+- `tests/test_route_origin.py` (7): origin moves the start, not the geometry; persists through a rebuild; follows its strand when the wall moves; missing → automatic; one origin per disconnected component; an open component keeps Start / End.
+- `tests/js/ui_origin_smoke.js`: markers (origin vs Start / End); drag projected onto its own run; {strand, u} stored; one undo step; geometry untouched; per-component origins; undo / redo; playback start; opaque single composite; hairline + subtle lines over beads; normal widths with Beads off.
+
+### Physical deposition rules — Contact Overlap, Return-Lane Overlap, no retrace, closed routes (2026-10-06, Designer checkpoint 2026-10-06)
+
+**Decision: centrelines are physical beads.** `MaterialSpec` (material.py) holds `bead_width` W, `contact_overlap` O, `return_overlap` R and `physical`.
+- **The switch:** the app sends `physical: true` by default (Material / Bead → Physical rules). The bare engine default stays the zero-width legacy, so the generic toolpath prototype and its retrace router keep their contract. All legacy tests run unchanged.
+- **Four distinct concepts.** O and R share the formula "centreline separation = W − overlap", but they are separate fields, helpers and code paths: machine testing may give them very different values.
+  - **BEAD WIDTH:** one pass.
+  - **CONTACT OVERLAP:** a generated bead intentionally LANDS against a printed one. Separation W − O, with 0 ≤ O ≤ W; O = W means the centrelines coincide.
+  - **RETURN-LANE OVERLAP:** a pass runs beside the pass it replaces a retrace of. Separation W − R, with 0 ≤ R ≤ W − 0.25; R = W would be an exact retrace.
+  - **CROSSING:** centrelines meant to cross. No overlap rule applies.
+- **Provisional defaults:** W 3.00, O 0.75, R 0.75 in (25 %). Contacts are 2.25 in apart; a single-line wall is ≈ 5.25 in wide.
+- **Architecture (decision): the generators make physically valid, closable geometry; the router never repairs it.**
+  - Router (`graph.route_layer(allow_retrace=False)`): no `_augment_by_retrace`. Every component routes as a closed circuit. Odd nodes are paired by explicit TRAVEL and reported (`closure_report`, the "Closed components" metric turns red), never printed over. API `/api/route` returns `closure`.
+- **Contact Overlap (wall lattice, `wall_lattice.plan(contact=W − O, closed=True)`):**
+  - Interior stitch landings stop W − O off the face centreline. The stitch is built on "contact rails", so zigzag and wave keep their shape. Rails are pushed along the across line until truly W − O clear: at a corner brace a straight offset would be only (W − O)/√2 from each leg.
+  - Stitches must also stay clear mid-curve (else Hermite / straight fallback).
+  - Route CONNECTIONS stay exact: pass ends at junction corners, plus ONE **transfer landing** per face ring the lattice would otherwise not touch (a closed ring wall: 2; a lone wall: 1). Converting an interior landing is parity-neutral (+2), so the route-aware motif design is unchanged.
+  - Crossings between phases are untouched.
+  - The report adds `contact`, `transfers`, `contact_min` and `contact_violations`. Stitches into or out of an exact connection are exempt within one target spacing.
+  - Other generators (field fallback, solid) are NOT changed yet.
+- **Return-Lane Overlap (dead-end / single-line walls):** an OPEN single-bead source becomes a TWO-PASS wall through the existing wall machinery, recorded in `PrintLayer._return_lanes` and `network.return_lanes`. This excludes paths that already have Wall Thickness, a network wall or extra offsets, and closed paths.
+  - Its two passes are W − R apart, with semicircular U-turns (cap style `full_round` for these systems only). The drawn path becomes the unprinted reference.
+  - Physical width 2W − R. Networks, trims and openings work unchanged: a thin X becomes one closed loop.
+- **Lattice second wave:** a lone wall run (no junction) gets a CLOSED out-and-back loop: two phases joined by cap Vs at both ends, motif `lone_loop`.
+- **Results (tests/physical_fixtures.py, physical):** every fixture's components are closed, with 0 retrace and travel only between genuinely disconnected components:
+  - wave / zigzag ring 1 run; lone wall 1; X walls 1; single line 1; thin X 1; star 1; dead-end branch 1; islands 2 runs, 1 travel.
+  - Legacy controls show what the rules fix: lone wall and single line open, thin X 2 retraces.
+- **Superseded:** exact retrace as a last resort (router, single-bead dead ends), lone lattice runs as open routes, Bead Width "visual only" (now a geometry input when physical; still visual with the rules off). Updated tests: `ui_bead_smoke.js` and the material API test, for the superseded visual-only rule and the extended material schema.
+- **Limitations / open:**
+  - (1) With a large separation relative to the wall (e.g. O = 0.25 → 2.75 in in a 10 in wall) reflex corners and cap Vs cannot keep the full clearance. This is reported in `contact_violations`.
+  - (2) SOLID infill still uses in-component travel hops (earlier decision) → reported as an open component. This conflicts with the closed-route constraint and is a pending decision.
+  - (3) The wide-region field fallback is unchanged: its repair may still leave odd ends, which are now travel and reported.
+  - (4) *(RESOLVED 2026-10-06 by the mouth cut — see "Attached single-bead branches close".)*
+  - (5) The "Closed loop" routing override is moot with physical rules on.
+- **Tests:** `tests/test_physical.py` (46). Covered: closed + no retrace + travel only between components + start = end per run, for 8 fixtures; legacy controls; the router reports instead of retracing; contact landings at W − O over a sweep of O (zigzag / wave, ring / lone); O moves landings; O = W lands on the face; the shortfall is reported; crossings untouched; transfers; return lanes W − R over a sweep of R with semicircular U-turns and width 2W − R; O and R independent; two-pass network X; exclusions; lone-wall second wave; trim + rounded junction + opening under the rules; API.
+  - Browser fixtures: `tests/js/physical_fixtures_console.js` (`physicalFixture('wave_ring' | 'zigzag_ring' | 'x_walls' | 'thin_x' | 'dead_end_line' | 'lone_wall' | 'star' | 'islands' | 'branch')`).
+
+### Material / Bead — first pass: physical bead visualisation (2026-10-05, Designer checkpoint 2026-10-06)
+
+**Concept (decision): three distinct things.**
+- **Wall Thickness:** the architectural thickness of a wall assembly (design).
+- **Centerline:** the vector path the nozzle follows (toolpath).
+- **Bead Width:** the physical width of ONE deposited mud pass (material).
+
+MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow into the physical deposition rules.
+- **Representation:**
+  - `material.py` defines `MaterialSpec(bead_width=3.0)`, held as `PrintLayer.material` (JS: `layer.material.bead_width`). It is design state, so it is undoable and sent in every payload, ready to become a geometry input.
+  - **Bead display** (on/off, default OFF) is a VIEW toggle, like Arrows and Dimensions.
+  - Clear All keeps the material.
+- **Footprint:** the centerline swept by a disk of the bead width (Minkowski sum). This gives half-width w/2, ROUND ends and round joins; a straight open line is a capsule, and closed paths have no ends.
+  - Python: `material.in_footprint`.
+  - Canvas: round-cap, round-join strokes of the bead width, all drawn into ONE offscreen layer and composited once at α 0.55, under the centerlines. Overlaps union with no seams, and the centerlines and toolpath stay visible on top.
+- **Only resolved PRINTABLE geometry gets a bead.** The API returns `printable` (`PrintLayer.printable_centerlines`): exactly the strands handed to the router.
+  - So the beads reflect trims, openings, derived wall faces, caps, rounded junctions, wall lattice, field and solid infill.
+  - Centred-wall reference lines, construction geometry and non-printed region boundaries get none.
+  - While Bead display is on, the frontend always fetches, even for a single path.
+- **Visual only (decision):** Bead Width changes NO geometry — walls, infill spacing, lattice, routing, trims, openings, junctions. We want to see the physical footprint before deciding the rules. Changing it is one undo step, with no refetch and no reroute.
+- **UI:**
+  - The right column has two peer sections: **Material / Bead** (Show bead, Bead width in 0.25 in steps, minimum 0.25) above **Print / Toolpath**.
+  - The toolbar has a **Beads** toggle next to Arrows / Dimensions, synced with the checkbox.
+- **Future rule — Contact Overlap (documented, NOT implemented):** the intended physical penetration between two beads at an intentional contact.
+  - Two beads of width w touch when their centerlines are w apart; for an overlap o they should be (w − o) apart.
+  - Example: a wave wall-lattice stitch currently runs to the face's CENTERLINE; physically it should stop about (w − o) from it.
+  - Contact Overlap will become a `MaterialSpec` field that moves generated centerlines. Later rules may include bead height, minimum bend radius and congestion.
+- **Limitations:**
+  - While a path is being dragged, beads show the last backend result until the refresh.
+  - A self-overlapping single path unions with itself; that is correct physically, but per-pass overlap is not shown.
+- **Tests:**
+  - `tests/test_material.py` (15): capsule / round ends, curve, closed path, printable == routed strands, the centred reference gets no bead, faces and caps, trim, opening, rounded junction arcs, wall lattice, solid infill, width changes no geometry, API.
+  - `tests/js/ui_bead_smoke.js`: OFF by default, one round-cap / round-join stroke per printable centerline at the bead width, closed loop, 0.25 snapping, undo, no reroute, OFF again, nothing without printable geometry.
+  - Checked in headless Chrome: the pixels of a straight line form a capsule (round, not square, ends).
+
+### Rounded junctions as wall assemblies (2026-10-05, Designer checkpoint 2026-10-06)
+
+**Bug (manual Trim test):** trimmed Circle × Rect, one 10 in network wall, Junctions = Rounded, Junction R increased. The inner face froze at a few inches while the outer face kept growing, then the outer face kinked.
+- **Root cause, three parts:**
+  1. Each face corner was filleted INDEPENDENTLY with the same r.
+  2. Each fillet was clamped to 45 % of its own resolved CHAIN. Chains are split at plain arrangement nodes, e.g. where a hub or T join-extension bead meets the wall bead, so the inner face's legs were 5–10 in stubs (tangent frozen at 2.5–4.4 in).
+  3. The arc was built from the legs' first-segment directions with its ends FORCED onto the polyline at arc length t. That is wrong once t passes a leg vertex (the rect corner 15 in away) or runs along a curved face → kinks of 14–42°.
+- **Decision — Junction R is a property of the physical wall junction:**
+  - Faces are followed through plain face nodes up to the next real feature. Usable leg: 45 % up to another corner or a T/X/end node; 90 % up to a sharp face vertex (> 25°, e.g. a rectangle corner; a short straight remains).
+  - The fillet is the exact tangent circle on the actual straight or curved faces: offset intersection, then Newton refinement so the centre is exactly r from both faces.
+  - A WALL TURN is a convex face corner (material inside it) paired with the concave corner of the same two walls on its bisector. **Junction R = the radius of the OUTER (convex) face; the inner face is concentric** (radius = distance from the same centre ≈ R − wall thickness; sharp while R ≤ W). The inner corner's own setting is not used; its panel says so.
+  - T / X / Y corners (concave only) keep R itself.
+  - The largest R ≤ requested that fits the WHOLE assembly (both faces) is used by both. Beyond it the geometry stays fixed.
+  - `junctions[]` reports `actual_radius / limited / partner / derived`. The junction panel shows "Requested · Actual (geometry limit)", and Wall Geometry notes how many junctions are limited.
+  - Arcs: 36 samples per half turn, and chords ≤ 2 in.
+- **Effect on existing geometry:** the T / Y / X rounded fixtures are byte-identical, except T(R=2): the old code silently built 1.45 in there (the same chain-split clamp), and it now builds 2.0 in. Miter is unchanged.
+- **Tests:** `tests/test_junction_rounding.py` (41). The manual fixture is swept over R = 1…400 with invariants: no tiny pieces, no face crossings, continuous faces, arc tangent to its legs (< 3°), concentric pairs with radius difference = W, monotonic and coherent limits, stable beyond the limit, 2 closed runs. Also covered: circle / rect moved or resized after trim, W = 6 / 16, untrimmed, L corner (R ≤ W → inner sharp, huge R limited), Miter = R 0, T / Y / X, opening near a rounded corner. The committed network.py fails the manual sweep (14 / 14).
+
+### Trim — non-destructive section suppression (2026-10-05, Designer checkpoint 2026-10-06)
+
+**What:** a toolbar **Trim** tool, as in CAD. Hovering highlights ONLY the section under the pointer, in orange-red. Clicking suppresses that section, and Trim stays active for more clicks. Esc or a tool switch exits. One click is one undo step.
+- **Section:** the stretch of a source path between two consecutive contacts with OTHER sources, or between a contact and an open end.
+  - Contacts are found on the DESIGN geometry: processed source polylines after end snapping, before wall offsets.
+  - They come from `trim.py`, which reuses the network contact primitives (`_seg_list`, `_contact_events`, `_Grid`). It is not a new segmentation system.
+  - Self-intersections do not split a path. A closed path needs ≥ 2 contacts and an open path ≥ 1. A path that touches nothing is one object: Delete it, not Trim it.
+  - Each physical contact has ONE representative point, shared by every path meeting there, so trimmed ends meet exactly. Without this the router saw near-coincident ends as disconnected (2 runs instead of 1).
+- **Representation (decision):** `layer.trims` holds `Trim {id, source_path_id, start, end, inside, u_mid}`, a layer-level record like openings.
+  - It stores a topological SIGNATURE, never coordinates: the bounding source ids at each end (as an unordered pair), and whether the section's midpoint lies inside each CLOSED bounding source. `u_mid` (midpoint as a fraction of length) only breaks ties between sections with the same signature.
+  - The source itself is never edited: a Circle stays a CirclePath, and removing the trim restores the exact geometry.
+  - Rejected alternatives: a frozen arc-length / coordinate interval, which breaks on any edit; and a constraint system, which is overkill.
+- **Resolution:** on every build, every trim is matched against the current sections.
+  - One match → suppressed. Several matches → the one containing `u_mid`.
+  - No match (an intersection is gone, or a bounding path was deleted) → `unresolved`. Several matches with no `u_mid` containment → `ambiguous`.
+  - In both cases the record is kept, NOTHING is suppressed, and the reason is shown in the path's Properties next to a "Restore trimmed sections" button. A trim is never moved onto an unrelated section.
+  - Sections always come from UNTRIMMED geometry, so trims are independent of each other and of their order.
+  - Verified: trims follow moves and resizes of either the circle or the rect; moving the circle off the rect makes them unresolved.
+- **Pipeline stage:** 1c in `_build_effective`, after snapping. Resolved trims become removed arc intervals in the existing `_OpeningPlan`, which cuts the whole wall assembly (source + offsets, computed on the full wall). Downstream consumes the pieces normally: networks, junctions, material regions, infill and routing. Removed geometry is absent, not merely hidden.
+  - **Trim ≠ Opening:** a trim interval gets no clear void and no cap-reach widening. Its ends are FREE ends, not `cut`, so the network T-joins a trimmed wall into the wall it ends on, or hub-mitres two trimmed ends meeting at a contact (circle × rect with both inside sections trimmed → one outline with mitred corners). With no host it is capped like any open end.
+  - A trimmed closed source no longer bounds a region: it is excluded from `_nesting`, `_opening_partners`, `_region_openings` and declared regions. A SOLID infill on a trimmed boundary therefore reports no region. An outline made of several trimmed sources is not yet a region.
+- **Copy / duplicate (decision):** trims do NOT travel with a copy. A trim is relational: it is defined by intersections with OTHER specific paths, and a copy placed elsewhere has different intersections. This matches openings, which also stay with the original. Deleting a path deletes its own trims. Trims of other paths that it bounded are kept and become unresolved (Undo brings the path back).
+- **Network fix needed by Trim:** in `network.find_attachments`, the "end buried inside another thick band" fallback now skips an end lying on that piece's OWN end. The first T test already did this, so such ends form a hub. A point on a band boundary counted as inside, which turned a two-wall corner into a T plus a leftover cap. No existing test changed.
+- **Limitations:**
+  - A contact with a section that is itself trimmed away still splits the other path. Sections come from untrimmed geometry; this was chosen for order-independence.
+  - Selecting in Edit mode still hit-tests the full source path.
+  - While a trimmed source is being dragged, the full source is drawn until the refresh.
+  - A trimmed centered wall's dashed reference line shows only its remaining sections.
+- **Files:** `trim.py` (sections + resolution); `model.py` (`Trim`, `PrintLayer.trims`, `_merge_removed` extracted from `_opening_removed_intervals` unchanged, `_OpeningPlan(trims=…)`, stage 1c, region exclusions); `app.py` (deserialise); `static/app.js` (Trim tool, hover, Restore); `index.html` (button).
+- **Tests:** `tests/test_trim.py` (38 + the UI smoke) and `tests/trim_fixtures.py`. `tests/js/ui_trim_smoke.js` covers hover, stale sections, one undo step, Esc, Restore, duplicate, delete and Clear All. For browser inspection, paste `tests/js/trim_fixtures_console.js` into the console, then run `trimFixture('circle_rect', 10)` etc.
+
 ---
 
 ## Algorithms and References
@@ -693,6 +922,24 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 ## Open Questions
 
+- Physical rules vs SOLID infill: the closed-route constraint (zero travel inside a component) conflicts with the earlier solid decision ("a short travel beats distorted print geometry"). Should solid infill close by construction (and how), or stay an allowed exception? Also: physical rules for the wide-region field fallback; per-machine values of O and R. (The single-bead loop + two-pass branch case was resolved 2026-10-06 by the mouth cut.)
+- **Wall-lattice corner / junction motif vocabulary (future design direction, 2026-10-06; NOT implemented).**
+  - **Direction:** the lattice generator need not converge on ONE universal algorithmic corner treatment. Instead it should eventually have a VOCABULARY / library of mathematically and physically useful local motifs for solving corners, junctions, turns and other difficult lattice transitions.
+  - These are tools available to the GENERATOR, not user-selectable styles or toggles.
+  - **First concrete reference:** the designer's loop / teardrop sketch from manual testing. The lattice path enters a corner, curls round in a smooth loop and exits again, a cleaner, more intentional transition than forcing the normal wave / zigzag through the corner. It is an example, not a prescribed solution.
+  - **Other candidate families:** S-shaped transitions; figure-eight / interlaced transitions; woven or Celtic-knot-like constructions; tangent circular / elliptical constructions; curvature-continuous transitions; other clean motifs found by experiment.
+  - **Possible selection:** generate several geometrically valid candidate motifs for a local situation, then choose by physical / toolpath criteria:
+    - smoothness / curvature, structural support, continuity, avoiding exact retrace;
+    - bead width, contact overlap, material buildup / congestion, even material distribution;
+    - spacing, local geometry, clean integration with the neighbouring lattice.
+  - The motifs are NOT primarily decorative: they are candidate solutions to physical deposition and routing problems.
+  - **Sequencing (decision):** do not build motif selection yet. Bead Width has just been introduced and Contact Overlap is the next physical rule to investigate. Those physical parameters should be used to EVALUATE corner motifs before a motif system is invented.
+  - Existing motifs (corner brace, junction hand-off, cap V; see the wall-lattice section) would become members of this vocabulary.
+  - **Second observed reference (2026-10-06, manual testing):** the CURRENT zigzag lattice naturally forms a clean DIAMOND / brace-like transition through a corner / junction, seen where the rectangular wall meets an attached branch. The designer rates it a strong example alongside the loop / teardrop.
+  - Both are examples for a future GENERATOR-side vocabulary. Neither becomes a user-selectable style, and motif selection is NOT hard-coded now.
+- Material / Bead: what Contact Overlap does the material need, and where should it act first (wall lattice → face, solid infill → perimeter, junctions)? What is the real bead width of the current nozzle and mix?
+- Trim: should an outline closed by SEVERAL trimmed sources (e.g. rect + circle with both inside sections trimmed) become a fillable region? Today only single closed sources declare regions.
+- Trim: should a contact with an already-trimmed-away section still split other paths? Today it does, which keeps trims order-independent. Explicit Extend / Join / Fillet tools are possible future work, not planned.
 - How should topological transitions (cell count changes, path splits/merges) be represented?
 - How should the lattice generator accept continuity hints without violating geometry/toolpath separation?
 - How should seam position be managed and optimized across layers?
@@ -724,10 +971,15 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 ## Next Steps
 
-0. Designer browser inspection of the Pass 8 correction (solid playback order, rectilinear, serpentine web, wall-authoring UI) and of the wall-region pass (doorways into rooms, derived-face display); then commit Pass 8 + correction + wall regions together.
+0. Designer browser inspection of the Pass 8 correction (solid playback order, rectilinear, serpentine web, wall-authoring UI) and of the wall-region pass (doorways into rooms, derived-face display). Pass 8 + correction + wall regions are checkpointed in 0898d16.
 0a. Designer manual verification in the browser of everything since wall networks (all in checkpoint 414c283): pass 7 (corner braces, max unsupported, out-and-back density, cap V, solid boundary contact + serpentine, wall relationships, Angle unit), the wall lattice (Target Spacing sweeps, dead-end out-and-back, four straight / curved arms, junction congestion, openings clear) and the design-model pass (offset sources, undo / redo, duplicate-rotate-snap, region / voids, insets, wall vs solid).
 0b. Deferred housekeeping from the checkpoint audit (each its own reviewed pass): make the vacuous `return_path` test helper real; SolidPlan.connectors / solid_link leftovers; request sequencing in the UI; `~` in path ids; exact-float matching; history / restore gaps; inset previews after sidebar edits; cap-style alias mismatch; float(None) payload robustness; the unused routing-graph build; geometry-helper / tolerance consolidation; splitting `wall_lattice.plan()` and `_build_effective`; feature-named test files.
 0c. Known issue (deferred, do not fix without a reviewed pass): the order of the wide-region fallback's `route_plan.corrections` diagnostic list is non-deterministic. The same entries come out in a different order depending on unrelated prior process state (likely iteration over an object-identity set / dict). Geometry and toolpath are unaffected. Confirmed present in the unmodified checkpoint 414c283; not introduced by the cleanup.
+0h. NEXT: decide the SOLID-infill vs closed-route conflict (see Open Questions); then the physical rules for the wide-region field fallback.
+0g. *(Reviewed manually 2026-10-06 — Designer checkpoint.)* Route Origin, bead / vector rendering, zoom / pan, Wall Network section.
+0f. Designer browser review of the physical rules (`physicalFixture(...)`; vary Contact / Return-lane overlap with Beads on), then decide the solid-infill closed-route question. *(Reviewed manually 2026-10-06 — Designer checkpoint.)*
+0e. Designer browser review of the Material / Bead view (Beads toggle; Bead width), then decide the first physical rule (Contact Overlap). *(Reviewed manually 2026-10-06 — Designer checkpoint.)*
+0d. Designer browser review of the Design / Print sidebar split (Wall Geometry and junctions now on the Design side) and of the Trim tool (`trimFixture(...)` fixtures; see the Trim section). Then use the new layout to judge which design tools are missing, for example the nested-shapes / standard interior wall thickness workflow (discussed, NOT implemented). *(Reviewed manually 2026-10-06 — Designer checkpoint.)*
 1b. Multi-select + group transforms; copy attached offsets / infills with a path; travel-order optimisation.
 2. Calibrate CLEARANCE_RADIUS / degree caps / limits from real bead width.
 3. Persistent attachment constraints; then the Z / layer planner using RouteEnds.
@@ -736,6 +988,8 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 ## Last Updated
 
-2026-10-05
+2026-10-06
 
-Pass 8 (wall + solid infill geometry) + its correction (solid routing / web, wall-authoring UI) + wall regions / doorways UNCOMMITTED, awaiting browser inspection: 889 + 90 tests green. Checkpoint commit 414c283 (pushed): wall networks, region infill, per-source Corner R, junctions, parametric / network walls, interactive shape tools, physical-quality routing + wall-authoring UI, the design-model pass (offset-source fix, undo / redo, transforms + clipboard, region / void semantics, parametric insets, WALL vs SOLID infill), the motif-based route-aware wall lattice (wall_lattice.py), and pass 7 (structural rules: corners, max unsupported distance, combined-density out-and-back, cap V, solid boundary contact + serpentine, wall relationships, router travel pairing for solids) — awaiting manual browser verification. Followed by a behaviour-preserving cleanup 51387d3 (dead code, stale comments / docs; pushed).
+DESIGNER CHECKPOINT (commit "Designer checkpoint: trim, physical beads, closed routing and canvas tools", 2026-10-06, pushed). Design / Print / Material sidebars, persistent Wall Network, Trim (+ ghost fix), rounded-junction assemblies, Material / Bead with Contact Overlap and Return-Lane Overlap, physical no-retrace closed routes, attached-branch return geometry, Route Origin, blue bead / vector rendering, zoom / pan / Fit / 100 %. All reviewed manually batch by batch. Tests: design_proto 1059 (incl. 8 JS UI smoke tests), toolpath_proto 90, pi-interface 78 — all green.
+
+Earlier: Pass 8 (wall + solid infill geometry) + its correction (solid routing / web, wall-authoring UI) + wall regions / doorways checkpointed in 0898d16, awaiting browser inspection. Checkpoint commit 414c283 (pushed): wall networks, region infill, per-source Corner R, junctions, parametric / network walls, interactive shape tools, physical-quality routing + wall-authoring UI, the design-model pass (offset-source fix, undo / redo, transforms + clipboard, region / void semantics, parametric insets, WALL vs SOLID infill), the motif-based route-aware wall lattice (wall_lattice.py), and pass 7 (structural rules: corners, max unsupported distance, combined-density out-and-back, cap V, solid boundary contact + serpentine, wall relationships, router travel pairing for solids) — awaiting manual browser verification. Followed by a behaviour-preserving cleanup 51387d3 (dead code, stale comments / docs; pushed).

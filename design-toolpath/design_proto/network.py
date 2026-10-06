@@ -57,7 +57,11 @@ TOL = 1e-6          # contact / node-merge tolerance (= graph JUNCTION_TOL)
 SNAP_TOL = 1e-3     # open source ends this close to another source snap onto it
 
 FACE, INTERNAL, WIRE, VIRTUAL = 'face', 'internal', 'wire', 'virtual'
-_PRIORITY = {WIRE: 0, FACE: 1, INTERNAL: 2, VIRTUAL: 3}
+SPLIT = 'split'     # region boundary for classification only — NEVER printed
+                    # (e.g. the mouth where a two-pass branch joins a
+                    # single-bead host: material on one side, but the
+                    # route must pass through it, not along it)
+_PRIORITY = {WIRE: 0, FACE: 1, INTERNAL: 2, VIRTUAL: 3, SPLIT: 4}
 
 FACE_RETRACE_COST = 3.0     # retracing a visible face costs 3× internal geometry
 MITER_LIMIT = 10.0          # hub corner further than this × W → bevel
@@ -747,6 +751,8 @@ def find_attachments(pieces: list[NetPiece], tol=TOL):
             # dangling in the cavity.
             for q in pieces:
                 if q.sys_id != pc.sys_id and q.thick:
+                    if not q.closed and any(e.dist(q.end_pt(w)) <= tol for w in (0, 1)):
+                        continue        # on that piece's own end → hub (as above)
                     band = q.band()
                     if band is not None and band.contains(e):
                         host = q
@@ -1169,71 +1175,364 @@ class Fillet:
     arc: list                    # cut on leg 1 → … → cut on leg 2
 
 
-def fillet_corner(leg1, leg2, radius) -> Optional[Fillet]:
-    """
-    Round the corner where two polylines (legs, both starting at the
-    corner) meet: a tangent circular arc of `radius`, clamped so it never
-    eats more than 45 % of either leg. Curved legs use their local chord
-    direction; the arc ends are forced onto the legs exactly.
-    """
-    from model import _fillet_vertex
-    n = leg1[0]
+SHARP_TURN = math.radians(25.0)   # a face vertex turning more than this ends a leg
+LEG_SHARE = 0.45                  # share of a leg ending at another feature
+VERTEX_SHARE = 0.9                # share of a leg ending at a sharp face vertex
+                                  # (a short straight always remains before it)
+PAIR_CONE = math.radians(20.0)    # inner corner within this of the outer bisector
+ARC_CHORD = 2.0                   # max chord of a sampled junction arc (in)
+
+
+@dataclass
+class _Leg:
+    """A wall face leaving a junction corner, continued through plain face
+    nodes (where the resolved face is only split into separate chains),
+    up to the next real feature. pts start at the corner; usable = how
+    much of it a fillet may consume."""
+    pts: list
+    refs: list                   # [(resolved bead, chain index, end)] in order
+    usable: float
+
+
+def _walk_leg(res, start, corner_nodes, ends_at, deg):
+    arr = res.arrangement
+    rb, ci, e = start
+    pts, refs, seen = [], [], set()
+    share = LEG_SHARE
+    while True:
+        ch = rb.chains[ci]
+        if len(ch) < 2 or (id(rb), ci) in seen:
+            break
+        seen.add((id(rb), ci))
+        refs.append((rb, ci, e))
+        seg = _leg(ch, e)
+        pts = seg if not pts else pts + seg[1:]
+        # a sharp vertex of the face (e.g. a rectangle corner) ends the
+        # leg: a fillet may run up to it, never round it
+        acc = 0.0
+        for k in range(1, len(pts) - 1):
+            acc += pts[k - 1].dist(pts[k])
+            d0, d1 = pts[k] - pts[k - 1], pts[k + 1] - pts[k]
+            if d0.length() < 1e-12 or d1.length() < 1e-12:
+                continue
+            c = (d0.x * d1.x + d0.y * d1.y) / (d0.length() * d1.length())
+            if math.acos(max(-1.0, min(1.0, c))) > SHARP_TURN:
+                return _Leg(pts[:k + 1], refs, VERTEX_SHARE * acc)
+        m = arr.find_node(seg[-1])
+        nxt = [x for x in ends_at.get(m, []) if x[0] is not rb or x[1] != ci]
+        if m is None or m in corner_nodes or deg.get(m) != 2 or len(nxt) != 1:
+            break                  # another corner / a T, X, end … : shared
+        rb, ci, e = nxt[0]
+        share = LEG_SHARE
+    return _Leg(pts, refs, share * _poly_len(pts)) if len(pts) >= 2 else None
+
+
+def _truncate(pts, t):
+    if t >= _poly_len(pts) - 1e-12:
+        return list(pts)
+    p, i = _point_along(pts, t)
+    return list(pts[:i]) + [p]
+
+
+def _offset_leg(pts, r, side):
+    out = []
+    for a, b in zip(pts, pts[1:]):
+        d = b - a
+        L = d.length()
+        if L < 1e-12:
+            continue
+        nx, ny = -d.y / L * side * r, d.x / L * side * r
+        out += [Vec2(a.x + nx, a.y + ny), Vec2(b.x + nx, b.y + ny)]
+    return out
+
+
+def _project(pts, p):
+    """(distance, arc position, foot) of p on the polyline."""
+    acc, best = 0.0, (float('inf'), 0.0, None)
+    for a, b in zip(pts, pts[1:]):
+        d, t = _pt_seg(p, a, b)
+        L = a.dist(b)
+        tc = max(0.0, min(1.0, t))
+        if d < best[0]:
+            best = (d, acc + tc * L, a.lerp(b, tc))
+        acc += L
+    return best
+
+
+@dataclass
+class _Tangent:
+    centre: Vec2
+    r: float
+    foot1: Vec2
+    t1: float
+    foot2: Vec2
+    t2: float
+
+
+def tangent_fillet(leg1, leg2, r) -> Optional[_Tangent]:
+    """The circle of radius r tangent to both legs (polylines starting at
+    the corner) inside the corner — the CAD fillet, exact on straight and
+    curved legs: both legs offset by r towards the inside of the corner,
+    the centre where the offsets cross, the tangent points the feet of the
+    centre on each leg. None if the legs are too short for r."""
     d1, d2 = _leg_dir(leg1), _leg_dir(leg2)
-    if d1 is None or d2 is None or radius <= 0:
+    if d1 is None or d2 is None or r <= 0:
         return None
-    dot = max(-1.0, min(1.0, d1.x * d2.x + d1.y * d2.y))
-    theta = math.acos(dot)
-    if theta < 1e-3 or math.pi - theta < 1e-3:
-        return None
-    t = radius / math.tan(theta / 2.0)
-    t = min(t, 0.45 * _poly_len(leg1), 0.45 * _poly_len(leg2))
-    if t < 1e-6:
-        return None
-    a, _ = _point_along(leg1, t)
-    b, _ = _point_along(leg2, t)
-    arc = _fillet_vertex(n + d1 * (2 * t), n, n + d2 * (2 * t),
-                         t * math.tan(theta / 2.0))
-    if len(arc) < 2:
-        return None
-    arc[0], arc[-1] = a, b
-    return Fillet(n, arc)
+    cr = d1.x * d2.y - d1.y * d2.x
+    if abs(cr) < 1e-9:
+        return None                       # straight on / folded back
+    side = 1.0 if cr > 0 else -1.0
+    o1, o2 = _offset_leg(leg1, r, side), _offset_leg(leg2, r, -side)
+    hits = []
+    for i in range(len(o1) - 1):
+        a, b = o1[i], o1[i + 1]
+        for j in range(len(o2) - 1):
+            c, d = o2[j], o2[j + 1]
+            rx, ry, qx, qy = b.x - a.x, b.y - a.y, d.x - c.x, d.y - c.y
+            den = rx * qy - ry * qx
+            if abs(den) < 1e-15:
+                continue
+            wx, wy = c.x - a.x, c.y - a.y
+            t = (wx * qy - wy * qx) / den
+            u = (wx * ry - wy * rx) / den
+            if -1e-9 <= t <= 1 + 1e-9 and -1e-9 <= u <= 1 + 1e-9:
+                hits.append((i + t, Vec2(a.x + t * rx, a.y + t * ry)))
+    tol = 1e-6 * max(1.0, r)
+    for _, c in sorted(hits, key=lambda h: h[0]):
+        # refine: the offset joins at polygon vertices of a sampled curve
+        # are chords, so the crossing is only approximately r from both
+        # faces — a few Newton steps put the centre exactly r from each
+        for _ in range(8):
+            dist1, s1, f1 = _project(leg1, c)
+            dist2, s2, f2 = _project(leg2, c)
+            e1, e2 = r - dist1, r - dist2
+            if abs(e1) < tol * 1e-3 and abs(e2) < tol * 1e-3:
+                break
+            if dist1 < 1e-12 or dist2 < 1e-12:
+                break
+            n1, n2 = (c - f1) * (1.0 / dist1), (c - f2) * (1.0 / dist2)
+            det = n1.x * n2.y - n1.y * n2.x
+            if abs(det) < 1e-12:
+                break
+            c = Vec2(c.x + (e1 * n2.y - e2 * n1.y) / det, c.y + (n1.x * e2 - n2.x * e1) / det)
+        dist1, s1, f1 = _project(leg1, c)
+        dist2, s2, f2 = _project(leg2, c)
+        if abs(dist1 - r) > tol or abs(dist2 - r) > tol or s1 <= 1e-9 or s2 <= 1e-9:
+            continue
+        if s1 >= _poly_len(leg1) - 1e-9 or s2 >= _poly_len(leg2) - 1e-9:
+            continue                      # tangent beyond the usable leg
+        return _Tangent(c, r, f1, s1, f2, s2)
+    return None
+
+
+def _arc(tg: _Tangent, corner: Vec2) -> list:
+    c, r = tg.centre, tg.r
+    a1 = math.atan2(tg.foot1.y - c.y, tg.foot1.x - c.x)
+    a2 = math.atan2(tg.foot2.y - c.y, tg.foot2.x - c.x)
+    sweep = (a2 - a1 + math.pi) % (2 * math.pi) - math.pi      # the short way
+    # 36 samples per half turn, and chords ≤ ARC_CHORD on large radii
+    n = max(3, int(abs(sweep) * 36.0 / math.pi) + 2, int(abs(sweep) * r / ARC_CHORD) + 2)
+    arc = [Vec2(c.x + r * math.cos(a1 + sweep * k / (n - 1)),
+                c.y + r * math.sin(a1 + sweep * k / (n - 1))) for k in range(n)]
+    arc[0], arc[-1] = tg.foot1, tg.foot2
+    return arc
+
+
+def _max_feasible(ok, r_req, iters=40):
+    """Largest r ≤ r_req with ok(r) (bisection; 0 if none)."""
+    if ok(r_req):
+        return r_req
+    lo, hi = 0.0, r_req
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        if ok(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def round_junctions(res: NetworkResult, corners: list, radius_of,
+                    wall_width: float = 0.0) -> list:
+    """
+    Apply junction rounding in place on the resolved chains. radius_of(key)
+    → requested radius (0 = mitre / sharp). Returns the fillets made (for
+    the material rings) and appends one FACE bead per arc to res.beads.
+
+    Rounding is decided per WALL JUNCTION, not per face:
+      * The faces leaving a corner are followed through plain face nodes
+        (chain splits) up to the next real feature — another corner, a
+        T / X node, a sharp vertex of the face — so a face is never
+        limited by an arbitrary split of its chain.
+      * A wall TURN has a convex face corner (material inside it) and,
+        on its bisector one wall thickness in, the concave corner of the
+        other face of the same two walls. They are one assembly: Junction
+        R is the radius of the OUTER (convex) face; the inner face is
+        concentric (radius = R − wall thickness; sharp when R ≤ that), so
+        the wall keeps its thickness round the turn. The inner corner's
+        own setting is not used.
+      * Every other corner (T, X, Y sides) is rounded with R itself.
+      * The fillet is the exact tangent circle on the actual (straight or
+        curved) faces; the largest radius ≤ R that fits the WHOLE assembly
+        (both faces, within their usable legs) is used by both faces.
+    Each corner gets .requested / .actual (radius used) / .limited /
+    .partner (the other corner of its assembly).
+    """
+    arr = res.arrangement
+    deg: dict = {}
+    for (u, v), bi in res.emitter.items():
+        for n in (u, v):
+            deg[n] = deg.get(n, 0) + 1
+    ends_at: dict = {}
+    for rb in res.beads:
+        if rb.bead.cls not in (FACE, VIRTUAL):
+            continue
+        for ci, ch in enumerate(rb.chains):
+            if len(ch) < 2 or (rb.bead.closed and rb.whole):
+                continue
+            for end in (0, -1):
+                n = arr.find_node(ch[end])
+                if n is not None:
+                    ends_at.setdefault(n, []).append((rb, ci, end))
+    corner_nodes = {c.node for c in corners}
+
+    info = []
+    for c in corners:
+        c.requested, c.actual, c.limited, c.partner = radius_of(c.key), 0.0, False, None
+        legs = [_walk_leg(res, e, corner_nodes, ends_at, deg) for e in c.ends]
+        if any(lg is None for lg in legs):
+            info.append(None)
+            continue
+        legs = [(lg, _truncate(lg.pts, lg.usable)) for lg in legs]
+        d1, d2 = _leg_dir(legs[0][1]), _leg_dir(legs[1][1])
+        if d1 is None or d2 is None:
+            info.append(None)
+            continue
+        th = math.acos(max(-1.0, min(1.0, d1.x * d2.x + d1.y * d2.y)))
+        u = d1 + d2
+        u = u.normalized() if u.length() > 1e-12 else Vec2(0.0, 0.0)
+        probe = c.pt + u * 1e-3
+        convex = bool(res.material.get(arr.face_at(probe), False))
+        elems = tuple(sorted(r.bead.element for r, _, _ in c.ends))
+        info.append({'legs': legs, 'u': u, 'half': th / 2.0, 'convex': convex,
+                     'elems': elems})
+
+    # wall turns: a convex corner + the concave corner on its bisector
+    partner = {}
+    for i, a in enumerate(corners):
+        ia = info[i]
+        if ia is None or not ia['convex'] or wall_width <= 0:
+            continue
+        best = None
+        for j, b in enumerate(corners):
+            ib = info[j]
+            if j == i or ib is None or ib['convex'] or j in partner or \
+                    ib['elems'] != ia['elems']:
+                continue
+            v = b.pt - a.pt
+            dist = v.length()
+            if dist < 1e-9 or dist * math.sin(ia['half']) > 1.5 * wall_width:
+                continue
+            cosv = (v.x * ia['u'].x + v.y * ia['u'].y) / dist
+            if cosv < math.cos(PAIR_CONE) or \
+                    ia['u'].x * ib['u'].x + ia['u'].y * ib['u'].y < math.cos(2 * PAIR_CONE):
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, j)
+        if best is not None:
+            partner[i], partner[best[1]] = best[1], i
+
+    plans = {}                                   # corner index → _Tangent
+    for i, c in enumerate(corners):
+        ia = info[i]
+        if ia is None or i in plans or c.requested <= 0:
+            continue
+        (_, l1), (_, l2) = ia['legs']
+        j = partner.get(i)
+        if j is not None and ia['convex']:
+            ib = info[j]
+            (f1, m1), (f2, m2) = ib['legs']
+            inner_pt = corners[j].pt
+
+            def inner_r(tg):
+                # concentric: the other face's radius is its distance from
+                # the outer arc's centre (0 = sharp when the centre lies
+                # inside the wall, i.e. R ≤ the wall thickness)
+                k = tg.centre - inner_pt
+                if k.x * ib['u'].x + k.y * ib['u'].y <= 0:
+                    return 0.0
+                return min(_project(f1.pts, tg.centre)[0], _project(f2.pts, tg.centre)[0])
+
+            def ok(r):
+                tg = tangent_fillet(l1, l2, r)
+                if tg is None:
+                    return False
+                ri = inner_r(tg)
+                return ri <= 1e-6 or tangent_fillet(m1, m2, ri) is not None
+            R = _max_feasible(ok, c.requested)
+            tg = tangent_fillet(l1, l2, R) if R > 1e-6 else None
+            ri = inner_r(tg) if tg else 0.0
+            tgi = tangent_fillet(m1, m2, ri) if ri > 1e-6 else None
+            c.actual, c.limited, c.partner = (R if tg else 0.0), R < c.requested - 1e-6, corners[j].key
+            cj = corners[j]
+            cj.requested, cj.actual, cj.partner = None, (ri if tgi else 0.0), c.key
+            cj.limited = c.limited
+            plans[i], plans[j] = tg, tgi
+        elif j is not None:
+            continue                          # the inner face: done with its outer corner
+        else:
+            R = _max_feasible(lambda r: tangent_fillet(l1, l2, r) is not None, c.requested)
+            tg = tangent_fillet(l1, l2, R) if R > 1e-6 else None
+            c.actual, c.limited = (R if tg else 0.0), R < c.requested - 1e-6
+            plans[i] = tg
+
+    fillets = []
+    for i, c in enumerate(corners):
+        tg = plans.get(i)
+        if tg is None:
+            continue
+        arc = _arc(tg, c.pt)
+        for (lg, _), t, tip in ((info[i]['legs'][0], tg.t1, tg.foot1),
+                                (info[i]['legs'][1], tg.t2, tg.foot2)):
+            _consume(lg, t, tip)
+        bead = Bead(f'junction:{c.key}', arc, False, FACE,
+                    c.ends[0][0].bead.element, face_id=f'junction:{c.key}')
+        res.beads.append(ResolvedBead(bead, True, [arc]))
+        fillets.append(Fillet(c.pt, arc))
+    for rb in res.beads:
+        if any(len(ch) < 2 for ch in rb.chains):
+            rb.chains = [ch for ch in rb.chains if len(ch) >= 2]
+            rb.whole = False
+    return fillets
+
+
+def _consume(lg: _Leg, t: float, tip: Vec2):
+    """Remove the first t of arc length of a leg from its chains; the face
+    then starts EXACTLY at the arc's end (no float gap)."""
+    for rb, ci, e in lg.refs:
+        ch = rb.chains[ci]
+        if len(ch) < 2:
+            continue
+        leg = _leg(ch, e)
+        L = _poly_len(leg)
+        rb.whole = False
+        if t >= L - 1e-9:
+            rb.chains[ci] = []                   # wholly inside the fillet
+            t -= L
+            continue
+        p, k = _point_along(leg, t)
+        rest = leg[k:]
+        while rest and rest[0].dist(tip) < 1e-9:   # tangent point ON a vertex
+            rest = rest[1:]
+        new = [tip] + rest
+        rb.chains[ci] = new if e == 0 else list(reversed(new))
+        return
 
 
 def trim_leg(leg, t):
     """The leg without its first t of arc length (starts at the cut)."""
     p, i = _point_along(leg, t)
     return [p] + leg[i:]
-
-
-def round_junctions(res: NetworkResult, corners: list, radius_of) -> list:
-    """
-    Apply junction rounding in place on the resolved chains. radius_of(key)
-    → radius (0 = mitre / sharp). Returns the fillets made (for the
-    material rings) and appends one FACE bead per arc to res.beads.
-    """
-    fillets = []
-    for c in corners:
-        r = radius_of(c.key)
-        if r <= 0:
-            continue
-        (r1, c1, e1), (r2, c2, e2) = c.ends
-        leg1, leg2 = _leg(r1.chains[c1], e1), _leg(r2.chains[c2], e2)
-        f = fillet_corner(leg1, leg2, r)
-        if f is None:
-            continue
-        t1 = _arc_pos(leg1, f.arc[0])
-        t2 = _arc_pos(leg2, f.arc[-1])
-        for rb, ci, e, leg, t, tip in ((r1, c1, e1, leg1, t1, f.arc[0]),
-                                       (r2, c2, e2, leg2, t2, f.arc[-1])):
-            # the face now starts EXACTLY at the arc's end (no float gap)
-            new = [tip] + trim_leg(leg, t)[1:]
-            rb.chains[ci] = new if e == 0 else list(reversed(new))
-            rb.whole = False
-        bead = Bead(f'junction:{c.key}', f.arc, False, FACE,
-                    r1.bead.element, face_id=f'junction:{c.key}')
-        res.beads.append(ResolvedBead(bead, True, [f.arc]))
-        fillets.append(f)
-    return fillets
 
 
 def _arc_pos(leg, p):
@@ -1262,9 +1561,8 @@ def fillet_ring(ring, fillets):
         back = [ring[(idx - k) % n] for k in range(n + 1)]
         # Orient the arc to run from the backward leg to the forward leg.
         a = f.arc[0]
-        on_fwd = _pt_seg(a, fwd[0], fwd[1])[0] if len(fwd) > 1 else 1.0
-        on_back = _pt_seg(a, back[0], back[1])[0] if len(back) > 1 else 1.0
-        arc = list(reversed(f.arc)) if on_fwd < on_back else list(f.arc)
+        # the arc may end beyond the first ring vertex: compare positions
+        arc = list(reversed(f.arc)) if _arc_pos(fwd, a) < _arc_pos(back, a) else list(f.arc)
         _, i_f = _point_along(fwd, _arc_pos(fwd, arc[-1]))
         _, i_b = _point_along(back, _arc_pos(back, arc[0]))
         j = (idx + i_f) % n

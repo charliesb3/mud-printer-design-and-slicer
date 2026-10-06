@@ -107,7 +107,12 @@
     canvas.tool-edit   { cursor: default; }
     canvas.tool-draw   { cursor: crosshair; }
 
-    .swatch-diamond { width: 8px; height: 8px; transform: rotate(45deg); border: 1.5px solid #ffdd00; flex-shrink: 0; }
+
+    .view-controls { position: absolute; top: 22px; right: 22px; display: flex; gap: 4px; align-items: center;
+                     z-index: 5; opacity: 0.75; }
+    .view-controls:hover { opacity: 1; }
+    .view-controls .tool-btn { padding: 2px 8px; font-size: 10px; }
+    #zoom-readout { font-size: 10px; color: var(--text-dim); min-width: 34px; text-align: right; }
 
     .canvas-hint {
       position: absolute;
@@ -117,10 +122,14 @@
       font-size: 10px;
       color: var(--text-dim);
       pointer-events: none;
-      white-space: nowrap;
+      width: max-content;
+      max-width: calc(100% - 24px);   /* wrap inside the centre column between the sidebars */
+      text-align: center;
     }
 
-    /* ---- SIDEBAR ---- */
+    /* ---- SIDEBARS ---- */
+    /* left = DESIGN (what exists), right = PRINT / TOOLPATH (how it prints);
+       each scrolls on its own, the canvas takes the space between them */
     .sidebar {
       width: 230px;
       flex-shrink: 0;
@@ -129,6 +138,21 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+    }
+    .sidebar.sidebar-left { border-left: none; border-right: 1px solid var(--border); }
+    #sidebar-material { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+    .material-panel { padding: 10px 12px 12px; }
+    #sidebar-print { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .sidebar-head {
+      padding: 7px 12px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #888;
+      background: #131313;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
     }
     .sidebar-scroll {
       flex: 1;
@@ -375,6 +399,7 @@
   <div class="tool-sep"></div>
   <div class="tool-group">
     <button class="tool-btn" id="tool-opening" onclick="setTool('opening')" title="Click a wall to cut a 12 in opening">Opening</button>
+    <button class="tool-btn" id="tool-trim" onclick="setTool('trim')" title="Hover a section between intersections and click to remove it (non-destructive; Esc exits)">Trim</button>
   </div>
   <div class="tool-sep"></div>
   <div class="tool-group">
@@ -386,32 +411,15 @@
   <button class="tool-btn toggle-on" id="btn-toolpath" onclick="toggleToolpath()">Toolpath ON</button>
   <button class="tool-btn" id="btn-arrows"   onclick="toggleArrows()">Arrows</button>
   <button class="tool-btn" id="btn-dims"     onclick="toggleDimensions()">Dimensions</button>
+  <button class="tool-btn" id="btn-beads"    onclick="toggleBeads()" title="Show the physical mud bead around every printable centerline (Material / Bead)">Beads</button>
   <div class="tool-sep"></div>
   <button class="tool-btn" onclick="clearAll()">Clear All</button>
 </div>
 
 <div class="main">
-  <div class="canvas-wrap" id="canvas-wrap">
-    <canvas id="canvas"></canvas>
-    <div id="transport-bar" class="hidden">
-      <button class="transport-btn" id="btn-restart" onclick="playbackRestart()" title="Restart">⏮</button>
-      <button class="transport-btn" id="btn-play" onclick="playbackToggle()" title="Play / Pause">▶</button>
-      <input type="range" id="scrubber" min="0" max="1000" value="0" step="1"
-             oninput="playbackScrub(this.value)" title="Scrub position">
-      <select id="play-speed" onchange="playbackSetSpeed(this.value)" title="Playback speed">
-        <option value="0.25">0.25×</option>
-        <option value="0.5">0.5×</option>
-        <option value="1" selected>1×</option>
-        <option value="2">2×</option>
-        <option value="4">4×</option>
-        <option value="8">8×</option>
-      </select>
-      <button class="transport-btn" id="btn-playrev" onclick="playbackToggleDir()" title="Toggle reverse">⏪</button>
-    </div>
-    <div class="canvas-hint" id="hint">Click to place points. Double-click to finish. Press C to close path.</div>
-  </div>
-
-  <div class="sidebar">
+  <!-- LEFT: DESIGN — what am I designing? -->
+  <div class="sidebar sidebar-left" id="sidebar-design">
+    <div class="sidebar-head">Design</div>
     <div class="sidebar-scroll">
 
       <!-- PATH LIST -->
@@ -420,32 +428,19 @@
         <div class="path-list" id="path-list"></div>
       </div>
 
-      <!-- PATH PROPERTIES -->
+      <!-- PATH / OPENING PROPERTIES -->
       <div id="path-props-section" style="display:none">
         <div class="section-title">Properties</div>
         <div class="prop-panel" id="path-props"></div>
       </div>
 
-      <!-- OFFSET TREATMENT -->
-      <details id="offset-section" class="advanced">
-        <summary class="section-title">Advanced: Extra Offsets</summary>
-        <div class="path-type" style="margin:4px 0 6px">
-          Extra parallel beads at a fixed distance from a path. Not the normal way to make a
-          wall — use the path's Wall Thickness.
-        </div>
-        <div id="offset-list"></div>
-        <button class="add-btn" onclick="addOffset()" style="margin-top:4px">+ Add Extra Offset</button>
-      </details>
-
-      <!-- INFILL (lattice of a whole wall region) -->
-      <div id="infill-section">
-        <div class="section-title">Infill</div>
-        <div id="infill-list"></div>
-        <button class="add-btn" onclick="addInfill()" style="margin-top:4px"
-                title="Fill the selected path's region (else the outermost closed boundary; closed paths inside it are voids). Closed single-bead boundary → Solid infill; wall with thickness → Wall infill">+ Add Infill</button>
+      <!-- SELECTED JUNCTION (a corner where walls of the network meet) -->
+      <div id="junction-props-section" style="display:none">
+        <div class="section-title">Selected Junction</div>
+        <div class="prop-panel" id="junction-props"></div>
       </div>
 
-      <!-- WALL GEOMETRY -->
+      <!-- WALL GEOMETRY (junction / end defaults of the physical walls) -->
       <div>
         <div class="section-title">Wall Geometry</div>
         <div class="prop-panel">
@@ -465,6 +460,7 @@
                    onchange="onWallGeometryChange()">
             <span class="prop-unit">in</span>
           </div>
+          <div class="path-type" id="wg-junction-note" style="color:var(--warn)"></div>
           <div class="prop-row">
             <span class="prop-label">End caps</span>
             <select class="prop-input" id="wg-cap-style"
@@ -482,6 +478,98 @@
             <span class="prop-unit">in</span>
           </div>
         </div>
+      </div>
+
+      <!-- WALL NETWORK (a layer-level object: paths that touch / cross) -->
+      <div id="network-section" style="display:none">
+        <div class="section-title">Wall Network</div>
+        <div class="prop-panel" id="network-props"></div>
+      </div>
+
+      <!-- OFFSET TREATMENT -->
+      <details id="offset-section" class="advanced">
+        <summary class="section-title">Advanced: Extra Offsets</summary>
+        <div class="path-type" style="margin:4px 0 6px">
+          Extra parallel beads at a fixed distance from a path. Not the normal way to make a
+          wall — use the path's Wall Thickness.
+        </div>
+        <div id="offset-list"></div>
+        <button class="add-btn" onclick="addOffset()" style="margin-top:4px">+ Add Extra Offset</button>
+      </details>
+
+    </div>
+  </div>
+
+  <div class="canvas-wrap" id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div class="view-controls" title="Wheel / pinch: zoom at the pointer · Space + drag or middle-drag: pan">
+      <button class="tool-btn" onclick="viewFit()">Fit</button>
+      <button class="tool-btn" onclick="viewReset()">100%</button>
+      <span id="zoom-readout">100%</span>
+    </div>
+    <div id="transport-bar" class="hidden">
+      <button class="transport-btn" id="btn-restart" onclick="playbackRestart()" title="Restart">⏮</button>
+      <button class="transport-btn" id="btn-play" onclick="playbackToggle()" title="Play / Pause">▶</button>
+      <input type="range" id="scrubber" min="0" max="1000" value="0" step="1"
+             oninput="playbackScrub(this.value)" title="Scrub position">
+      <select id="play-speed" onchange="playbackSetSpeed(this.value)" title="Playback speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+      </select>
+      <button class="transport-btn" id="btn-playrev" onclick="playbackToggleDir()" title="Toggle reverse">⏪</button>
+    </div>
+    <div class="canvas-hint" id="hint">Click to place points. Double-click to finish. Press C to close path.</div>
+  </div>
+
+  <!-- RIGHT: MATERIAL / BEAD (what is physically deposited) and
+       PRINT / TOOLPATH (how will it print?) — two peer sections -->
+  <div class="sidebar sidebar-right" id="sidebar-right">
+    <div id="sidebar-material">
+      <div class="sidebar-head">Material / Bead</div>
+      <div class="prop-panel material-panel">
+        <div class="prop-row" title="Draw the bead footprint of every printable centerline">
+          <span class="prop-label">Show bead</span>
+          <input type="checkbox" id="bead-show" onchange="toggleBeads(this.checked)">
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Bead width</span>
+          <input type="number" class="prop-input" id="bead-width" value="3.00" min="0.25" step="0.25"
+                 onchange="onBeadWidthChange()">
+          <span class="prop-unit">in</span>
+        </div>
+        <div class="prop-row" title="How deeply a generated bead overlaps a bead it LANDS AGAINST (e.g. a lattice stitch landing on a wall face): centrelines W − O apart. Not applied to crossings.">
+          <span class="prop-label">Contact overlap</span>
+          <input type="number" class="prop-input" id="contact-overlap" value="0.75" min="0" step="0.25"
+                 onchange="onMaterialChange('contact_overlap')">
+          <span class="prop-unit">in</span>
+        </div>
+        <div class="prop-row" title="Overlap of a RETURN LANE with the pass it runs beside (instead of printing over it): centrelines W − R apart. A single-line wall becomes a two-pass wall ≈ 2W − R wide.">
+          <span class="prop-label">Return-lane overlap</span>
+          <input type="number" class="prop-input" id="return-overlap" value="0.75" min="0" step="0.25"
+                 onchange="onMaterialChange('return_overlap')">
+          <span class="prop-unit">in</span>
+        </div>
+        <div class="prop-row" title="Physical rules: overlaps shape generated geometry, no pass prints over another, every connected component prints as one closed route. Off = zero-width centrelines (legacy).">
+          <span class="prop-label">Physical rules</span>
+          <input type="checkbox" id="phys-rules" checked onchange="onMaterialChange('physical')">
+        </div>
+        <div class="path-type" id="material-derived"></div>
+      </div>
+    </div>
+    <div id="sidebar-print">
+    <div class="sidebar-head">Print / Toolpath</div>
+    <div class="sidebar-scroll">
+
+      <!-- INFILL (lattice of a whole wall region) -->
+      <div id="infill-section">
+        <div class="section-title">Infill</div>
+        <div id="infill-list"></div>
+        <button class="add-btn" onclick="addInfill()" style="margin-top:4px"
+                title="Fill the selected path's region (else the outermost closed boundary; closed paths inside it are voids). Closed single-bead boundary → Solid infill; wall with thickness → Wall infill">+ Add Infill</button>
       </div>
 
       <!-- ROUTING OVERRIDES -->
@@ -514,6 +602,7 @@
         <div class="metric-row"><span class="metric-label">Continuous</span><span class="metric-value" id="m-pct">—</span></div>
         <div class="metric-row"><span class="metric-label">Print dist</span><span class="metric-value" id="m-pdist">—</span></div>
         <div class="metric-row"><span class="metric-label" title="Distance printed more than once to maintain a continuous route">Reprinted</span><span class="metric-value" id="m-rdist">—</span></div>
+        <div class="metric-row"><span class="metric-label" title="Physical rules: connected components that print as ONE closed extrusion (start = end, no travel or retrace inside)">Closed components</span><span class="metric-value" id="m-closed">—</span></div>
       </div>
 
       <!-- LEGEND -->
@@ -523,14 +612,15 @@
           <div class="legend-item"><div class="swatch print"></div> Print move</div>
           <div class="legend-item"><div class="swatch travel"></div> Travel (non-print)</div>
           <div class="legend-item"><div class="swatch retrace"></div> Retrace</div>
-          <div class="legend-item"><div class="swatch-dot start"></div> Start</div>
-          <div class="legend-item"><div class="swatch-dot end"></div> End</div>
-          <div class="legend-item"><div class="swatch-diamond"></div> Seam (closed loop)</div>
+          <div class="legend-item"><div class="swatch-dot start"></div> Route origin (closed route: start = end)</div>
+          <div class="legend-item"><div class="swatch-dot start"></div> Start (open route)</div>
+          <div class="legend-item"><div class="swatch-dot end"></div> End (open route)</div>
           <div class="legend-item"><div class="swatch-junction"></div> Wall-network junction</div>
           <div class="legend-item"><div class="swatch" style="background:#ff6fa8"></div> Corrective infill strand</div>
         </div>
       </div>
 
+    </div>
     </div>
   </div>
 </div>

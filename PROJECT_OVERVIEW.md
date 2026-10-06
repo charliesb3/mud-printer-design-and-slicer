@@ -390,9 +390,10 @@ perimeter + internal web prints as one continuous path with zero travel.
 ### Design + Toolpath — Phase 3 (Design Canvas) Prototype
 
 Interactive path-first design canvas (`design-toolpath/design_proto/`,
-889 tests incl. 3 UI smoke tests). Checkpointed in commit 414c283 (+ cleanup
-51387d3); Pass 8 (infill geometry) is uncommitted, and the work since wall
-networks still awaits manual browser verification.
+1059 tests incl. 8 JS UI smoke tests). Checkpoints: commit 414c283 (+ cleanup
+51387d3); Pass 8 + correction + wall regions in commit 0898d16; the
+2026-10-06 "Designer checkpoint" commit (trim, physical beads, closed
+routing, canvas tools), reviewed manually batch by batch.
 
 Major capabilities:
 - Path-first, non-destructive design: parametric primitives, curves, drawn
@@ -425,6 +426,22 @@ Major capabilities:
   its voids): an opening is a subtraction through the complete wall, never
   new wall topology.
 - Toolpath overlay with playback; routing diagnostics.
+- Workspace: DESIGN sidebar (paths, properties, wall geometry, persistent
+  Wall Network) | canvas (zoom at the pointer, Space / middle-drag pan,
+  Fit / 100 %) | MATERIAL / BEAD + PRINT / TOOLPATH sidebar.
+- Non-destructive TRIM of source sections between intersections (stored as
+  a topological signature, follows parametric edits, unresolved → nothing
+  suppressed); rounded thick-wall junctions are one concentric assembly.
+- PHYSICAL BEADS (system-level concept): Wall Thickness (architecture) ≠
+  centreline (toolpath) ≠ Bead Width (one deposited pass). With physical
+  rules on: Contact Overlap (lattice landings stop W − O off a face),
+  Return-Lane Overlap (single-bead open walls print out and back W − R
+  apart), NO exact retrace, and every connected component one closed route
+  (start = end, no internal travel); the router reports, never hides, what
+  cannot close. Route Origin: the designer chooses where each closed route
+  begins / returns (groundwork for multi-layer seams). Beads view: one solid
+  blue bead per printable centreline. Open: solid infill still uses
+  in-component travel (conflicts with the closed-route rule — pending).
 
 See `design-toolpath/PROJECT_MEMORY.md` for decisions, history and details.
 
@@ -495,8 +512,9 @@ Allow the architecture to evolve as the machine and software become better under
 
 ## Last Updated
 
-2026-10-05
+2026-10-06
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
-Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas through pass 7 checkpointed in commit 414c283, behaviour-preserving cleanup 51387d3; Pass 8 (wall wave / dead-end / openings — approved) + correction (solid routing and serpentine web, wall-authoring UI) + wall regions / doorways implemented, uncommitted, 889 tests green; manual browser verification pending.
+Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas: checkpoints 414c283 / 51387d3 / 0898d16, then the 2026-10-06 Designer checkpoint (Design / Print sidebars, Trim, rounded-junction assemblies, Material / Bead, Contact + Return-Lane Overlap, no-retrace closed routes, attached-branch return geometry, Route Origin, blue bead / vector rendering, zoom / pan, persistent Wall Network, trim ghost fix): design_proto 1059 + toolpath_proto 90 + pi-interface 78 tests green.
+Repository permanently relocated to `/Users/charliebritton/Projects/mudprintersoftware` (previously `/Users/charliebritton/Documents/mude printer/mudprintersoftware`). Post-move environment restored 2026-10-05: the three `.venv`s were recreated with the same package versions, and all suites pass from the new path (Pi 78, toolpath_proto 90, design_proto 889 incl. 3 JS UI smoke tests).
 Arduino/GRBL subproject not yet started.

@@ -15,11 +15,12 @@ from flask import Flask, jsonify, request, send_from_directory
 from model import (
     PrintLayer, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
     QuadBezierPath,
-    OffsetTreatment, LatticeInstance, TraversalConstraints, Opening,
+    OffsetTreatment, LatticeInstance, TraversalConstraints, Opening, Trim,
     RegionOverride, RegionInfill, JunctionSetting, WallSpec, NetworkWall,
     InsetPath, WallRelation,
     GENERATORS, Vec2
 )
+from material import MaterialSpec
 import infill as infill_mod
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
@@ -140,6 +141,15 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             label=od.get('label', ''),
         ))
 
+    # Trims: suppressed sections of source paths (absent → none)
+    for td in data.get('trims', []) or []:
+        layer.trims.append(Trim(
+            id=td['id'], source_path_id=td['source_path_id'],
+            start=[str(x) for x in td.get('start') or []],
+            end=[str(x) for x in td.get('end') or []],
+            inside={str(k): bool(v) for k, v in (td.get('inside') or {}).items()},
+            u_mid=float(td.get('u_mid', 0.5) or 0.0)))
+
     # Wall-network region overrides (paint bucket); absent → none
     for rd in data.get('region_overrides', []) or []:
         layer.region_overrides.append(RegionOverride(
@@ -171,6 +181,9 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             thickness=float(wd.get('thickness', 0) or 0),
             align=wd.get('align', 'auto') or 'auto',
             print_reference=bool(wd.get('print_reference', False))))
+    layer.material = MaterialSpec.from_dict(data.get('material'))
+    layer.route_origins = [{'strand': str(o.get('strand')), 'u': float(o.get('u', 0.0) or 0.0)}
+                           for o in (data.get('route_origins') or []) if o.get('strand')]
     layer.return_paths = bool(data.get('return_paths', True))
     layer.prefer_closed = bool(data.get('prefer_closed', True))
     for jd in data.get('junction_overrides', []) or []:
@@ -230,6 +243,8 @@ def api_effective_paths():
         return jsonify({
             'paths': [p.to_dict() for p in paths],
             'network': meta['network'],
+            'printable': layer.printable_centerlines(paths, meta),
+            'material': layer.material.to_dict(),
         })
     except Exception:
         return jsonify({'error': traceback.format_exc()}), 400
@@ -256,7 +271,7 @@ def api_route():
             sys.path.insert(0, proto_dir)
 
         from graph import (route_layer, compute_metrics, graph_info,
-                           label_passes, route_ends)
+                           label_passes, route_ends, build_graph, closure_report)
 
         # Apply traversal constraints
         c = layer.constraints
@@ -269,10 +284,16 @@ def api_route():
                 from geometry import Vec2 as RVec2
                 start = RVec2(pt.x, pt.y)
 
+        physical = layer.material.physical
+        from model import resolve_route_origins
+        origin_pts, origin_rep = resolve_route_origins(routing_layer.strands,
+                                                       layer.route_origins)
         moves = route_layer(
             routing_layer,
             start=start,
             component_order=c.component_order,
+            allow_retrace=not physical,     # physical beads: never retrace
+            origins=origin_pts,
         )
 
         # Reverse direction: reverse move order and swap each move's start/end
@@ -296,8 +317,15 @@ def api_route():
                 'paths': [p.to_dict() for p in paths],
             },
             'network': meta['network'],
+            'printable': [{'id': s.id, 'pts': [[q.x, q.y] for q in s.points],
+                           'closed': bool(s.closed)} for s in routing_layer.strands],
+            'material': layer.material.to_dict(),
             'moves': [m.to_dict() for m in moves],
             'metrics': metrics,
+            # physical rules: can every connected component print as ONE
+            # closed extrusion (start = end, no travel, no retrace)?
+            'closure': dict(closure_report(build_graph(routing_layer)), physical=physical),
+            'origins': origin_rep,
             'graph': ginfo,
             # For a future layer planner: closed → next layer starts here;
             # open → next layer can run this route reversed (end → start).

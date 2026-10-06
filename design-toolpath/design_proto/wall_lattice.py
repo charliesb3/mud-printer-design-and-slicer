@@ -720,11 +720,24 @@ def _spacing_cost(L, n, S):
 
 
 def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
-         max_unsupported=None):
+         max_unsupported=None, contact=0.0, closed=False):
     """
     Route-aware wall lattice for one wall region (rings: material on the
     left). Returns a LatticePlan, or None if the region is not wall-like
     (the caller falls back to the field generator).
+
+    PHYSICAL BEADS (material.py):
+      contact — centreline separation of a CONTACT landing (bead width −
+        Contact Overlap). Interior stitch landings stop this far off the
+        face centreline, measured across the wall (the stitch is built on
+        these "contact rails", so wave / zigzag keep their shape). Route
+        CONNECTIONS stay exact: pass ends at junction corners and one
+        TRANSFER landing per face ring the lattice would otherwise not
+        touch (converting an interior landing is parity-neutral: +2).
+        Crossings between passes are untouched. 0 = legacy (on the face).
+      closed — every route must close: a lone wall run (no junction) gets
+        a closed OUT-AND-BACK loop (two phases joined by a cap V at both
+        ends — the second wave) instead of one open pass.
     """
     rings = [r for r in rings if len(r) >= 3]
     if not rings:
@@ -761,7 +774,10 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             continue
         has_junction = any(v[0] == 'J' for v in comp)
         if not has_junction:
-            continue                     # a lone run: single pass, open route
+            if closed:                   # a lone run closes as an out-and-back loop
+                for u, v, k in sub.edges(keys=True):
+                    mult[k] = 2
+            continue                     # (legacy: a lone run, single pass, open route)
         H = nx.Graph()
         simple = nx.Graph()
         for u, v, k, d in sub.edges(keys=True, data=True):
@@ -1074,10 +1090,22 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             # half a thickness on (still no rung across the wall).
             x = A[-1][0]
             if cap_point(r, x) is not None:
-                return [A + [(x, CAP)] + list(reversed(B))]
-            if mid_apex(r, x) is not None:
-                return [A + [(x, MID)] + list(reversed(B))]
-            return [A + list(reversed(B))]
+                loop = A + [(x, CAP)] + list(reversed(B))
+            elif mid_apex(r, x) is not None:
+                loop = A + [(x, MID)] + list(reversed(B))
+            else:
+                loop = A + list(reversed(B))
+            if r.a[0] == 'E' and r.b[0] == 'E':
+                # a LONE run: the loop also turns round at the start end
+                # (second cap V) and closes on itself — the second wave
+                x0 = A[0][0]
+                if cap_point(r, x0) is not None:
+                    loop = loop + [(x0, CAP), A[0]]
+                elif mid_apex(r, x0) is not None:
+                    loop = loop + [(x0, MID), A[0]]
+                else:
+                    loop = loop + [A[0]]
+            return [loop]
         return [A, B]
 
     # -- 2. sides at run ends, junction pairing, stitch counts -------------
@@ -1191,6 +1219,90 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     _, choice, pairs = best
 
     # -- 3. geometry --------------------------------------------------------
+    # PHYSICAL CONTACT: landings on the faces stop `contact` off the face
+    # centreline (across the wall); pass ends at junctions and TRANSFER
+    # landings stay exact (they are where the route joins the faces).
+    transfers = set()
+    contact_clamped = [False]
+
+    def _toward(p, q, d, clear=None):
+        """p moved towards q until it is d clear of its face (clear(x) =
+        distance to that face): along a slanted chord (a corner brace) the
+        straight offset d would sit closer than d to the face."""
+        v = q - p
+        L = v.length()
+        if d <= 0 or L < 1e-12:
+            return p
+        lim = 0.45 * L                      # never past the middle of the wall
+        t = min(d, lim)
+        if clear is not None:
+            for _ in range(8):
+                c = clear(p + v * (t / L))
+                if c >= d - 1e-6 or t >= lim - 1e-12:
+                    break
+                t = min(lim, t + (d - c) * 1.5)
+        if t < d - 1e-9 and (clear is None or clear(p + v * (t / L)) < d - 1e-3):
+            contact_clamped[0] = True
+        return p + v * (t / L)
+
+    # all face segments, gridded: a stitch must stay `contact` clear of the
+    # faces except at its own exact (route-connection) ends
+    _fsegs = [(ring[i], ring[(i + 1) % len(ring)]) for ring in rings for i in range(len(ring))]
+    _cell = max(2.0, 2.0 * contact)
+    _fgrid: dict = {}
+    for k_, (a_, b_) in enumerate(_fsegs):
+        for gx in range(int(math.floor(min(a_.x, b_.x) / _cell)), int(math.floor(max(a_.x, b_.x) / _cell)) + 1):
+            for gy in range(int(math.floor(min(a_.y, b_.y) / _cell)), int(math.floor(max(a_.y, b_.y) / _cell)) + 1):
+                _fgrid.setdefault((gx, gy), []).append(k_)
+
+    def _face_d(q):
+        gx, gy = int(math.floor(q.x / _cell)), int(math.floor(q.y / _cell))
+        best = float('inf')
+        for dx_ in (-1, 0, 1):
+            for dy_ in (-1, 0, 1):
+                for k_ in _fgrid.get((gx + dx_, gy + dy_), ()):
+                    best = min(best, _seg_d(q, *_fsegs[k_]))
+        return best
+
+    def _clear_poly(pts, exact_a, exact_b):
+        """Every sample at least `contact` from the faces. A stitch into or
+        out of an EXACT end (transfer / junction hand-off) is the route
+        connection itself and is not held off the face."""
+        if contact <= 0 or exact_a or exact_b:
+            return True
+        return all(_face_d(q) >= contact * 0.98 for q in pts[1:-1])
+
+    def _clear_fn(r, side, s):
+        """Distance to `side`'s face near station s (windowed)."""
+        ri, est = geo._chord_arc(r, side, s)
+        ring = sk.R.rings[ri]
+        n = len(ring)
+        ks = list(geo._segs(ri, est, 3.0 * thick + 2.0 * contact))
+        return lambda q: min(_seg_d(q, ring[k], ring[(k + 1) % n]) for k in ks)
+
+    def is_contact(r, side, s):
+        if contact <= 0 or side not in (0, 1, CAP):
+            return False
+        if not r.cycle and ((s <= 1e-9 and r.a[0] == 'J') or (s >= r.length - 1e-9 and r.b[0] == 'J')):
+            return False                    # a junction hand-off: route connection
+        return (id(r), side, round(s % r.length if r.cycle else s, 9)) not in transfers
+
+    def lp(r, side, s):
+        """The landing point actually used (contact rail or exact)."""
+        p = geo.landing(r, side, s)
+        if not is_contact(r, side, s):
+            return p
+        if side == CAP:                     # off the end face, into the wall
+            return _toward(p, geo.centre(r, s), contact)
+        return _toward(p, geo.landing(r, 1 - side, s), contact, _clear_fn(r, side, s))
+
+    def rail(r, side, s):
+        """Nominal stitch point on `side` at s: the face, or its contact rail."""
+        p = geo.side_point(r, side, s)
+        if contact <= 0:
+            return p
+        return _toward(p, geo.side_point(r, 1 - side, s), contact, _clear_fn(r, side, s))
+
     def stitch(r, s_a, side_a, s_b, side_b):
         """One stitch from face side_a at station s_a to the opposite face
         at s_b, following the wall between them: each point lies on the
@@ -1199,7 +1311,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         faces, so the pass is one smooth wave through its landings. A
         corner brace (same station, both faces) and cap-V legs are
         straight."""
-        pa, pb = geo.landing(r, side_a, s_a), geo.landing(r, side_b, s_b)
+        pa, pb = lp(r, side_a, s_a), lp(r, side_b, s_b)
         if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b) or MID in (side_a, side_b):
             return [pa, pb]
         at_junction = (not r.cycle) and ((min(s_a, s_b) <= 1e-9 and r.a[0] == 'J') or
@@ -1219,22 +1331,29 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             # corner points may sit off the nominal face point) with a
             # smoothstep, which keeps the tangency.
             n = WAVE_SAMPLES
-            ea = pa - geo.side_point(r, side_a, s_a)
-            eb = pb - geo.side_point(r, side_b, s_b)
+            ea = pa - rail(r, side_a, s_a)
+            eb = pb - rail(r, side_b, s_b)
             out = [pa]
             for k in range(1, n):
                 f = k / n
                 s_ = s_a + f * (s_b - s_a)
                 w = (1 - math.cos(math.pi * f)) / 2
-                q = geo.side_point(r, side_a, s_).lerp(geo.side_point(r, side_b, s_), w)
+                q = rail(r, side_a, s_).lerp(rail(r, side_b, s_), w)
                 out.append(q + ea * (1 - w) + eb * w)
             out.append(pb)
-            if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(out, out[1:])):
+            ex_a, ex_b = not is_contact(r, side_a, s_a), not is_contact(r, side_b, s_b)
+            if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(out, out[1:])) \
+                    and _clear_poly(out, ex_a, ex_b):
                 return _no_foldback(out)
             # beside a corner the face-to-face construction can leave the
-            # wall: a Hermite curve leaving / meeting each face along it
+            # wall (or, with contact rails, come closer to a face than the
+            # contact): a Hermite curve leaving / meeting each face along it
             # (still tangent, still a wave) before falling back to straight
             h = hermite(r, s_a, side_a, pa, s_b, side_b, pb)
+            if h is not None and _clear_poly(h, ex_a, ex_b):
+                return h
+            if straight_ok and (contact <= 0 or _clear_poly(_dense(pa, pb), ex_a, ex_b)):
+                return [pa, pb]
             if h is not None:
                 return h
             return [pa, pb] if straight_ok else out
@@ -1242,7 +1361,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         for k in range(1, 8):
             f = k / 8
             s_ = s_a + f * (s_b - s_a)
-            out.append(geo.side_point(r, side_a, s_).lerp(geo.side_point(r, side_b, s_), f))
+            out.append(rail(r, side_a, s_).lerp(rail(r, side_b, s_), f))
         out.append(pb)
         if straight_ok and not all(_strut_ok(u, v, region) or u.dist(v) < 1e-9
                                    for u, v in zip(out, out[1:])):
@@ -1287,11 +1406,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     stitch_memo = {}
 
     def emit(r, seq):
-        poly = [geo.landing(r, seq[0][1], seq[0][0])]
+        poly = [lp(r, seq[0][1], seq[0][0])]
         for (xa, sa), (xb, sb) in zip(seq, seq[1:]):
             # memoised by the actual landing points (junction hand-off
             # points may be moved after a first emission)
-            pa, pb = geo.landing(r, sa, xa), geo.landing(r, sb, xb)
+            pa, pb = lp(r, sa, xa), lp(r, sb, xb)
             key = (id(r), round(xa, 9), sa, round(xb, 9), sb, pa.x, pa.y, pb.x, pb.y)
             if key not in stitch_memo:
                 stitch_memo[key] = stitch(r, xa, sa, xb, sb)
@@ -1425,6 +1544,38 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 geo.cache[(id(r), side, round(sv, 9))] = point
             merged.add((x, y))
 
+    if contact > 0:
+        # One TRANSFER per face ring that no exact pass end touches: the
+        # lattice and that ring stay one closed route (+2 at the node).
+        def ring_of(p):
+            best = None
+            for k, ring in enumerate(rings):
+                d = min(_seg_d(p, ring[i], ring[(i + 1) % len(ring)]) for i in range(len(ring)))
+                if best is None or d < best[0]:
+                    best = (d, k)
+            return best
+        touched = set()
+        cands: dict = {}
+        for ri, r in enumerate(runs):
+            for one in seqs[ri][1]:
+                for x, sd in one:
+                    if sd not in (0, 1):
+                        continue
+                    p = geo.landing(r, sd, x)
+                    d, k = ring_of(p)
+                    if d > 1e-6:
+                        continue                # moved inside (merged hand-off)
+                    if not is_contact(r, sd, x):
+                        touched.add(k)
+                    else:
+                        cands.setdefault(k, []).append((ri, sd, x))
+        for k, cs in sorted(cands.items()):
+            if k in touched or not cs:
+                continue
+            ri, sd, x = cs[len(cs) // 2]       # mid-sequence: away from ends / corners
+            r = runs[ri]
+            transfers.add((id(r), sd, round(x % r.length if r.cycle else x, 9)))
+
     polys = []
     run_rep = []
     pitches = []
@@ -1451,7 +1602,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         if r.cycle:
             motif = 'loop'
         elif mode == 'two':
-            motif = 'out_and_back' if any(nd[0] == 'E' for nd in (r.a, r.b)) else 'double'
+            motif = ('lone_loop' if all(nd[0] == 'E' for nd in (r.a, r.b)) else
+                     'out_and_back' if any(nd[0] == 'E' for nd in (r.a, r.b)) else 'double')
         else:
             motif = ('single' if all(nd[0] == 'J' for nd in (r.a, r.b))
                      else 'lone' if all(nd[0] == 'E' for nd in (r.a, r.b)) else 'open_end')
@@ -1474,6 +1626,20 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             polys.append([p, q])
             connectors.append(round(p.dist(q), 2))
     polys = [_simplify(p) for p in polys if len(p) >= 2]
+    # contact check: lattice points nearer the faces than the contact
+    # separation, away from the exact route connections (reported, not hidden)
+    c_min, c_bad = None, 0
+    if contact > 0:
+        exact = [geo.landing(r, sd, x) for ri, r in enumerate(runs) for one in seqs[ri][1]
+                 for x, sd in one if sd in (0, 1) and not is_contact(r, sd, x)]
+        for poly in polys:
+            for q in poly:
+                if any(q.dist(e) < S for e in exact):
+                    continue            # the stitches of a route connection
+                d = _face_d(q)
+                c_min = d if c_min is None else min(c_min, d)
+                if d < 0.98 * contact:
+                    c_bad += 1
     report = {
         'target': S, 'thickness': round(thick, 2), 'max_unsupported_limit': round(DMAX, 2),
         'max_unsupported': round(max(unsupported, default=0.0), 2),
@@ -1482,6 +1648,10 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         'runs': run_rep, 'junctions': len(junction_ends),
         'dead_ends': sum(1 for r in runs if not r.cycle for nd in (r.a, r.b) if nd[0] == 'E'),
         'connectors': connectors,
+        'contact': round(contact, 4), 'transfers': len(transfers),
+        'contact_clamped': contact_clamped[0],
+        'contact_min': None if c_min is None else round(c_min, 3),
+        'contact_violations': c_bad,
     }
     return LatticePlan(polys, report)
 
@@ -1552,6 +1722,10 @@ def _same_face(sk, p, q):
     L = sk.R.length(a[0])
     d = abs(a[1] - b[1])
     return min(d, L - d) < 2.0 * p.dist(q)
+
+
+def _dense(a, b, n=8):
+    return [a.lerp(b, k / n) for k in range(n + 1)]
 
 
 def _seg_d(p, a, b):

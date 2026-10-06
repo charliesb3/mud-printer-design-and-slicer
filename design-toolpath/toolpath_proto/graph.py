@@ -343,17 +343,52 @@ def _choose_source(G: nx.MultiGraph,
 # Component routing
 # ---------------------------------------------------------------------------
 
+def _pair_by_travel(G: nx.MultiGraph) -> nx.MultiGraph:
+    """NO-RETRACE mode: a component with odd nodes cannot be printed as one
+    closed extrusion. Its odd nodes are paired by explicit TRAVEL edges
+    (minimum total straight distance) — never by printing over a bead —
+    so the failure stays visible (travel inside the component)."""
+    odd = [n for n, d in G.degree() if d % 2 == 1]
+    if not odd:
+        return G
+    H = nx.Graph()
+    for i, u in enumerate(odd):
+        for v in odd[i + 1:]:
+            H.add_edge(u, v, weight=_euclid(u, v))
+    aug = G.copy()
+    for u, v in nx.min_weight_matching(H):
+        aug.add_edge(u, v, kind='travel', strand_id=None, seg_idx=None,
+                     length=_euclid(u, v), cost=0.0)
+    return aug
+
+
+def closure_report(G: nx.MultiGraph) -> dict:
+    """Per connected component: can it print as ONE closed extrusion
+    (every node even)? {'components', 'closed', 'open': [{'odd', 'at'}]}"""
+    comps = [G.subgraph(c) for c in nx.connected_components(G)]
+    open_ = []
+    for c in comps:
+        odd = [n for n, d in c.degree() if d % 2 == 1]
+        if odd:
+            open_.append({'odd': len(odd), 'at': [list(n) for n in odd[:6]]})
+    return {'components': len(comps), 'closed': len(comps) - len(open_), 'open': open_}
+
+
 def _route_component(
     comp: nx.MultiGraph,
     current: tuple | None,
     pinned_start: tuple | None,
+    allow_retrace: bool = True,
 ) -> tuple[nx.MultiGraph, list[tuple[tuple, tuple, int]]]:
     """
     Return (G_work, path) as (u, v, key) triples.
     G_work is the possibly-augmented graph; callers MUST use it for edge
     attribute lookup — augmented travel edges do not exist in the original comp.
+    allow_retrace=False (physical beads): never retrace; odd nodes are
+    paired by travel and the route is a closed circuit.
     """
-    G_work = _augment_by_retrace(comp, pinned_start)
+    G_work = _augment_by_retrace(comp, pinned_start) if allow_retrace else \
+        _pair_by_travel(comp)
 
     source = _choose_source(G_work, current, pinned_start)
 
@@ -374,12 +409,22 @@ def route_layer(
     layer: Layer,
     start: Vec2 | None = None,
     component_order: list[int] | None = None,
+    allow_retrace: bool = True,
+    origins: list[Vec2] | None = None,
 ) -> list[PrintMove]:
     """
     Route all strands in layer, returning an ordered list of PrintMove objects.
 
     start            – optional starting position (nozzle park position)
     component_order  – optional list of component indices to visit first
+    allow_retrace    – False: physical beads — no exact retrace; every
+                       component is routed as a closed circuit (start = end)
+                       and travel appears inside a component only where its
+                       geometry cannot close (see closure_report)
+    origins          – ROUTE ORIGINS: graph nodes where a CLOSED component's
+                       circuit begins and returns (at most one per component;
+                       ignored for open components, which keep their own
+                       start / end)
     """
     G = build_graph(layer)
     raw_comps = [G.subgraph(c).copy() for c in nx.connected_components(G)]
@@ -396,9 +441,20 @@ def route_layer(
     current_pos: tuple | None = _pt(start) if start else None
     pinned = _pt(start) if start else None
 
+    origin_nodes = [_pt(o) for o in (origins or [])]
+
+    def _origin(comp):
+        """This component's route origin, if it is a closed circuit."""
+        if any(d % 2 for _, d in comp.degree()):
+            return None
+        return next((o for o in origin_nodes if o in comp.nodes), None)
+
     def _entry_dist(comp, pos):
         if pos is None:
             return 0.0
+        org = _origin(comp)
+        if org is not None:
+            return _euclid(pos, org)
         odd = [n for n, d in comp.degree() if d % 2 == 1]
         return min(_euclid(pos, n) for n in (odd or comp.nodes))
 
@@ -413,10 +469,12 @@ def route_layer(
             # travel between disconnected pieces
             k = min(range(len(pending)), key=lambda i: _entry_dist(pending[i], current_pos))
             comp = pending.pop(k)
-        # Only apply pinned start to the very first component
-        pin = pinned if comp_idx == 0 else None
+        # A closed component starts at its route origin; otherwise the
+        # pinned start applies to the very first component only
+        org = _origin(comp)
+        pin = org if org is not None else (pinned if comp_idx == 0 else None)
 
-        G_work, path = _route_component(comp, current_pos, pin)
+        G_work, path = _route_component(comp, current_pos, pin, allow_retrace)
         if not path:
             continue
 

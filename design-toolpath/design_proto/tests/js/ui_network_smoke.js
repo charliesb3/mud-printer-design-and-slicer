@@ -104,11 +104,18 @@ eval(src + `
   selectedId = null; selectedOpeningId = null;
   onMouseDown(ev(198.5, 140.5)); onMouseUp();
   check(selectedJunction && selectedJunction.key === 'p1|p2#0', 'clicking a diamond selects the junction');
-  const panelEl = document.getElementById('path-props');
-  const rebuild = () => { panelEl.children.length = 0; updatePropPanel(); };  // stub: innerHTML='' doesn't clear
+  const pathPanelEl = document.getElementById('path-props');
+  const junctionPanelEl = document.getElementById('junction-props');
+  const rebuild = () => { pathPanelEl.children.length = 0; junctionPanelEl.children.length = 0; updatePropPanel(); };  // stub: innerHTML='' doesn't clear
+  // a selected junction shows its own section of the DESIGN sidebar (next to Wall
+  // Geometry), separate from the path Properties
+  let panelEl = junctionPanelEl;
   rebuild();
   const findRow = label => panelEl.children.find(r => r.children && r.children[0] &&
                                                  r.children[0].textContent === label);
+  check(document.getElementById('junction-props-section').style.display === '' &&
+        document.getElementById('path-props-section').style.display === 'none' &&
+        pathPanelEl.children.length === 0, 'junction panel renders in its own section, not in the path Properties');
   const tRow = findRow('Treatment');
   check(!!tRow, 'junction panel has a Treatment row');
   tRow.children[1].value = 'Rounded'; tRow.children[1].onchange();
@@ -123,7 +130,10 @@ eval(src + `
   selectJunction(networkInfo.junctions[1]); rebuild();
   check(!findRow('Treatment'), 'internal (non-corner) junction offers no corner treatment');
   // --- per-path Corner R (rect) is the path's own, not the layer's
-  selectedJunction = null; selectedId = R.id; rebuild();
+  selectedJunction = null; selectedId = R.id; panelEl = pathPanelEl; rebuild();
+  check(document.getElementById('junction-props-section').style.display === 'none' &&
+        document.getElementById('path-props-section').style.display === '',
+        'selecting a path hides the junction panel and shows path Properties');
   const cRow = findRow('Corner R');
   check(!!cRow, 'rectangle properties show Corner R');
   cRow.children[1].value = '12'; cRow.children[1].onchange();
@@ -143,13 +153,40 @@ eval(src + `
   head.onmouseenter();
   check(highlightPathId === P.id, 'hovering the header highlights the path');
   head.onmouseleave();
-  // --- network wall thickness, inherited by members
-  const nRow = findRow('Network Wall Thickness');
+  // --- network wall thickness, inherited by members. The Wall Network is a
+  // persistent Design-sidebar section (2026-10-06; it used to live in the
+  // selected path's Properties): no selection needed.
+  const netEl = document.getElementById('network-props');
+  const netRow = label => netEl.children.find(r => r.children && r.children[0] && r.children[0].textContent === label);
+  const keepSel = selectedId;
+  selectedId = null; netEl.children.length = 0; updatePropPanel();
+  check(document.getElementById('network-section').style.display === '' && !!netRow('Network Wall Thickness'),
+        'Wall Network section is accessible with NO path selected');
+  selectedId = keepSel; rebuild();
+  check(!findRow('Network Wall Thickness') &&
+        panelEl.children.some(c => (c.textContent || '').startsWith('Member of wall network N1')),
+        'the path Properties show membership, the settings live in Wall Network');
+  netEl.children.length = 0; updateNetworkSection();
+  const nRow = netRow('Network Wall Thickness');
   check(!!nRow, 'network panel offers Network Wall Thickness');
   nRow.children[1].value = '10'; nRow.children[1].onchange();
   check(layer.network_walls.length === 1 && layer.network_walls[0].thickness === 10,
         'one network wall applies to every member');
   check(buildPayload().network_walls.length === 1, 'payload carries the network wall');
+  rebuild();
+  // two networks: a compact selector picks which one is edited
+  const savedNI = networkInfo;
+  networkInfo = { ...networkInfo, source_networks: [{ id: 'N1', sources: [R.id, P.id], wall: null },
+                                                    { id: 'N2', sources: ['x1', 'x2'], wall: null }] };
+  const keep2 = selectedId; selectedId = null;
+  netEl.children.length = 0; updateNetworkSection();
+  const pick = netRow('Network');
+  check(!!pick && pick.children[1].children.length === 2, 'several networks: a compact selector');
+  pick.children[1].value = pick.children[1].children[1].value; pick.children[1].onchange();
+  check(networkPick === 'N2', 'the selector switches the edited network');
+  selectedId = keep2; netEl.children.length = 0; updateNetworkSection();
+  check(networkPick === 'N1', 'selecting a member path shows its own network');
+  networkInfo = savedNI;
   rebuild();
   check(!findRow('Wall Thickness'), 'inheriting path shows the inherited wall, not an editor');
   const ovBtn = panelEl.children.find(c => c.textContent === 'Override for this path');
