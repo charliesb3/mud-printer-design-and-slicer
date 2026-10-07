@@ -2359,6 +2359,15 @@ class PrintLayer:
     # 'u': fraction of its length}] (resolve_route_origins). A routing
     # preference only: never changes geometry.
     route_origins: list = field(default_factory=list)
+    # LATTICE REFERENCE (layer_design.py; None = normal generation): for a
+    # DERIVED layer design, {infill id: [polyline]} — the parent design's
+    # resolved wall lattice. A wall infill found here is NOT regenerated: the
+    # parent's stitches are kept exactly and only clipped to this design's
+    # material (unchanged XY geometry keeps unchanged XY print structure).
+    lattice_reference: Optional[dict] = None
+    lattice_stations: Optional[dict] = None   # infill id → [(Vec2, Vec2)] lineage jamb lines
+    lattice_lineage: Optional[dict] = None    # infill id → shared-lattice diagnostics (layer_design)
+    lattice_track: Optional[dict] = None      # infill id → (reference track, map): cross-Z station tracking
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -2997,12 +3006,32 @@ class PrintLayer:
                 # WALL regions: route-aware stitching motifs (wall_lattice);
                 # wide regions (areas, not walls) keep the field generator +
                 # local repair below.
+                ref = (self.lattice_reference or {}).get(inf.id)
+                if ref is not None:
+                    # inherited lattice: the parent's stitches clipped to
+                    # this design's material — local change only at the cut
+                    pieces = _clip_to_rings(ref, job['rings'])
+                    for j, poly in enumerate(pieces):
+                        dp = DerivedPath(poly, closed=False, role='lattice',
+                                         label=inf.pattern, source_id=inf.id,
+                                         treatment_id='infill', id=f"{job['key']}.r{j}")
+                        cls_of[id(dp)] = N.INTERNAL
+                        result.append(dp)
+                    rep_ = lattice.setdefault(inf.id, {'motif': False, 'inherited': True, 'regions': [],
+                                                      'lineage': (self.lattice_lineage or {}).get(inf.id)})
+                    rep_['regions'].append({'inherited': True, 'pieces': len(pieces),
+                                            'reference_polylines': len(ref)})
+                    continue
                 phys = self.material.physical
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
                              self.prefer_closed or phys,
                              float(inf.params.get('max_unsupported', 0) or 0) or None,
                              contact=self.material.contact_separation() if phys else 0.0,
-                             closed=phys)
+                             closed=phys,
+                             stations=(self.lattice_stations or {}).get(inf.id),
+                             track=((self.lattice_track or {}).get(inf.id) or (None, None))[0],
+                             track_map=((self.lattice_track or {}).get(inf.id) or (None, None))[1],
+                             bead=self.material.bead_width if phys else 0.0)
                 if lp is not None:
                     for j, poly in enumerate(lp.polylines):
                         dp = DerivedPath(poly, closed=False, role='lattice',
@@ -3010,7 +3039,8 @@ class PrintLayer:
                                          treatment_id='infill', id=f"{job['key']}.{j}")
                         cls_of[id(dp)] = N.INTERNAL
                         result.append(dp)
-                    rep_ = lattice.setdefault(inf.id, {'motif': True, 'regions': []})
+                    rep_ = lattice.setdefault(inf.id, {'motif': True, 'regions': [],
+                                                      'lineage': (self.lattice_lineage or {}).get(inf.id)})
                     lp.report['rings'] = [[[q.x, q.y] for q in ring] for ring in job['rings']]
                     rep_['regions'].append(lp.report)
                     continue
@@ -3038,7 +3068,9 @@ class PrintLayer:
                         # V1 / V2 only move the phase of closed loops and lone
                         # walls; in networks junction coherence fixes it
                         'variation_effective': any(run['motif'] in ('loop', 'lone')
-                                                   for r in regs for run in r['runs'])}
+                                                   for r in regs for run in r['runs']),
+                        # the lineage's SHARED lattice (Layer Designs), if any
+                        'lineage': lr.get('lineage')}
             # Motif lattices are continuous by construction: no repair.
             # Report them in the same shape (0 defects / edits) so route
             # consumers see one plan; open ends = lone runs / open arms.
@@ -3217,7 +3249,9 @@ class PrintLayer:
         extra = {ot.source_path_id for ot in self.offset_treatments}
         for p in sources:
             spec = p.wall
-            if spec is None:
+            if spec is not None and spec.thickness <= 1e-9:
+                spec = None                      # explicit SINGLE BEAD: no inherited network wall
+            elif spec is None:
                 nw = self._network_wall_for(net_of.get(p.id, [p.id]))
                 if nw is not None:
                     spec = WallSpec(nw.thickness, nw.align, nw.print_reference)
@@ -3566,13 +3600,28 @@ class PrintLayer:
             anchor = self._anchor(inf)
             if anchor not in sys_ids:
                 continue
-            elem = f'S:{anchor}'
-            targets = set()
-            for (u, v), owners in arr.edges.items():
-                if any(res.beads[b].bead.element == elem for b in owners):
-                    for fid in arr.edge_faces(u, v):
-                        if fid in comp_of:
-                            targets.add(comp_of[fid])
+            # REACH (2026-10-06 fix): the regions bounded by the anchor's
+            # beads, then — transitively — every region bounded by a source
+            # that bounds a region already reached. Openings / Trim REMOVE
+            # material; they never change which infill fills it: a circle arc
+            # cut free of the rectangle by two openings stays filled by the
+            # rectangle's infill exactly as the uncut wall was. (Uncut: the
+            # same single region as before.)
+            elems, targets = {f'S:{anchor}'}, set()
+            edge_info = [({res.beads[b].bead.element for b in owners},
+                          {comp_of[fid] for fid in arr.edge_faces(u, v) if fid in comp_of})
+                         for (u, v), owners in arr.edges.items()]
+            while True:
+                new = set()
+                for es, ks in edge_info:
+                    if es & elems:
+                        new |= ks
+                if new <= targets:
+                    break
+                targets |= new
+                for es, ks in edge_info:
+                    if ks & targets:
+                        elems |= {e for e in es if e.startswith('S:')}
             # A declared (closed single-bead) region also owns the ISLANDS
             # nested in its voids — material components not touching the
             # anchor but lying inside it (even-odd nesting).
@@ -3791,6 +3840,76 @@ class PrintLayer:
             'return_paths': self.return_paths,
             'prefer_closed': self.prefer_closed,
         }
+
+
+def _clip_to_rings(polylines, rings) -> list:
+    """Parts of the polylines inside the region (even-odd rings), split
+    exactly where they cross a ring (a crossing within 1e-6 of a vertex is
+    that vertex); vertices inside are kept unchanged.
+    A part lying ON a ring (exactly where this design prints a boundary)
+    is dropped: that boundary prints it. (Ring segments are gridded — the
+    result is exactly that of testing every segment.)"""
+    segs = [(r[i], r[(i + 1) % len(r)]) for r in rings for i in range(len(r))]
+    xs = [p.x for c, d in segs for p in (c, d)] or [0.0]
+    ys = [p.y for c, d in segs for p in (c, d)] or [0.0]
+    span = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+    cell = max(span / max(8.0, math.sqrt(len(segs))), 1e-3)
+    grid: dict = {}
+    for k, (c, d) in enumerate(segs):
+        for gx in range(int(math.floor(min(c.x, d.x) / cell)), int(math.floor(max(c.x, d.x) / cell)) + 1):
+            for gy in range(int(math.floor(min(c.y, d.y) / cell)), int(math.floor(max(c.y, d.y) / cell)) + 1):
+                grid.setdefault((gx, gy), []).append(k)
+
+    def near(x0, y0, x1, y1, pad=0.0):
+        out = set()
+        for gx in range(int(math.floor((x0 - pad) / cell)), int(math.floor((x1 + pad) / cell)) + 1):
+            for gy in range(int(math.floor((y0 - pad) / cell)), int(math.floor((y1 + pad) / cell)) + 1):
+                out.update(grid.get((gx, gy), ()))
+        return out
+
+    def on_ring(q):
+        return any(_seg_dist_pt(q, *segs[k]) < 1e-6 for k in near(q.x, q.y, q.x, q.y, 2e-6))
+
+    def inside(q):
+        return not on_ring(q) and sum(1 for r in rings if _point_in_polygon(q, r)) % 2 == 1
+
+    out = []
+    for poly in polylines:
+        cur = []
+        for a, b in zip(poly, poly[1:]):
+            ts = [0.0, 1.0]
+            L_ab = a.dist(b)
+            for k in sorted(near(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y), 1e-6)):
+                c, d = segs[k]
+                hit = _seg_intersect_param(a, b, c, d)
+                # a crossing within 1e-6 of a vertex IS that vertex (a shared
+                # jamb crossing must end every piece at the same point)
+                if hit is not None and 1e-6 < hit[0] * L_ab < L_ab - 1e-6:
+                    ts.append(hit[0])
+            ts = sorted(set(ts))
+            for t0, t1 in zip(ts, ts[1:]):
+                p0, p1 = a.lerp(b, t0) if t0 > 0 else a, b if t1 >= 1 else a.lerp(b, t1)
+                if inside(a.lerp(b, (t0 + t1) / 2)):
+                    if not cur:
+                        cur = [p0]
+                    elif cur[-1].dist(p0) > 1e-9:
+                        out.append(cur)
+                        cur = [p0]
+                    cur.append(p1)
+                elif cur:
+                    if len(cur) >= 2:
+                        out.append(cur)
+                    cur = []
+        if len(cur) >= 2:
+            out.append(cur)
+    return [p for p in out if len(p) >= 2]
+
+
+def _seg_dist_pt(q, a, b) -> float:
+    dx, dy = b.x - a.x, b.y - a.y
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((q.x - a.x) * dx + (q.y - a.y) * dy) / L2))
+    return math.hypot(q.x - a.x - t * dx, q.y - a.y - t * dy)
 
 
 def resolve_route_origins(strands, origins) -> tuple[list, list]:

@@ -169,16 +169,31 @@ eval(src + `
                mv([140, 260], [140, 140], R.id), mv([140, 140], [200, 140], R.id)];
   routeResult = { moves: rot, metrics: {}, closure: {} };
   showToolpath = true; selectedId = null;
+  // INTERACTION PRIORITY (stabilization 2026-10-06; previously the origin won
+  // here): editable design geometry outranks the toolpath overlay, so on an
+  // opening the OPENING is grabbed …
   onMouseDown(ev(201, 141));
-  check(originDrag && !openingDrag && !dragging && !bodyDragging, 'origin on an opening: the ORIGIN is grabbed, not the opening');
-  onMouseMove(ev(230, 150)); onMouseMove(ev(258, 200)); onMouseUp({});
+  check(openingDrag && !originDrag, 'origin on an opening: the OPENING (design geometry) is grabbed, not the origin');
+  onMouseUp({});
+  layer.openings = JSON.parse(opBefore);
+  // … and the origin is grabbed where no design handle overlaps it
+  const rot2 = [mv([260, 200], [260, 260], R.id), mv([260, 260], [140, 260], R.id), mv([140, 260], [140, 140], R.id),
+                mv([140, 140], [260, 140], R.id), mv([260, 140], [260, 200], R.id)];
+  routeResult = { moves: rot2, metrics: {}, closure: {} };
+  onMouseDown(ev(260, 201));
+  check(originDrag && !openingDrag && !dragging && !bodyDragging, 'origin on a plain wall: the ORIGIN is grabbed, not the wall');
+  onMouseMove(ev(258, 230)); onMouseMove(ev(200, 258)); onMouseUp({});
   check(JSON.stringify(layer.openings) === opBefore && JSON.stringify(layer.source_paths) === geomBefore,
         'dragging the origin never moves the opening or the path');
   check(layer.route_origins.length === 1 && layer.route_origins[0].strand === R.id, 'only the route origin changed');
-  // an OPEN route whose START sits on the opening: the click is swallowed
+  // an OPEN route whose START sits on the opening: START is a diagnostic
+  // marker — it never takes the pointer, the opening beneath is edited
+  // (superseded 2026-10-06: the click used to be swallowed)
   routeResult = { moves: [mv([200, 140], [260, 140], R.id), mv([260, 140], [260, 260], R.id)], metrics: {}, closure: {} };
-  onMouseDown(ev(200, 141)); onMouseMove(ev(230, 160)); onMouseUp({});
-  check(!originDrag && JSON.stringify(layer.openings) === opBefore, 'Start of an open route over an opening: nothing moves');
+  onMouseDown(ev(200, 141));
+  check(!originDrag && openingDrag, 'Start of an open route over an opening: the OPENING is grabbed');
+  onMouseUp({});
+  layer.openings = JSON.parse(opBefore);
   check(routeMarkers(routeResult.moves).map(m => m.kind).join() === 'start,end', 'an open route still shows Start / End');
 
   // ---- solid bead rendering: the printed line IS one blue bead ----

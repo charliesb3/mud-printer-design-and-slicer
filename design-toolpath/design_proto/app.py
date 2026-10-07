@@ -40,10 +40,15 @@ def index():
 # ---------------------------------------------------------------------------
 
 def _wall(d):
+    """A path's OWN wall. Absent → none (it inherits its network's wall, if
+    any). An explicit thickness 0 is the SINGLE-BEAD override: the path prints
+    as a single bead (physical rules: its return-lane solution) even inside a
+    thick-walled network — never a fake epsilon wall, never deleted."""
     w = d.get('wall')
-    if not w or float(w.get('thickness', 0) or 0) <= 0:
+    if not isinstance(w, dict) or 'thickness' not in w:
         return None
-    return WallSpec(float(w['thickness']), w.get('align', 'auto') or 'auto',
+    t = float(w.get('thickness', 0) or 0)
+    return WallSpec(max(0.0, t), w.get('align', 'auto') or 'auto',
                     bool(w.get('print_reference', False)))
 
 
@@ -97,10 +102,17 @@ def _deserialise_layer(data: dict) -> PrintLayer:
         layer.source_paths.append(_deserialise_path(pd))
 
     for od in data.get('offset_treatments', []):
+        dist = od['distance']
+        if 'direction' in od:
+            # EDITOR form (Layer Design documents are stored as the canvas
+            # edits them): direction + positive distance → signed distance,
+            # exactly as static/app.js buildPayload() converts it
+            dist = (1 if (od.get('direction') or 'inside') in ('inside', 'left') else -1) * \
+                abs(dist if dist is not None else 10)
         layer.offset_treatments.append(OffsetTreatment(
             id=od['id'],
             source_path_id=od['source_path_id'],
-            distance=od['distance'],
+            distance=dist,
             role=od.get('role', 'inner'),
             label=od.get('label', ''),
         ))
@@ -116,7 +128,7 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             label=ld.get('label', ''),
         ))
 
-    cd = data.get('constraints', {})
+    cd = data.get('constraints') or {}
     layer.constraints = TraversalConstraints(
         start_path_id=cd.get('start_path_id'),
         start_t=cd.get('start_t'),
@@ -234,11 +246,31 @@ def api_infill_patterns():
 # API — effective paths (geometry only, no routing)
 # ---------------------------------------------------------------------------
 
+def _apply_lineage(layer, data):
+    """The Designer view of a design that belongs to a project with Layer
+    Designs (payload `lineage`: {designs, id, document}) resolves its wall
+    lattice through the SAME library as the Layer Assembly — the lineage's
+    shared scaffold — so Designer and Assembly show identical geometry."""
+    lin = data.get('lineage') or {}
+    designs = lin.get('designs') or []
+    if len(designs) < 2 or lin.get('id') is None:
+        return
+    from layer_design import DesignLibrary
+    lib = DesignLibrary(designs)
+    active = lib.get(lin['id'])
+    doc = lin.get('document')
+    if doc is not None:                      # the live (unsaved) edit of the active design:
+        lib.set_document(active.id, doc)     # lattice-definition edits go to the lineage
+    layer.lattice_reference = lib.lattice_reference(active.id) or None
+    layer.lattice_lineage = lib.lattice_lineage(active.id) or None
+
+
 @app.route('/api/effective_paths', methods=['POST'])
 def api_effective_paths():
     try:
         data = request.get_json(force=True)
         layer = _deserialise_layer(data)
+        _apply_lineage(layer, data)
         paths, meta = layer._build_effective()
         return jsonify({
             'paths': [p.to_dict() for p in paths],
@@ -259,6 +291,7 @@ def api_route():
     try:
         data = request.get_json(force=True)
         layer = _deserialise_layer(data)
+        _apply_lineage(layer, data)
 
         # Build routing layer (effective geometry computed once)
         paths, meta = layer._build_effective()
@@ -333,6 +366,69 @@ def api_route():
         })
     except Exception:
         return jsonify({'error': traceback.format_exc()}), 400
+
+
+# ---------------------------------------------------------------------------
+# Layer Designs (Designer side): resolve a design's document / derive the
+# delta a design edited in the Designer stores (layer_design.py)
+# ---------------------------------------------------------------------------
+
+@app.route('/api/layer_designs/document', methods=['POST'])
+def api_layer_design_document():
+    try:
+        from layer_design import DesignLibrary
+        data = request.get_json(force=True)
+        lib = DesignLibrary(data['designs'])
+        return jsonify({'document': lib.document(data['id']), 'lineage': lib.lineage(data['id'])})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+def _project_bead_width(lib, d):
+    """BEAD WIDTH is ONE project-wide MATERIAL value (2026-10-06), owned by
+    the lineage ROOT's document (the project's Base). A derived design never
+    stores its own: a bead width edited while viewing it moves to the root
+    (like a lattice-definition edit). Returns the root id it moved to."""
+    mat = (d.settings or {}).get('material')
+    if not isinstance(mat, dict) or 'bead_width' not in mat:
+        return None
+    w = mat.pop('bead_width')
+    if not mat:
+        d.settings.pop('material')
+    root = d
+    while root.parent is not None:
+        root = lib.get(root.parent)
+    root.document['material'] = {**(root.document.get('material') or {}), 'bead_width': w}
+    return root.id
+
+
+@app.route('/api/layer_designs/delta', methods=['POST'])
+def api_layer_design_delta():
+    try:
+        from layer_design import DesignLibrary, derive_delta
+        data = request.get_json(force=True)
+        lib = DesignLibrary(data['designs'])
+        if data.get('id') is None:
+            patch, settings = derive_delta(lib.document(data['parent']), data['document'])
+            return jsonify({'patch': patch, 'settings': settings})
+        # the design's delta; LATTICE DEFINITION edits of inherited infills
+        # are moved to their owner (the lineage) — `designs` is the updated set
+        moved = lib.set_document(data['id'], data['document'])
+        d = lib.get(data['id'])
+        material_moved = _project_bead_width(lib, d)
+        return jsonify({'patch': d.patch, 'settings': d.settings, 'lattice_moved': moved,
+                        'material_moved': material_moved,
+                        'designs': [x.to_dict() for x in lib.designs.values()]})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+# The LAYER ASSEMBLY workspace: a separate subsystem (design-toolpath/
+# layer_assembly) mounted here; it reaches the Designer only through its
+# LayerSource adapter.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from layer_assembly.web import bp as assembly_bp   # noqa: E402
+app.register_blueprint(assembly_bp)
 
 
 if __name__ == '__main__':

@@ -79,6 +79,22 @@ eval(src + `
   const g = _openingGeom(op);
   check(Math.abs(g.width - 32) < 1e-6 && Math.abs((g.b - g.a) - 42) < 1e-6, 'clear width 32, cut 42 with full round');
   check(buildPayload().openings[0].id === op.id, 'payload has openings');
+  // INTERACTION PRIORITY: an open route's END marker exactly on the opening's
+  // end handle must not steal the pointer (toolpath overlay = diagnostics)
+  selectOpening(op.id); setTool('edit');
+  const gh = _openingGeom(op), hp = gh.end.pt;
+  const prevTP = showToolpath, prevRR = routeResult, w0 = op.width;
+  showToolpath = true;
+  routeResult = { moves: [{ kind: 'print', start: [hp[0] - 30, hp[1] - 30], end: [hp[0], hp[1]], strand_id: 'x' }] };
+  const mk = routeMarkers(routeResult.moves).find(m => m.kind === 'end');
+  check(mk && Math.hypot(mk.pos[0] - hp[0], mk.pos[1] - hp[1]) < 1e-9 && !!hitTestRouteMarker(hp[0], hp[1]),
+        'an END marker sits exactly on the opening end handle');
+  const [hx, hy] = worldToCanvas(hp[0], hp[1]);
+  const r0 = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+  onMouseDown({ clientX: hx + (r0.left || 0), clientY: hy + (r0.top || 0), button: 0, preventDefault() {} });
+  check(openingDrag && openingDrag.mode === 'end', 'the opening end handle wins over the END marker');
+  onMouseUp();
+  showToolpath = prevTP; routeResult = prevRR; op.width = w0;
   // keyboard delete of selected opening
   selectOpening(op.id);
   document.activeElement = document.body;

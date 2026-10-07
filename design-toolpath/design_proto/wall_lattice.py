@@ -52,6 +52,58 @@ designs the topology first:
    MAXIMUM UNSUPPORTED DISTANCE (default 1.375 × target) wins over the
    target: stitches are added until no gap exceeds it.
 
+5. LINEAGE JAMBS (stations=…). A Layer Design lineage shares ONE lattice
+   scaffold (layer_design.py). Every end wall (cap) that an opening of a
+   lineage member creates is given as a station line (its two face
+   points). Topology: a member prints the scaffold clipped at that line,
+   so for Base AND the member to both route closed, the scaffold must
+   cross each jamb line an EVEN number of times with all crossings at ONE
+   point — a single pass crosses once (the member is left with odd cut
+   ends, an open route, however the stitches are arranged locally). So:
+     - a run crossed by a jamb line carries TWO mirrored passes (a ring:
+       two circulating passes; between junctions: a double run; a dead-end
+       arm: its out-and-back) — it adds an even degree at its ends, route
+       inspection pairs the remaining runs;
+     - at every jamb line both passes cross EXACTLY at the line's midpoint
+       M (a shared vertex, side JAMB): the two neighbouring stations are
+       re-centred about the line where free (limited; never a corner /
+       junction / wall-end station) and the ordinary stitch is bent
+       smoothly through M (two jambs between the same stations get one
+       extra station between them — the passes' tails swap, every later
+       landing keeps its face).
+   The member then ends BOTH passes at M on its end wall — the planner's
+   cap V — and closes; Base carries the crossing as a relic (no extra
+   material there: mirrored passes cross mid-wall anyway). The second pass
+   along the whole run is the price of the closed route (reported:
+   'double_loop' / doubled runs). Jambs at a corner (the crossing replaces
+   the corner station) and just short of a junction end (both passes end at
+   M — a cap V into the junction) are resolved; one that cannot be crossed
+   is reported in report['jambs']. (layer_design then checks the member's
+   closure and plans it alone if the shared scaffold cannot close it.)
+
+6. CROSS-Z TRACKING (track=, track_map=). A semantically transformed
+   design does not rediscover its lattice per layer: the plan of the
+   untransformed reference is mapped wall-relatively onto this skeleton
+   (_match_track) and every matched run keeps the reference's passes, start
+   side / parity, per-segment stitch counts, loop seam, stitch construction
+   and junction PAIRINGS. A count changes only where impossible (gap > max
+   unsupported, pitch < ½ target) or where the requested parity demands it.
+   PARTIAL when the skeleton changed (a junction lens shrinking away):
+   unmatched runs are planned afresh, pass counts are repaired for parity
+   through untracked runs first, carried sides are re-searched only if they
+   cannot pair. The junction TRANSITIONS themselves are still constructed
+   per layer (the known source of cross-Z support findings at moving
+   junctions — see the Designer memory).
+
+7. PHYSICAL VALIDITY. bead= : a run whose faces are ≤ one bead apart has
+   NO CAVITY and gets no passes (a single-bead path's return lanes, a wall
+   overridden to a bead's width). No emitted stitch leaves the material:
+   where the wave / Hermite / straight constructions all do (a landing on a
+   concave rounded-junction fillet), the stitch follows the wall centre
+   line (dogleg). With contact rails, transfer landings join every face
+   ring AND every separate lattice system, so a connected region is one
+   closed route.
+
 Wide regions (local thickness ≫ spacing — not a wall but an area) are not
 stitched here; the caller falls back to the field generator (infill.py).
 """
@@ -68,6 +120,7 @@ from infill import _Region, _strut_ok
 _DEBUG = False
 CAP = 2              # landing 'side' meaning: on the wall's end face (cap)
 MID = 3              # 'side': mid-wall apex of a turnaround with no cap landing
+JAMB = 4             # 'side': both phases cross exactly at a lineage jamb line's midpoint
 WAVE_SAMPLES = 16    # points per wave stitch (smooth: ≲ 10° turn per vertex)
 WIDE = 1.6            # local thickness > WIDE × spacing → not a wall (fallback)
 PRUNE = 1.2           # × thickness: shorter side branches are corner noise
@@ -720,7 +773,8 @@ def _spacing_cost(L, n, S):
 
 
 def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
-         max_unsupported=None, contact=0.0, closed=False):
+         max_unsupported=None, contact=0.0, closed=False, stations=None, track=None, track_map=None,
+         bead=0.0):
     """
     Route-aware wall lattice for one wall region (rings: material on the
     left). Returns a LatticePlan, or None if the region is not wall-like
@@ -738,6 +792,17 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
       closed — every route must close: a lone wall run (no junction) gets
         a closed OUT-AND-BACK loop (two phases joined by a cap V at both
         ends — the second wave) instead of one open pass.
+      stations — lineage jamb lines [(P, Q)] (face points of an end wall
+        some lineage member has here); see 5. in the module doc.
+      bead — physical bead width: NO CAVITY, NO LATTICE. A run whose faces
+        are at most one bead apart (a single-bead path's return lanes, a
+        wall overridden down to a bead's width) has no room for internal
+        structure: it gets no passes (the lattice ends at the junction
+        inside the thick wall it meets). 0 = legacy (every run).
+      track, track_map — CROSS-Z STATION TRACKING (6. in the module doc):
+        the 'track' of a REFERENCE plan of the same wall network (the
+        untransformed design) and a map from reference to this geometry
+        (wall-relative). The plan keeps the reference's discrete choices.
     """
     rings = [r for r in rings if len(r) >= 3]
     if not rings:
@@ -760,45 +825,28 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         return None
     region = _Region(rings, max(S / 2, 2.0))
     geo = _Geo(sk)
-
-    # -- 1. how many passes per run (route inspection on the skeleton) -----
-    K = nx.MultiGraph()
-    for ri, r in enumerate(runs):
-        if not r.cycle:
-            K.add_edge(r.a, r.b, key=ri, weight=r.length)
-    mult = {ri: 1 for ri in range(len(runs))}
-    for comp in nx.connected_components(K):
-        sub = K.subgraph(comp)
-        odd = [v for v in comp if sub.degree(v) % 2 == 1]
-        if not odd:
-            continue
-        has_junction = any(v[0] == 'J' for v in comp)
-        if not has_junction:
-            if closed:                   # a lone run closes as an out-and-back loop
-                for u, v, k in sub.edges(keys=True):
-                    mult[k] = 2
-            continue                     # (legacy: a lone run, single pass, open route)
-        H = nx.Graph()
-        simple = nx.Graph()
-        for u, v, k, d in sub.edges(keys=True, data=True):
-            if not simple.has_edge(u, v) or d['weight'] < simple[u][v]['weight']:
-                simple.add_edge(u, v, weight=d['weight'], key=k)
-        dist = dict(nx.all_pairs_dijkstra(simple))
-        for i, u in enumerate(odd):
-            for v in odd[i + 1:]:
-                H.add_edge(u, v, weight=dist[u][0][v])
-        ends = 0 if prefer_closed else 2
-        for k in range(ends):
-            for u in odd:
-                H.add_edge(('__end__', k), u, weight=0.0)
-        for u, v in nx.min_weight_matching(H):
-            if isinstance(u, tuple) and u[0] == '__end__' or \
-                    isinstance(v, tuple) and v[0] == '__end__':
-                continue
-            p = dist[u][1][v]
-            for x, y in zip(p, p[1:]):
-                ri = simple[x][y]['key']
-                mult[ri] = 2 if mult[ri] == 1 else 1
+    no_cavity = []
+    if bead > 0:
+        def separation(r):
+            n = max(4, int(r.length / max(0.5, 0.25 * thick)))
+            ds = sorted(geo.side_point(r, 0, r.length * k / n).dist(geo.side_point(r, 1, r.length * k / n))
+                        for k in range(1, n))
+            return ds[len(ds) // 2] if ds else 0.0
+        keep = [r for r in runs if separation(r) > bead + 1e-6]
+        no_cavity = [round(r.length, 3) for r in runs if r not in keep]
+        if not keep:
+            return LatticePlan([], {'runs': [], 'no_cavity': no_cavity, 'motif': None})
+        runs = keep
+    tracked, same_topology = _match_track(runs, geo, track, track_map, thick) \
+        if track and track_map else ({}, True)
+    # PARTIAL TRACKING: where the skeleton changed (a junction lens shrinking
+    # away, a hub regrouping) only the changed runs are planned afresh;
+    # every run that still corresponds keeps the reference's choices
+    track_note = {'tracked_runs': len(tracked), 'changed_segments': 0,
+                  'untracked_runs': (len(runs) - len(tracked)) if track else 0,
+                  'replanned': (None if not track or same_topology else
+                                'reference topology differs' if not tracked else
+                                'topology changed: unmatched runs planned afresh')}
 
     span_cache = {}
 
@@ -945,6 +993,14 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         lo, hi = span(r)
         if r.cycle:
             pts_ = cs if cs else [0.0]
+            tr = tracked.get(id(r))
+            if tr is not None and tr.get('seam_s') is not None:
+                if not cs:
+                    pts_ = [tr['seam_s']]                  # the reference's seam, carried
+                else:                                      # the reference's FIRST corner first
+                    k0 = min(range(len(cs)), key=lambda i: min(abs(cs[i] - tr['seam_s']),
+                                                              r.length - abs(cs[i] - tr['seam_s'])))
+                    pts_ = cs[k0:] + [c + r.length for c in cs[:k0]]
             bounds = [(pts_[i], pts_[i + 1] if i + 1 < len(pts_) else pts_[0] + r.length)
                       for i in range(len(pts_))]
         else:
@@ -977,6 +1033,30 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             cands = good or cands
         return sorted(cands, key=lambda n: (_spacing_cost(U, n, S), n))
 
+    def _tracked_counts(r, segs, tr, mode):
+        """The reference's stitch count of each segment (matched by its mapped
+        midpoint), changed ONLY where it is physically impossible here: a
+        gap beyond the maximum unsupported distance, or a pitch under half
+        the target (congestion). A single pass changes by 2 (keeps its
+        parity, so junction pairing is unchanged)."""
+        L = r.length
+        out, changed = [], 0
+        mids = tr['segmid']
+        for a, b, U in segs:
+            m = geo.centre(r, ((a + b) / 2) % L if r.cycle else (a + b) / 2)
+            j = min(range(len(mids)), key=lambda i: mids[i].dist(m))
+            n0 = tr['counts'][j]
+            step = 1 if mode == 'two' else 2
+            ok = lambda n: n >= 1 and gap_ok(r, a, b, n) and U / n >= 0.5 * S - 1e-9
+            n = n0
+            if not ok(n):
+                cands = sorted({n0 + step * k for k in range(-20, 21) if n0 + step * k >= 1},
+                               key=lambda x: (abs(x - n0), x))
+                n = next((x for x in cands if ok(x)), n0)
+                changed += n != n0
+            out.append(n)
+        return out, changed
+
     count_cache = {}
 
     def counts(r, mode, parity=None):
@@ -990,6 +1070,25 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             return count_cache[key]
         segs = segments(r)
         ncorner = len(corners(r))
+        tr = tracked.get(id(r))
+        if tr is not None and tr.get('segmid') is not None and len(tr['segmid']) == len(segs):
+            res, changed = _tracked_counts(r, segs, tr, mode)
+            if mode != 'two' and parity is not None and (sum(res) + ncorner) % 2 != parity:
+                # the requested parity (junction pairing) differs from the
+                # reference's here: ONE segment changes by one stitch — the
+                # cheapest feasible — never a pass ending on the wrong face
+                opts = [(abs(_spacing_cost(U, n + d, S) - _spacing_cost(U, n, S)), i, n + d)
+                        for i, ((a, b, U), n) in enumerate(zip(segs, res)) for d in (1, -1)
+                        if n + d >= 1 and gap_ok(r, a, b, n + d)]
+                if opts:
+                    _, i, n = min(opts)
+                    res[i] = n
+                    changed += 1
+            track_note['changed_segments'] += changed
+            tr['changed'] = tr.get('changed') or bool(changed)
+            cost = sum(_spacing_cost(U, n, S) for (a, b, U), n in zip(segs, res))
+            count_cache[key] = (res, cost)
+            return count_cache[key]
         if mode == 'two':
             # mirrored phases land every station (one on each face), so
             # any count works: both phases always end on opposite faces
@@ -1016,6 +1115,54 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     def _dead_end_last(r):
         return not r.cycle and (r.b[0] == 'E' or r.a[0] == 'E')
 
+    jamb_cache = {}
+    jamb_end_cache = {}               # run → [(s of a junction end, (P, Q))]: jamb lines through it
+    jamb_matched = set()              # station lines lying across some run of this region
+
+    def jambs_of(r):
+        """Lineage jamb lines lying across this run: [(s, {side: point})]
+        (the line's exact face points)."""
+        if id(r) in jamb_cache:
+            return jamb_cache[id(r)]
+        out = []
+        if stations:
+            L = r.length
+            lo, hi = span(r)
+            n = max(8, int(L / max(0.5, 0.25 * thick)))
+            ss = [L * k / n for k in range(n + 1)]
+            for P, Q in stations:
+                M = P.lerp(Q, 0.5)
+                d, s0 = min((geo.centre(r, x).dist(M), x) for x in ss)
+                if d > 0.75 * thick:
+                    continue                                 # not across this run
+                a, b = max(0.0, s0 - L / n), min(L, s0 + L / n)
+                for _ in range(40):                          # refine (golden section)
+                    m1, m2 = a + (b - a) * 0.382, a + (b - a) * 0.618
+                    if geo.centre(r, m1).dist(M) <= geo.centre(r, m2).dist(M):
+                        b = m2
+                    else:
+                        a = m1
+                sj = (a + b) / 2
+                if not r.cycle and not (lo + 0.5 * thick + 1e-6 < sj < hi - 0.5 * thick - 1e-6):
+                    # a jamb line AT a junction end of the run (an opening
+                    # cutting the host where this wall attaches): the run's two
+                    # passes turn round through the line's midpoint there (a
+                    # cap V into the junction) instead of handing off
+                    for nd, s_end in ((r.a, 0.0), (r.b, L)):
+                        if nd[0] != 'J' or geo.centre(r, s_end).dist(M) > thick:
+                            continue
+                        jamb_end_cache.setdefault(id(r), []).append((s_end, (P, Q)))
+                        jamb_matched.add((round(P.x, 6), round(P.y, 6), round(Q.x, 6), round(Q.y, 6)))
+                    continue
+                p0 = geo.side_point(r, 0, sj)
+                pts_ = {0: P, 1: Q} if P.dist(p0) <= Q.dist(p0) else {0: Q, 1: P}
+                if not _strut_ok(pts_[0], pts_[1], region):
+                    continue
+                out.append((sj, pts_))
+                jamb_matched.add((round(P.x, 6), round(P.y, 6), round(Q.x, 6), round(Q.y, 6)))
+        jamb_cache[id(r)] = out
+        return out
+
     def seg_stations(r, a, b, n):
         """n + 1 station positions from a to b, even in the station
         parameter u (b may run past the seam of a loop)."""
@@ -1027,6 +1174,205 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             return geo.s_of_u(r, uu) if uu <= UL else L + geo.s_of_u(r, uu - UL)
         ua, ub = u(a), u(b)
         return [a] + [s_of(ua + (ub - ua) * j / n) for j in range(1, n)] + [b]
+
+    # -- 1. how many passes per run (route inspection on the skeleton) -----
+    # A run crossed by a lineage JAMB line carries TWO passes (module doc
+    # §5): it contributes an even degree at both ends, so route inspection
+    # runs on the remaining runs only.
+    jammed = {ri for ri, r in enumerate(runs) if jambs_of(r) or jamb_end_cache.get(id(r))} \
+        if stations else set()
+    K = nx.MultiGraph()
+    for ri, r in enumerate(runs):
+        if not r.cycle and ri not in jammed:
+            K.add_edge(r.a, r.b, key=ri, weight=r.length)
+    mult = {ri: 2 if ri in jammed else 1 for ri in range(len(runs))}
+    for comp in nx.connected_components(K):
+        sub = K.subgraph(comp)
+        odd = [v for v in comp if sub.degree(v) % 2 == 1]
+        if not odd:
+            continue
+        has_junction = any(v[0] == 'J' for v in comp)
+        if not has_junction:
+            if closed:                   # a lone run closes as an out-and-back loop
+                for u, v, k in sub.edges(keys=True):
+                    mult[k] = 2
+            continue                     # (legacy: a lone run, single pass, open route)
+        H = nx.Graph()
+        simple = nx.Graph()
+        for u, v, k, d in sub.edges(keys=True, data=True):
+            if not simple.has_edge(u, v) or d['weight'] < simple[u][v]['weight']:
+                simple.add_edge(u, v, weight=d['weight'], key=k)
+        dist = dict(nx.all_pairs_dijkstra(simple))
+        for i, u in enumerate(odd):
+            for v in odd[i + 1:]:
+                H.add_edge(u, v, weight=dist[u][0][v])
+        ends = 0 if prefer_closed else 2
+        for k in range(ends):
+            for u in odd:
+                H.add_edge(('__end__', k), u, weight=0.0)
+        for u, v in nx.min_weight_matching(H):
+            if isinstance(u, tuple) and u[0] == '__end__' or \
+                    isinstance(v, tuple) and v[0] == '__end__':
+                continue
+            p = dist[u][1][v]
+            for x, y in zip(p, p[1:]):
+                ri = simple[x][y]['key']
+                mult[ri] = 2 if mult[ri] == 1 else 1
+
+
+    jamb_report = {}
+    jamb_lines = {}                   # (run, s) → (P, Q): the jamb line's face points
+
+    def between_jambs(A, B, fixed, k, sv):
+        """A[k] is the previous jamb, between the same two stations as sv:
+        add a station half way between the two jambs (the tails of A and B
+        swap, so every later landing keeps its face)."""
+        ins = (A[k][0] + sv) / 2
+        a_side = next(A[i][1] for i in range(k, -1, -1) if A[i][1] in (0, 1))
+        A, B = (A[:k + 1] + [(ins, 1 - a_side)] + B[k + 1:],
+                B[:k + 1] + [(ins, a_side)] + A[k + 1:])
+        fixed = {i + 1 if i > k else i for i in fixed} | {k + 1}
+        return A, B, fixed, k + 1
+
+    def cross_at_jambs(r, A, B, fixed):
+        """JAMB CROSSINGS (module doc §5): the two mirrored phases A, B of a
+        doubled run cross mid-wall between consecutive stations; at every
+        lineage jamb line they are made to cross EXACTLY at the line's
+        midpoint M (a shared vertex, side JAMB). The two neighbouring
+        stations are re-centred about the line where they are free to move
+        (limited, never a segment bound), so the stitches are bent only
+        slightly. Where two jambs fall between the same two stations, one
+        station is added between them (both phases: their tails swap, so
+        every later landing keeps its face). Returns the new (A, B);
+        unresolved jambs are reported in jamb_report."""
+        L = r.length
+        rep = jamb_report.setdefault(id(r), {'resolved': 0, 'unresolved': []})
+        A, B = list(A), list(B)
+        fixed = set(fixed)
+        sgn = 1.0 if A[-1][0] >= A[0][0] else -1.0
+        lo_s, hi_s = sorted((A[0][0], A[-1][0]))
+        todo = []
+        for sj, pts_ in jambs_of(r):
+            cands = [sj, sj + L] if r.cycle else [sj]
+            sv = next((c for c in cands if lo_s + 1e-6 < c < hi_s - 1e-6), None)
+            if sv is None:
+                rep['unresolved'].append({'s': round(sj, 3), 'why': 'outside the pass'})
+                continue
+            todo.append((sv, pts_))
+        todo.sort(key=lambda t: sgn * t[0])
+        margin = max(0.5 * thick, 1e-3)
+        for sv, pts_ in todo:
+            pos = lambda e: sgn * e[0]
+            # interval k … k+1 (indices into A; JAMB entries are not stations)
+            k = None
+            for i in range(len(A) - 1):
+                if pos(A[i]) < sgn * sv < pos(A[i + 1]):
+                    k = i
+                    break
+            if k is None:
+                rep['unresolved'].append({'s': round(sv % L if r.cycle else sv, 3),
+                                          'why': 'on a station'})
+                continue
+            if A[k][1] == JAMB:
+                # the previous jamb is between the same two stations: add a
+                # station half way between the two jambs
+                A, B, fixed, k = between_jambs(A, B, fixed, k, sv)
+            # re-centre the two stations about the line where free
+            def gap(i, j):
+                return abs(A[j][0] - A[i][0])
+            p = gap(k, k + 1)
+            want = {k: sv - sgn * p / 2, k + 1: sv + sgn * p / 2}
+            for i, nb in ((k, k - 1), (k + 1, k + 2)):
+                if i in fixed or A[i][1] not in (0, 1) or not (0 <= nb < len(A)):
+                    continue
+                cur = A[i][0]
+                lim = 0.35 * p
+                tgt = cur + max(-lim, min(lim, want[i] - cur))
+                # keep the neighbouring gap within [½ its length, DMAX]
+                g0 = abs(cur - A[nb][0])
+                g1 = abs(tgt - A[nb][0])
+                if g1 < 0.5 * g0:
+                    tgt = A[nb][0] + (cur - A[nb][0]) * 0.5
+                elif g1 > DMAX:
+                    tgt = A[nb][0] + (cur - A[nb][0]) * (DMAX / max(g0, 1e-9))
+                if not (min(A[nb][0], sv) < tgt < max(A[nb][0], sv)):
+                    continue
+                A[i] = (tgt, A[i][1])
+                B[i] = (tgt, B[i][1])
+            near = [i for i in (k, k + 1) if abs(A[i][0] - sv) < margin]
+            if near and all(0 < i < len(A) - 1 and A[i][1] in (0, 1) and A[i + 1][1] != JAMB
+                            for i in near) and len(near) == 1:
+                # a FIXED station (a corner) right at the jamb: the crossing
+                # replaces it — drop that station from both phases (their tails
+                # swap, so every later landing keeps its face). Beside the
+                # previous jamb, a station then goes half way between the two.
+                i = near[0]
+                if abs(A[i + 1][0] - A[i - 1][0]) <= 1.5 * DMAX:
+                    A, B = A[:i] + B[i + 1:], B[:i] + A[i + 1:]
+                    fixed = {j - 1 if j > i else j for j in fixed if j != i}
+                    k = next(j for j in range(len(A) - 1) if pos(A[j]) < sgn * sv < pos(A[j + 1]))
+                    if A[k][1] == JAMB:
+                        A, B, fixed, k = between_jambs(A, B, fixed, k, sv)
+                    rep.setdefault('replaced_stations', 0)
+                    rep['replaced_stations'] += 1
+            if min(abs(sv - A[k][0]), abs(A[k + 1][0] - sv)) < margin:
+                rep['unresolved'].append({'s': round(sv % L if r.cycle else sv, 3),
+                                          'why': 'too close to a corner / junction / wall end'})
+                continue
+            M = pts_[0].lerp(pts_[1], 0.5)
+            geo.cache[(id(r), JAMB, round(sv % L if r.cycle else sv, 9))] = M
+            A.insert(k + 1, (sv, JAMB))
+            B.insert(k + 1, (sv, JAMB))
+            fixed = {i + 1 if i > k else i for i in fixed}
+            jamb_lines[(id(r), round(sv % L if r.cycle else sv, 9))] = (pts_[0], pts_[1])
+            rep['resolved'] += 1
+            rep.setdefault('lines', set()).add(_line_key(pts_[0], pts_[1]))
+        return A, B
+
+    # the reference's passes per run. Where they leave a skeleton node odd
+    # (the reference had another junction structure there), parity is
+    # repaired along the cheapest paths — through UNTRACKED (changed) runs
+    # first, tracked ones only if unavoidable — so the route still closes
+    # and unchanged walls keep their passes.
+    tmult = dict(mult)
+    for ri, r in enumerate(runs):
+        tr = tracked.get(id(r))
+        if tr is not None and ri not in jammed and not r.cycle and tr.get('mult') in (1, 2):
+            tmult[ri] = tr['mult']
+    if tmult != mult:
+        deg = {}
+        for ri, r in enumerate(runs):
+            if not r.cycle:
+                for v in (r.a, r.b):
+                    deg[v] = deg.get(v, 0) + tmult[ri]
+        odd = sorted(v for v, d in deg.items() if d % 2)
+        if odd and prefer_closed:
+            Kw = nx.Graph()
+            for ri, r in enumerate(runs):
+                if r.cycle or ri in jammed:
+                    continue
+                w = r.length * (100.0 if id(r) in tracked else 1.0)
+                if not Kw.has_edge(r.a, r.b) or w < Kw[r.a][r.b]['weight']:
+                    Kw.add_edge(r.a, r.b, weight=w, key=ri)
+            Hm = nx.Graph()
+            for i, u in enumerate(odd):
+                for v in odd[i + 1:]:
+                    if u in Kw and v in Kw and nx.has_path(Kw, u, v):
+                        Hm.add_edge(u, v, weight=nx.dijkstra_path_length(Kw, u, v))
+            m_ = nx.min_weight_matching(Hm) if Hm.number_of_edges() else set()
+            if 2 * len(m_) == len(odd):
+                for u, v in m_:
+                    pth = nx.dijkstra_path(Kw, u, v)
+                    for x, y in zip(pth, pth[1:]):
+                        ri = Kw[x][y]['key']
+                        tmult[ri] = 3 - tmult[ri]
+                        if id(runs[ri]) in tracked:
+                            track_note['mult_changed'] = track_note.get('mult_changed', 0) + 1
+                mult = tmult
+            else:
+                track_note['mult_replanned'] = True          # keep route inspection's solution
+        else:
+            mult = tmult
 
     def layout(r, mode, s0=0, parity=None):
         """Landing sequences [(s, side)] of a run: one pass (single /
@@ -1050,7 +1396,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     side = 1 - side
                     seq.append((x, side))
                 last = i == len(segs) - 1
-                if not last and round(b, 9) in cmap:            # corner brace
+                if not last and round(b % r.length if r.cycle else b, 9) in cmap:   # corner brace
                     side = 1 - side
                     seq.append((b, side))
             # CAP V at open wall ends: the end face is landed through the
@@ -1075,6 +1421,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         ns_o = list(reversed(ns_)) if rev else ns_
         A, B = [(segs_o[0][0], s0)], [(segs_o[0][0], 1 - s0)]
         sa = s0
+        jamb_report[id(r)] = {'resolved': 0, 'unresolved': []}         # (the last layout wins)
+        fixed = {0}                       # segment bounds: ends, corners
         for (a, b, U), n in zip(segs_o, ns_o):
             st = seg_stations(r, a, b, n) if not rev else \
                 list(reversed(seg_stations(r, b, a, n)))
@@ -1082,6 +1430,24 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 sa = 1 - sa
                 A.append((st[k], sa))
                 B.append((st[k], 1 - sa))
+            fixed.add(len(A) - 1)
+        if jambs_of(r):
+            A, B = cross_at_jambs(r, A, B, fixed)
+        for s_end, (P, Q) in jamb_end_cache.get(id(r), ()):
+            # both phases END at the jamb line's midpoint M instead of handing
+            # off at the junction corners (their two slots leave the junction
+            # pairing): a cap V into the junction. A member whose host is cut
+            # there ends its wall on that line — both passes meet at M on it.
+            M = P.lerp(Q, 0.5)
+            geo.cache[(id(r), JAMB, round(s_end, 9))] = M
+            jamb_lines[(id(r), round(s_end, 9))] = (P, Q)
+            for seq in (A, B):
+                if abs(seq[-1][0] - s_end) < 1e-9:
+                    seq[-1] = (s_end, JAMB)
+                elif abs(seq[0][0] - s_end) < 1e-9:
+                    seq[0] = (s_end, JAMB)
+            jamb_report[id(r)]['resolved'] += 1
+            jamb_report[id(r)].setdefault('lines', set()).add(_line_key(P, Q))
         if _dead_end_last(r):
             # TURNAROUND = CAP V: both phases end at the last station on
             # opposite faces, joined through a landing ON the cap — the end,
@@ -1117,8 +1483,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         if r.cycle:
             continue
         for end, nd in ((0, r.a), (1, r.b)):
-            if nd[0] == 'J':
-                junction_ends.setdefault(nd, []).append((ri, end))
+            if nd[0] == 'J' and not any(abs(s_e - (0.0 if end == 0 else r.length)) < 1e-9
+                                        for s_e, _ in jamb_end_cache.get(id(r), ())):
+                junction_ends.setdefault(nd, []).append((ri, end))      # (a junction-end jamb: no hand-off)
 
     def slot_idx(ri, end, side):
         return runs[ri].chords[0 if end == 0 else -1][side]
@@ -1148,6 +1515,25 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             return p.dist(q) * (SAME_FACE_W if same else 1.0), [p, q]
         return 1e6, None
 
+    # CROSS-Z: the reference's junction pairing, in this plan's run / end /
+    # side terms — strongly preferred where still feasible, so a hub keeps
+    # its route identity instead of flipping on near-equal costs
+    preferred = set()
+    if tracked:
+        loc = {tuple(tr['uid']): (ri, tr) for ri, r in enumerate(runs)
+               for tr in [tracked.get(id(r))] if tr is not None and tr.get('uid')}
+        def to_local(tr, e, sd):
+            return (e if tr['fwd'] else 1 - e), (sd if tr['same_side'] else 1 - sd)
+        for u_, (ri, tr) in loc.items():
+            for key_, (puid, pe, ps) in (tr.get('partners') or {}).items():
+                if tuple(puid) not in loc:
+                    continue
+                e, sd = (int(v) for v in key_.split(','))
+                rj, trj = loc[tuple(puid)]
+                a_ = (ri,) + to_local(tr, e, sd)
+                b_ = (rj,) + to_local(trj, pe, ps)
+                preferred.add(frozenset((a_, b_)))
+
     cache = {}
 
     def cluster_cost(nd, slots):
@@ -1165,6 +1551,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 c = 0.05 * ca           # both land on the corner apex
             else:
                 c, _ = conn_cost(pts_[x], pts_[y])
+            if c < 1e5 and frozenset((x, y)) in preferred:
+                c *= 0.01
             G.add_edge(x, y, weight=c)
         m = nx.min_weight_matching(G) if G.number_of_edges() else set()
         tot = sum(G[x][y]['weight'] for x, y in m)
@@ -1194,21 +1582,28 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         return total, pairs
 
     options = [(s0 ^ flip, par) for s0 in (0, 1) for par in (0, 1)]
-    if len(single) <= 6:
-        best = None
-        for combo in itertools.product(options, repeat=len(single)):
-            choice = dict(zip(single, combo))
-            tot, pairs = solve(choice)
-            if best is None or tot < best[0] - 1e-9:
-                best = (tot, choice, pairs)
-    else:                                         # coordinate descent
-        choice = {ri: (flip, (sum(counts(runs[ri], 'single')[0]) + len(corners(runs[ri]))) % 2)
-                  for ri in single}
+
+    def search(fixed_choice):
+        """Best start sides / parities of the single-pass runs, the runs in
+        fixed_choice kept (the reference's sides)."""
+        free = [ri for ri in single if ri not in fixed_choice]
+        if len(free) <= 6:
+            best = None
+            for combo in itertools.product(options, repeat=len(free)):
+                choice = dict(fixed_choice)
+                choice.update(zip(free, combo))
+                tot, pairs = solve(choice)
+                if best is None or tot < best[0] - 1e-9:
+                    best = (tot, choice, pairs)
+            return best
+        choice = dict(fixed_choice)                          # coordinate descent
+        choice.update({ri: (flip, (sum(counts(runs[ri], 'single')[0]) + len(corners(runs[ri]))) % 2)
+                       for ri in free})
         tot0, pairs0 = solve(choice)
         best = (tot0, dict(choice), pairs0)
         for _ in range(4):
             improved = False
-            for ri in single:
+            for ri in free:
                 for opt in options:
                     trial = dict(best[1]); trial[ri] = opt
                     tot, pairs = solve(trial)
@@ -1216,6 +1611,14 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                         best = (tot, trial, pairs); improved = True
             if not improved:
                 break
+        return best
+
+    kept = {ri: tracked[id(runs[ri])]['choice'] for ri in single
+            if id(runs[ri]) in tracked and tracked[id(runs[ri])].get('choice')}
+    best = search(kept) if single else (0.0, {}, solve({})[1])
+    if kept and best[0] >= 1e9:                   # the carried sides cannot pair here
+        best = search({})
+        track_note['choice_replanned'] = True
     _, choice, pairs = best
 
     # -- 3. geometry --------------------------------------------------------
@@ -1312,7 +1715,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         corner brace (same station, both faces) and cap-V legs are
         straight."""
         pa, pb = lp(r, side_a, s_a), lp(r, side_b, s_b)
-        if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b) or MID in (side_a, side_b):
+        if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b) or MID in (side_a, side_b) \
+                or JAMB in (side_a, side_b):
             return [pa, pb]
         at_junction = (not r.cycle) and ((min(s_a, s_b) <= 1e-9 and r.a[0] == 'J') or
                                          (max(s_a, s_b) >= r.length - 1e-9 and r.b[0] == 'J'))
@@ -1342,30 +1746,47 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 out.append(q + ea * (1 - w) + eb * w)
             out.append(pb)
             ex_a, ex_b = not is_contact(r, side_a, s_a), not is_contact(r, side_b, s_b)
-            if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(out, out[1:])) \
-                    and _clear_poly(out, ex_a, ex_b):
-                return _no_foldback(out)
             # beside a corner the face-to-face construction can leave the
             # wall (or, with contact rails, come closer to a face than the
             # contact): a Hermite curve leaving / meeting each face along it
-            # (still tangent, still a wave) before falling back to straight
-            h = hermite(r, s_a, side_a, pa, s_b, side_b, pb)
-            if h is not None and _clear_poly(h, ex_a, ex_b):
-                return h
-            if straight_ok and (contact <= 0 or _clear_poly(_dense(pa, pb), ex_a, ex_b)):
-                return [pa, pb]
+            # (still tangent, still a wave) before falling back to straight.
+            # CROSS-Z: the reference's construction of THIS stitch is tried
+            # first (when still valid), so the shape does not flip per layer.
+            order = ['wave', 'hermite', 'straight']
+            if kind_ctx['pref'] in order:
+                order.remove(kind_ctx['pref'])
+                order.insert(0, kind_ctx['pref'])
+            h = None
+            for kd in order:
+                if kd == 'wave':
+                    if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(out, out[1:])) \
+                            and _clear_poly(out, ex_a, ex_b):
+                        kind_ctx['used'] = 'wave'
+                        return _no_foldback(out)
+                elif kd == 'hermite':
+                    h = hermite(r, s_a, side_a, pa, s_b, side_b, pb)
+                    if h is not None and _clear_poly(h, ex_a, ex_b):
+                        kind_ctx['used'] = 'hermite'
+                        return h
+                elif straight_ok and (contact <= 0 or _clear_poly(_dense(pa, pb), ex_a, ex_b)):
+                    kind_ctx['used'] = 'straight'
+                    return [pa, pb]
+            kind_ctx['used'] = 'fallback'
             if h is not None:
                 return h
-            return [pa, pb] if straight_ok else out
+            if straight_ok:
+                return [pa, pb]
+            return dogleg(r, s_a, pa, s_b, pb) or out
         out = [pa]
         for k in range(1, 8):
             f = k / 8
             s_ = s_a + f * (s_b - s_a)
             out.append(rail(r, side_a, s_).lerp(rail(r, side_b, s_), f))
         out.append(pb)
-        if straight_ok and not all(_strut_ok(u, v, region) or u.dist(v) < 1e-9
-                                   for u, v in zip(out, out[1:])):
-            return [pa, pb]             # the curve would leave the wall
+        if not all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(out, out[1:])):
+            if straight_ok:
+                return [pa, pb]             # the curve would leave the wall
+            return dogleg(r, s_a, pa, s_b, pb) or out
         # tidy the ends: no curve point hugging a landing (a curve running
         # into a tight inner corner would overshoot it and double back)
         tidy = 0.35 * thick
@@ -1373,6 +1794,26 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             del out[-2]
         while len(out) > 2 and out[1].dist(out[0]) < tidy and _strut_ok(out[0], out[2], region):
             del out[1]
+        return out
+
+    def dogleg(r, s_a, pa, s_b, pb):
+        """A stitch that stays IN the material where neither the face-to-face
+        construction nor a straight strut does (e.g. a junction landing on a
+        rounded fillet, next to a room's inner corner): it follows the
+        wall's centre line between the stations, shortcut wherever a
+        straight strut stays inside. None if even that leaves the wall.
+        (A shortest two-strut path was tried: it hugs the fillet, grazes it
+        and is split by clipping — closure comes first.)"""
+        chain = [pa] + [geo.centre(r, s_a + f * (s_b - s_a)) for f in
+                        (0.02, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.98)] + [pb]
+        if not all(_strut_ok(u, v, region) for u, v in zip(chain, chain[1:])):
+            return None
+        out, i = [pa], 0
+        while i < len(chain) - 1:
+            j = next(j for j in range(len(chain) - 1, i, -1) if j == i + 1 or _strut_ok(chain[i], chain[j], region))
+            out.append(chain[j])
+            i = j
+        kind_ctx['used'] = 'dogleg'
         return out
 
     def hermite(r, s_a, side_a, pa, s_b, side_b, pb):
@@ -1404,17 +1845,88 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         return None
 
     stitch_memo = {}
+    kind_ctx = {'pref': None, 'used': None}   # cross-Z: preferred / used stitch construction
 
-    def emit(r, seq):
+    def one_stitch(r, xa, sa, xb, sb):
+        # memoised by the actual landing points (junction hand-off
+        # points may be moved after a first emission)
+        pa, pb = lp(r, sa, xa), lp(r, sb, xb)
+        key = (id(r), round(xa, 9), sa, round(xb, 9), sb, pa.x, pa.y, pb.x, pb.y, kind_ctx['pref'])
+        if key not in stitch_memo:
+            kind_ctx['used'] = None
+            stitch_memo[key] = (stitch(r, xa, sa, xb, sb), kind_ctx['used'])
+        kind_ctx['used'] = stitch_memo[key][1]
+        return stitch_memo[key][0]
+
+    def through_jamb(r, xa, sa, xj, xb, sb):
+        """The ordinary stitch xa → xb, bent smoothly so that it crosses
+        the jamb line exactly at its midpoint M (a vertex): the crossing X
+        of the stitch with the line moves to M, the displacement fading to
+        zero at both landings (raised cosine in arc length). None if the
+        bent stitch would leave the wall or crowd a face."""
+        full = one_stitch(r, xa, sa, xb, sb)
+        P, Q = jamb_lines[(id(r), round(xj % r.length if r.cycle else xj, 9))]
+        M = P.lerp(Q, 0.5)
+        d = Q - P
+        side = lambda q: d.x * (q.y - P.y) - d.y * (q.x - P.x)
+        best = None
+        for i, (u, v) in enumerate(zip(full, full[1:])):
+            fu, fv = side(u), side(v)
+            if (fu <= 0 <= fv or fv <= 0 <= fu) and fu != fv:
+                X = u.lerp(v, fu / (fu - fv))
+                if best is None or X.dist(M) < best[0]:
+                    best = (X.dist(M), i, X)
+        if best is None or best[0] > thick:
+            if _DEBUG: print('jamb: no crossing', best and best[0])
+            return None
+        _, i, X = best
+        pts = full[:i + 1] + [X] + full[i + 1:]
+        cum = [0.0]
+        for u, v in zip(pts, pts[1:]):
+            cum.append(cum[-1] + u.dist(v))
+        uX, U = cum[i + 1], cum[-1]
+        dv = M - X
+        out = []
+        for q, c in zip(pts, cum):
+            if c <= uX:
+                w = 0.0 if uX <= 1e-12 else (1 - math.cos(math.pi * c / uX)) / 2
+            else:
+                w = 0.0 if U - uX <= 1e-12 else (1 - math.cos(math.pi * (U - c) / (U - uX))) / 2
+            out.append(q + dv * w)
+        out[0], out[i + 1], out[-1] = full[0], M, full[-1]
+        if not all(_strut_ok(u, v, region) or u.dist(v) < 1e-6 for u, v in zip(out, out[1:])):
+            if _DEBUG: print('jamb: leaves wall')
+            return None
+        if contact > 0 and not all(_face_d(q) >= contact * 0.98 for q in out[1:-1]
+                                   if q.dist(out[0]) > contact and q.dist(out[-1]) > contact):
+            if _DEBUG: print('jamb: crowds face', min(_face_d(q) for q in out[1:-1]), contact, X, M)
+            return None
+        return out[:i + 2], out[i + 1:]
+
+    def emit(r, seq, prefs=None, record=None):
         poly = [lp(r, seq[0][1], seq[0][0])]
-        for (xa, sa), (xb, sb) in zip(seq, seq[1:]):
-            # memoised by the actual landing points (junction hand-off
-            # points may be moved after a first emission)
-            pa, pb = lp(r, sa, xa), lp(r, sb, xb)
-            key = (id(r), round(xa, 9), sa, round(xb, 9), sb, pa.x, pa.y, pb.x, pb.y)
-            if key not in stitch_memo:
-                stitch_memo[key] = stitch(r, xa, sa, xb, sb)
-            poly.extend(stitch_memo[key][1:])
+        k = 0
+        while k < len(seq) - 1:
+            (xa, sa), (xb, sb) = seq[k], seq[k + 1]
+            kind_ctx['pref'] = prefs[k] if prefs and k < len(prefs) else None
+            if sb == JAMB and k + 2 < len(seq):
+                xc, sc = seq[k + 2]
+                halves = through_jamb(r, xa, sa, xb, xc, sc)
+                if halves is None:
+                    rep_ = jamb_report.setdefault(id(r), {'resolved': 0, 'unresolved': []})
+                    rep_['bend_failed'] = rep_.get('bend_failed', 0) + 1
+                    halves = (one_stitch(r, xa, sa, xb, sb), one_stitch(r, xb, sb, xc, sc))
+                poly.extend(halves[0][1:])
+                poly.extend(halves[1][1:])
+                if record is not None:
+                    record += [kind_ctx['used'], kind_ctx['used']]
+                k += 2
+                continue
+            poly.extend(one_stitch(r, xa, sa, xb, sb)[1:])
+            if record is not None:
+                record.append(kind_ctx['used'])
+            k += 1
+        kind_ctx['pref'] = None
         return poly
 
     def run_crowding(r, sq):
@@ -1463,13 +1975,21 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     seqs = {}
     for ri, r in enumerate(runs):
         if r.cycle:
-            seqs[ri] = ('single', layout(r, 'single', flip, 0))
+            if ri in jammed:
+                opts = [layout(r, 'two', s0_) for s0_ in (flip, 1 - flip)]
+                if corners(r) and id(r) not in tracked:
+                    scores = [run_crowding(r, q) for q in opts]
+                    seqs[ri] = ('two', opts[min(range(2), key=lambda k: scores[k])])
+                else:
+                    seqs[ri] = ('two', opts[0])
+            else:
+                seqs[ri] = ('single', layout(r, 'single', flip, 0))
         elif mult[ri] == 2:
             # Which phase lands which corner point follows from the start
             # side: pick the one keeping other beads clear of the inner
             # corner (the phase arriving two stations back passes wide).
             opts = [layout(r, 'two', s0_) for s0_ in (0, 1)]
-            if corners(r):
+            if corners(r) and id(r) not in tracked:
                 scores = [run_crowding(r, q) for q in opts]
                 if _DEBUG:
                     print('orient', ri, round(r.length, 2), [c['s'] for c in corners(r)], scores)
@@ -1517,8 +2037,19 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 d = (a1 - a0) % L
                 if d > L / 2:
                     d -= L
-                apex = min((sk.R.point(ri, a0 + d * k / 16) for k in range(17)),
-                           key=lambda q: q.dist(centre))
+                # the arc point nearest the junction centre — CONTINUOUS in
+                # the geometry (coarse samples, then golden section), so the
+                # meeting point moves smoothly from layer to layer
+                ks = min(range(17), key=lambda k: sk.R.point(ri, a0 + d * k / 16).dist(centre))
+                lo_, hi_ = max(0.0, (ks - 1) / 16), min(1.0, (ks + 1) / 16)
+                f_ = lambda t: sk.R.point(ri, a0 + d * t).dist(centre)
+                for _ in range(30):
+                    m1, m2 = lo_ + (hi_ - lo_) * 0.382, lo_ + (hi_ - lo_) * 0.618
+                    if f_(m1) <= f_(m2):
+                        hi_ = m2
+                    else:
+                        lo_ = m1
+                apex = sk.R.point(ri, a0 + d * (lo_ + hi_) / 2)
             # The stitches leaving the shared point run straight into each
             # arm; on a rounded corner they would cut the fillet, so the
             # point moves inside the wall (towards the junction centre)
@@ -1531,13 +2062,24 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             dirv = centre - apex
             dl = dirv.length() or 1.0
             point = apex
-            for k in (0.0, 0.2, 0.3, 0.4, 0.5, 0.65):
-                q = apex + dirv * (k * thick / dl)
-                if k > 0 and not region.inside(q):
-                    break
-                if all(_strut_ok(q, nx_, region) for nx_ in nexts):
-                    point = q
-                    break
+            at = lambda k: apex + dirv * (k * thick / dl)
+            ok_k = lambda k: (k == 0 or region.inside(at(k))) and all(_strut_ok(at(k), nx_, region) for nx_ in nexts)
+            if not ok_k(0.0):
+                # the SMALLEST move inside that frees every stitch (bisection:
+                # continuous in the geometry — no jumps between layers)
+                good = next((k for k in (0.2, 0.3, 0.4, 0.5, 0.65) if ok_k(k)), None)
+                if good is not None:
+                    lo_k = 0.0
+                    for _ in range(20):
+                        mk = (lo_k + good) / 2
+                        if ok_k(mk):
+                            good = mk
+                        else:
+                            lo_k = mk
+                    # a margin past the threshold (still continuous): a strut
+                    # exactly grazing the fillet would be split by clipping
+                    good = next((g for g in (good + 0.1, good + 0.05) if ok_k(g)), good)
+                    point = at(good)
             for ri_, end, side in (x, y):
                 r = runs[ri_]
                 sv = 0.0 if end == 0 else r.length
@@ -1557,8 +2099,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         touched = set()
         cands: dict = {}
         for ri, r in enumerate(runs):
+            cs_ = {round(c['s'] % r.length if r.cycle else c['s'], 6) for c in corners(r)}
             for one in seqs[ri][1]:
-                for x, sd in one:
+                for j, (x, sd) in enumerate(one):
                     if sd not in (0, 1):
                         continue
                     p = geo.landing(r, sd, x)
@@ -1568,27 +2111,98 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     if not is_contact(r, sd, x):
                         touched.add(k)
                     else:
-                        cands.setdefault(k, []).append((ri, sd, x))
+                        poor = j in (0, len(one) - 1) or \
+                            round(x % r.length if r.cycle else x, 6) in cs_
+                        cands.setdefault(k, []).append((ri, sd, x, poor))
+        # CONNECTIVITY: passes / rings joined by exact contacts (shared pass
+        # end points, exact landings on a ring). With rounded junctions the
+        # hand-off points sit inside the wall, so per-ring transfers alone
+        # can leave the lattice as two closed systems (two print runs).
+        par = {}
+        def find(a):
+            par.setdefault(a, a)
+            while par[a] != a:
+                par[a] = par[par[a]]
+                a = par[a]
+            return a
+        def union(a, b):
+            par[find(a)] = find(b)
+        at_pt = {}
+        pass_of = []                             # (pass id, ri, landing index list)
+        for ri, r in enumerate(runs):
+            for pi, one in enumerate(seqs[ri][1]):
+                pid = ('P', ri, pi)
+                find(pid)
+                for j, (x, sd) in enumerate(one):
+                    q = lp(r, sd, x)
+                    key_ = (round(q.x, 6), round(q.y, 6))
+                    if key_ in at_pt:
+                        union(pid, at_pt[key_])
+                    else:
+                        at_pt[key_] = pid
+                    if sd in (0, 1) and not is_contact(r, sd, x):
+                        d, k = ring_of(geo.landing(r, sd, x))
+                        if d <= 1e-6:
+                            union(pid, ('R', k))
+                pass_of.append((pid, ri, one))
+        def transfer(k, cs):
+            # mid-sequence: away from ends / corners (the nearest candidate
+            # to the middle that is neither a pass end nor a corner)
+            m = len(cs) // 2
+            order = sorted(range(len(cs)), key=lambda i: (abs(i - m), i))
+            ri, sd, x, _ = cs[next((i for i in order if not cs[i][3]), m)]
+            r = runs[ri]
+            transfers.add((id(r), sd, round(x % r.length if r.cycle else x, 9)))
+            union(('R', k), next(pid for pid, ri_, _ in pass_of if ri_ == ri and
+                                 any(abs(xx - x) < 1e-9 and ss == sd for xx, ss in _)))
         for k, cs in sorted(cands.items()):
             if k in touched or not cs:
                 continue
-            ri, sd, x = cs[len(cs) // 2]       # mid-sequence: away from ends / corners
-            r = runs[ri]
-            transfers.add((id(r), sd, round(x % r.length if r.cycle else x, 9)))
+            transfer(k, cs)
+        # one more transfer for every lattice system still apart: on a
+        # ring it lands on with a contact landing, joining that ring's system
+        for _ in range(len(rings) + len(pass_of)):
+            comps = {find(pid) for pid, _, _ in pass_of}
+            if len(comps) <= 1:
+                break
+            main = find(pass_of[0][0])
+            done = False
+            for k, cs in sorted(cands.items()):
+                own = [c for c in cs if find(next(pid for pid, ri_, one in pass_of if ri_ == c[0] and
+                                                   any(abs(xx - c[2]) < 1e-9 and ss == c[1] for xx, ss in one)))
+                       != find(('R', k))]
+                if own and (find(('R', k)) == main or any(
+                        find(next(pid for pid, ri_, one in pass_of if ri_ == c[0] and
+                                  any(abs(xx - c[2]) < 1e-9 and ss == c[1] for xx, ss in one))) == main
+                        for c in own)):
+                    transfer(k, own)
+                    done = True
+                    break
+            if not done:
+                break
 
+    for v_ in jamb_report.values():
+        v_['bend_failed'] = 0             # count the final emission only
     polys = []
     run_rep = []
     pitches = []
     unsupported = []
 
+    kinds_out = {}
     for ri, r in enumerate(runs):
         mode, sq = seqs[ri]
-        for one in sq:
-            polys.append(emit(r, one))
-        if r.cycle:
+        tr = tracked.get(id(r))
+        ref_k = tr.get('kinds') if tr and tr.get('fwd') and not tr.get('changed') else None
+        kinds_out[ri] = []
+        for si, one in enumerate(sq):
+            prefs = ref_k[si] if ref_k and si < len(ref_k) and len(ref_k[si]) == len(one) - 1 else None
+            rec = []
+            polys.append(emit(r, one, prefs, rec))
+            kinds_out[ri].append(rec)
+        if r.cycle and mode != 'two':
             polys[-1][-1] = polys[-1][0]
         # supports along the wall: every landing station (either face)
-        stn = sorted({round(x % r.length if r.cycle else x, 6) for one in sq for x, _ in one})
+        stn = sorted({round(x % r.length if r.cycle else x, 6) for one in sq for x, sd in one if sd != JAMB})
         gaps = [b_ - a_ for a_, b_ in zip(stn, stn[1:])]
         if r.cycle and stn:
             gaps.append(stn[0] + r.length - stn[-1])
@@ -1600,7 +2214,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         for (a_, b_, U), n in zip(segs, ns_):
             pitches.append(U / n)
         if r.cycle:
-            motif = 'loop'
+            motif = 'double_loop' if mode == 'two' else 'loop'
         elif mode == 'two':
             motif = ('lone_loop' if all(nd[0] == 'E' for nd in (r.a, r.b)) else
                      'out_and_back' if any(nd[0] == 'E' for nd in (r.a, r.b)) else 'double')
@@ -1625,7 +2239,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 continue
             polys.append([p, q])
             connectors.append(round(p.dist(q), 2))
-    polys = [_simplify(p) for p in polys if len(p) >= 2]
+    keep = {(lambda q: (q.x, q.y))(geo.cache[(id(r), JAMB, round(x % r.length if r.cycle else x, 9))])
+            for ri, r in enumerate(runs) for one in seqs[ri][1] for x, sd in one if sd == JAMB}
+    polys = [_simplify(p, keep) for p in polys if len(p) >= 2]
     # contact check: lattice points nearer the faces than the contact
     # separation, away from the exact route connections (reported, not hidden)
     c_min, c_bad = None, 0
@@ -1640,7 +2256,31 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 c_min = d if c_min is None else min(c_min, d)
                 if d < 0.98 * contact:
                     c_bad += 1
+    track_out = []
+    uid = {ri: _xy(geo.centre(r, 0.5 * r.length)) for ri, r in enumerate(runs)}
+    partners = {ri: {} for ri in range(len(runs))}
+    for nd, m in pairs.items():                    # the junction pairing (route identity at a hub)
+        for x, y in m:
+            partners[x[0]][f'{x[1]},{x[2]}'] = [uid[y[0]], y[1], y[2]]
+            partners[y[0]][f'{y[1]},{y[2]}'] = [uid[x[0]], x[1], x[2]]
+    for ri, r in enumerate(runs):
+        L = r.length
+        segs_ = segments(r)
+        mode_ = seqs[ri][0]
+        ns_, _ = counts(r, 'two' if mode_ == 'two' else 'single',
+                        None if mode_ == 'two' else (choice[ri][1] if ri in choice else (0 if r.cycle else None)))
+        track_out.append({
+            'cycle': r.cycle, 'mult': mult[ri],
+            'pts': [_xy(geo.centre(r, f * L)) for f in (0.1, 0.3, 0.5, 0.7, 0.9)],
+            'seam': _xy(geo.centre(r, segs_[0][0] % L if r.cycle else 0.0)),
+            'left0': geo._side_sign(r, 0) > 0,
+            'segmid': [_xy(geo.centre(r, ((a_ + b_) / 2) % L if r.cycle else (a_ + b_) / 2)) for a_, b_, _ in segs_],
+            'counts': list(ns_),
+            'kinds': kinds_out.get(ri),
+            'choice': list(choice[ri]) if ri in choice else None,
+            'uid': uid[ri], 'partners': partners[ri]})
     report = {
+        'no_cavity': no_cavity,
         'target': S, 'thickness': round(thick, 2), 'max_unsupported_limit': round(DMAX, 2),
         'max_unsupported': round(max(unsupported, default=0.0), 2),
         'pitch_min': round(min(pitches), 2) if pitches else None,
@@ -1652,6 +2292,13 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         'contact_clamped': contact_clamped[0],
         'contact_min': None if c_min is None else round(c_min, 3),
         'contact_violations': c_bad,
+        'track': {'runs': track_out, **track_note},
+        'jambs': {'resolved': len(set().union(*(v.get('lines', set()) for v in jamb_report.values()))),
+                  'lines': sorted(set().union(*(v.get('lines', set()) for v in jamb_report.values()))),
+                  'unresolved': [u for v in jamb_report.values() for u in v['unresolved']],
+                  'bend_failed': sum(v.get('bend_failed', 0) for v in jamb_report.values()),
+                  'matched': sorted(jamb_matched)}
+        if stations else None,
     }
     return LatticePlan(polys, report)
 
@@ -1688,10 +2335,97 @@ def _no_foldback(poly):
     return out
 
 
-def _simplify(poly):
+def _xy(p):
+    return (round(p.x, 9), round(p.y, 9))
+
+
+def _match_track(runs, geo, track, track_map, thick):
+    """({id(run): tracked reference data}, same topology?). Each local run a
+    reference run maps onto (distinct, within half a thickness, wall-relative
+    through track_map) is matched; directions and sides are aligned (a
+    reference side keeps its physical side). PARTIAL when the skeleton
+    changed (a run appeared / vanished): the unmatched runs are planned
+    afresh by the caller, the matched ones keep the reference's choices."""
+    ref = (track or {}).get('runs') or []          # (may span several regions)
+    if not ref:
+        return {}, False
+    polys = {}
+
+    def poly(r):
+        if id(r) not in polys:
+            geo.centre(r, 0.0)
+            mids = geo.mids[id(r)]
+            ss = list(r.s) + ([r.length] if r.cycle else [])
+            polys[id(r)] = (mids, ss)
+        return polys[id(r)]
+
+    def project(r, p):
+        mids, ss = poly(r)
+        best = (math.inf, 0.0)
+        for k in range(len(mids) - 1):
+            a, b = mids[k], mids[k + 1]
+            d = b - a
+            L2 = d.x * d.x + d.y * d.y
+            t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / L2))
+            q = a.lerp(b, t)
+            dd = q.dist(p)
+            if dd < best[0]:
+                best = (dd, ss[k] + t * (ss[min(k + 1, len(ss) - 1)] - ss[k]))
+        return best
+    cand = []
+    for i, tr in enumerate(ref):
+        mp = [track_map(Vec2(*p)) for p in tr['pts']]
+        for r in runs:
+            if bool(r.cycle) != bool(tr['cycle']):
+                continue
+            pr = [project(r, q) for q in mp]
+            cost = sum(d for d, _ in pr) / len(pr)
+            cand.append((cost, i, id(r), r, pr))
+    cand.sort(key=lambda c: c[0])
+    used_i, used_r, out = set(), set(), {}
+    for cost, i, rid, r, pr in cand:
+        if i in used_i or rid in used_r or cost > 0.5 * thick:
+            continue
+        used_i.add(i); used_r.add(rid)
+        tr = dict(ref[i])
+        ss = [s_ for _, s_ in pr]
+        if r.cycle:
+            fwd = ((ss[1] - ss[0]) % r.length) < r.length / 2
+        else:
+            fwd = ss[-1] >= ss[0]
+        same_side = (bool(tr['left0']) == (geo._side_sign(r, 0) > 0)) == fwd
+        side = (lambda x: x) if same_side else (lambda x: 1 - x)
+        if tr.get('choice'):
+            s0, par = tr['choice']
+            tr['choice'] = (side(s0) if fwd else side(s0 ^ par), par)
+        tr['segmid'] = [track_map(Vec2(*p)) for p in tr['segmid']]
+        tr['seam_s'] = project(r, track_map(Vec2(*tr['seam'])))[1] if r.cycle else None
+        tr['fwd'] = fwd
+        tr['same_side'] = same_side
+        out[rid] = tr
+    # SAME TOPOLOGY: every local run matched, and no reference run left over
+    # that maps INTO this region (e.g. a junction lens that has shrunk away).
+    # Otherwise the match is PARTIAL: the matched runs keep their choices,
+    # the caller re-plans the rest and repairs parity.
+    best_i = {}
+    for cost, i, rid, r, pr in cand:
+        best_i[i] = min(best_i.get(i, math.inf), cost)
+    same = len(out) == len(runs) and not any(i not in used_i and c <= thick for i, c in best_i.items())
+    return out, same
+
+
+def _line_key(P, Q):
+    a, b = (round(P.x, 6), round(P.y, 6)), (round(Q.x, 6), round(Q.y, 6))
+    return min(a, b) + max(a, b)
+
+
+def _simplify(poly, keep=()):
     out = [poly[0]]
     for k in range(1, len(poly) - 1):
         a, b, c = out[-1], poly[k], poly[k + 1]
+        if (b.x, b.y) in keep:          # a shared vertex (jamb crossing)
+            out.append(b)
+            continue
         d = c - a
         L = d.length()
         if L > 1e-12 and abs((b.x - a.x) * d.y - (b.y - a.y) * d.x) / L < 1e-6 and \

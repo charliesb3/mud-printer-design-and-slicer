@@ -114,6 +114,9 @@ The current project is organized into three major subprojects:
 The approximate current/future information flow is:
 
 Design + Toolpath
+  ├─ Designer (design_proto): reusable 2D LAYER DESIGNS
+  │         ↓ narrow interface (LayerSource: design info + resolved 2D printable geometry)
+  └─ Layer Assembly (layer_assembly): stacks Layer Designs by physical height → layers + Z
         ↓
 machine instructions / G-code
         ↓
@@ -426,6 +429,27 @@ Major capabilities:
   its voids): an opening is a subtraction through the complete wall, never
   new wall topology.
 - Toolpath overlay with playback; routing diagnostics.
+- LAYER DESIGNS + LAYER ASSEMBLY (Z phase, started 2026-10-06; architecture
+  + prototype, uncommitted): the Designer defines one reusable 2D Layer
+  Design (a Designer document); designs derive from a Base by an id-keyed
+  overlay resolved live (Base edits propagate; no copies; no door / window
+  objects — a doorway is a design with a gap). A separate, deliberately
+  "dumb" `design-toolpath/layer_assembly` package stacks designs by
+  PHYSICAL HEIGHT with one global layer height (whole layers, boundaries
+  rounded, errors reported) into layer instances that only reference their
+  design; its 3D preview consumes instance Z + resolved 2D geometry. A
+  lineage prints ONE vertically registered wall-lattice scaffold, and its
+  lattice definition (pattern, spacing, variation) belongs to the lineage.
+  Runs crossed by a variant's end wall carry two passes that cross on the
+  jamb line, so a connected opening variant still prints as one closed
+  route. Assembly transform groups move the ARCHITECTURE (source paths,
+  via the LayerSource `geometry(design, transforms)`), then the Designer
+  resolves walls / junctions / lattice — never rubber-sheeted beads. The
+  application has two workspaces, [Designer] [Assembly] (stack
+  editor + 3D stack preview). Own memory:
+  `design-toolpath/layer_assembly/PROJECT_MEMORY.md`; the Designer side and
+  the test tiers: `design-toolpath/PROJECT_MEMORY.md` → "Z PHASE — CURRENT
+  ARCHITECTURE".
 - Workspace: DESIGN sidebar (paths, properties, wall geometry, persistent
   Wall Network) | canvas (zoom at the pointer, Space / middle-drag pan,
   Fit / 100 %) | MATERIAL / BEAD + PRINT / TOOLPATH sidebar.
@@ -516,5 +540,6 @@ Allow the architecture to evolve as the machine and software become better under
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
 Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas: checkpoints 414c283 / 51387d3 / 0898d16, then the 2026-10-06 Designer checkpoint (Design / Print sidebars, Trim, rounded-junction assemblies, Material / Bead, Contact + Return-Lane Overlap, no-retrace closed routes, attached-branch return geometry, Route Origin, blue bead / vector rendering, zoom / pan, persistent Wall Network, trim ghost fix): design_proto 1059 + toolpath_proto 90 + pi-interface 78 tests green.
+Z phase (2026-10-06, UNCOMMITTED, audited and awaiting manual browser approval before a checkpoint commit): Layer Designs with live inheritance, a shared lineage lattice and one project bead width (Designer); the Layer Assembly subsystem and workspace (stack by physical height, section / assembly-wide transforms, semantic transform groups, vertical support with HEADER NEEDED / INSUFFICIENT LAYER SUPPORT, headers, undo / redo, 3D preview). Stable boundary: the Designer owns source / wall semantics, junctions, openings, lattice, printable geometry, routes and the material; the Assembly owns layer order, Z, transforms, group choices, vertical support and assembly objects; the Assembly asks the Designer for each grouped layer's design with its SOURCES moved and receives resolved, source-tagged geometry (never rubber-sheets beads). Principles: a closed print route outranks vertical lattice registration; lattice identity persists through Z where topology is unchanged; routine edits must not re-solve unchanged layers; mud requires physical support below — checked in the Assembly, never weakened to hide findings. Main open issue: lattice coherence at independently transformed junctions (legitimate support findings on the reference network). Tests (2026-10-06 audit): design_proto 1143, layer_assembly 124, toolpath_proto 90, pi-interface 78 — all green.
 Repository permanently relocated to `/Users/charliebritton/Projects/mudprintersoftware` (previously `/Users/charliebritton/Documents/mude printer/mudprintersoftware`). Post-move environment restored 2026-10-05: the three `.venv`s were recreated with the same package versions, and all suites pass from the new path (Pi 78, toolpath_proto 90, design_proto 889 incl. 3 JS UI smoke tests).
 Arduino/GRBL subproject not yet started.

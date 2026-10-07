@@ -1683,9 +1683,10 @@ function _drawRouteMarkers(moves, labels) {
   }
 }
 
-// Any route marker under the pointer (Toolpath ON): it wins hit-testing
-// over every path / opening / handle beneath it — a marker is toolpath UI,
-// never a handle on design geometry.
+// Any route marker under the pointer (Toolpath ON). Only a closed route's
+// ORIGIN is interactive, and editable design handles (opening ends / gaps,
+// the selected path's handles) are tested BEFORE it (onMouseDown);
+// START / END are diagnostics and never take the pointer.
 function hitTestRouteMarker(wx, wy) {
   if (!showToolpath || !routeResult || !routeResult.moves) return null;
   let best = null;
@@ -2029,14 +2030,10 @@ function onMouseDown(e) {
   }
 
   if (tool === 'edit') {
-    // 00. The route origin of a closed route (Toolpath ON): drag it along
-    // its printable route
-    const rm = hitTestRouteMarker(wx, wy);
-    if (rm) {
-      if (rm.kind === 'origin') startOriginDrag(rm);
-      else setStatus('This route is OPEN (its start and end differ): it has no route origin to move.');
-      return;                       // never falls through to the geometry beneath
-    }
+    // INTERACTION PRIORITY: editable design handles outrank the toolpath
+    // overlay. START / END markers (and arrows) are diagnostics only — they
+    // never take the pointer; a closed route's ORIGIN is draggable, but only
+    // after the selected opening's / path's handles and opening gaps.
     // 0. Resize handles of the selected opening
     if (selectedOpeningId) {
       const op = layer.openings.find(o => o.id === selectedOpeningId);
@@ -2087,6 +2084,11 @@ function onMouseDown(e) {
                       orig: { center_s: op.center_s, width: op.width } };
       return;
     }
+
+    // 1c. The route origin of a closed route (Toolpath ON): drag it along
+    // its printable route (START / END of an open route: not interactive)
+    const rm = hitTestRouteMarker(wx, wy);
+    if (rm && rm.kind === 'origin') { startOriginDrag(rm); return; }
 
     // 2. Hit test any path
     const pid = hitTestPath(wx, wy);
@@ -2244,6 +2246,7 @@ document.addEventListener('keyup', e => {
 });
 
 document.addEventListener('keydown', e => {
+  if (currentWorkspace !== 'designer') return;     // Designer shortcuts only in the Designer
   if (e.key === ' ' && !_isTyping()) {             // Space held: pan mode
     if (e.preventDefault) e.preventDefault();
     spaceDown = true;
@@ -2883,12 +2886,16 @@ function _alignLabel(align, closed) {
   const a = (!align || align === 'auto') ? (closed ? 'inside' : 'center') : align;
   return Object.keys(ALIGN_UI).find(k => ALIGN_UI[k] === a) || (closed ? 'Inside' : 'Centered');
 }
+// Wall Thickness semantics: > 0 = a thick architectural wall; 0 = a SINGLE-
+// BEAD path (physical rules: its return-lane solution; never lattice). A path
+// in a thick-walled network inherits the network wall (path.wall = null) until
+// it overrides it — `{ thickness: 0 }` is the explicit single-bead override.
 function _effectiveWall(path) {
-  const own = path.wall && path.wall.thickness > 0 ? path.wall : null;
-  if (own) return { wall: own, from: 'path' };
   const net = _networkOf()[path.id];
   const nw = net ? _netWallFor(net.ids) : null;
-  return nw ? { wall: nw, from: 'network', net } : { wall: null, from: null };
+  if (path.wall && path.wall.thickness > 0) return { wall: path.wall, from: 'path', net, nw };
+  if (path.wall && nw) return { wall: null, from: 'single', net, nw };
+  return nw ? { wall: nw, from: 'network', net, nw } : { wall: null, from: null, net, nw };
 }
 
 function _addSubTitle(panel, text, color) {
@@ -2932,13 +2939,22 @@ function _addWallRows(panel, path) {
   }
   const own = eff.wall;
   addPropRowNum(panel, 'Wall Thickness', 'wall-t', own ? own.thickness : 0, v => {
-    path.wall = v > 0 ? { thickness: v, align: (path.wall && path.wall.align) || 'auto',
-                          print_reference: !!(path.wall && path.wall.print_reference) } : null;
+    const align = (path.wall && path.wall.align) || 'auto';
+    // 0 inside a thick-walled network = the explicit SINGLE-BEAD override
+    // (not "inherit 10 in again", not a fake epsilon wall, never deleted)
+    path.wall = v > 0 ? { thickness: v, align, print_reference: !!(path.wall && path.wall.print_reference) }
+                      : (eff.nw ? { thickness: 0, align } : null);
     refresh();
-  });
+  }, own ? 'in' : 'in · Single bead');
   if (!own) {
-    _addNote(panel, '0 = a single bead (no wall region). Set a thickness to make this path a wall; ' +
-                    'its faces follow every edit of the path.');
+    _addNote(panel, eff.from === 'single'
+      ? `Single bead — overrides network ${eff.net.label}'s ${eff.nw.thickness} in wall. Printed as one bead ` +
+        '(with Physical rules, an out-and-back return-lane pair); no wall lattice inside it.'
+      : '0 = a single bead (no wall region, no lattice). Set a thickness to make this path a wall; ' +
+        'its faces follow every edit of the path.');
+    if (eff.from === 'single') {
+      _addButton(panel, `Use network ${eff.net.label} wall instead`, () => { path.wall = null; refresh(); });
+    }
     return;
   }
   addPropRowSelect(panel, 'Wall Alignment', _alignLabel(own.align, path.closed), _alignOptions(path.closed), v => {
@@ -3323,6 +3339,25 @@ function _infillStatus(f) {
   return info.status;
 }
 
+// The lineage's SHARED lattice (Layer Designs): who shares it, where its
+// definition lives, and any jamb that cannot close (reported, never hidden).
+function _infillLineage(f) {
+  const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
+  const lin = info && info.lattice && info.lattice.lineage;
+  if (!lin) return null;
+  const names = (lin.members || []).map(_designName).join(', ');
+  let text = `Shared lattice: ${names} print one vertically registered lattice. ` +
+             `Pattern, spacing and variation apply to the whole lineage (defined in ${_designName(lin.owner)}).`;
+  let warn = false;
+  const un = (lin.jambs && lin.jambs.unresolved) || [];
+  if (un.length) {
+    warn = true;
+    text += ` ${un.length} opening end wall${un.length > 1 ? 's' : ''} could not be crossed locally ` +
+            `(${un.map(u => u.why).join('; ')}) — that design's route stays open there.`;
+  }
+  return { text, warn };
+}
+
 function updateInfillList() {
   const el = document.getElementById('infill-list');
   if (!el) return;
@@ -3369,6 +3404,14 @@ function updateInfillList() {
       s.style.color = 'var(--warn)';
       s.textContent = st;
       panel.appendChild(s);
+    }
+    const lin = _infillLineage(f);
+    if (lin) {
+      const n = document.createElement('div');
+      n.className = 'path-type infill-lineage';
+      n.textContent = lin.text;
+      if (lin.warn) n.style.color = 'var(--warn)';
+      panel.appendChild(n);
     }
     const names = _patternsFor(f.kind);
     addPropRowSelectTo(panel, 'Pattern', f.pattern, names, v => {
@@ -3655,7 +3698,17 @@ function buildPayload() {
     cap_corner_radius: layer.cap_corner_radius || 0,
     openings: (layer.openings || []).map(o => ({ ...o })),
     region_overrides: (layer.region_overrides || []).map(r => ({ ...r })),
+    ..._lineagePayload(),
   };
+}
+
+// With several Layer Designs the backend resolves this design's wall lattice
+// through the lineage's SHARED scaffold (layer_design.py) — the same lattice
+// the Assembly prints. One design: nothing is sent (unchanged behaviour).
+function _lineagePayload() {
+  if (typeof project === 'undefined' || !project || project.designs.length < 2) return {};
+  return { lineage: { designs: _designsPayload(), id: project.active,
+                      document: JSON.parse(JSON.stringify(layer)) } };
 }
 
 function updateMetrics(data) {
@@ -3820,12 +3873,37 @@ function toggleBeads(on) {
 
 function onBeadWidthChange() {
   const el = document.getElementById('bead-width');
-  const v = parseFloat(el.value);
-  let w = Math.round((Number.isFinite(v) ? v : _beadWidth()) / BEAD_STEP) * BEAD_STEP;
-  w = Math.max(BEAD_STEP, w);
+  const w = setProjectBeadWidth(el.value);
   el.value = w.toFixed(2);
-  layer.material = { ...(layer.material || {}), bead_width: w };
+}
+
+// BEAD WIDTH is ONE project-wide MATERIAL value (2026-10-06): it lives in the
+// lineage ROOT's document (Base's `material.bead_width`); every Layer Design
+// inherits it and none stores its own (the backend moves a derived design's
+// edit to the root: /api/layer_designs/delta → material_moved). The Designer's
+// Material panel and the Assembly's Physical support both read and write it
+// through these two functions (window.Designer.beadWidth / setBeadWidth).
+function _rootIsActive() {
+  const d = project.designs.find(x => x.id === project.active);
+  return !d || d.parent == null;
+}
+
+function projectBeadWidth() {
+  const m = _rootIsActive() ? layer.material : (project.baseDoc || {}).material;
+  const w = m && +m.bead_width;
+  return w > 0 ? w : BEAD_DEFAULT;
+}
+
+// set it (snapped to the bead step); invalidates the bead rendering and, with
+// physical rules on, every design's geometry (one Designer undo step)
+function setProjectBeadWidth(v) {
+  const x = parseFloat(v);
+  const w = Math.max(BEAD_STEP, Math.round((Number.isFinite(x) ? x : projectBeadWidth()) / BEAD_STEP) * BEAD_STEP);
+  if (!_rootIsActive() && project.baseDoc)
+    project.baseDoc.material = { ...(project.baseDoc.material || {}), bead_width: w };
+  layer.material = { ...(layer.material || {}), bead_width: w };      // the live view (inherits it)
   _applyMaterial();
+  return w;
 }
 
 // PHYSICAL RULES (material.py): Contact Overlap and Return-Lane Overlap are
@@ -4820,6 +4898,7 @@ function _solidActual(f) {
 function _variationEffective(f) {
   const info = ((networkInfo && networkInfo.infills) || []).find(i => i.id === f.id);
   const lat = info && info.lattice;
+  if (lat && lat.lineage) return lat.lineage.variation_effective !== false;   // the shared lattice
   if (!lat || lat.motif === false) return true;            // field fallback: phase applies
   return lat.variation_effective !== false;
 }
@@ -5018,6 +5097,178 @@ function _addWallRelationRows(panel, path) {
 
 let _idCounter = 1;
 function newId() { return 'p' + (_idCounter++); }
+
+// ---------------------------------------------------------------------------
+// WORKSPACES + PROJECT LAYER DESIGNS
+// One application, two workspaces: [Designer] [Assembly]. Switching is a
+// view change; neither workspace's state is touched.
+// The project's LAYER DESIGNS (design_proto/layer_design.py): Base is a full
+// Designer document; a derived design stores only its delta from its
+// parent ({patch, settings}). The Designer edits ONE design at a time (its
+// resolved document is `layer`); leaving a derived design stores its delta
+// (computed Designer-side against the LIVE parent), so inheritance stays
+// live and nothing is copied. Each design keeps its own undo history.
+// Not persisted across page reloads (neither is the Designer).
+// ---------------------------------------------------------------------------
+let currentWorkspace = 'designer';
+const _workspaceHooks = {};       // name → onShow()
+
+function setWorkspace(name) {
+  currentWorkspace = name;
+  for (const w of ['designer', 'assembly']) {
+    const el = document.getElementById('ws-' + w);
+    if (el) el.style.display = w === name ? '' : 'none';
+    const tab = document.getElementById('ws-tab-' + w);
+    if (tab) tab.classList.toggle('active', w === name);
+  }
+  renderDesignTabs();
+  if (name === 'designer') resizeCanvas();
+  if (_workspaceHooks[name]) _workspaceHooks[name]();
+}
+
+const project = {
+  designs: [{ id: 'base', name: 'Base', parent: null }],
+  active: 'base',
+  baseDoc: null,            // Base's document while another design is edited
+  deltas: {},               // derived id → { patch, settings }
+  hist: {},                 // design id → its undo history
+};
+let _designCounter = 1;
+
+async function _post(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify(body) });
+  const data = await res.json();
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
+// The Layer Design list in the form the backend takes (layer_design.py).
+function _designsPayload() {
+  return project.designs.map(d => d.parent == null
+    ? { id: d.id, name: d.name, parent: null,
+        document: JSON.parse(JSON.stringify(project.active === d.id ? layer : project.baseDoc)) }
+    : { id: d.id, name: d.name, parent: d.parent,
+        patch: (project.deltas[d.id] || {}).patch || {}, settings: _withoutBeadWidth((project.deltas[d.id] || {}).settings) });
+}
+
+// a derived design never carries its own bead width (one project value)
+function _withoutBeadWidth(settings) {
+  const s = { ...(settings || {}) };
+  if (s.material && 'bead_width' in s.material) {
+    const { bead_width, ...m } = s.material;
+    if (Object.keys(m).length) s.material = m; else delete s.material;
+  }
+  return s;
+}
+
+// store the delta of the derived design being edited (vs its LIVE parent)
+async function syncActiveDesign() {
+  const d = project.designs.find(x => x.id === project.active);
+  if (!d || d.parent == null) return;
+  const r = await _post('/api/layer_designs/delta',
+                        { designs: _designsPayload(), parent: d.parent, id: d.id,
+                          document: JSON.parse(JSON.stringify(layer)) });
+  project.deltas[d.id] = { patch: r.patch, settings: r.settings };
+  // LATTICE DEFINITION edits (pattern, spacing, variation …) of an inherited
+  // wall infill belong to the LINEAGE: the backend moved them to the design
+  // that owns the infill — take the updated owner(s) back
+  // a BEAD WIDTH edited while viewing the variant belongs to the project (root)
+  const owners = Object.keys(r.lattice_moved || {});
+  if (r.material_moved && !owners.includes(r.material_moved)) owners.push(r.material_moved);
+  for (const owner of owners) {
+    const od = (r.designs || []).find(x => x.id === owner);
+    if (!od) continue;
+    if (od.parent == null) project.baseDoc = od.document;
+    else project.deltas[owner] = { patch: od.patch, settings: od.settings };
+  }
+}
+
+async function designsForBackend() {
+  await syncActiveDesign();
+  return _designsPayload();
+}
+
+function createDerivedDesign(name, parent) {
+  if (!project.designs.some(d => d.id === parent)) throw new Error('unknown parent ' + parent);
+  const id = 'd' + (_designCounter++);
+  project.designs.push({ id, name: (name || '').trim() || `Variant ${_designCounter - 1}`, parent });
+  project.deltas[id] = { patch: {}, settings: {} };
+  renderDesignTabs();
+  return id;
+}
+
+// open another Layer Design in the Designer
+async function editDesign(id) {
+  if (id === project.active || !project.designs.some(d => d.id === id)) return;
+  await syncActiveDesign();
+  project.hist[project.active] = { undo: _hist.undo, redo: _hist.redo, current: _hist.current, bytes: _hist.bytes };
+  if (project.active === 'base' || project.designs.find(d => d.id === project.active).parent == null)
+    project.baseDoc = JSON.parse(JSON.stringify(layer));
+  const target = project.designs.find(d => d.id === id);
+  const doc = target.parent == null ? project.baseDoc
+            : (await _post('/api/layer_designs/document', { designs: _designsPayload(), id })).document;
+  project.active = id;
+  for (const k of Object.keys(layer)) delete layer[k];
+  Object.assign(layer, JSON.parse(JSON.stringify(doc)));
+  const h = project.hist[id] || { undo: [], redo: [], current: null, bytes: 0 };
+  Object.assign(_hist, h);
+  selectedId = null; selectedOpeningId = null; selectedJunction = null;
+  snapHint = null; drawPts = []; highlightPathId = null;
+  routeResult = null; networkInfo = null; derivedPaths = []; printable = [];
+  _syncLayerControls();
+  updatePathList(); updatePropPanel(); updateOffsetList(); updateInfillList(); updateHint();
+  renderDesignTabs();
+  scheduleRefresh();
+  updateUndoButtons();
+  repaint();
+  setStatus(target.parent == null ? `Editing ${target.name}.`
+            : `Editing ${target.name} — derived from ${_designName(target.parent)}: only its differences are stored.`);
+}
+
+// rename: the user-facing name only — the stable id (referenced by every
+// assembly section and by derived designs) never changes
+function renameDesign(id, name) {
+  const d = project.designs.find(x => x.id === id);
+  const n = (name || '').trim();
+  if (!d) return false;
+  if (!n) { setStatus('A Layer Design needs a name — kept "' + d.name + '".'); return false; }
+  d.name = n;
+  renderDesignTabs();
+  return true;
+}
+
+function _designName(id) {
+  const d = project.designs.find(x => x.id === id);
+  return d ? d.name : id;
+}
+
+// Designer header: which Layer Design is being edited (only once there are several)
+function renderDesignTabs() {
+  const el = document.getElementById('design-tabs');
+  if (!el) return;
+  el.innerHTML = '';
+  if (Array.isArray(el.children)) el.children.length = 0;   // (test DOM stub)
+  const show = currentWorkspace === 'designer' && project.designs.length > 1;
+  el.style.display = show ? '' : 'none';
+  if (!show) return;
+  for (const d of project.designs) {
+    const b = document.createElement('button');
+    b.className = 'design-tab' + (d.id === project.active ? ' active' : '');
+    b.textContent = d.name;
+    b.title = d.parent == null ? 'Base design' : `Derived from ${_designName(d.parent)}`;
+    b.onclick = () => editDesign(d.id);
+    el.appendChild(b);
+  }
+}
+
+// The narrow interface the Assembly workspace uses (static/assembly.js).
+window.Designer = {
+  listDesigns: () => project.designs.map(d => ({ ...d, active: d.id === project.active })),
+  designsForBackend, createDerivedDesign, editDesign, renameDesign, setWorkspace,
+  beadWidth: projectBeadWidth, setBeadWidth: setProjectBeadWidth,   // ONE project material value
+  onWorkspaceShow: (name, fn) => { _workspaceHooks[name] = fn; },
+};
 
 // ---------------------------------------------------------------------------
 // Init — blank canvas, auto-routes when first path is added

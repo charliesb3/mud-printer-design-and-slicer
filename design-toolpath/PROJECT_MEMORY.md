@@ -360,13 +360,15 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 ## Current State
 
+**Summary (2026-10-06):** the Designer is checkpointed (5ed967d). On top of it, an UNCOMMITTED Z-phase batch adds Layer Designs (inheritance, shared lineage lattice, project bead width), semantic transforms for the Layer Assembly, and the Assembly subsystem (`layer_assembly/`, own memory). Start with "Z PHASE — CURRENT ARCHITECTURE" below; known open problem: transformed-junction lattice coherence (support findings at moving junctions). Testing tiers: same section → "Testing workflow".
+
 ### Phase 2 — Toolpath / Graph Prototype — COMPLETE
 
 Location: `design-toolpath/toolpath_proto/`. 90 tests passing.
 
 ### Phase 3 — Design Canvas Prototype — 13 steps + six UX passes + wall networks + passes 1–7 (checkpoint 414c283, cleanup 51387d3) + Pass 8 (checkpoint 0898d16)
 
-Location: `design-toolpath/design_proto/`. 1059 tests passing (incl. 8 node UI smoke tests); toolpath_proto 90. Pass 8 + its correction + the wall-region pass were checkpointed in commit 0898d16, still awaiting browser inspection (Pass 8's wall work was manually approved).
+Location: `design-toolpath/design_proto/`. 1070 tests passing (incl. 8 node UI smoke tests); toolpath_proto 90. Pass 8 + its correction + the wall-region pass were checkpointed in commit 0898d16, still awaiting browser inspection (Pass 8's wall work was manually approved).
 
 How to read this file: the pass sections below are kept as HISTORY (newest decisions win). Where a later pass replaced an approach the older text is marked SUPERSEDED. Current behaviour in one paragraph: wall infill = `wall_lattice.py` motifs (corners braced, max unsupported distance, MIRRORED out-and-back with cap V; wave = tangent half sines, smooth); regions too wide to be a wall (thickness > 1.6 × target, provisional) fall back to the `infill.py` field + `route_plan.py` repair; solid infill = `solid.py` (perimeter and infill printed as distinct coherent phases — boundary contacts are ties, one routing hand-off per ring; rectilinear = conventional boustrophedon; serpentine = interconnected web of anti-phase waves touching at alternating apexes; boundary support measured, landings only with a user limit); short travel accepted where the field is split; openings cut through the complete wall: assemblies (Wall Thickness, linked two-path walls) are cut as assemblies; in a wall-infill MATERIAL region (outer boundary minus any number of voids) an opening is a corridor SUBTRACTED from the material, from the clicked face to the opposite face.
 
@@ -705,6 +707,89 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - Both sidebars are 230 px (the old width) and scroll independently, and the page itself never scrolls. The canvas hint now wraps inside the center column instead of being clipped.
 - **Tests:** `test_app.py::TestWorkspaceLayout` checks the left / right / toolbar placement of control ids and the column order. `ui_network_smoke.js` checks that the junction panel renders in its own section, not in the path Properties.
 
+### Z PHASE — CURRENT ARCHITECTURE (Layer Designs, semantic transforms, cross-Z lattice; 2026-10-06, uncommitted, audited for checkpoint)
+
+Read this section for any Layer Design / Assembly-facing Designer work. The Assembly side is in `layer_assembly/PROJECT_MEMORY.md`. Superseded same-day approaches are compressed at the end ("Z-phase history").
+
+**A. Designer pipeline (as implemented; `model.PrintLayer._build_effective`)**
+
+    source paths (+ Corner R, snapping, insets)
+      → trims (sections between contacts; removed intervals cut whole wall assemblies)
+      → wall specs: own WallSpec | Network Wall of the source network | single bead
+        (explicit Wall Thickness 0 = single bead; physical rules: open / opened single beads → RETURN LANES)
+      → offsets (wall faces) → openings (cut pieces, caps, doorway corridors) → mouth cuts (lanes on single-bead hosts)
+      → wall NETWORK (joins T / hub, arrangement, material regions, junction corners, rounded / mitred fillets)
+      → region infill jobs (transitive reach) → wall lattice (wall_lattice.plan: skeleton → passes → jambs → stations
+        → stitches; or the lineage scaffold clipped to the material; solid / field fallback for other regions)
+      → printable centrelines → routing graph (graph.route_layer, physical: closed circuits, no retrace;
+        odd components paired by visible travel and reported)
+
+**B. Layer Designs (`layer_design.py`)**
+- A Layer Design = a Designer document + id, name, parent. Derived designs store a live delta (`patch` by record id, `settings` one level deep); `derive_delta` is the inverse used when a derived design is edited in the Designer. Record ids survive derivation. Not a feature tree.
+- **Lineage-owned:** the LATTICE DEFINITION (pattern, params, variation) of a wall infill lives in the design that introduced it (`owner`); edits from any member are moved there (`set_document`); descendant overrides are inert; a descendant's own infill on the lineage's wall is a reported conflict. The PROJECT MATERIAL bead width is owned by the lineage root (Base); a derived design never stores one (`/api/layer_designs/delta` moves it: `material_moved`).
+- **One shared lattice per lineage:** a lattice FAMILY (generator + descendants inheriting the infill) prints ONE scaffold, planned once on the generator with all openings removed; every member end wall is a JAMB line (both passes of a doubled run cross at its midpoint; corner jambs replace the corner station; jambs at a junction end end both passes there). Every member prints the scaffold clipped to its material. A family of one is planned normally.
+- **A closed route outranks registration:** `scaffold_verdict` resolves each member with the clipped scaffold and checks closure; a member that cannot close (an opening reaching into another wall's material — the junction is rebuilt, so the member is not "Base minus the opening") is planned ON ITS OWN, reported as `planned_alone` in the lineage diagnostics. The verdict's resolve is reused by `build()`.
+- **Designer = Assembly:** the Designer view resolves through the same library (`app._apply_lineage`, payload `lineage`).
+- **Transformed variants:** `build(design, transforms={source: (k, tx, ty)})` (Assembly transform groups): `semantic_transform.transform_document` moves the sources, the scaffold is planned for the same transforms with CROSS-Z tracking, then the normal pipeline. Caches: `_cache`, `_tbuilds` (LRU 256), content-keyed `_SHARED` (scaffolds, caps, transformed docs, attachments), `_TRACK_MAPS`.
+
+**C. Semantic transforms (`semantic_transform.py`, `source_attribution.py`)**
+- Principle (durable): transform the forms → reconstruct their natural geometry → their new intersections / attachments → rebuild the junction → resolve faces / lattice / routes. A junction is derived geometry, never primary.
+- Closed / free sources take their own transform (sizes scale; wall thickness, offsets, Corner R, opening widths stay physical; opening positions scale with the host).
+- **Explicit connector vs derived junction** (`relations`): an authored open wall attached to forms is a CONNECTOR — regenerated between its transformed attachments (2-point similarity; straight stays straight, a curve keeps its shape); forms that merely INTERSECT have a DERIVED junction — recomputed by the network from the transformed forms, shrinking and disappearing when they separate (`semantic.junctions` [{sources, present}]; no bridge is invented). Attachments come from the untransformed design's coincidence (no persistent constraints yet).
+- `effective_walls(doc)`: the Designer's wall rule at document level (own wall / network wall by source-network membership / single / lanes) for attachments and attribution. (A document-level re-statement of `_wall_offsets` — kept in step by tests.)
+- `source_attribution.attribute(doc, printable, strand_sources)`: faces / caps belong to their source whole (`BuiltLayer.strand_sources`); other vertices by the JUNCTION TERRITORY rule — min over walls of distance to the material centre line / half thickness (miter bisector at a corner; a T branch trimmed at the host face). Used by the Assembly only to SEE groups (colours, finding frames).
+- Identity is exact (`_is_identity`: |k−1| ≤ 1e-9, |t| ≤ 1e-7 → the plain build).
+
+**D. The boundary** — the Designer owns source / wall semantics, junctions, openings / trims, lattice, printable geometry, route topology and the project material. It knows nothing of sections, Z, headers or support. Contract, caching and invalidation: `layer_assembly/PROJECT_MEMORY.md` → "Designer ↔ Assembly contract".
+
+**E. What persists across Z**
+- Lineage scaffold: one per family per transform spec (content-cached), registered across members at one transform.
+- Lattice stations / identity: carried from the UNTRANSFORMED reference plan (not from the layer below) by `wall_lattice` track data: per matched run passes, start side / parity, segment counts, seam, stitch construction, junction PAIRINGS (`partners`, run `uid`).
+- Source identity: source path ids (stable across derived designs and openings) → per-vertex tags.
+- Group membership, support state, headers: Assembly state. Route information does not persist across Z (Route Origin is per design; multi-layer seam planning is future).
+
+**Cross-Z lattice — what is solved once vs per layer**
+- Once per design: untransformed scaffold (+ its track), attachments / relations, effective walls.
+- Per transformed layer (new spec): source transform (~0.05 s), scaffold PLAN for the transformed walls — Delaunay skeleton, route inspection, tracked layout, stitch geometry (~0.55 s), resolve with the clipped scaffold + closure verdict (~0.17 s), attribution (~0.17 s, Assembly adapter).
+- Matching is wall-relative (`_track_map`: reference point → owner source's map). Matched runs keep their choices; PARTIAL when the skeleton changed: unmatched runs planned afresh, pass counts repaired for parity through untracked runs first, carried sides re-searched only if they cannot pair, carried counts honour the requested parity.
+- Correctness-critical: closure (verdict + fallback), containment (dogleg), parity. Merely inefficient: re-planning unchanged topology every layer.
+
+**Transformed-junction lattice — THE remaining problem (precise statement for the next pass)**
+- Symptom: reference stack (`tests/reference_network.py`, 32 layers, Circle 1 / Rect 1 / Rect 2 in three groups scaling, Line 1 unassigned, round junctions, Base then "gaps"): ≈ 51 (zigzag) / 71 (wave) support findings, ~85 % on lattice strands at the Rect 1 ↔ Circle 1 lens and the Rect 1 ↔ Rect 2 crossing; wall bodies stack cleanly; every route closes (4 of 31 variants plan alone at the topology change). The support checker is correct — do not weaken it.
+- Verified causes (by consecutive-layer overlays and plan diffs):
+  1. Junction TRANSITIONS are constructed per layer from discrete choices that flip under small geometric change even when the skeleton is unchanged: the stitch construction out of a junction landing (wave → Hermite → straight → dogleg, the first VALID one), the meeting point on a rounded fillet, the dogleg's centre-line shortcut. Layers 1–7 of the stack (identical topology, fully tracked) still show 3–6 findings each, all at the lens.
+  2. Where a junction region shrinks away (lens runs 10 → 6 → 5), the changed runs are planned afresh (partial tracking) — a legitimate topology change, but the replacement motif is unrelated to the layer below.
+  3. The reference is the untransformed design (layer 0), not the layer below, so drift accumulates with height.
+- Tried and abandoned: a shortest two-strut dogleg (hugs and grazes the fillet → clipping splits it → 21 / 31 layers opened); bisected fillet meeting point (no effect on findings; kept, continuous).
+- Next pass (attack only this): carry the reference lattice GEOMETRY of each junction territory wall-relatively (morph the stations / transition polylines with the owning walls) and re-plan only when the territory topology changes; a dedicated shrinking-junction transition motif; track against the previous layer's plan if per-layer chaining is acceptable for caching (variants would then depend on the stack below).
+
+**Performance (benchmark `python -m layer_assembly.bench`, 8 workers, this Mac; 2026-10-06 audit)**
+  | layers | cold total | variant geometry | support | warm total (overhang edit) |
+  |---|---|---|---|---|
+  | 49 | 8.9 s | 6.6 s | 1.2 s | 1.07 s |
+  | 99 | 14.5 s | 11.5 s | 2.4 s | 2.08 s |
+  | 299 | 43.5 s | 35.5 s | 7.4 s | 6.34 s |
+- (Before stabilization pass 2: 8.2 / 12.7 / 38.3 s cold — the closure verdict and derived-junction detection added ~15 %.) Per variant ≈ 0.95 s CPU: scaffold plan 0.53–0.60 s, resolve with the clipped scaffold + closure verdict 0.16–0.19 s, source attribution 0.17–0.19 s, source transform + derived junctions 0.02–0.03 s (design relations cached in the audit; was 0.05). Serialisation and layer resolution < 0.02 s. Support analysis ≈ 21–25 ms per layer and is the whole warm-edit cost. The Assembly path does not route (only the closure graph); full routing happens in the Designer view. Browser render of a 32-layer stack ≈ 10 ms.
+- Top bottlenecks (evidence): 1) the per-variant scaffold PLAN (≈ 60 % of variant time) — topology is re-planned although usually unchanged; 2) support analysis on warm edits; 3) attribution (could be done from the build's own face geometry instead of re-deriving material centre lines).
+- Known accidental recomputation (documented, not changed): each worker process rebuilds the untransformed reference scaffold / track map once (×8 in a cold run).
+
+**Testing workflow (decision, audit)** — tiers:
+- TIER A (while editing one module; seconds): the module's own test file, e.g. `design_proto/.venv/bin/python -m pytest design_proto/tests/test_reference_network.py -k sweep`, `… layer_assembly/tests/test_overlap.py`, `… design_proto/tests/test_networks.py -k ui_network_smoke`, `… layer_assembly/tests/test_assembly_ui.py`.
+- TIER B (after a coherent subsystem change): `design_proto/.venv/bin/python -m pytest design_proto/tests -q` (Designer) or `… layer_assembly/tests -q` (Assembly); for wall_lattice / layer_design / semantic changes also `layer_assembly/tests/test_semantic_groups.py test_reference_network_stack.py`.
+- Measured (2026-10-06 audit, serial): design_proto 1143 tests 188 s; layer_assembly 124 tests 84 s; toolpath_proto 90 tests 0.2 s; pi-interface 78 tests 1.3 s. Slowest: `test_cross_z_tracking.py` (2 tests ≈ 23 s), `test_reference_network.py` (≈ 45 s total), Assembly `test_semantic_groups.py::…strongly_scaled…` and `test_reference_network_stack.py` (≈ 25 s each). Real-Designer Assembly tests are ≈ 90 % of the Assembly suite time.
+- TIER C (checkpoint only): Designer + Assembly + `toolpath_proto` (`cd toolpath_proto && .venv/bin/python -m pytest -q`) + `pi-interface` (`cd pi-interface && .venv/bin/python -m pytest -q`). The JS smoke tests run inside the Python suites (node required). The four suites use separate venvs / processes and can run in parallel.
+- All commands from `design-toolpath/` unless noted. Pure Assembly tests never import the Designer.
+
+**Z-phase history (superseded the same day — details in git history)**
+- Lattice inheritance: parent's lattice clipped (derived layer stayed open at the cut) → generated-original reference → single-pass scaffold + straight brace on jambs (rejected: 2 print runs) → doubled jammed runs crossing at jamb midpoints (current). "Unresolvable jamb → route stays open, reported" → planned-alone fallback (closed route first).
+- Lattice definition per design → owned by the lineage (editing "gaps" changed only gaps and stacked different lattices).
+- Transform groups as per-vertex placement of resolved beads → semantic transforms (connecting walls stretched / tore).
+- Junction ownership: nearest attributed face → material-centreline / half-thickness territory; network walls were seen only on their anchor path (fixed: `effective_walls`).
+- Cross-Z: per-layer independent planning (stitch counts oscillated) → full tracking against the untransformed plan (applied even to changed skeletons → 20 / 31 open variants on the reference stack) → partial tracking with parity repair + pairing tracking.
+- Wall Thickness 0 used to mean "inherit the network wall again" in the UI → explicit single-bead override.
+- Round-junction scaffold failures: fillet arcs taken as end walls; stitches leaving a concave fillet; jambs just short of a junction end; disconnected lattice systems in stand-alone plans — all fixed (`tests/test_reference_network.py`).
+- Assembly tool: `layer_assembly/bench.py`. Fixtures: `tests/multi_opening_fixtures.py` (rect + line + circle), `tests/reference_network.py` (PRIMARY realistic integration fixture).
+
 ### Trim ghost fix (2026-10-06, Designer checkpoint 2026-10-06)
 
 - **Bug (manual):** trimmed circle × rectangle (10 in walls); selecting the rectangle drew a ghost of the untrimmed rectangle: selection outline, hover highlight, outline handles, and hit-testing on trimmed-away sections.
@@ -835,6 +920,7 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
   - `material.py` defines `MaterialSpec(bead_width=3.0)`, held as `PrintLayer.material` (JS: `layer.material.bead_width`). It is design state, so it is undoable and sent in every payload, ready to become a geometry input.
   - **Bead display** (on/off, default OFF) is a VIEW toggle, like Arrows and Dimensions.
   - Clear All keeps the material.
+- **Bead width is ONE project-wide value (2026-10-06, decision):** owned by the lineage root's document (Base's `material.bead_width`); derived Layer Designs never store their own (`/api/layer_designs/delta` moves such an edit to the root: `material_moved`). The Material panel and the Assembly's Physical support edit the same value (`projectBeadWidth` / `setProjectBeadWidth`, `window.Designer.beadWidth / setBeadWidth`). Details and invalidation: `layer_assembly/PROJECT_MEMORY.md` → "Designer ↔ Assembly contract".
 - **Footprint:** the centerline swept by a disk of the bead width (Minkowski sum). This gives half-width w/2, ROUND ends and round joins; a straight open line is a capsule, and closed paths have no ends.
   - Python: `material.in_footprint`.
   - Canvas: round-cap, round-join strokes of the bead width, all drawn into ONE offscreen layer and composited once at α 0.55, under the centerlines. Overlaps union with no seams, and the centerlines and toolpath stay visible on top.
@@ -971,24 +1057,23 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
 
 ## Next Steps
 
-0. Designer browser inspection of the Pass 8 correction (solid playback order, rectilinear, serpentine web, wall-authoring UI) and of the wall-region pass (doorways into rooms, derived-face display). Pass 8 + correction + wall regions are checkpointed in 0898d16.
-0a. Designer manual verification in the browser of everything since wall networks (all in checkpoint 414c283): pass 7 (corner braces, max unsupported, out-and-back density, cap V, solid boundary contact + serpentine, wall relationships, Angle unit), the wall lattice (Target Spacing sweeps, dead-end out-and-back, four straight / curved arms, junction congestion, openings clear) and the design-model pass (offset sources, undo / redo, duplicate-rotate-snap, region / voids, insets, wall vs solid).
-0b. Deferred housekeeping from the checkpoint audit (each its own reviewed pass): make the vacuous `return_path` test helper real; SolidPlan.connectors / solid_link leftovers; request sequencing in the UI; `~` in path ids; exact-float matching; history / restore gaps; inset previews after sidebar edits; cap-style alias mismatch; float(None) payload robustness; the unused routing-graph build; geometry-helper / tolerance consolidation; splitting `wall_lattice.plan()` and `_build_effective`; feature-named test files.
-0c. Known issue (deferred, do not fix without a reviewed pass): the order of the wide-region fallback's `route_plan.corrections` diagnostic list is non-deterministic. The same entries come out in a different order depending on unrelated prior process state (likely iteration over an object-identity set / dict). Geometry and toolpath are unaffected. Confirmed present in the unmodified checkpoint 414c283; not introduced by the cleanup.
-0h. NEXT: decide the SOLID-infill vs closed-route conflict (see Open Questions); then the physical rules for the wide-region field fallback.
-0g. *(Reviewed manually 2026-10-06 — Designer checkpoint.)* Route Origin, bead / vector rendering, zoom / pan, Wall Network section.
-0f. Designer browser review of the physical rules (`physicalFixture(...)`; vary Contact / Return-lane overlap with Beads on), then decide the solid-infill closed-route question. *(Reviewed manually 2026-10-06 — Designer checkpoint.)*
-0e. Designer browser review of the Material / Bead view (Beads toggle; Bead width), then decide the first physical rule (Contact Overlap). *(Reviewed manually 2026-10-06 — Designer checkpoint.)*
-0d. Designer browser review of the Design / Print sidebar split (Wall Geometry and junctions now on the Design side) and of the Trim tool (`trimFixture(...)` fixtures; see the Trim section). Then use the new layout to judge which design tools are missing, for example the nested-shapes / standard interior wall thickness workflow (discussed, NOT implemented). *(Reviewed manually 2026-10-06 — Designer checkpoint.)*
-1b. Multi-select + group transforms; copy attached offsets / infills with a path; travel-order optimisation.
-2. Calibrate CLEARANCE_RADIUS / degree caps / limits from real bead width.
-3. Persistent attachment constraints; then the Z / layer planner using RouteEnds.
+Current priority order (Z phase, uncommitted batch audited 2026-10-06):
+
+1. **Manual browser review of the Z-phase batch, then the checkpoint commit** (Layer Designs, shared lineage lattice, Assembly workspace, semantic transform groups, support, five columns, Wall Thickness 0 = single bead).
+2. **Transformed-junction lattice coherence** — the one open geometry problem; precise statement in "Z PHASE — CURRENT ARCHITECTURE → Transformed-junction lattice". Attack only this in its own pass.
+3. **Cheaper transformed layers:** reuse stable topology (carry stations / geometry instead of a full plan per variant); share the untransformed tracking reference across worker processes.
+4. Decide whether the run-scale doubling of jammed lattice runs is acceptable on the machine; persistent attachment constraints (also needed by semantic transforms); a transition motif when a tracked count must change.
+5. Decide the SOLID-infill vs closed-route conflict (Open Questions); physical rules for the wide-region field fallback.
+6. Deferred housekeeping (each its own reviewed pass): the vacuous `return_path` test helper; SolidPlan.connectors / solid_link leftovers; request sequencing in the UI; `~` in path ids; exact-float matching; history / restore gaps; inset previews after sidebar edits; cap-style alias mismatch; float(None) payload robustness; the unused routing-graph build; geometry-helper / tolerance consolidation; feature-named test files. Known non-deterministic order of `route_plan.corrections` (geometry unaffected; present since 414c283).
+7. Multi-select + group transforms; copying attached offsets / infills with a path; travel-order optimisation; calibrate CLEARANCE_RADIUS / degree caps from the real bead width; the Z / layer planner using RouteEnds.
+
+(Browser reviews of Pass 8, wall regions and pass 7 — items "0 / 0a" before the Designer checkpoint — remain open; the checkpoint-reviewed items were completed 2026-10-06.)
 
 ---
 
 ## Last Updated
 
-2026-10-06
+2026-10-06 — CHECKPOINT AUDIT of the uncommitted Z-phase batch: architecture documented ("Z PHASE — CURRENT ARCHITECTURE" replaces seven same-day sections; history compressed), dead / superseded code removed (legacy Assembly `min_overlap` input, attribution strand-prefix fallback, per-vertex placement helper, unused helpers), stale docstrings corrected, design relations cached, test tiers defined. Before it, the same day: Z phase (Layer Designs, layer_assembly subsystem), shared lineage lattice, semantic transform groups, two stabilization passes (identity, closure on the reference network, single-bead semantics, derived junctions vs connectors, cross-Z tracking). Uncommitted, awaiting manual browser approval.
 
 DESIGNER CHECKPOINT (commit "Designer checkpoint: trim, physical beads, closed routing and canvas tools", 2026-10-06, pushed). Design / Print / Material sidebars, persistent Wall Network, Trim (+ ghost fix), rounded-junction assemblies, Material / Bead with Contact Overlap and Return-Lane Overlap, physical no-retrace closed routes, attached-branch return geometry, Route Origin, blue bead / vector rendering, zoom / pan / Fit / 100 %. All reviewed manually batch by batch. Tests: design_proto 1059 (incl. 8 JS UI smoke tests), toolpath_proto 90, pi-interface 78 — all green.
 

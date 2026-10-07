@@ -49,6 +49,76 @@
     }
     header h1 { font-size: 12px; font-weight: 600; color: var(--text-bright); letter-spacing: 0.06em; }
 
+    /* ---- WORKSPACES ---- */
+    .workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .ws-tabs, .design-tabs { display: flex; gap: 2px; }
+    .ws-tab, .design-tab {
+      padding: 4px 14px; background: #1c1c1c; border: 1px solid #333; color: #888; cursor: pointer;
+      font-family: inherit; font-size: 11px; border-radius: 3px;
+    }
+    .ws-tab.active { background: #1c3a5a; border-color: var(--accent); color: var(--accent); }
+    .design-tabs { margin-left: 12px; padding-left: 12px; border-left: 1px solid #333; }
+    .design-tab { padding: 3px 10px; font-size: 10px; }
+    .design-tab.active { background: #252525; border-color: #666; color: #e0e0e0; }
+    .design-tab .dt-parent { color: #666; margin-left: 4px; }
+    /* assembly */
+    .asm-designs-col { width: 190px; }
+    .asm-stack-col { width: 230px; border-left: 1px solid #222; }
+    .asm-transform-col { width: 240px; }
+    .asm-stack-col .sidebar-scroll { overflow-y: auto; }
+    .asm-kv { font-size: 10px; color: #999; line-height: 1.6; margin: 2px 0 4px; }
+    .asm-kv .asm-kv-row { display: flex; justify-content: space-between; }
+    .asm-kv .asm-kv-row b { color: #ddd; font-weight: normal; }
+    .asm-kv .asm-kv-hint { color: #777; margin-top: 2px; }
+    #asm-physical .prop-label { width: 110px; }
+    .asm-support-card details { margin-top: 3px; color: #999; font-size: 10px; }
+    @media (max-width: 1280px) {
+      #ws-assembly .main { flex-wrap: wrap; }
+      .asm-designs-col, .asm-stack-col { width: 25%; max-height: 40vh; }
+      #asm-preview-wrap { flex-basis: 100%; min-height: 60vh; }
+    }
+    .asm-design { padding: 6px 8px; border: 1px solid #2a2a2a; border-radius: 3px; margin-bottom: 4px; }
+    .asm-design .asm-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+    .asm-design .asm-meta { color: #666; font-size: 10px; margin-top: 2px; }
+    .asm-section { border: 1px solid #333; border-left-width: 4px; border-radius: 3px; padding: 6px 8px; margin: 4px 0; background: #1b1b1b; }
+    .asm-section .asm-row, .asm-support-card .asm-row, #asm-assembly-tf .asm-row { display: flex; gap: 6px; align-items: center; margin: 2px 0; }
+    .asm-section .asm-row select, .asm-section .asm-row input,
+    .asm-support-card .asm-row input, #asm-assembly-tf .asm-row select, #asm-assembly-tf .asm-row input { flex: 1; min-width: 0; }
+    #asm-assembly-tf .prop-label { width: 52px; }
+    #asm-assembly-tf .asm-tf-head { flex-wrap: wrap; }
+    #asm-assembly-tf .asm-tf-head .asm-calc { flex-basis: 100%; }
+    .asm-section .prop-label { width: 52px; }
+    .asm-tf { border-top: 1px dashed #333; margin-top: 4px; padding-top: 4px; }
+    .asm-tf-head .mini-btn { background: #222; color: #999; border-color: #333; }
+    .asm-design .asm-name { flex: 1; min-width: 0; }
+    .asm-support-card { border: 1px solid #333; border-left: 3px solid #555; border-radius: 3px; padding: 5px 7px; margin: 6px 0; font-size: 11px; }
+    .asm-support-card.asm-needs_header { border-left-color: #ff4d4d; }
+    .asm-support-card.asm-needs_header .asm-support-title { color: #ff6b6b; }
+    .asm-support-card.asm-overridden { border-left-color: #f0a030; border-left-style: dashed; }
+    .asm-support-card.asm-overridden .asm-support-title { color: #f0a030; }
+    .asm-support-card.asm-supported { border-left-color: #888; }
+    .asm-support-card.asm-insufficient_support { border-left-color: #c56cf0; }
+    .asm-support-card.asm-insufficient_support .asm-support-title { color: #d68df5; }
+    .asm-physical { border-top: 1px solid #2a2a2a; margin-top: 6px; padding-top: 4px; }
+    .asm-physical .asm-calc, #asm-assembly-tf .asm-calc { color: #888; font-size: 10px; }
+    #asm-assembly-tf .asm-center.asm-selected { background: #262a33; border-radius: 3px; }
+    #asm-assembly-tf .asm-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+    #asm-assembly-tf .asm-walls .prop-label { width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #asm-assembly-tf .mini-btn.active { background: #4a9eff; color: #fff; }
+    .asm-support-card.asm-header { border-left-color: #d8d8dc; }
+    .asm-support-title { font-weight: bold; flex: 1; }
+    .asm-support-card .prop-label { width: 64px; }
+    .asm-hist { display: flex; gap: 6px; margin-bottom: 6px; }
+    .asm-bar { padding: 6px 10px 0; border-bottom: 1px solid #2a2a2a; }
+    .asm-hist .mini-btn:disabled { opacity: 0.4; }
+    #asm-assembly-tf .asm-center .prop-label { width: 28px; }
+    .asm-section .asm-calc { color: #999; font-size: 10px; }
+    .asm-section .asm-diff { color: #c9a35a; }
+    .asm-totals { margin: 8px 0; font-size: 11px; color: #aaa; line-height: 1.6; }
+    .asm-plate { text-align: center; color: #555; font-size: 10px; margin: 6px 0 10px; }
+    .asm-preview-wrap { padding: 0; }
+    .asm-view-controls { top: 10px; right: 10px; }
+
     /* ---- TOOLBAR ---- */
     .toolbar {
       display: flex;
@@ -381,8 +451,17 @@
 
 <header>
   <h1>DESIGN CANVAS</h1>
+  <!-- WORKSPACES: one application, separate workspaces (view switch only —
+       neither workspace's state is touched by switching) -->
+  <div class="ws-tabs" id="ws-tabs">
+    <button class="ws-tab active" id="ws-tab-designer" onclick="setWorkspace('designer')">Designer</button>
+    <button class="ws-tab" id="ws-tab-assembly" onclick="setWorkspace('assembly')">Assembly</button>
+  </div>
+  <!-- the Layer Design being edited (shown once derived designs exist) -->
+  <div class="design-tabs" id="design-tabs" style="display:none"></div>
 </header>
 
+<div class="workspace" id="ws-designer">
 <div class="toolbar">
   <div class="tool-group">
     <button class="tool-btn active" id="tool-edit" onclick="setTool('edit')">Edit</button>
@@ -625,8 +704,99 @@
   </div>
 </div>
 
+</div><!-- /ws-designer -->
+
+<!-- ASSEMBLY workspace (design-toolpath/layer_assembly): which Layer Design
+     at which Z, by physical height; stack preview. UI: static/assembly.js -->
+<div class="workspace" id="ws-assembly" style="display:none">
+  <div class="main">
+    <div class="sidebar sidebar-left asm-designs-col">
+      <div class="sidebar-head">Layer Designs</div>
+      <div class="sidebar-scroll">
+        <div class="path-type">Reusable 2D layer designs, edited in the Designer tab. A derived design inherits
+          everything from its parent and keeps only its own differences.</div>
+        <div id="asm-designs"></div>
+        <div class="asm-new">
+          <div class="section-title">New derived design</div>
+          <div class="prop-row"><span class="prop-label">Name</span>
+            <input class="prop-input" id="asm-new-name" placeholder="e.g. Door Gap"></div>
+          <div class="prop-row"><span class="prop-label">Parent</span>
+            <select class="prop-input" id="asm-new-parent"></select></div>
+          <button class="add-btn" id="asm-new-btn" onclick="asmNewDerived()">+ New Derived Design</button>
+        </div>
+      </div>
+    </div>
+    <!-- LAYERS: what is stacked, in what order, for how much height -->
+    <div class="sidebar sidebar-left asm-stack-col asm-layers-col" id="asm-col-layers">
+      <div class="sidebar-head">Layers</div>
+      <div class="asm-bar">
+        <div class="asm-hist">
+          <button class="mini-btn" id="asm-undo" onclick="asmUndo()" title="Assembly undo (Cmd/Ctrl-Z) — separate from the Designer's" disabled>↶ Undo</button>
+          <button class="mini-btn" id="asm-redo" onclick="asmRedo()" title="Assembly redo (Cmd/Ctrl-Shift-Z)" disabled>↷ Redo</button>
+        </div>
+      </div>
+      <div class="sidebar-scroll asm-pane" id="asm-pane-layers">
+        <div class="prop-row" title="ONE global layer height; every section's layer count is derived from its physical height">
+          <span class="prop-label">Layer height</span>
+          <input type="number" class="prop-input" id="asm-layer-height" value="1.5" min="0.05" step="0.05"
+                 onchange="asmSetLayerHeight(this.value)">
+          <span class="prop-unit">in</span>
+        </div>
+        <div class="asm-totals" id="asm-totals"></div>
+        <button class="add-btn" onclick="asmAddSection()">+ Add Section (on top)</button>
+        <div id="asm-sections"></div>
+        <div class="asm-plate">▁▁ build plate · z = 0 ▁▁</div>
+        <div class="path-type" id="asm-warnings" style="color:var(--warn)"></div>
+      </div>
+    </div>
+    <!-- ASSEMBLY TRANSFORM: assembly-wide transform, transform centres / groups,
+         geometry assignment, regenerated connectors -->
+    <div class="sidebar sidebar-left asm-stack-col asm-transform-col" id="asm-col-transform">
+      <div class="sidebar-head">Assembly Transform</div>
+      <div class="sidebar-scroll asm-pane" id="asm-pane-transform">
+        <div id="asm-assembly-tf"></div>
+      </div>
+    </div>
+    <!-- STRUCTURE / SUPPORT: physical support (material + overhang), findings, headers -->
+    <div class="sidebar sidebar-left asm-stack-col asm-structure-col" id="asm-col-structure">
+      <div class="sidebar-head">Structure</div>
+      <div class="sidebar-scroll asm-pane" id="asm-pane-structure">
+        <div class="asm-physical" id="asm-physical">
+          <div class="section-title">Physical support</div>
+          <div class="prop-row" title="Width of ONE deposited mud bead — the project material (the same value as the Designer's Material / Bead). Changing it rebuilds every design.">
+            <span class="prop-label">Bead width</span>
+            <input type="number" class="prop-input" id="asm-bead-width" value="3" min="0.25" step="0.25"
+                   onchange="asmSetBeadWidth(this.value)">
+            <span class="prop-unit">in</span>
+          </div>
+          <div class="prop-row" title="Printability constraint (not a transform): how far a bead may hang past the bead below (0 … bead width)">
+            <span class="prop-label">Maximum overhang</span>
+            <input type="number" class="prop-input" id="asm-max-overhang" value="1.5" min="0" step="0.0625"
+                   onchange="asmSetMaxOverhang(this.value)">
+            <span class="prop-unit">in</span>
+          </div>
+          <div class="asm-kv" id="asm-overlap-note"></div>
+        </div>
+        <div id="asm-support"></div>
+      </div>
+    </div>
+    <div class="canvas-wrap asm-preview-wrap" id="asm-preview-wrap">
+      <canvas id="asm-canvas"></canvas>
+      <div class="view-controls asm-view-controls">
+        <button class="tool-btn" onclick="asmViewPreset('iso')">Iso</button>
+        <button class="tool-btn" onclick="asmViewPreset('front')">Front</button>
+        <button class="tool-btn" onclick="asmViewPreset('side')">Side</button>
+        <button class="tool-btn" onclick="asmViewPreset('top')">Top</button>
+        <button class="tool-btn" onclick="asmViewPreset('fit')">Fit</button>
+      </div>
+      <div class="canvas-hint">Drag: orbit · Shift / right-drag: pan · Wheel: zoom</div>
+    </div>
+  </div>
+</div>
+
 <div id="status-bar">Ready.</div>
 
 <script src="/static/app.js"></script>
+<script src="/static/assembly.js"></script>
 </body>
 </html>

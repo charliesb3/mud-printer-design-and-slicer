@@ -206,6 +206,19 @@ eval(src + `
                                            c.textContent.startsWith('Use network'));
   useNet.onclick();
   check(P.wall === null, 'back to inheriting the network wall');
+  // --- Wall Thickness 0 inside a thick-walled network = SINGLE BEAD (stabilization
+  // 2026-10-06): an explicit override, not "inherit 10 in again", never deleted
+  panelEl.children.find(c => c.textContent === 'Override for this path').onclick(); rebuild();
+  const zRow = findRow('Wall Thickness');
+  zRow.children[1].value = '0'; zRow.children[1].onchange(); rebuild();
+  check(P.wall && P.wall.thickness === 0, '0 stores the explicit single-bead override');
+  check(findRow('Wall Thickness').children[2].textContent.includes('Single bead'), '0 reads "Single bead"');
+  check(panelEl.children.some(c => (c.textContent || '').startsWith('Single bead — overrides network N1')),
+        'the note explains the single-bead override and its return lanes / no lattice');
+  check(buildPayload().source_paths.find(s => s.id === P.id).wall.thickness === 0,
+        'the payload carries the single-bead override');
+  panelEl.children.find(c => typeof c.textContent === 'string' && c.textContent.startsWith('Use network')).onclick();
+  check(P.wall === null, 'single bead → back to the network wall');
   // --- path picker: hover / arrow keys highlight the candidate path
   const pk = addPathPickerRow({ appendChild() {} }, 'Source', P.id, id => { picked = id; });
   let picked = null;
