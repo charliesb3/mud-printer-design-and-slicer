@@ -63,18 +63,24 @@ def test_corner_fixture_quality(name):
 @pytest.mark.parametrize('name', [n for n in WF.CORNER_FIXTURES if 'rounded' not in n])
 def test_every_sharp_corner_is_supported(name):
     # every sharp vertex of the wall boundary (wall corners, junction
-    # corners, cap corners) has a lattice landing within one thickness —
-    # wall corners themselves are landed exactly (brace / pinned points)
+    # corners, cap corners) has a lattice landing within one thickness.
+    # (2026-10-07, canonical corner motifs: a single-pass corner is landed
+    # on BOTH sides of the outer and the inner corner — MOTIF_OUTER /
+    # MOTIF_INNER × t away — a double-pass corner exactly at both corner
+    # points; pass 7 landed every wall corner exactly with one brace.)
     L, q = CM(name)
     cs = RQ.corner_support(L)
     assert cs, 'fixture has corners'
     assert max(c[3] for c in cs) <= q['thickness'] + 1e-6
     regs = _regions(L)
     if any(run['corners'] for r in regs for run in r['runs']):
-        assert min(c[3] for c in cs) < 1e-6
+        assert min(c[3] for c in cs) <= WL.MOTIF_OUTER * q['thickness'] + 1e-6
 
 
 def test_rounded_corners_are_braced_at_their_apexes():
+    # (2026-10-07) a tight rounded corner is still a CORNER: its canonical
+    # single motif lands both sides of the outer arc's apex and of the
+    # inner arc's apex (pass 7 landed the two apexes with one brace)
     L, q = CM('rounded rect wall')
     paths, _ = L._build_effective()
     lands = [p for x in paths if getattr(x, 'treatment_id', '') == 'infill' for p in x.sample_points()]
@@ -83,8 +89,14 @@ def test_rounded_corners_are_braced_at_their_apexes():
         k = math.sqrt(0.5)
         outer_apex = Vec2(cx + sx * 20 * k, cy + sy * 20 * k)
         inner_apex = Vec2(cx + sx * 10 * k, cy + sy * 10 * k)
-        assert min(outer_apex.dist(p) for p in lands) < 1.5
-        assert min(inner_apex.dist(p) for p in lands) < 1.5
+        near_o = [p for p in lands if 1.0 < outer_apex.dist(p) < 0.5 * q['thickness'] and
+                  abs(math.hypot(p.x - cx, p.y - cy) - 20) < 0.3]
+        near_i = [p for p in lands if 1.0 < inner_apex.dist(p) < 0.8 * q['thickness'] and
+                  abs(math.hypot(p.x - cx, p.y - cy) - 10) < 0.5]
+        # one landing either side of each apex (the motif flanks it)
+        side = lambda p, a: (p.x - a.x) * sy - (p.y - a.y) * sx
+        assert {side(p, outer_apex) > 0 for p in near_o} == {True, False}
+        assert {side(p, inner_apex) > 0 for p in near_i} == {True, False}
 
 
 @pytest.mark.parametrize('name', ['rect wall', 'rect with one void', 'acute (triangle) wall',
@@ -98,15 +110,14 @@ def test_corner_support_does_not_depend_on_spacing(name):
 
 
 def test_corner_brace_is_a_diagonal_not_a_box():
-    # single-pass ring: at each corner the lattice goes outer corner ↔ inner
-    # corner (one diagonal brace), not round a little box
+    # SUPERSEDED 2026-10-07 (canonical corner motifs): a single-pass corner
+    # is no longer one outer ↔ inner diagonal but the motif Ia → Oa → Ob → Ib
+    # (tests/test_corner_motifs.py). What remains: no tiny box / bow tie
+    # cell at the corner, and every motif landing on a face.
     L, q = CM('rect wall')
-    paths, _ = L._build_effective()
-    segs = [(a, b) for x in paths if getattr(x, 'treatment_id', '') == 'infill'
-            for a, b in zip(x.sample_points(), x.sample_points()[1:])]
-    for O, I in ((Vec2(100, 140), Vec2(110, 150)), (Vec2(300, 260), Vec2(290, 250))):
-        assert any({(round(a.x, 6), round(a.y, 6)), (round(b.x, 6), round(b.y, 6))} ==
-                   {(O.x, O.y), (I.x, I.y)} for a, b in segs)
+    assert q['tiny_cells'] == 0 and q['congestion_hotspots'] == 0
+    regs = _regions(L)
+    assert sum(r['corner_motifs']['single'] for r in regs) == 4
 
 
 # ---------------------------------------------------------------------------

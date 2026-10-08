@@ -196,6 +196,42 @@ eval(src + `
   layer.openings = JSON.parse(opBefore);
   check(routeMarkers(routeResult.moves).map(m => m.kind).join() === 'start,end', 'an open route still shows Start / End');
 
+  // ---- MOVE START mode (2026-10-07): starts take the pointer first ----
+  routeResult = { moves: rot, metrics: {}, closure: {} };
+  layer.route_origins = [];
+  toggleMoveStart(true);
+  check(moveStartMode && document.getElementById('btn-move-start').classList !== undefined, 'Move Start toggles on');
+  onMouseDown(ev(201, 141));                       // the origin sits ON the opening
+  check(originDrag && !openingDrag && !dragging && !bodyDragging && !rotateDrag,
+        'Move Start: the start on an opening is grabbed, not the opening');
+  onMouseMove(ev(258, 180)); onMouseUp({});
+  check(JSON.stringify(layer.openings) === opBefore && JSON.stringify(layer.source_paths) === geomBefore &&
+        layer.route_origins.length === 1 && layer.route_origins[0].strand === R.id,
+        'Move Start: only the route start moved (geometry and opening untouched)');
+  check(Array.isArray(layer.route_origins[0].pos) && layer.route_origins[0].pos.length === 2 &&
+        buildPayload().route_origins[0].pos.length === 2,
+        'the start stores its position (Parallel Walls put their lane-change seam there)');
+  routeResult = { moves: rot, metrics: {}, closure: {} };
+  layer.route_origins = [];
+  selectedId = null;
+  onMouseDown(ev(150, 259)); onMouseUp({});        // a click on the closed route, away from the marker
+  check(layer.route_origins.length === 1 && Math.abs(layer.route_origins[0].u - 350 / 480) < 0.01 && selectedId === null,
+        'Move Start: clicking a closed route starts it there (no path is selected)');
+  onMouseDown(ev(200, 200)); onMouseUp({});        // empty canvas / inside: nothing happens
+  check(selectedId === null && !openingDrag && !bodyDragging, 'Move Start: no design selection at all');
+  routeResult = { moves: [mv([200, 140], [260, 140], R.id), mv([260, 140], [260, 260], R.id)], metrics: {}, closure: {} };
+  const before = JSON.stringify(layer.route_origins);
+  onMouseDown(ev(200, 141)); onMouseUp({});
+  check(!openingDrag && JSON.stringify(layer.route_origins) === before,
+        'Move Start: an OPEN route Start is explained, not moved (and the opening is not grabbed)');
+  setTool('edit');
+  check(!moveStartMode, 'choosing a tool leaves Move Start');
+  routeResult = { moves: rot, metrics: {}, closure: {} };
+  onMouseDown(ev(201, 141));
+  check(openingDrag && !originDrag, 'after leaving Move Start the normal priority is back (the opening is grabbed)');
+  onMouseUp({});
+  layer.openings = JSON.parse(opBefore);
+
   // ---- solid bead rendering: the printed line IS one blue bead ----
   check(BEAD_ALPHA === 1.0 && BEAD_COLOR === MOVE_COLORS.print, 'bead = the print colour, opaque');
   routeResult = { moves, metrics: {}, closure: {} };

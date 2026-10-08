@@ -64,7 +64,7 @@ eval(src + `
   // ---- a Base design in the Designer ----
   addPrimitive('RectanglePath');                       // (140,140) 120 x 120
   const R = layer.source_paths[0];
-  R.wall = { thickness: 10, align: 'auto', print_reference: false };
+  _wsSetType(_wsNew([R.id]), 'hollow');               // a 10 in wall: Hollow / Skins Only
   layer.material.physical = true;
   historyCheckpoint();
   const designerBefore = JSON.stringify(layer);

@@ -142,7 +142,7 @@ def _track_map(doc0, transforms):
 KEYED = {
     'source_paths': 'id', 'offset_treatments': 'id', 'lattice_instances': 'id',
     'openings': 'id', 'trims': 'id', 'region_overrides': 'id', 'infills': 'id',
-    'network_walls': 'id', 'wall_relations': 'id', 'junction_overrides': 'key',
+    'network_walls': 'id', 'wall_systems': 'id', 'wall_relations': 'id', 'junction_overrides': 'key',
     'route_origins': 'strand',
 }
 MERGED_SETTINGS = ('material', 'constraints')
@@ -568,7 +568,7 @@ class DesignLibrary:
                         'jambs': jambs, 'doubled_runs': sum(1 for r in sc.get('report') or []
                                                              for run in r.get('runs') or []
                                                              if run.get('passes') == 2),
-                        'variation_effective': any(run.get('motif') in ('loop', 'lone')
+                        'variation_effective': any(run.get('phase_free', run.get('motif') in ('loop', 'lone'))
                                                    for r in sc.get('report') or []
                                                    for run in r.get('runs') or [])}
         v = self.scaffold_verdict(design_id, transforms) if out else {'closes': True}

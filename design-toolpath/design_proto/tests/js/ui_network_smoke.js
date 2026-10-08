@@ -153,72 +153,39 @@ eval(src + `
   head.onmouseenter();
   check(highlightPathId === P.id, 'hovering the header highlights the path');
   head.onmouseleave();
-  // --- network wall thickness, inherited by members. The Wall Network is a
-  // persistent Design-sidebar section (2026-10-06; it used to live in the
-  // selected path's Properties): no selection needed.
+  // --- the Wall Network is geometric CONNECTIVITY only (2026-10-07): a
+  // read-only Design section; construction is owned by explicit Wall Systems
   const netEl = document.getElementById('network-props');
-  const netRow = label => netEl.children.find(r => r.children && r.children[0] && r.children[0].textContent === label);
   const keepSel = selectedId;
   selectedId = null; netEl.children.length = 0; updatePropPanel();
-  check(document.getElementById('network-section').style.display === '' && !!netRow('Network Wall Thickness'),
-        'Wall Network section is accessible with NO path selected');
+  const netText = () => netEl.children.map(c => c.textContent || '').join(' | ');
+  check(document.getElementById('network-section').style.display === '' && netText().includes('N1: '),
+        'Wall Network section lists the connected paths with NO path selected');
+  check(!netEl.children.some(r => r.children && r.children[0] &&
+                                  /Thickness|Alignment|System/.test(r.children[0].textContent || '')),
+        'the Wall Network owns no construction controls');
   selectedId = keepSel; rebuild();
-  check(!findRow('Network Wall Thickness') &&
-        panelEl.children.some(c => (c.textContent || '').startsWith('Member of wall network N1')),
-        'the path Properties show membership, the settings live in Wall Network');
-  netEl.children.length = 0; updateNetworkSection();
-  const nRow = netRow('Network Wall Thickness');
-  check(!!nRow, 'network panel offers Network Wall Thickness');
-  nRow.children[1].value = '10'; nRow.children[1].onchange();
-  check(layer.network_walls.length === 1 && layer.network_walls[0].thickness === 10,
-        'one network wall applies to every member');
-  check(buildPayload().network_walls.length === 1, 'payload carries the network wall');
+  check(panelEl.children.some(c => (c.textContent || '').startsWith('Connected to')),
+        'the path Properties show connectivity');
+  const wsRow = findRow('Wall System');
+  check(!!wsRow && wsRow.children[1].children[0].value === 'none',
+        'path Properties: a Wall System choice, None (single bead) first');
+  check(!findRow('Wall Thickness') && !findRow('Network Wall Thickness'), 'no wall thickness editor on the path');
+  selectedId = R.id; rebuild();
+  panelEl.children.find(c => c.textContent === '+ New Wall System with this path').onclick();
+  const WS = layer.wall_systems[0];
+  check(WS && WS.members.join() === R.id && WS.thickness === 10 && WS.type === 'skin_web',
+        'new Wall System (Skin + Web, 10 in) with the path');
+  check(_wsOf(P.id) === null, 'the touching path is NOT forced into it (membership is explicit)');
+  selectedId = P.id; rebuild();
+  const pr = findRow('Wall System').children[1];
+  pr.value = WS.id; pr.onchange();
+  check(_wsOf(P.id) === WS && _effectiveWall(P).wall.thickness === 10, 'Wall System chosen on the path: its wall');
   rebuild();
-  // two networks: a compact selector picks which one is edited
-  const savedNI = networkInfo;
-  networkInfo = { ...networkInfo, source_networks: [{ id: 'N1', sources: [R.id, P.id], wall: null },
-                                                    { id: 'N2', sources: ['x1', 'x2'], wall: null }] };
-  const keep2 = selectedId; selectedId = null;
-  netEl.children.length = 0; updateNetworkSection();
-  const pick = netRow('Network');
-  check(!!pick && pick.children[1].children.length === 2, 'several networks: a compact selector');
-  pick.children[1].value = pick.children[1].children[1].value; pick.children[1].onchange();
-  check(networkPick === 'N2', 'the selector switches the edited network');
-  selectedId = keep2; netEl.children.length = 0; updateNetworkSection();
-  check(networkPick === 'N1', 'selecting a member path shows its own network');
-  networkInfo = savedNI;
-  rebuild();
-  check(!findRow('Wall Thickness'), 'inheriting path shows the inherited wall, not an editor');
-  const ovBtn = panelEl.children.find(c => c.textContent === 'Override for this path');
-  check(!!ovBtn, 'inheriting path offers an override');
-  ovBtn.onclick(); rebuild();
-  const wRow = findRow('Wall Thickness');
-  check(P.wall && P.wall.thickness === 10 && !!wRow, 'override copies the network wall onto the path');
-  wRow.children[1].value = '8'; wRow.children[1].onchange(); rebuild();
-  check(P.wall.thickness === 8, 'own wall thickness edited');
-  const aRow = findRow('Wall Alignment');
-  check(aRow && aRow.children[1].children.map(o => o.value).join() === 'Centered,Left,Right',
-        'open path: Centered / Left / Right alignment');
-  check(!!findRow('Print reference line'), 'centered wall offers Print reference line');
-  aRow.children[1].value = 'Left'; aRow.children[1].onchange(); rebuild();
-  check(P.wall.align === 'left' && !findRow('Print reference line'), 'Left alignment stored');
-  const useNet = panelEl.children.find(c => typeof c.textContent === 'string' &&
-                                           c.textContent.startsWith('Use network'));
-  useNet.onclick();
-  check(P.wall === null, 'back to inheriting the network wall');
-  // --- Wall Thickness 0 inside a thick-walled network = SINGLE BEAD (stabilization
-  // 2026-10-06): an explicit override, not "inherit 10 in again", never deleted
-  panelEl.children.find(c => c.textContent === 'Override for this path').onclick(); rebuild();
-  const zRow = findRow('Wall Thickness');
-  zRow.children[1].value = '0'; zRow.children[1].onchange(); rebuild();
-  check(P.wall && P.wall.thickness === 0, '0 stores the explicit single-bead override');
-  check(findRow('Wall Thickness').children[2].textContent.includes('Single bead'), '0 reads "Single bead"');
-  check(panelEl.children.some(c => (c.textContent || '').startsWith('Single bead — overrides network N1')),
-        'the note explains the single-bead override and its return lanes / no lattice');
-  check(buildPayload().source_paths.find(s => s.id === P.id).wall.thickness === 0,
-        'the payload carries the single-bead override');
-  panelEl.children.find(c => typeof c.textContent === 'string' && c.textContent.startsWith('Use network')).onclick();
-  check(P.wall === null, 'single bead → back to the network wall');
+  const pr2 = findRow('Wall System').children[1];
+  pr2.value = 'none'; pr2.onchange();
+  check(_wsOf(P.id) === null && !_effectiveWall(P).wall, 'None: back to a single bead');
+  layer.wall_systems = []; layer.infills = layer.infills.filter(f => !f.owner);
   // --- path picker: hover / arrow keys highlight the candidate path
   const pk = addPathPickerRow({ appendChild() {} }, 'Source', P.id, id => { picked = id; });
   let picked = null;

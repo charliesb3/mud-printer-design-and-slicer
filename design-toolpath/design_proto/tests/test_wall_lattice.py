@@ -435,5 +435,11 @@ def test_wave_keeps_structure(name):
     paths, _ = L._build_effective()
     polys = [p.sample_points() for p in paths if getattr(p, 'treatment_id', '') == 'infill']
     tot = sum(a.dist(b) for pl in polys for a, b in zip(pl, pl[1:]))
-    straight = sum(a.dist(b) for pl in polys for a, b in zip(pl, pl[1:]) if a.dist(b) >= 10.0)
+    # (2026-10-07: the canonical corner motifs' braces are straight in both
+    # patterns — legs within 1.6 t of a wall corner are counted with them)
+    corners_ = [Vec2(*m['outer']) for reg in L.network_summary()['lattice']['I']['regions']
+                for m in (reg.get('corner_motifs') or {}).get('motifs', [])]
+    at_corner = lambda a, b: any(min(a.dist(c), b.dist(c)) <= 1.6 * thick for c in corners_)
+    straight = sum(a.dist(b) for pl in polys for a, b in zip(pl, pl[1:])
+                   if a.dist(b) >= 10.0 and not at_corner(a, b))
     assert straight <= 0.1 * tot

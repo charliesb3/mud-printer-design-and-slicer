@@ -136,19 +136,28 @@ class TestA_IsolatedDoubleWall:
                     cur = [q]
             assert len(cur) == 1, 'a stitch ends off the faces'
         # ≈ centre line / target spacing (600 / 20 = 30), ±20 % (target
-        # spacing; a closed ring needs an even count)
-        assert 0.8 * 30 <= len(stitches) <= 1.2 * 30
+        # spacing; a closed ring needs an even count). Since 2026-10-07 each
+        # of the 4 corners carries the canonical single-pass motif (Ia → Oa →
+        # Ob → Ib: 3 stitches more than a plain landing) — counted apart.
+        assert 0.8 * 30 <= len(stitches) - 3 * 4 <= 1.2 * 30
+        wraps = 0
         for st in stitches:
             a, b = st[0], st[-1]
-            # each stitch runs face to face: one end on each face
+            # each stitch runs face to face: one end on each face — except the
+            # corner motif's same-skin wrap round each OUTER corner (2026-10-07)
             assert face(a) < 1e-6 and face(b) < 1e-6
-            assert (N.dist_to_polyline(a, outer, True) < 1e-6) != \
-                (N.dist_to_polyline(b, outer, True) < 1e-6)
+            on_a, on_b = (N.dist_to_polyline(q, outer, True) < 1e-6 for q in (a, b))
+            if on_a and on_b:
+                assert any(a.dist(c) < 5 and b.dist(c) < 5 for c in outer)
+                wraps += 1
+            else:
+                assert on_a != on_b
             # no long struts (no starburst across the region). Spacing is a
             # TARGET; the structural bound is the maximum unsupported
             # distance (1.375 × target) along the wall, and a stitch into a
             # pinned corner adds the corner diagonal (thickness × √2)
             assert a.dist(b) <= math.hypot(10, 1.375 * 20) + 10 * math.sqrt(2) + 1e-6
+        assert wraps == 4
         _assert_internal_inside(L)
 
     def test_routes_as_one_run(self):
@@ -221,14 +230,26 @@ class TestB_RectangleWithBranch:
     def test_variation_shifts_the_phase(self):
         # Superseded for networks: the phase of a run between junctions is
         # fixed by junction coherence (passes hand over at shared corners),
-        # so V1/V2 shift the phase where it is free — a closed wall ring.
+        # so V1/V2 shift the phase where it is free. 2026-10-07: a CORNERED
+        # ring is anchored by its corner motifs too (V1 = V2, reported as not
+        # effective); a corner-less ring keeps its free phase.
         R = ROOM()
         R.wall = WallSpec(10)
-        a = _infill(_layer([R], infills=[_inf('R', variation=0)]))[0]
+        La = _layer([R], infills=[_inf('R', variation=0)])
+        a = _infill(La)[0]
         R2 = ROOM()
         R2.wall = WallSpec(10)
         b = _infill(_layer([R2], infills=[_inf('R', variation=1)]))[0]
-        assert _sig(a) != _sig(b)
+        assert _sig(a) == _sig(b)
+        assert La.network_summary()['infills'][0]['lattice']['variation_effective'] is False
+        from model import CirclePath
+        C = CirclePath(200, 200, 80, id='R')
+        C.wall = WallSpec(10)
+        c0 = _infill(_layer([C], infills=[_inf('R', variation=0)]))[0]
+        C2 = CirclePath(200, 200, 80, id='R')
+        C2.wall = WallSpec(10)
+        c1 = _infill(_layer([C2], infills=[_inf('R', variation=1)]))[0]
+        assert _sig(c0) != _sig(c1)
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +630,8 @@ class TestApi:
     def test_patterns_endpoint(self, client):
         d = client.get('/api/infill_patterns').get_json()
         # pass 5: patterns carry their KIND; solid patterns were added
-        assert {p['name'] for p in d if p['kind'] == 'wall'} == {'zigzag', 'wave'}
+        # (2026-10-07 adds the wall 'truss' — Adaptive Truss — with its own parameters)
+        assert {p['name'] for p in d if p['kind'] == 'wall'} == {'zigzag', 'wave', 'truss'}
         # (pass 7 adds the solid 'serpentine' pattern — a distinct name: the
         # UI keys patterns by name, so it must not collide with wall 'wave')
         assert {p['name'] for p in d if p['kind'] == 'solid'} == {'rectilinear', 'serpentine'}

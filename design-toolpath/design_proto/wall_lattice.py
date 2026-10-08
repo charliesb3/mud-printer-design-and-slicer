@@ -104,11 +104,61 @@ designs the topology first:
    ring AND every separate lattice system, so a connected region is one
    closed route.
 
+8. ADAPTIVE TRUSS (pattern 'truss', truss=…; 2026-10-07). The wall-web
+   experiment's phase-field rule INSIDE this architecture — runs, anchors,
+   pass multiplicity, caps, junction pairing, jambs, lineage scaffold and
+   tracking are unchanged; only three things differ:
+     - STATION PARAMETER: u = S_eff·φ with φ(s) = ∫ ds / a(s), a = w(s)·cot θ
+       + bond (w = the cavity between the contact rails at s, measured across
+       the run: the angle is wall-relative). n = round(Δφ) per segment via
+       the usual cost; stations even in φ. S_eff (straight-wall pitch of this
+       thickness) stands in for Target Spacing in every heuristic. DMAX =
+       max_span / 2, so each SKIN's span ≤ max_span even on a single pass.
+     - STITCH: half a bond along the rail, a fillet (≤ turn_radius), the
+       brace in strip coordinates, a fillet, half a bond — each contact is
+       one bond centred on its station. Reduced to half / no bond where it
+       does not fit; then the ordinary constructions.
+     - CONTACT IDENTITY / SEED: track data carries every segment's
+       normalised station phases; a tracked count change inserts / removes a
+       PAIR locally (_adapt_phases). The solution seed (0 = the planner's own
+       optimum) drives LOCAL hashed choices (_hchoice(seed, feature, kind)):
+       each run's preferred start face (alternatives within
+       TRUSS_SEED_BIAS × thickness), a nearly tied segment count, a
+       corner-less loop's seam, the gap a carried pair goes into. Tracked
+       runs hash their REFERENCE identity, so Z follows the reference.
+   Strict alternation is the V1 default inside segments, not a rule of the
+   representation: stations are (s, side) landings, so a future local motif
+   may land the same skin twice where both skins stay within max_span.
+
+9. CANONICAL CORNER MOTIFS (zigzag / wave; 2026-10-07). Significant
+   corners are HARD anchors with one fixed treatment; the ordinary lattice
+   is fitted BETWEEN them (integer stitches nearest Target Spacing — the
+   spacing never degrades a corner).
+     - A corner concentrates its turn: ≥ 30° within 2 t (as before) AND
+       ≥ CORNER_LOCAL of its 6 t turn within 3 t — sharp and tightly
+       rounded corners (centre-line R ≲ 2 t) are corners, even arcs /
+       generous radii / circles carry the ordinary pattern. Near a dead end
+       the cap's turn readings no longer out-rank a real corner.
+     - SINGLE PASS: Ia → Oa → Ob → Ib — inner face MOTIF_INNER·t before the
+       inner corner, outer face MOTIF_OUTER·t either side of the outer corner
+       (the Oa → Ob stitch wraps the outer corner along the contact rails),
+       inner face MOTIF_INNER·t after the inner corner. Points from the
+       corner geometry only; contacts squarely off each face leg. Every
+       corner is entered on its inner face, so each segment's stitch-count
+       PARITY is fixed by its two ends (seg_req) — a corner resets the
+       phase; a loop's seam is its first corner's motif (V1 / V2 no longer
+       move a cornered loop: reported 'phase_free': False).
+     - DOUBLE PASS: unchanged production rule, now applied to every
+       detected corner — both mirrored phases land the corner station, one
+       on the inner corner, one on the outer.
+   Adaptive Truss keeps its own corner handling (§8, unchanged).
+
 Wide regions (local thickness ≫ spacing — not a wall but an area) are not
 stitched here; the caller falls back to the field generator (infill.py).
 """
 from __future__ import annotations
 import itertools
+import hashlib
 import math
 from dataclasses import dataclass, field
 
@@ -130,6 +180,90 @@ SAME_FACE_W = 2.5     # a connector along one face costs more than one across
 DMAX_RATIO = 1.375    # default maximum unsupported distance = 1.375 × target
 CORNER_TURN = math.radians(30.0)   # centre line turning within CORNER_WIN (a 140° interior corner turns ~35° there)
 CORNER_WIN = 2.0      # × thickness: window over which a corner turns
+
+# CANONICAL CORNER MOTIFS (zigzag / wave; see 9. in the module doc)
+CORNER_LOCAL = 0.75       # a corner turns ≥ this share of its 6 t turn within 3 t (else: a curve)
+MOTIF_INNER = 0.55        # × thickness: single-pass inner contacts, along the inner face from the inner corner
+MOTIF_OUTER = 0.30        # × thickness: single-pass outer contacts, along the outer face from the outer corner
+MOTIF_SI, MOTIF_SO = 0.55, 0.25   # × thickness: their station positions (centre line) either side of the corner
+
+# ADAPTIVE TRUSS (pattern 'truss', see 8. in the module doc). Defaults are
+# prototype values from the wall-web experiment, NOT calibrated machine values.
+TRUSS_DEFAULTS = {'brace_angle': 45.0, 'bond': 3.0, 'max_span': 40.0, 'turn_radius': 1.5, 'seed': 0}
+TRUSS_ANGLE_RANGE = (15.0, 75.0)
+TRUSS_SEED_BIAS = 0.25    # × thickness: a seed may pick a valid alternative this much costlier
+TRUSS_COUNT_TOL = 0.08    # a seed may pick the second count when both pitches are within 8 %
+TRUSS_KEY_GRID = 12.0     # in: feature keys are quantised coarsely, so an edit elsewhere rarely re-draws a choice
+
+
+def truss_params(params):
+    """Normalised Adaptive Truss parameters from an infill's params."""
+    p = dict(TRUSS_DEFAULTS)
+    for k in p:
+        v = (params or {}).get(k)
+        if v is not None:
+            try:
+                p[k] = float(v) if k != 'seed' else int(v)
+            except (TypeError, ValueError):
+                pass
+    lo, hi = TRUSS_ANGLE_RANGE
+    p['brace_angle'] = min(hi, max(lo, p['brace_angle']))
+    p['bond'] = max(0.0, p['bond'])
+    p['max_span'] = max(4.0, p['max_span'])
+    p['turn_radius'] = max(0.0, p['turn_radius'])
+    return p
+
+
+def _hchoice(seed, key, kind, n=2):
+    """Deterministic LOCAL choice in range(n) from (solution seed, stable
+    feature key, choice kind) — a hash, not a random stream: adding or
+    changing one feature never re-draws the choices of the others."""
+    h = hashlib.blake2b(f'{seed}|{key}|{kind}'.encode(), digest_size=8).digest()
+    return int.from_bytes(h, 'big') % n
+
+
+def _fkey(p):
+    """Stable feature key of a point (a run's centre, a segment's middle),
+    quantised to TRUSS_KEY_GRID."""
+    g = TRUSS_KEY_GRID
+    return f'{round(p.x / g):d},{round(p.y / g):d}'
+
+
+def _adapt_phases(q, n, pick=0):
+    """CROSS-Z contact identity: the reference segment's normalised station
+    phases q = [0, …, 1] → n crossings with LOCAL change only. Crossings are
+    inserted / removed in PAIRS where possible (a single pass alternates
+    faces: one extra crossing would swap the face of every later landing),
+    in the widest gap (ties: `pick` chooses among them) / at the most crowded
+    adjacent pair; only the neighbouring stations are smoothed, every other
+    contact keeps its phase."""
+    q = list(q)
+    changed = []
+    guard = 0
+    while len(q) - 1 < n and guard < 200:
+        guard += 1
+        gaps = [q[k + 1] - q[k] for k in range(len(q) - 1)]
+        g = max(gaps)
+        ties = [k for k, x in enumerate(gaps) if x >= g - 1e-9]
+        i = ties[pick % len(ties)]
+        a, b = q[i], q[i + 1]
+        add = [a + (b - a) / 3, a + 2 * (b - a) / 3] if n - (len(q) - 1) >= 2 else [0.5 * (a + b)]
+        q[i + 1:i + 1] = add
+        changed.append(i + 1)
+    while len(q) - 1 > n and len(q) > 2 and guard < 400:
+        guard += 1
+        if (len(q) - 1) - n >= 2 and len(q) > 4:
+            j = min(range(1, len(q) - 2), key=lambda k: q[k + 2] - q[k - 1])
+            del q[j:j + 2]
+        else:
+            j = min(range(1, len(q) - 1), key=lambda k: q[k + 1] - q[k - 1])
+            del q[j]
+        changed.append(j)
+    for c in changed:
+        for _ in range(3):
+            for i in range(max(1, c - 3), min(len(q) - 1, c + 4)):
+                q[i] = 0.5 * (q[i - 1] + q[i + 1])
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +726,7 @@ class _Geo:
         self.sk = sk
         self.cache = {}
         self.mids = {}
+        self.phase = None             # ADAPTIVE TRUSS: (cot θ, bond, contact, a_min, S_eff)
 
     def centre(self, run, s):
         mids = self.mids.get(id(run))
@@ -712,16 +847,28 @@ class _Geo:
         key = ('table', id(run))
         if key not in self.cache:
             L = run.length
-            dh = max(0.5, 0.25 * self.sk.thickness)
+            dh = max(0.5, (0.1 if self.phase is not None else 0.25) * self.sk.thickness)
             n = max(2, int(math.ceil(L / dh)))
             ss = [L * k / n for k in range(n + 1)]
             p0 = [self.side_point(run, 0, x) for x in ss]
             p1 = [self.side_point(run, 1, x) for x in ss]
             us = [0.0]
-            for k in range(n):
-                ds = ss[k + 1] - ss[k]
-                face = min(p0[k].dist(p0[k + 1]), p1[k].dist(p1[k + 1]))
-                us.append(us[-1] + 0.5 * ds + 0.5 * min(face, ds))
+            if self.phase is not None:
+                # ADAPTIVE TRUSS: u = S_eff × PHASE, φ(s) = ∫ ds / a(s) with
+                # the crossing advance a = w(s)·cot θ + bond, w = the cavity
+                # between the contact rails across the wall at s (angle
+                # measured against the run's centre line, i.e. wall-relative)
+                cot, bond, c, a_min, s_eff = self.phase
+                for k in range(n):
+                    ds = ss[k + 1] - ss[k]
+                    w = max(0.0, 0.5 * (p0[k].dist(p1[k]) + p0[k + 1].dist(p1[k + 1])) - 2.0 * c)
+                    a = max(a_min, w * cot + bond)
+                    us.append(us[-1] + s_eff * ds / a)
+            else:
+                for k in range(n):
+                    ds = ss[k + 1] - ss[k]
+                    face = min(p0[k].dist(p0[k + 1]), p1[k].dist(p1[k + 1]))
+                    us.append(us[-1] + 0.5 * ds + 0.5 * min(face, ds))
             self.cache[key] = (ss, us)
         return self.cache[key]
 
@@ -774,7 +921,7 @@ def _spacing_cost(L, n, S):
 
 def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
          max_unsupported=None, contact=0.0, closed=False, stations=None, track=None, track_map=None,
-         bead=0.0):
+         bead=0.0, truss=None):
     """
     Route-aware wall lattice for one wall region (rings: material on the
     left). Returns a LatticePlan, or None if the region is not wall-like
@@ -803,20 +950,36 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         the 'track' of a REFERENCE plan of the same wall network (the
         untransformed design) and a map from reference to this geometry
         (wall-relative). The plan keeps the reference's discrete choices.
+      truss — ADAPTIVE TRUSS parameters (pattern 'truss'; truss_params()):
+        brace_angle, bond, max_span, turn_radius, seed. See 8. in the module
+        doc. `spacing` / `max_unsupported` are ignored for this pattern.
     """
     rings = [r for r in rings if len(r) >= 3]
     if not rings:
         return None
-    S = max(1.0, float(spacing))
-    # Maximum unsupported distance: structural upper bound on the distance
-    # along the wall between consecutive lattice supports (either face).
-    # Target spacing is a preference; this one wins when they conflict.
-    DMAX = float(max_unsupported) if max_unsupported else DMAX_RATIO * S
-    DMAX = max(DMAX, 0.5 * S)
     thick = _thickness(rings)
+    TP = truss_params(truss) if pattern == 'truss' else None
+    if TP is not None:
+        # the preferred advance per crossing of a straight wall of this
+        # thickness: the effective "target" every spacing heuristic uses
+        cot = 1.0 / math.tan(math.radians(TP['brace_angle']))
+        w_rail = max(0.0, thick - 2.0 * contact)
+        S = max(1.0, w_rail * cot + TP['bond'])
+        # per-SKIN span ≤ max_span even on a single pass, whose consecutive
+        # supports alternate faces: the station gap is bounded by half of it
+        DMAX = max(0.5 * TP['max_span'], 0.5 * S)
+        wide_s = max(S, 0.5 * TP['max_span'])     # wall / area test not tied to the brace angle
+    else:
+        S = max(1.0, float(spacing))
+        # Maximum unsupported distance: structural upper bound on the distance
+        # along the wall between consecutive lattice supports (either face).
+        # Target spacing is a preference; this one wins when they conflict.
+        DMAX = float(max_unsupported) if max_unsupported else DMAX_RATIO * S
+        DMAX = max(DMAX, 0.5 * S)
+        wide_s = S
     # PROVISIONAL wall / area heuristic (local thickness vs target spacing);
     # to be replaced by a medial-axis opposing-face classification.
-    if thick <= 0 or thick > WIDE * S:
+    if thick <= 0 or thick > WIDE * wide_s:
         return None
     h = max(0.5, min(thick / 3.0, S / 3.0))
     sk = skeleton(rings, h, thick)
@@ -825,6 +988,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         return None
     region = _Region(rings, max(S / 2, 2.0))
     geo = _Geo(sk)
+    if TP is not None:
+        geo.phase = (cot, TP['bond'], contact, max(1.0, 0.5 * TP['bond'], 0.5 * bead), S)
+    seed = TP['seed'] if TP is not None else 0
+    seeded = TP is not None and seed != 0     # seed 0 = the planner's own optimum (no hashed choices)
+    MOTIFS = TP is None                       # zigzag / wave: canonical corner motifs (§9); truss unchanged
     no_cavity = []
     if bead > 0:
         def separation(r):
@@ -907,9 +1075,21 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 m_ = len(ss) - 1
                 nb = [abs(tv[j % m_]) for j in range(k - w_, k + w_ + 1)]
             else:
-                nb = [abs(tv[j]) for j in range(max(0, k - w_), min(len(ss), k + w_ + 1))]
+                nb = [abs(tv[j]) for j in range(max(0, k - w_), min(len(ss), k + w_ + 1))
+                      # (motifs: the cap end's turn readings are not rival corners)
+                      if not MOTIFS or lo <= ss[j] <= hi]
             if abs(tv[k]) + 1e-12 < max(nb):
                 continue
+            if MOTIFS and (r.cycle or (x - 3.0 * thick > 0 and x + 3.0 * thick < L)):
+                # a CORNER concentrates its turn: at least CORNER_LOCAL of the
+                # turn over 6 t happens within 3 t (sharp or rounded corner
+                # ≈ 1; an even arc / circle 0.5) — curves carry the ordinary
+                # pattern, only real corners become motif anchors
+                def tw(w):
+                    t_ = ang(x + w / 2) - ang(x - w / 2)
+                    return abs((t_ + math.pi) % (2 * math.pi) - math.pi)
+                if tw(3.0 * thick) < CORNER_LOCAL * tw(6.0 * thick):
+                    continue
             if found and abs(x - found[-1][0]) < W:
                 continue
             if r.cycle and k == len(ss) - 1:
@@ -942,7 +1122,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             if I is None or O is None or not _strut_ok(I, O, region):
                 continue
             out.append({'s': x, 'inner': inner, 'points': {inner: I, 1 - inner: O},
-                        'turn': round(math.degrees(abs(tsign)), 1)})
+                        'turn': round(math.degrees(abs(tsign)), 1), 't1': t1, 't2': t2})
         for cn in out:
             for side, pnt in cn['points'].items():
                 geo.cache[(id(r), side, round(cn['s'] % L if r.cycle else cn['s'], 9))] = pnt
@@ -986,14 +1166,77 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         geo.cache[(id(r), MID, round(s_end, 9))] = q
         return q
 
-    def segments(r):
+    def motif_single(r):
+        """Single-pass runs of zigzag / wave carry the canonical SINGLE
+        corner motif at every corner (module doc §9)."""
+        return MOTIFS and bool(corners(r)) and all(motif_pts(r, c) for c in corners(r))
+
+    motif_cache = {}
+
+    def motif_pts(r, c):
+        """The single-pass corner motif's four FACE points, from the corner
+        geometry alone (never the spacing): inner face MOTIF_INNER·t before
+        (Ia) and after (Ib) the inner corner, outer face MOTIF_OUTER·t
+        before (Oa) and after (Ob) the outer corner. None if it does not fit."""
+        key = (id(r), round(c['s'], 9))
+        if key in motif_cache:
+            return motif_cache[key]
+        inn = c['inner']
+        I, O = c['points'][inn], c['points'][1 - inn]
+        t1, t2 = c['t1'], c['t2']
+        di, do = MOTIF_INNER * thick, MOTIF_OUTER * thick
+        res = {'Ia': _nearest_face_point(sk, I - t1 * di, I, 2.0 * thick),
+               'Ib': _nearest_face_point(sk, I + t2 * di, I, 2.0 * thick),
+               'Oa': _nearest_face_point(sk, O - t1 * do, O, 2.0 * thick),
+               'Ob': _nearest_face_point(sk, O + t2 * do, O, 2.0 * thick)}
+        ok = all(v is not None for v in res.values()) and \
+            _strut_ok(res['Ia'], res['Oa'], region) and _strut_ok(res['Ob'], res['Ib'], region)
+        if ok and contact > 0:
+            # contact points squarely off each face leg (canonical: never the
+            # skeleton's station correspondence)
+            def perp(t):
+                q = Vec2(-t.y, t.x)
+                return q if (q.x * (O.x - I.x) + q.y * (O.y - I.y)) > 0 else q * -1.0
+            res['contact'] = {'Ia': res['Ia'] + perp(t1) * contact, 'Ib': res['Ib'] + perp(t2) * contact,
+                              'Oa': res['Oa'] - perp(t1) * contact, 'Ob': res['Ob'] - perp(t2) * contact}
+            ok = all(region.inside(q) for q in res['contact'].values())
+        motif_cache[key] = res if ok else None
+        return motif_cache[key]
+
+    seg_order = {}                    # cycle → corner indices in segment order (seam corner first)
+
+    def seg_req(r, s0, parity):
+        """SINGLE-PASS MOTIF parity: every corner is entered on its INNER
+        face (the motif runs inner → outer → outer → inner and leaves on the
+        inner face), so each segment's stitch-count parity is fixed by the
+        faces at its two ends: [None = free]."""
+        cs = corners(r)
+        if r.cycle:
+            segments(r)
+            order = [cs[i] for i in seg_order.get(id(r), range(len(cs)))]
+            m = len(order)
+            return [order[k]['inner'] ^ order[(k + 1) % m]['inner'] for k in range(m)]
+        inn = [c['inner'] for c in cs]
+        req = [None if s0 is None else s0 ^ inn[0]]
+        req += [inn[k - 1] ^ inn[k] for k in range(1, len(inn))]
+        req.append(None if s0 is None or parity is None else inn[-1] ^ s0 ^ parity)
+        return req
+
+    def segments(r, motif=False):
         """Fixed support points of a run (ends / corners) → segments with
-        their station-parameter length U."""
+        their station-parameter length U. motif: the single-pass corner
+        motif occupies [corner − SI, corner + SI]; the ordinary lattice is
+        fitted between the motifs."""
         cs = [c['s'] for c in corners(r)]
         lo, hi = span(r)
         if r.cycle:
             pts_ = cs if cs else [0.0]
+            if seeded and not cs:
+                # ADAPTIVE TRUSS: a corner-less loop has no anchor — where its
+                # stations start is a free choice; the seed picks it
+                pts_ = [r.length * _hchoice(seed, _fkey(geo.centre(r, 0.5 * r.length)), 'seam', 64) / 64.0]
             tr = tracked.get(id(r))
+            k0 = 0
             if tr is not None and tr.get('seam_s') is not None:
                 if not cs:
                     pts_ = [tr['seam_s']]                  # the reference's seam, carried
@@ -1001,17 +1244,27 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     k0 = min(range(len(cs)), key=lambda i: min(abs(cs[i] - tr['seam_s']),
                                                               r.length - abs(cs[i] - tr['seam_s'])))
                     pts_ = cs[k0:] + [c + r.length for c in cs[:k0]]
+            seg_order[id(r)] = list(range(k0, len(cs))) + list(range(0, k0))
             bounds = [(pts_[i], pts_[i + 1] if i + 1 < len(pts_) else pts_[0] + r.length)
                       for i in range(len(pts_))]
+            if motif and cs:
+                g = MOTIF_SI * thick
+                bounds = [(a + g, b - g) for a, b in bounds]
         else:
             pts_ = [lo] + cs + [hi]
             bounds = list(zip(pts_, pts_[1:]))
+            if motif and cs:
+                g = MOTIF_SI * thick
+                bounds = [(a + (g if i > 0 else 0.0), b - (g if i < len(bounds) - 1 else 0.0))
+                          for i, (a, b) in enumerate(bounds)]
 
         def u(x):
             if r.cycle and x > r.length:
                 return geo.u_of_s(r, r.length) + geo.u_of_s(r, x - r.length)
             return geo.u_of_s(r, x)
         return [(a, b, max(1e-6, u(b) - u(a))) for a, b in bounds]
+
+    phase_q = {}                       # (run, segment start, n) → normalised station phases
 
     def gap_ok(r, a, b, n):
         st = seg_stations(r, a, b, n)
@@ -1021,7 +1274,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         """Admissible stitch counts for a segment, cheapest first: never a
         support gap beyond the maximum unsupported distance (measured on
         the real centre-line length Ls) if avoidable."""
-        n_min = max(lo_n, int(math.ceil(max(U, Ls or 0.0) / DMAX - 1e-9)))
+        # (truss: U is in phase units, only the real length meets DMAX)
+        n_min = max(lo_n, int(math.ceil((Ls or 0.0 if TP is not None else max(U, Ls or 0.0)) / DMAX - 1e-9)))
         cands = [n for n in range(n_min, max(n_min, int(math.ceil(U / S))) + 4)
                  if parity is None or n % 2 == parity]
         if r is not None:
@@ -1031,7 +1285,12 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 cands = [n + 2 for n in cands]
             good = [n for n in cands if gap_ok(r, a, b, n)]
             cands = good or cands
-        return sorted(cands, key=lambda n: (_spacing_cost(U, n, S), n))
+        out = sorted(cands, key=lambda n: (_spacing_cost(U, n, S), n))
+        if seeded and r is not None and len(out) > 1 and \
+                all(abs(U / n - S) <= TRUSS_COUNT_TOL * S for n in out[:2]) and \
+                _hchoice(seed, _fkey(geo.centre(r, ((a + b) / 2) % r.length if r.cycle else (a + b) / 2)), 'count'):
+            out[0], out[1] = out[1], out[0]          # SEED: the other valid count of this segment
+        return out
 
     def _tracked_counts(r, segs, tr, mode):
         """The reference's stitch count of each segment (matched by its mapped
@@ -1055,16 +1314,27 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 n = next((x for x in cands if ok(x)), n0)
                 changed += n != n0
             out.append(n)
+            if TP is not None and tr.get('phases') and j < len(tr['phases']):
+                # CONTACT IDENTITY: the reference's phases of this segment,
+                # changed only locally (pairs) where the count had to change
+                q = [0.0] + list(tr['phases'][j]) + [1.0]
+                if not tr.get('fwd', True):
+                    q = [1.0 - x for x in reversed(q)]
+                if len(q) - 1 != n:
+                    q = _adapt_phases(q, n, _hchoice(seed, f"{_fkey(Vec2(*tr['uid']))}/{j}", 'insert', 1 << 16))
+                phase_q[(id(r), round(a, 6), n)] = q
         return out, changed
 
     count_cache = {}
 
-    def counts(r, mode, parity=None):
+    def counts(r, mode, parity=None, s0=None):
         """Stitch counts per segment and their spacing cost.
         mode 'single': one pass; total stitches (incl. one brace per
         corner) of the given parity. mode 'two': two complementary
         interleaved phases — segments between fixed points odd, the
         dead-end segment even."""
+        if mode != 'two' and motif_single(r):
+            return motif_counts(r, parity, s0)
         key = (id(r), mode, parity)
         if key in count_cache:
             return count_cache[key]
@@ -1108,6 +1378,34 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                         break
             if best:
                 res[best[1]] = best[2]
+        cost = sum(_spacing_cost(U, n, S) for (a, b, U), n in zip(segs, res))
+        count_cache[key] = (res, cost)
+        return count_cache[key]
+
+    def motif_counts(r, parity, s0):
+        """Stitch counts of a single pass whose corners carry the canonical
+        motif: per segment (between motifs) the count nearest the target
+        spacing WITH the parity the motifs require (§9)."""
+        key = (id(r), 'motif', parity, s0)
+        if key in count_cache:
+            return count_cache[key]
+        segs = segments(r, True)
+        req = seg_req(r, s0, parity)
+        tr = tracked.get(id(r))
+        if tr is not None and tr.get('segmid') is not None and len(tr['segmid']) == len(segs):
+            res, changed = _tracked_counts(r, segs, tr, 'single')
+            for i, ((a, b, U), n) in enumerate(zip(segs, res)):
+                if req[i] is not None and n % 2 != req[i]:
+                    opts = [n + d for d in (1, -1, 3, -3) if n + d >= 1 and gap_ok(r, a, b, n + d)] or [n + 1]
+                    res[i] = min(opts, key=lambda x: (_spacing_cost(U, x, S), x))
+                    changed += 1
+            track_note['changed_segments'] += changed
+            tr['changed'] = tr.get('changed') or bool(changed)
+        else:
+            res = []
+            for i, (a, b, U) in enumerate(segs):
+                opts = seg_options(U, req[i], 1, b - a, r, a, b)
+                res.append(opts[0] if opts else (2 if req[i] == 0 else 1))
         cost = sum(_spacing_cost(U, n, S) for (a, b, U), n in zip(segs, res))
         count_cache[key] = (res, cost)
         return count_cache[key]
@@ -1173,6 +1471,12 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             UL = geo.u_of_s(r, L)
             return geo.s_of_u(r, uu) if uu <= UL else L + geo.s_of_u(r, uu - UL)
         ua, ub = u(a), u(b)
+        q = phase_q.get((id(r), round(a, 6), n))
+        if q is None and b < a:                   # (called end to start)
+            q = phase_q.get((id(r), round(b, 6), n))
+            q = None if q is None else [1.0 - x for x in reversed(q)]
+        if q is not None:                         # carried contact identity (cross-Z)
+            return [a] + [s_of(ua + (ub - ua) * q[j]) for j in range(1, n)] + [b]
         return [a] + [s_of(ua + (ub - ua) * j / n) for j in range(1, n)] + [b]
 
     # -- 1. how many passes per run (route inspection on the skeleton) -----
@@ -1260,7 +1564,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 continue
             todo.append((sv, pts_))
         todo.sort(key=lambda t: sgn * t[0])
-        margin = max(0.5 * thick, 1e-3)
+        # room the crossing needs from a fixed station (truss: its pitch is
+        # far shorter than a zigzag's, its bonds keep the brace clear)
+        margin = max(0.5 * thick, 1e-3) if TP is None else max(0.25 * thick, 0.35 * S, 1e-3)
         for sv, pts_ in todo:
             pos = lambda e: sgn * e[0]
             # interval k … k+1 (indices into A; JAMB entries are not stations)
@@ -1378,7 +1684,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         """Landing sequences [(s, side)] of a run: one pass (single /
         loop) or the two phases (A, B) of an out-and-back / double run,
         oriented from the junction end."""
-        ns_, _ = counts(r, 'two' if mode == 'two' else 'single', parity)
+        if mode != 'two' and motif_single(r):
+            return [motif_layout(r, s0, parity)]
+        ns_, _ = counts(r, 'two' if mode == 'two' else 'single', parity, s0 if mode != 'two' else None)
         segs = segments(r)
         cmap = {round(c['s'], 9): c for c in corners(r)}
         if mode != 'two':
@@ -1473,6 +1781,79 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     loop = loop + [A[0]]
             return [loop]
         return [A, B]
+
+    motif_role = {}                   # (run, side, s) → (role, corner) of a single-pass motif landing
+    motif_contact = {}                # (run, side, s) → its canonical contact point
+
+    def motif_layout(r, s0, parity):
+        """ONE pass whose every corner carries the canonical SINGLE motif
+        Ia → Oa → Ob → Ib (inner face before the inner corner, outer face
+        either side of the outer corner, inner face after the inner corner);
+        the ordinary stations are fitted between the motifs."""
+        L = r.length
+        cs = corners(r)
+        segs = segments(r, True)
+        if r.cycle:
+            order = [cs[i] for i in seg_order.get(id(r), range(len(cs)))]
+            s0 = order[0]['inner']               # the seam is the first corner's motif
+        else:
+            order = cs
+        ns_, _ = counts(r, 'single', parity, s0)
+        gi, go = MOTIF_SI * thick, MOTIF_SO * thick
+
+        def pin(c, role, x, side, pt):
+            k = round(x % L if r.cycle else x, 9)
+            geo.cache[(id(r), side, k)] = pt
+            motif_role[(id(r), side, k)] = (role, c)
+            cp = (motif_pts(r, c).get('contact') or {}).get(role)
+            if cp is not None:
+                motif_contact[(id(r), side, k)] = cp
+            return (x, side)
+
+        def motif(c, sc):
+            inn = c['inner']
+            P = motif_pts(r, c)
+            return [pin(c, 'Ia', sc - gi, inn, P['Ia']), pin(c, 'Oa', sc - go, 1 - inn, P['Oa']),
+                    pin(c, 'Ob', sc + go, 1 - inn, P['Ob']), pin(c, 'Ib', sc + gi, inn, P['Ib'])]
+        seq = []
+        side = s0
+        for i, ((a, b, U), n) in enumerate(zip(segs, ns_)):
+            st = seg_stations(r, a, b, n)
+            if i == 0:
+                seq.append((st[0], side))
+            for x in st[1:]:
+                side = 1 - side
+                seq.append((x, side))
+            last = i == len(segs) - 1
+            if r.cycle or not last:
+                c = order[(i + 1) % len(order)] if r.cycle else order[i]
+                sc = b + gi                         # the corner's station
+                if side != c['inner']:              # (parity could not be met: plain corner brace)
+                    motif_report['fallback'] += 1
+                    side = 1 - side
+                    seq.append((b, side))
+                    continue
+                m = motif(c, sc)
+                if r.cycle and last:
+                    seq[-1:] = m[:3]                # back at the seam: … Ia, Oa, Ob (= the start)
+                else:
+                    seq[-1:] = m                    # (Ia replaces the segment's end station)
+                motif_report['single'] += 1
+        if r.cycle:
+            # start at the seam motif's Ob (closing point) → Ib → first segment
+            c0 = order[0]
+            m0 = motif(c0, segs[0][0] - gi)
+            seq = [m0[2], m0[3]] + seq[1:]
+        if not r.cycle:
+            if r.a[0] == 'E' and cap_point(r, seq[0][0]) is not None:
+                x0, sd0 = seq[0]
+                seq = [(x0, 1 - sd0), (x0, CAP)] + seq
+            if r.b[0] == 'E' and cap_point(r, seq[-1][0]) is not None:
+                x1, sd1 = seq[-1]
+                seq = seq + [(x1, CAP), (x1, 1 - sd1)]
+        return seq
+
+    motif_report = {'single': 0, 'fallback': 0}
 
     # -- 2. sides at run ends, junction pairing, stitch counts -------------
     # slot = (run index, end 0|1, side 0|1)
@@ -1578,10 +1959,26 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             pairs[nd] = m
         for ri in single:
             s0, par = choice[ri]
-            total += counts(runs[ri], 'single', par)[1]
+            total += counts(runs[ri], 'single', par, s0)[1]
+            if seeded and s0 != face_pref[ri]:
+                total += seed_bias                  # SEED: prefer this run's seeded start face
         return total, pairs
 
-    options = [(s0 ^ flip, par) for s0 in (0, 1) for par in (0, 1)]
+    # SEED (Adaptive Truss): each run's preferred start face is a local hash
+    # of (seed, run identity) — the REFERENCE run's identity when tracked, so
+    # a transformed layer draws the same choice. Valid alternatives within
+    # TRUSS_SEED_BIAS × thickness of the optimum may be chosen.
+    seed_bias = TRUSS_SEED_BIAS * thick
+    face_pref = {}
+    for ri, r in enumerate(runs):
+        tr = tracked.get(id(r))
+        key = _fkey(Vec2(*tr['uid'])) if tr and tr.get('uid') else _fkey(geo.centre(r, 0.5 * r.length))
+        bit = flip ^ (_hchoice(seed, key, 'face') if seeded else 0)
+        face_pref[ri] = bit if TP is None or not tr or tr.get('same_side', True) else 1 - bit
+
+    def options_of(ri):
+        f_ = face_pref[ri]
+        return [(s0 ^ f_, par) for s0 in (0, 1) for par in (0, 1)]
 
     def search(fixed_choice):
         """Best start sides / parities of the single-pass runs, the runs in
@@ -1589,7 +1986,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         free = [ri for ri in single if ri not in fixed_choice]
         if len(free) <= 6:
             best = None
-            for combo in itertools.product(options, repeat=len(free)):
+            for combo in itertools.product(*[options_of(ri) for ri in free]):
                 choice = dict(fixed_choice)
                 choice.update(zip(free, combo))
                 tot, pairs = solve(choice)
@@ -1597,14 +1994,15 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     best = (tot, choice, pairs)
             return best
         choice = dict(fixed_choice)                          # coordinate descent
-        choice.update({ri: (flip, (sum(counts(runs[ri], 'single')[0]) + len(corners(runs[ri]))) % 2)
+        choice.update({ri: (face_pref[ri], (sum(counts(runs[ri], 'single', None, face_pref[ri])[0]) +
+                                            (0 if motif_single(runs[ri]) else len(corners(runs[ri])))) % 2)
                        for ri in free})
         tot0, pairs0 = solve(choice)
         best = (tot0, dict(choice), pairs0)
         for _ in range(4):
             improved = False
             for ri in free:
-                for opt in options:
+                for opt in options_of(ri):
                     trial = dict(best[1]); trial[ri] = opt
                     tot, pairs = solve(trial)
                     if tot < best[0] - 1e-9:
@@ -1695,6 +2093,9 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         p = geo.landing(r, side, s)
         if not is_contact(r, side, s):
             return p
+        mc = motif_contact.get((id(r), side, round(s % r.length if r.cycle else s, 9)))
+        if mc is not None:
+            return mc
         if side == CAP:                     # off the end face, into the wall
             return _toward(p, geo.centre(r, s), contact)
         return _toward(p, geo.landing(r, 1 - side, s), contact, _clear_fn(r, side, s))
@@ -1718,6 +2119,16 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         if abs(s_a - s_b) < 1e-9 or CAP in (side_a, side_b) or MID in (side_a, side_b) \
                 or JAMB in (side_a, side_b):
             return [pa, pb]
+        ka = motif_role.get((id(r), side_a, round(s_a % r.length if r.cycle else s_a, 9)))
+        kb = motif_role.get((id(r), side_b, round(s_b % r.length if r.cycle else s_b, 9)))
+        if ka and kb and ka[1] is kb[1]:
+            m_ = motif_stitch(r, ka, kb, pa, pb)
+            if m_ is not None:
+                return m_
+        if TP is not None:
+            t_ = truss_stitch(r, s_a, side_a, pa, s_b, side_b, pb)
+            if t_ is not None:
+                return t_
         at_junction = (not r.cycle) and ((min(s_a, s_b) <= 1e-9 and r.a[0] == 'J') or
                                          (max(s_a, s_b) >= r.length - 1e-9 and r.b[0] == 'J'))
         at_corner = any(abs(c['s'] - x) < 1e-9 for c in corners(r) for x in (s_a, s_b % r.length if r.cycle else s_b))
@@ -1795,6 +2206,87 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         while len(out) > 2 and out[1].dist(out[0]) < tidy and _strut_ok(out[0], out[2], region):
             del out[1]
         return out
+
+    def motif_stitch(r, ka, kb, pa, pb):
+        """Stitches INSIDE a single-pass corner motif: the two braces
+        (Ia → Oa, Ob → Ib) are straight; the outer pair (Oa → Ob) wraps the
+        outer corner along the contact rails (a quadratic curve whose control
+        point is where the two rails meet), else its straight chord."""
+        if ka[0][0] == 'O' and kb[0][0] == 'O':
+            c = ka[1]
+            t1, t2 = c['t1'], c['t2']
+            if ka[0] == 'Ob':                            # (walked backwards)
+                t1, t2 = t2 * -1.0, t1 * -1.0
+            den = t1.x * (-t2.y) - t1.y * (-t2.x)
+            if abs(den) > 1e-9:
+                w = pb - pa
+                u = (w.x * (-t2.y) - w.y * (-t2.x)) / den
+                Q = pa + t1 * u
+                if 0 < u < 3.0 * thick:
+                    pts = [pa]
+                    for k in range(1, 8):
+                        f = k / 8
+                        pts.append(pa * ((1 - f) ** 2) + Q * (2 * f * (1 - f)) + pb * (f * f))
+                    pts.append(pb)
+                    if all(_strut_ok(a_, b_, region) or a_.dist(b_) < 1e-9 for a_, b_ in zip(pts, pts[1:])) \
+                            and _clear_poly(pts, False, False):
+                        kind_ctx['used'] = 'motif_wrap'
+                        return pts
+        if _strut_ok(pa, pb, region) and _clear_poly(_dense(pa, pb), False, False):
+            kind_ctx['used'] = 'motif'
+            return [pa, pb]
+        return None
+
+    def truss_stitch(r, s_a, side_a, pa, s_b, side_b, pb):
+        """ADAPTIVE TRUSS stitch: half a BOND along the start face's contact
+        rail, a smooth transition (radius ≤ turn_radius), the diagonal BRACE
+        (built in strip coordinates: it bends with a curved wall, so the
+        angle stays wall-relative), a transition and half a bond into the
+        landing — consecutive stitches join at the landing, so each contact
+        is one bond of length `bond` centred on its station. Exact ends
+        (junction hand-offs, transfers) get no bond. Where the full bond does
+        not fit (short gap, leaving the wall, crowding a face) it is halved,
+        then dropped ('truss_plain'); None → the ordinary constructions."""
+        gap = abs(s_b - s_a)
+        sg = 1.0 if s_b > s_a else -1.0
+        ex_a, ex_b = not is_contact(r, side_a, s_a), not is_contact(r, side_b, s_b)
+        order = ['truss', 'truss_short', 'truss_plain']
+        if kind_ctx['pref'] in order:
+            order.remove(kind_ctx['pref'])
+            order.insert(0, kind_ctx['pref'])
+        for kd in order:
+            frac = {'truss': 1.0, 'truss_short': 0.5, 'truss_plain': 0.0}[kd]
+            h = min(0.5 * TP['bond'] * frac, 0.3 * gap)
+            ha, hb = (0.0 if ex_a else h), (0.0 if ex_b else h)
+            s1, s2 = s_a + sg * ha, s_b - sg * hb
+            pts = [pa]
+            i_a = 0
+            if ha > 1e-6:
+                m = max(1, int(math.ceil(ha / 1.0)))
+                pts += [rail(r, side_a, s_a + sg * ha * k / m) for k in range(1, m + 1)]
+                i_a = len(pts) - 1
+            for k in range(1, 8):
+                f = k / 8
+                x = s1 + f * (s2 - s1)
+                pts.append(rail(r, side_a, x).lerp(rail(r, side_b, x), f))
+            if hb > 1e-6:
+                pts.append(rail(r, side_b, s2))
+                i_b = len(pts) - 1
+                m = max(1, int(math.ceil(hb / 1.0)))
+                pts += [rail(r, side_b, s2 + sg * hb * k / m) for k in range(1, m)]
+            else:
+                i_b = None
+            pts.append(pb)
+            if TP['turn_radius'] > 0:
+                if i_b is not None:
+                    pts = _fillet_at(pts, i_b, TP['turn_radius'])
+                if i_a:
+                    pts = _fillet_at(pts, i_a, TP['turn_radius'])
+            if all(_strut_ok(u, v, region) or u.dist(v) < 1e-9 for u, v in zip(pts, pts[1:])) \
+                    and _clear_poly(pts, ex_a, ex_b):
+                kind_ctx['used'] = kd
+                return _no_foldback(pts)
+        return None
 
     def dogleg(r, s_a, pa, s_b, pb):
         """A stitch that stays IN the material where neither the face-to-face
@@ -1983,7 +2475,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 else:
                     seqs[ri] = ('two', opts[0])
             else:
-                seqs[ri] = ('single', layout(r, 'single', flip, 0))
+                seqs[ri] = ('single', layout(r, 'single', face_pref[ri], 0))
         elif mult[ri] == 2:
             # Which phase lands which corner point follows from the start
             # side: pick the one keeping other beads clear of the inner
@@ -1997,7 +2489,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             else:
                 seqs[ri] = ('two', opts[0])
         else:
-            s0, par = choice[ri] if ri in choice else (flip, None)
+            s0, par = choice[ri] if ri in choice else (face_pref[ri], None)
             seqs[ri] = ('single', layout(r, 'single', s0, par))
 
     def neighbour(ri, end, side):
@@ -2111,7 +2603,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     if not is_contact(r, sd, x):
                         touched.add(k)
                     else:
-                        poor = j in (0, len(one) - 1) or \
+                        poor = j in (0, len(one) - 1) or (id(r), sd, round(x % r.length if r.cycle else x, 9)) \
+                            in motif_role or \
                             round(x % r.length if r.cycle else x, 6) in cs_
                         cands.setdefault(k, []).append((ri, sd, x, poor))
         # CONNECTIVITY: passes / rings joined by exact contacts (shared pass
@@ -2209,10 +2702,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         unsupported.append(max(gaps, default=0.0))
         ns_, _ = counts(r, 'two' if mode == 'two' else 'single',
                         None if mode == 'two' else (choice[ri][1] if ri in choice else
-                                                     (0 if r.cycle else None)))
-        segs = segments(r)
+                                                     (0 if r.cycle else None)),
+                        choice[ri][0] if ri in choice else None)
+        segs = segments(r, mode != 'two' and motif_single(r))
         for (a_, b_, U), n in zip(segs, ns_):
-            pitches.append(U / n)
+            pitches.append((b_ - a_) / n if TP is not None else U / n)   # (truss: U is a phase)
         if r.cycle:
             motif = 'double_loop' if mode == 'two' else 'loop'
         elif mode == 'two':
@@ -2221,10 +2715,12 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         else:
             motif = ('single' if all(nd[0] == 'J' for nd in (r.a, r.b))
                      else 'lone' if all(nd[0] == 'E' for nd in (r.a, r.b)) else 'open_end')
-        L = sum(U for _, _, U in segs)
+        L = sum((b_ - a_) if TP is not None else U for a_, b_, U in segs)
         N = sum(ns_)
         run_rep.append({'length': round(L, 2), 'stitches': N, 'pitch': round(L / N, 2),
                         'passes': 2 if mode == 'two' else 1, 'motif': motif,
+                        # V1 / V2 can shift this run's phase (a cornered loop is anchored by its motifs)
+                        'phase_free': motif in ('loop', 'lone') and not (mode != 'two' and motif_single(r)),
                         'corners': len(corners(r)),
                         'max_unsupported': round(unsupported[-1], 2),
                         'ends': [None if r.cycle else ('junction' if nd[0] == 'J' else 'end')
@@ -2265,10 +2761,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             partners[y[0]][f'{y[1]},{y[2]}'] = [uid[x[0]], x[1], x[2]]
     for ri, r in enumerate(runs):
         L = r.length
-        segs_ = segments(r)
         mode_ = seqs[ri][0]
+        segs_ = segments(r, mode_ != 'two' and motif_single(r))
         ns_, _ = counts(r, 'two' if mode_ == 'two' else 'single',
-                        None if mode_ == 'two' else (choice[ri][1] if ri in choice else (0 if r.cycle else None)))
+                        None if mode_ == 'two' else (choice[ri][1] if ri in choice else (0 if r.cycle else None)),
+                        choice[ri][0] if ri in choice else None)
         track_out.append({
             'cycle': r.cycle, 'mult': mult[ri],
             'pts': [_xy(geo.centre(r, f * L)) for f in (0.1, 0.3, 0.5, 0.7, 0.9)],
@@ -2276,10 +2773,37 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             'left0': geo._side_sign(r, 0) > 0,
             'segmid': [_xy(geo.centre(r, ((a_ + b_) / 2) % L if r.cycle else (a_ + b_) / 2)) for a_, b_, _ in segs_],
             'counts': list(ns_),
+            # CONTACT IDENTITY (truss): normalised phase of every interior
+            # station of each segment — segment j, contact k
+            'phases': [list((phase_q.get((id(r), round(a_, 6), n_)) or
+                             [k / n_ for k in range(n_ + 1)])[1:-1])
+                       for (a_, b_, _), n_ in zip(segs_, ns_)] if TP is not None else None,
             'kinds': kinds_out.get(ri),
             'choice': list(choice[ri]) if ri in choice else None,
             'uid': uid[ri], 'partners': partners[ri]})
+    # the corner motifs as built (for inspection / tests): each corner's frame
+    # (outer corner O, run directions t1 / t2) and its landings (contact points)
+    motif_list = []
+    if MOTIFS:
+        for ri, r in enumerate(runs):
+            mode_ = seqs[ri][0]
+            for c in corners(r):
+                inn = c['inner']
+                O, I = c['points'][1 - inn], c['points'][inn]
+                if mode_ == 'two':
+                    ld = [('I', lp(r, inn, c['s'])), ('O', lp(r, 1 - inn, c['s']))]
+                    kind = 'double'
+                else:
+                    ld = sorted(((v[0], lp(r, k[1], k[2])) for k, v in motif_role.items()
+                                 if k[0] == id(r) and v[1] is c), key=lambda t: t[0])
+                    kind = 'single' if len(ld) == 4 else 'brace'
+                motif_list.append({'kind': kind, 'outer': _xy(O), 'inner': _xy(I),
+                                   't1': _xy(c['t1']), 't2': _xy(c['t2']),
+                                   'landings': {k_: _xy(q) for k_, q in ld}})
     report = {
+        'corner_motifs': dict(motif_report, double=sum(len(corners(r)) for ri, r in enumerate(runs)
+                                                       if seqs[ri][0] == 'two'),
+                              motifs=motif_list) if MOTIFS else 0,
         'no_cavity': no_cavity,
         'target': S, 'thickness': round(thick, 2), 'max_unsupported_limit': round(DMAX, 2),
         'max_unsupported': round(max(unsupported, default=0.0), 2),
@@ -2293,6 +2817,10 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         'contact_min': None if c_min is None else round(c_min, 3),
         'contact_violations': c_bad,
         'track': {'runs': track_out, **track_note},
+        'pattern': pattern,
+        'truss': None if TP is None else {
+            **TP, 'effective_pitch': round(S, 2),
+            'stitches': _tally(x or 'other' for ri in kinds_out for one in kinds_out[ri] for x in one)},
         'jambs': {'resolved': len(set().union(*(v.get('lines', set()) for v in jamb_report.values()))),
                   'lines': sorted(set().union(*(v.get('lines', set()) for v in jamb_report.values()))),
                   'unresolved': [u for v in jamb_report.values() for u in v['unresolved']],
@@ -2316,6 +2844,82 @@ def _straight(geo, r, s_a, s_b):
         if abs((pm.x - p0.x) * d.y - (pm.y - p0.y) * d.x) / L > 1e-3:
             return False
     return True
+
+
+def _nearest_face_point(sk, q, ref, radius):
+    """The point nearest q on the boundary ring that `ref` lies on (within
+    radius of ref), or None."""
+    best_ring = None
+    for ri, ring in enumerate(sk.R.rings):
+        n = len(ring)
+        d = min(_seg_d(ref, ring[i], ring[(i + 1) % n]) for i in range(n))
+        if best_ring is None or d < best_ring[0]:
+            best_ring = (d, ri)
+    ring = sk.R.rings[best_ring[1]]
+    n = len(ring)
+    best = None
+    for i in range(n):
+        a, b = ring[i], ring[(i + 1) % n]
+        d = b - a
+        L2 = d.x * d.x + d.y * d.y
+        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((q.x - a.x) * d.x + (q.y - a.y) * d.y) / L2))
+        p = a + d * t
+        dd = p.dist(q)
+        if best is None or dd < best[0]:
+            best = (dd, p)
+    if best is None or best[1].dist(ref) > radius:
+        return None
+    return best[1]
+
+
+def _tally(xs):
+    out = {}
+    for x in xs:
+        out[x] = out.get(x, 0) + 1
+    return dict(sorted(out.items()))
+
+
+def _fillet_at(pts, i, r):
+    """Round the polyline at vertex i with a circular arc of radius ≤ r
+    (the tangent points are found along the polyline either side, limited
+    to 45 % of the stretch to the neighbouring ends)."""
+    if i <= 0 or i >= len(pts) - 1 or r <= 0:
+        return pts
+    V = pts[i]
+    u1, u2 = V - pts[i - 1], pts[i + 1] - V
+    l1, l2 = u1.length(), u2.length()
+    if l1 < 1e-9 or l2 < 1e-9:
+        return pts
+    u1, u2 = u1 * (1.0 / l1), u2 * (1.0 / l2)
+    c = max(-1.0, min(1.0, u1.x * u2.x + u1.y * u2.y))
+    turn = math.acos(c)
+    if turn < math.radians(2):
+        return pts
+    back = sum(pts[k].dist(pts[k + 1]) for k in range(i))
+    fwd = sum(pts[k].dist(pts[k + 1]) for k in range(i, len(pts) - 1))
+    t = min(r * math.tan(turn / 2), 0.45 * back, 0.45 * fwd)
+    if t < 1e-3:
+        return pts
+    rr = t / math.tan(turn / 2)
+
+    def walk(k0, step, dist):
+        k, left = k0, dist
+        while 0 <= k + step < len(pts):
+            seg = pts[k].dist(pts[k + step])
+            if seg >= left:
+                return k + step, pts[k].lerp(pts[k + step], left / seg)
+            left -= seg
+            k += step
+        return k, pts[k]
+    ka, A = walk(i, -1, t)
+    kb, B = walk(i, 1, t)
+    sgn = 1.0 if u1.x * u2.y - u1.y * u2.x > 0 else -1.0
+    nrm = Vec2(-u1.y * sgn, u1.x * sgn)
+    C = A + nrm * rr
+    a0 = math.atan2(A.y - C.y, A.x - C.x)
+    arc = [Vec2(C.x + rr * math.cos(a0 + sgn * turn * k / 6), C.y + rr * math.sin(a0 + sgn * turn * k / 6))
+           for k in range(1, 6)]
+    return pts[:ka + 1] + [A] + arc + [B] + pts[kb:]
 
 
 def _no_foldback(poly):

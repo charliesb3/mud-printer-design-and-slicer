@@ -340,6 +340,111 @@ def _choose_source(G: nx.MultiGraph,
 
 
 # ---------------------------------------------------------------------------
+# Route start (seam) placement and component order
+# ---------------------------------------------------------------------------
+
+# A closed component's DEFAULT start (its seam: start = end) should hide in the
+# wall: web / lattice / internal geometry first, wall-system paths next, inner
+# skins next, exterior skins / caps / corners last. Travel still counts: the
+# start minimises travel + SEAM_WEIGHT × exposure (in).
+SEAM_WEIGHT = 12.0
+_CONCEALED_ROLES = ('lattice', 'infill', 'web', 'solid', 'solid_infill')
+
+
+def _strand_exposure(st) -> float:
+    if st is None:
+        return 0.5
+    if st.kind in ('field', 'internal') or (st.role or '') in _CONCEALED_ROLES:
+        return 0.0
+    role = st.role or ''
+    if role == 'wall_system':
+        return 0.4
+    if role == 'inner':
+        return 0.7
+    return 1.0
+
+
+def _node_exposure(G, n, strands) -> float:
+    """0 (concealed) … 1.5 (exposed corner) for a node as a seam."""
+    ex = 0.0
+    nbrs = []
+    for _, v, d in G.edges(n, data=True):
+        if d.get('kind') == 'travel':
+            continue
+        ex = max(ex, _strand_exposure(strands.get(d.get('strand_id'))))
+        nbrs.append(v)
+    if len(nbrs) == 2:
+        (ax, ay), (bx, by) = nbrs
+        ux, uy = n[0] - ax, n[1] - ay
+        vx, vy = bx - n[0], by - n[1]
+        lu, lv = math.hypot(ux, uy), math.hypot(vx, vy)
+        if lu > 1e-9 and lv > 1e-9 and (ux * vx + uy * vy) / (lu * lv) < math.cos(math.radians(35)):
+            ex += 0.5                                   # a corner: a visible seam
+    return ex
+
+
+def _seam_node(G, current, strands) -> tuple:
+    """Default start of a CLOSED component: least travel + exposure. (A seam
+    sits on a bead vertex: on straight skins those are corners, so a less
+    exposed skin wins.)"""
+    def cost(n):
+        t = _euclid(current, n) if current is not None else 0.0
+        return (t + SEAM_WEIGHT * _node_exposure(G, n, strands), n)
+    return min(G.nodes, key=cost)
+
+
+def _rep_nodes(comp, origin, cap=48) -> list:
+    """Nodes where a component can be entered: its origin, its odd nodes
+    (open), else a spread sample of its nodes (closed)."""
+    if origin is not None:
+        return [origin]
+    odd = [n for n, d in comp.degree() if d % 2 == 1]
+    if odd:
+        return odd
+    nodes = sorted(comp.nodes)
+    step = max(1, len(nodes) // cap)
+    return nodes[::step]
+
+
+def _plan_order(reps, start) -> list[int]:
+    """Visiting order of components minimising TRAVEL between them: nearest
+    neighbour from every possible first component (or from the start
+    position), then 2-opt on the open tour (distances = closest entry
+    points)."""
+    n = len(reps)
+    if n <= 1:
+        return list(range(n))
+    D = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            D[i][j] = D[j][i] = min(_euclid(a, b) for a in reps[i] for b in reps[j])
+    d0 = [min(_euclid(start, a) for a in r) for r in reps] if start is not None else [0.0] * n
+
+    def length(seq):
+        return d0[seq[0]] + sum(D[a][b] for a, b in zip(seq, seq[1:]))
+
+    def nn(first):
+        seq, left = [first], set(range(n)) - {first}
+        while left:
+            k = min(left, key=lambda j: (D[seq[-1]][j], j))
+            seq.append(k)
+            left.discard(k)
+        return seq
+    firsts = [min(range(n), key=lambda i: (d0[i], i))] if start is not None else range(n)
+    best = min((nn(f) for f in firsts), key=length)
+    if n <= 150:
+        improved, passes = True, 0
+        while improved and passes < 50:
+            improved, passes = False, passes + 1
+            for i in range(0 if start is None else 0, n - 1):
+                for j in range(i + 1, n):
+                    cand = best[:i] + best[i:j + 1][::-1] + best[j + 1:]
+                    if length(cand) < length(best) - 1e-9:
+                        best, improved = cand, True
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Component routing
 # ---------------------------------------------------------------------------
 
@@ -379,6 +484,8 @@ def _route_component(
     current: tuple | None,
     pinned_start: tuple | None,
     allow_retrace: bool = True,
+    strands: dict | None = None,
+    next_reps: list | None = None,
 ) -> tuple[nx.MultiGraph, list[tuple[tuple, tuple, int]]]:
     """
     Return (G_work, path) as (u, v, key) triples.
@@ -391,8 +498,20 @@ def _route_component(
         _pair_by_travel(comp)
 
     source = _choose_source(G_work, current, pinned_start)
-
     residual_odd = [n for n, d in G_work.degree() if d % 2 == 1]
+    own_odd = [n for n, d in comp.degree() if d % 2 == 1]
+    if strands is not None and not (pinned_start and pinned_start in G_work.nodes):
+        if not own_odd:
+            source = _seam_node(G_work, current, strands)      # concealed seam, little travel
+        elif len(own_odd) == 2:
+            # an OPEN component starts at one of its ends — the one that
+            # leaves the other end nearest the next component
+            def total(a):
+                b = own_odd[1] if a == own_odd[0] else own_odd[0]
+                return (_euclid(current, a) if current is not None else 0.0) + \
+                    (min(_euclid(b, r) for r in next_reps) if next_reps else 0.0)
+            source = min(own_odd, key=total)
+
     if not residual_odd:
         path = list(nx.eulerian_circuit(G_work, source=source, keys=True))
     else:
@@ -428,20 +547,28 @@ def route_layer(
     """
     G = build_graph(layer)
     raw_comps = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+    strands = {s.id: s for s in layer.strands}
+    origin_nodes = [_pt(o) for o in (origins or [])]
 
-    # Apply optional component ordering
+    def _origin_of(comp):
+        if any(d % 2 for _, d in comp.degree()):
+            return None
+        return next((o for o in origin_nodes if o in comp.nodes), None)
+
+    # Component order: explicit (constraint) first; otherwise planned to
+    # minimise travel between the disconnected components
     if component_order:
         indices = [i for i in component_order if i < len(raw_comps)]
         remaining = [i for i in range(len(raw_comps)) if i not in indices]
         ordered_comps = [raw_comps[i] for i in indices + remaining]
     else:
-        ordered_comps = raw_comps
+        reps0 = [_rep_nodes(c, _origin_of(c)) for c in raw_comps]
+        ordered_comps = [raw_comps[i] for i in _plan_order(reps0, _pt(start) if start else None)]
 
     moves: list[PrintMove] = []
     current_pos: tuple | None = _pt(start) if start else None
     pinned = _pt(start) if start else None
 
-    origin_nodes = [_pt(o) for o in (origins or [])]
 
     def _origin(comp):
         """This component's route origin, if it is a closed circuit."""
@@ -449,32 +576,19 @@ def route_layer(
             return None
         return next((o for o in origin_nodes if o in comp.nodes), None)
 
-    def _entry_dist(comp, pos):
-        if pos is None:
-            return 0.0
-        org = _origin(comp)
-        if org is not None:
-            return _euclid(pos, org)
-        odd = [n for n, d in comp.degree() if d % 2 == 1]
-        return min(_euclid(pos, n) for n in (odd or comp.nodes))
-
     pending = list(ordered_comps)
     comp_idx = -1
     while pending:
         comp_idx += 1
-        if comp_idx == 0 or component_order:
-            comp = pending.pop(0)
-        else:
-            # nearest next component (its nearest possible start) — short
-            # travel between disconnected pieces
-            k = min(range(len(pending)), key=lambda i: _entry_dist(pending[i], current_pos))
-            comp = pending.pop(k)
-        # A closed component starts at its route origin; otherwise the
-        # pinned start applies to the very first component only
+        comp = pending.pop(0)
+        # A closed component starts at its route origin (the user's seam);
+        # otherwise the pinned start applies to the very first component
+        # only; else the concealed-seam / open-orientation rules
         org = _origin(comp)
         pin = org if org is not None else (pinned if comp_idx == 0 else None)
+        nxt = _rep_nodes(pending[0], _origin(pending[0])) if pending else None
 
-        G_work, path = _route_component(comp, current_pos, pin, allow_retrace)
+        G_work, path = _route_component(comp, current_pos, pin, allow_retrace, strands, nxt)
         if not path:
             continue
 

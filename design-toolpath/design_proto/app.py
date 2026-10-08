@@ -16,7 +16,7 @@ from model import (
     PrintLayer, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
     QuadBezierPath,
     OffsetTreatment, LatticeInstance, TraversalConstraints, Opening, Trim,
-    RegionOverride, RegionInfill, JunctionSetting, WallSpec, NetworkWall,
+    RegionOverride, RegionInfill, JunctionSetting, WallSpec, NetworkWall, WallSystem,
     InsetPath, WallRelation,
     GENERATORS, Vec2
 )
@@ -48,8 +48,10 @@ def _wall(d):
     if not isinstance(w, dict) or 'thickness' not in w:
         return None
     t = float(w.get('thickness', 0) or 0)
+    sysd = w.get('system')
     return WallSpec(max(0.0, t), w.get('align', 'auto') or 'auto',
-                    bool(w.get('print_reference', False)))
+                    bool(w.get('print_reference', False)),
+                    dict(sysd) if isinstance(sysd, dict) else None)
 
 
 def _deserialise_path(d: dict):
@@ -180,6 +182,7 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             params=dict(fd.get('params') or {}),
             variation_index=int(fd.get('variation_index', 0) or 0),
             kind=fd.get('kind', 'wall') or 'wall',
+            owner=fd.get('owner') or None,
         ))
     layer.junction_style = data.get('junction_style', 'miter') or 'miter'
     layer.junction_radius = float(data.get('junction_radius', 0.0) or 0.0)
@@ -192,9 +195,26 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             id=wd['id'], path_id=wd['path_id'],
             thickness=float(wd.get('thickness', 0) or 0),
             align=wd.get('align', 'auto') or 'auto',
-            print_reference=bool(wd.get('print_reference', False))))
+            print_reference=bool(wd.get('print_reference', False)),
+            system=dict(wd['system']) if isinstance(wd.get('system'), dict) else None))
+    for sd in data.get('wall_systems', []) or []:
+        if not isinstance(sd, dict):
+            continue
+        th = sd.get('thickness')
+        layer.wall_systems.append(WallSystem(
+            id=str(sd.get('id') or f'WS{len(layer.wall_systems) + 1}'),
+            type=str(sd.get('type') or 'skin_web'),
+            params=dict(sd.get('params') or {}),
+            members=[str(x) for x in sd.get('members', []) or []],
+            name=str(sd.get('name') or ''),
+            thickness=None if th is None else float(th or 0),
+            align=sd.get('align', 'auto') or 'auto',
+            print_reference=bool(sd.get('print_reference', False)),
+            web=dict(sd.get('web') or {})))
     layer.material = MaterialSpec.from_dict(data.get('material'))
-    layer.route_origins = [{'strand': str(o.get('strand')), 'u': float(o.get('u', 0.0) or 0.0)}
+    layer.route_origins = [dict({'strand': str(o.get('strand')), 'u': float(o.get('u', 0.0) or 0.0)},
+                                **({'pos': [float(o['pos'][0]), float(o['pos'][1])]}
+                                   if isinstance(o.get('pos'), (list, tuple)) and len(o['pos']) == 2 else {}))
                            for o in (data.get('route_origins') or []) if o.get('strand')]
     layer.return_paths = bool(data.get('return_paths', True))
     layer.prefer_closed = bool(data.get('prefer_closed', True))
@@ -235,7 +255,7 @@ def api_generators():
 def api_infill_patterns():
     import solid as solid_mod
     return jsonify([{'name': k, 'description': v, 'kind': 'wall',
-                     'parameters': infill_mod.PARAMETERS}
+                     'parameters': infill_mod.parameters_for(k)}
                     for k, v in infill_mod.PATTERNS.items()] +
                    [{'name': k, 'description': v, 'kind': 'solid',
                      'parameters': solid_mod.PARAMETERS}
@@ -285,6 +305,19 @@ def api_effective_paths():
 # ---------------------------------------------------------------------------
 # API — route (geometry + toolpath)
 # ---------------------------------------------------------------------------
+
+@app.route('/api/migrate_wall_systems', methods=['POST'])
+def api_migrate_wall_systems():
+    """Legacy walls (path / Network Wall / wall infills) → explicit Wall
+    Systems (model.PrintLayer.migrate_wall_systems)."""
+    try:
+        data = request.get_json(force=True)
+        layer = _deserialise_layer(data)
+        _apply_lineage(layer, data)
+        return jsonify(layer.migrate_wall_systems())
+    except Exception:
+        return jsonify({'error': traceback.format_exc()}), 400
+
 
 @app.route('/api/route', methods=['POST'])
 def api_route():

@@ -392,18 +392,22 @@ eval(src + `
   const [WO] = layer.source_paths;
   selectedId = WO.id;
   let nodes = panelNodes();
-  const iWall = nodes.findIndex(n => n.textContent === 'Wall Thickness');
+  const iWall = nodes.findIndex(n => n.textContent === 'Wall System');
   const iAdv = nodes.findIndex(n => n.id === 'adv-geometry');
-  check(iWall >= 0 && iAdv > iWall, 'Wall Thickness is the primary wall control (before the Advanced section)');
+  check(iWall >= 0 && iAdv > iWall, 'the Wall System choice is the primary wall control (before the Advanced section)');
   check(nodes.find(n => n.id === 'adv-geometry').open !== true, 'Advanced (link / inset) starts collapsed');
   check(nodes.some(n => n.id === 'relation-none') && !nodes.some(n => n.id === 'relation-picker'),
         'no candidate → an explanation, not a dead picker');
   // Wall Thickness still works
   WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
   check(buildPayload().source_paths[0].wall.thickness === 10, 'Wall Thickness kept in the payload');
+  WO.wall = null;
+  _wsNew([WO.id]).align = 'inside';
   nodes = panelNodes();
-  const dn = nodes.find(n => n.id === 'wall-derived-note');
-  check(dn && dn.textContent.startsWith('10 in wall inside this boundary'), 'Wall section explains the derived parametric face');
+  check(nodes.some(n => typeof n.textContent === 'string' && n.textContent.startsWith('10 in wall · Inside · Skin + Web')),
+        'Wall section names the Wall System envelope');
+  layer.wall_systems = []; layer.infills = layer.infills.filter(f => !f.owner);
+  WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
   derivedPaths = [{ id: WO.id + '.wall', source_id: WO.id, treatment_id: WO.id + '.wall', closed: true,
                     points: [[110, 110], [290, 110], [290, 210], [110, 210]] }];
   _drawDerivedWallFaces();                       // selection trace + label (no throw)

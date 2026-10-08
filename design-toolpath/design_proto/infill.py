@@ -41,6 +41,8 @@ from model import Vec2, _segments_intersect
 PATTERNS = {
     'zigzag': 'Triangulated web: struts alternate face to face',
     'wave': 'Same web, each strut a smooth wave tangent to the walls',
+    'truss': 'Adaptive Truss: braces at a structural angle, pitch from the local cavity width, '
+             'a bond along each skin (wall lattice only; wide areas use the zigzag field)',
 }
 
 PARAMETERS = [
@@ -49,6 +51,24 @@ PARAMETERS = [
     {'name': 'spacing', 'label': 'Target Spacing', 'default': 20.0, 'min': 4.0,
      'max': 120.0, 'step': 1.0},
 ]
+
+# ADAPTIVE TRUSS (wall_lattice.truss_params). Prototype defaults from the
+# wall-web experiment — NOT calibrated machine values. Target Spacing is not
+# a parameter: the pitch follows from the brace angle and the cavity width.
+TRUSS_PARAMETERS = [
+    {'name': 'brace_angle', 'label': 'Brace Angle', 'default': 45.0, 'min': 15.0, 'max': 75.0,
+     'step': 1.0, 'unit': '°'},
+    {'name': 'bond', 'label': 'Bond Length', 'default': 3.0, 'min': 0.0, 'max': 24.0, 'step': 0.25},
+    {'name': 'max_span', 'label': 'Max Unsupported Span', 'default': 40.0, 'min': 4.0, 'max': 240.0,
+     'step': 1.0},
+    {'name': 'turn_radius', 'label': 'Min Turn Radius', 'default': 1.5, 'min': 0.0, 'max': 12.0,
+     'step': 0.25},
+]
+
+
+def parameters_for(pattern):
+    return TRUSS_PARAMETERS if pattern == 'truss' else PARAMETERS
+
 
 CORNER_TURN = math.radians(35.0)    # sharper ring turns are always samples
 

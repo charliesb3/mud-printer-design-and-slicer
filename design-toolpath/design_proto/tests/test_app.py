@@ -68,7 +68,8 @@ class TestWorkspaceLayout:
             def handle_starttag(self, tag, attrs):
                 a = dict(attrs)
                 region = self.stack[-1] if self.stack else None
-                if a.get('id') in ('sidebar-design', 'sidebar-print', 'sidebar-material', 'canvas-wrap'):
+                if a.get('id') in ('sidebar-design', 'sidebar-wallsys', 'sidebar-print', 'sidebar-material',
+                                   'canvas-wrap'):
                     region = a['id']
                 elif 'toolbar' in (a.get('class') or '').split():
                     region = 'toolbar'
@@ -93,12 +94,17 @@ class TestWorkspaceLayout:
                   'junction-props-section', 'junction-props',
                   'wg-junction-style', 'wg-junction-radius', 'wg-cap-style', 'wg-cap-corner-radius',
                   'network-section', 'network-props']
-        prnt = ['infill-section', 'infill-list', 'override-reverse', 'route-returns', 'route-closed', 'metrics-section', 'm-runs']
+        prnt = ['override-reverse', 'route-returns', 'route-closed', 'metrics-section', 'm-runs']
+        # the old Infill authoring UI is gone: a wall's web lives in its Wall System
+        assert 'infill-section' not in p.ids and 'infill-list' not in p.ids
         tools = ['tool-edit', 'tool-draw', 'tool-line', 'tool-curve', 'tool-circle', 'tool-ellipse',
                  'tool-rect', 'tool-opening', 'tool-trim', 'btn-undo', 'btn-redo', 'btn-duplicate',
                  'btn-toolpath', 'btn-arrows', 'btn-dims']
         for i in design:
             assert p.where.get(i) == 'sidebar-design', f'{i} should be in the Design sidebar'
+        # WALL SYSTEM: its own sidebar next to Design (construction, not geometry)
+        for i in ('wallsys-section', 'wallsys-list', 'wallsys-edit-section', 'wallsys-props'):
+            assert p.where.get(i) == 'sidebar-wallsys', f'{i} should be in the Wall System sidebar'
         for i in prnt:
             assert p.where.get(i) == 'sidebar-print', f'{i} should be in the Print / Toolpath sidebar'
         for i in tools:
@@ -111,7 +117,7 @@ class TestWorkspaceLayout:
 
     def test_canvas_sits_between_the_sidebars(self, client):
         html = client.get('/').data.decode()
-        order = [html.index(f'id="{i}"') for i in ('sidebar-design', 'canvas-wrap',
+        order = [html.index(f'id="{i}"') for i in ('sidebar-design', 'sidebar-wallsys', 'canvas-wrap',
                                                      'sidebar-material', 'sidebar-print')]
         assert order == sorted(order)
 

@@ -11,6 +11,7 @@ Pipeline:
 Source geometry is never mutated by treatments.
 """
 from __future__ import annotations
+import json
 import math
 import os
 import sys
@@ -1559,6 +1560,9 @@ class WallSpec:
     # strut — local mud build-up). Inside / outside / left / right walls
     # keep the reference as one of their printed faces.
     print_reference: bool = False
+    # WALL SYSTEM (wall_systems.py): None / 'skin_web' = two skins + Wall
+    # Infill (the default); otherwise how the envelope is filled.
+    system: dict = None
 
     def resolved_align(self, closed: bool) -> str:
         a = self.align
@@ -1572,8 +1576,11 @@ class WallSpec:
         return self.print_reference or self.resolved_align(closed) != 'center'
 
     def to_dict(self) -> dict:
-        return {'thickness': self.thickness, 'align': self.align,
-                'print_reference': self.print_reference}
+        d = {'thickness': self.thickness, 'align': self.align,
+             'print_reference': self.print_reference}
+        if self.system:
+            d['system'] = dict(self.system)
+        return d
 
     def offsets(self, path_id: str, closed: bool,
                 pts: list[Vec2]) -> list['OffsetTreatment']:
@@ -1606,11 +1613,73 @@ class NetworkWall:
     thickness: float
     align: str = 'auto'
     print_reference: bool = False
+    system: dict = None                  # WALL SYSTEM (see WallSpec)
 
     def to_dict(self) -> dict:
-        return {'id': self.id, 'type': 'network_wall', 'path_id': self.path_id,
-                'thickness': self.thickness, 'align': self.align,
-                'print_reference': self.print_reference}
+        d = {'id': self.id, 'type': 'network_wall', 'path_id': self.path_id,
+             'thickness': self.thickness, 'align': self.align,
+             'print_reference': self.print_reference}
+        if self.system:
+            d['system'] = dict(self.system)
+        return d
+
+
+@dataclass
+class WallSystem:
+    """
+    WALL SYSTEM (layer-level; wall_systems.py) — the CONSTRUCTION
+    specification of an explicit, user-authored group of Design paths:
+
+      name, members                  which paths (at most ONE system per path;
+                                     members need not touch or share a Wall
+                                     Network — connectivity stays geometric)
+      thickness, align,              the wall ENVELOPE of every member
+      print_reference
+      type, params                   the CONSTRUCTION: 'single' (the ordinary
+                                     single-line / out-and-back wall: no
+                                     envelope, the bead + return-lane rules) |
+                                     'hollow' (two skins) | 'skin_web' (two
+                                     skins + a web) | 'parallel' (N walls) |
+                                     'interleaved' | 'linked' | 'chain'
+      web = {pattern, params,        Skin + Web only: the web lattice (zigzag /
+             variation_index}        wave / truss; pattern 'none' = skins
+                                     only). Materialised as RegionInfill
+                                     records OWNED by the system (owner = id;
+                                     one per connected group of members), so
+                                     Layer-Design lineage keeps keying the
+                                     lattice on infill ids.
+
+    A path in no Wall System is a single bead (a physical out-and-back pair
+    when open). Legacy designs (a path's own WallSpec, Network Walls,
+    unowned wall infills) still resolve as before; the Designer migrates
+    them into Wall Systems. thickness None = a legacy system from the
+    membership-only pass (envelope from the path / network wall).
+    """
+    id: str
+    type: str = 'skin_web'
+    params: dict = field(default_factory=dict)
+    members: list = field(default_factory=list)
+    name: str = ''
+    thickness: Optional[float] = None
+    align: str = 'auto'
+    print_reference: bool = False
+    web: dict = field(default_factory=dict)
+
+    def spec(self) -> dict:
+        return {**(self.params or {}), 'type': self.type}
+
+    def envelope(self) -> Optional['WallSpec']:
+        if self.thickness is None or self.thickness <= 1e-9:
+            return None
+        return WallSpec(float(self.thickness), self.align or 'auto', bool(self.print_reference))
+
+    def to_dict(self) -> dict:
+        d = {'id': self.id, 'name': self.name, 'type': self.type, 'params': dict(self.params or {}),
+             'members': list(self.members), 'align': self.align,
+             'print_reference': self.print_reference, 'web': dict(self.web or {})}
+        if self.thickness is not None:
+            d['thickness'] = self.thickness
+        return d
 
 
 @dataclass
@@ -1649,12 +1718,16 @@ class RegionInfill:
     params: dict = field(default_factory=dict)
     variation_index: int = 0
     kind: str = 'wall'               # 'wall' | 'solid'
+    owner: Optional[str] = None      # the Skin + Web WALL SYSTEM whose web this is
 
     def to_dict(self) -> dict:
-        return {'id': self.id, 'type': 'region_infill', 'path_id': self.path_id,
-                'kind': self.kind,
-                'pattern': self.pattern, 'params': dict(self.params),
-                'variation_index': self.variation_index}
+        d = {'id': self.id, 'type': 'region_infill', 'path_id': self.path_id,
+             'kind': self.kind,
+             'pattern': self.pattern, 'params': dict(self.params),
+             'variation_index': self.variation_index}
+        if self.owner:
+            d['owner'] = self.owner
+        return d
 
 
 @dataclass
@@ -2344,6 +2417,7 @@ class PrintLayer:
     junction_radius: float = 0.0      # radius when junction_style == 'round'
     junction_overrides: list[JunctionSetting] = field(default_factory=list)
     network_walls: list[NetworkWall] = field(default_factory=list)
+    wall_systems: list[WallSystem] = field(default_factory=list)
     wall_relations: list[WallRelation] = field(default_factory=list)
     # return_paths ("Infill repair" in the UI): local continuity repair of
     # the wide-region field fallback (route_plan.repair); motif wall
@@ -2415,7 +2489,7 @@ class PrintLayer:
         for rel in self.wall_relations:
             if (getattr(self, '_relation_status', {}).get(rel.id) or {}).get('status') == 'ok':
                 cand.append((rel.outer_id, rel.inner_id))
-        wall_regions = {inf.path_id for inf in self.infills if inf.kind == 'wall'}
+        wall_regions = {inf.path_id for inf in self._all_infills() if inf.kind == 'wall'}
         for p in sources:
             if isinstance(p, InsetPath) and p.parent_id in by_id:
                 o, i = (p.parent_id, p.id) if p.mode == 'inset' else (p.id, p.parent_id)
@@ -2455,7 +2529,7 @@ class PrintLayer:
         nest = self._nesting(processed)
         out = {'cuts': {}, 'faces': {}, 'voids': {}, 'rings': {}, 'status': {}, 'handled': set()}
         trimmed = getattr(self, '_trimmed', set())
-        for inf in self.infills:
+        for inf in self._all_infills():
             O = inf.path_id
             if inf.kind != 'wall' or O not in by_id or not by_id[O].closed or O in linked \
                     or O in trimmed \
@@ -2692,6 +2766,16 @@ class PrintLayer:
             all_offsets.append(derived)
             offsets_by_source.setdefault(src.id, []).append((ot, derived))
             source_of[ot.id] = src.id
+        # each wall's OWN face lines (untrimmed by the network): a generated wall's
+        # band in a mixed / junction region follows them round corners that lie
+        # hidden inside another wall's band (see _split_wall_systems)
+        self._src_faces = {}
+        for sid_, lst in offsets_by_source.items():
+            src = self._path_by_id(sid_)
+            faces = [(list(d_.sample_points()), bool(src.closed)) for _, d_ in lst if len(d_.sample_points()) >= 2]
+            if len(faces) == 1 and sid_ in processed:
+                faces.append((list(processed[sid_]), bool(src.closed)))     # (aligned wall: the path is a face)
+            self._src_faces[sid_] = faces
 
         # 3b) PHYSICAL: a return-lane (two-pass) branch ending on a SINGLE-BEAD
         # host joins it: the host is cut exactly across the branch mouth
@@ -2954,6 +3038,11 @@ class PrintLayer:
             full_by_id, plans, offsets_by_source, processed)
         regions = network.pop('_rings', [])
         jobs = network.pop('_infill_jobs', [])
+        network['wall_systems'] = []
+        network['wall_system_membership'] = dict(getattr(self, '_wall_system_of', {}) or {})
+        network['source_walls'] = dict(getattr(self, '_source_walls', {}) or {})
+        if getattr(self, '_wall_systems', None):
+            result, jobs = self._apply_wall_systems(N, result, cls_of, regions, jobs, network)
         network['reference_only'] = sorted(ref_only)
         network['return_lanes'] = sorted(getattr(self, '_return_lanes', ()))
         network['opening_status'] = dict(region_ops['status'])
@@ -3031,7 +3120,8 @@ class PrintLayer:
                              stations=(self.lattice_stations or {}).get(inf.id),
                              track=((self.lattice_track or {}).get(inf.id) or (None, None))[0],
                              track_map=((self.lattice_track or {}).get(inf.id) or (None, None))[1],
-                             bead=self.material.bead_width if phys else 0.0)
+                             bead=self.material.bead_width if phys else 0.0,
+                             truss=inf.params if pattern == 'truss' else None)
                 if lp is not None:
                     for j, poly in enumerate(lp.polylines):
                         dp = DerivedPath(poly, closed=False, role='lattice',
@@ -3060,17 +3150,19 @@ class PrintLayer:
                         'motif': lr['motif'],
                         'pitch_min': min((a for a, _ in ps), default=None),
                         'pitch_max': max((b for _, b in ps), default=None),
-                        'target': float(next((x.params.get('spacing', 20.0) for x in self.infills
+                        'target': float(next((x.params.get('spacing', 20.0) for x in self._all_infills()
                                               if x.id == info['id']), 20.0)),
                         'max_unsupported': max((r['max_unsupported'] for r in regs), default=None),
                         'max_unsupported_limit': max((r['max_unsupported_limit'] for r in regs), default=None),
                         'corners': sum(run.get('corners', 0) for r in regs for run in r['runs']),
                         # V1 / V2 only move the phase of closed loops and lone
                         # walls; in networks junction coherence fixes it
-                        'variation_effective': any(run['motif'] in ('loop', 'lone')
+                        'variation_effective': any(run.get('phase_free', run['motif'] in ('loop', 'lone'))
                                                    for r in regs for run in r['runs']),
                         # the lineage's SHARED lattice (Layer Designs), if any
-                        'lineage': lr.get('lineage')}
+                        'lineage': lr.get('lineage'),
+                        # ADAPTIVE TRUSS: effective pitch / stitch constructions
+                        'truss': next((r['truss'] for r in regs if r.get('truss')), None)}
             # Motif lattices are continuous by construction: no repair.
             # Report them in the same shape (0 defects / edits) so route
             # consumers see one plan; open ends = lone runs / open arms.
@@ -3161,7 +3253,7 @@ class PrintLayer:
         # closed paths nested in it (by geometry, not creation order).
         nest = self._nesting(processed)
         for info in network.get('infills', []):
-            inf = next((x for x in self.infills if x.id == info['id']), None)
+            inf = next((x for x in self._all_infills() if x.id == info['id']), None)
             if inf is None:
                 continue
             kids = [k for k, par in nest.items() if par == inf.path_id]
@@ -3239,24 +3331,845 @@ class PrintLayer:
     def _network_wall_for(self, ids) -> Optional[NetworkWall]:
         return next((w for w in self.network_walls if w.path_id in ids), None)
 
+    def _apply_wall_systems(self, N, result, cls_of, regions, jobs, network):
+        """WALL SYSTEMS (wall_systems.py): a wall-material region whose
+        bounding walls choose a non-default system prints that system's paths
+        INSTEAD of its skins / caps / Wall Infill. The envelope (faces,
+        opening cuts, junctions, caps) is built as usual; its face beads are
+        only removed / replaced here.
+
+        A region whose walls use DIFFERENT systems (e.g. a Chained Loop
+        ring with an attached line removed from that system) is split by
+        wall: each system fills the envelope of its own walls (the region
+        with the other walls' faces closed off by a chord across their mouth),
+        the Skin + Web walls keep their own face / cap beads, spliced into the
+        system's route at their mouth so the piece still prints as one route."""
+        import json
+        import wall_systems as WS
+        faces = [p for p in result if cls_of.get(id(p)) == N.FACE]
+        samples = {}
+        for p in faces:
+            pts = p.sample_points()
+            samples[id(p)] = (pts[::max(1, len(pts) // 12)] + [pts[-1]]) if pts else []
+
+        def keyof(sid):
+            ws = self._wall_systems.get(sid)
+            if ws is None:
+                return None
+            return self._wall_system_key.get(sid) or json.dumps(ws, sort_keys=True)
+        drop, new = set(), []
+        bead, contact = self.material.bead_width, self.material.contact_separation()
+
+        def emit(polys, system, k, first, tag=''):
+            for j, poly in enumerate(polys):
+                closed = len(poly) > 3 and poly[0].dist(poly[-1]) < 1e-6
+                dp = DerivedPath(poly[:-1] if closed else poly, closed=closed, role='wall_system',
+                                 label=system['type'], source_id=first,
+                                 treatment_id='wall_system_path', id=f'{first}~ws{k}{tag}.{j}')
+                cls_of[id(dp)] = N.FACE
+                new.append(dp)
+        for k, rings in enumerate(regions):
+            members, msid = [], {}
+            for p in faces:
+                sm = samples[id(p)]
+                if sm and id(p) not in drop and all(
+                        min(N.dist_to_polyline(q, r, True) for r in rings) < 0.05 for q in sm):
+                    members.append(p)
+                    msid[id(p)] = (getattr(p, 'source_id', None) or p.id).split('~')[0]
+                    if str(p.id).startswith('junction:'):
+                        # a junction FILLET between two walls: in a mixed junction it
+                        # belongs to the incoming skin-like wall, not to the host
+                        # system's envelope (that system meets the incoming wall at
+                        # its REAL material; Junction R is applied there)
+                        faces_ = str(p.id)[len('junction:'):].split('#')[0].split('|')
+                        known_ = sorted((q.id for q in self.source_paths), key=len, reverse=True)
+                        srcs_ = [next((k for k in known_ if f.startswith(k)), None) for f in faces_]
+                        srcs_ = [x for x in srcs_ if x is not None]
+                        skin_ = [x for x in srcs_ if keyof(x) is None]
+                        if skin_ and len({keyof(x) for x in srcs_}) > 1:
+                            msid[id(p)] = skin_[0]
+                        elif srcs_ and not skin_ and len(set(srcs_)) > 1:
+                            # between two GENERATED walls: neither band follows it (the
+                            # walls meet by crossing printed paths; no pattern bends round it)
+                            msid[id(p)] = '__J'
+            sids = set(msid.values()) - {'__J'}
+            if not members or all(keyof(s) is None for s in sids):
+                continue
+            keys = {keyof(s) for s in sids}
+            systems_used = set()
+            self._split_skin_part = None
+            gen_sids = [s_ for s_ in sids if keyof(s_) is not None]
+
+            def partkey(sid_, keyof=keyof):
+                """Split key: every GENERATED wall its own band (they meet by
+                crossing printed paths), the skin walls together, fillets apart."""
+                if sid_ == '__J':
+                    return '__J'
+                return sid_ if keyof(sid_) is not None else None
+            if len(gen_sids) == 1 and len(keys) == 1 and '__J' not in set(msid.values()):
+                system = self._wall_systems[next(iter(sids))]
+                polys, rep = WS.generate(rings, system, bead, contact, self._seam_hints())
+                drop |= {id(p) for p in members}
+                emit(polys, system, k, sorted(sids)[0])
+                rep.update({'sources': sorted(sids), 'region': k, 'status': 'ok',
+                            'system_id': self._wall_system_key.get(next(iter(sids)))})
+                network['wall_systems'].append(rep)
+                systems_used.add(system['type'])
+            else:
+                parts = self._split_wall_systems(N, rings, members, msid, partkey)
+                if parts is None:
+                    # (an excluded wall spanning between two system walls — a
+                    # partition — cannot be closed off by a chord: V1 keeps
+                    # the whole region Skin + Web)
+                    network['wall_systems'].append({'sources': sorted(sids), 'region': k, 'status': 'mixed',
+                                                    'system': None})
+                    continue
+                skin_sids = sorted(s for s in sids if keyof(s) is None)
+                gen = []
+                for pi, part in enumerate(parts):
+                    sid0 = part['sources'][0]
+                    system = self._wall_systems[sid0]
+                    polys, rep = WS.generate(part['rings'], system, bead, contact, self._seam_hints())
+                    polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
+                    for ch in joined:                # the incoming beads are re-emitted, extended
+                        drop |= {id(p) for p in members if keyof(msid[id(p)]) is None and
+                                 all(min(N.dist_to_polyline(q, ch, False), 1.0) < 0.05 for q in samples[id(p)])}
+                    rep.update({'sources': part['sources'], 'region': k, 'status': 'ok',
+                                'system_id': self._wall_system_key.get(sid0),
+                                'shared_with': sorted(sids - set(part['sources'])),
+                                'spliced_skins': spliced, 'junctions': jinfo})
+                    gen.append({'part': part, 'polys': polys, 'rep': rep, 'system': system, 'sid0': sid0})
+                # (pass 10: generated walls meet by PUSHED bands that cross the host's
+                # paths — the earlier open-the-cap-and-cut splice is retired)
+                skin_part = getattr(self, '_split_skin_part', None)
+                if skin_part:
+                    # a SKIN wall bridging generated walls (its two faces on two rings):
+                    # at each mouth its two face ends continue straight into the host
+                    # and are capped there — crossing the host's printed paths
+                    for ci, ch in enumerate(skin_part.get('chords', [])):
+                        if not (ch.get('is_end') and not ch.get('same') and ch.get('other') and ch.get('exact')):
+                            continue
+                        e_, s_ = ch['exact']
+                        cv = s_ - e_
+                        if cv.length() < 1e-9:
+                            continue
+                        nrm = Vec2(cv.y, -cv.x) * (1.0 / cv.length())
+                        hw = (getattr(self, '_source_walls', {}) or {}).get(ch['other'][0]) or {}
+                        depth = 0.5 * float(hw.get('thickness') or 10.0) + 0.25 * bead
+                        ext = [e_, e_ + nrm * depth, s_ + nrm * depth, s_]
+                        sid_ = ch.get('sid') or ''
+                        dp = DerivedPath(ext, closed=False, role='inner', source_id=sid_,
+                                         treatment_id='wall_system_crossing', id=f'{sid_}~cross{k}.{ci}')
+                        cls_of[id(dp)] = N.FACE
+                        new.append(dp)
+                for gi, g in enumerate(gen):
+                    # a generated wall ENTERING skin walls (Single / Hollow / Skin + Web
+                    # host): the host face is closed across the mouth by a skin bead and
+                    # the incoming cap touches it at one point — one route, no phantom
+                    # connectors (the host skins are never spliced into the incoming wall)
+                    for hj, rec in enumerate(g['part'].get('host_skins', [])):
+                        # the host face closed across the mouth; the incoming wall,
+                        # pushed into the host, CROSSES it (real contact)
+                        halves = [list(rec['ends'])]
+                        host_sid = rec['sids'][0]
+                        for hk, hp in enumerate(halves):
+                            dp = DerivedPath(hp, closed=False, role='inner', source_id=host_sid,
+                                             treatment_id='wall_system_mouth',
+                                             id=f'{host_sid}~mouth{k}.{gi}.{hj}.{hk}')
+                            cls_of[id(dp)] = N.FACE
+                            new.append(dp)
+                        g['rep'].setdefault('junctions', []).append({'crossing_into': host_sid})
+                for pi, g in enumerate(gen):
+                    emit(g['polys'], g['system'], k, g['sid0'], tag=f'p{pi}')
+                    network['wall_systems'].append(g['rep'])
+                    systems_used.add(g['system']['type'])
+                drop |= {id(p) for p in members if partkey(msid[id(p)]) is not None}
+            ring0 = rings[0][0] if rings and rings[0] else None
+            mine = [j for j in jobs if ring0 is not None and j['rings'] and j['rings'][0]
+                    and j['rings'][0][0].dist(ring0) < 1e-6]
+            skin_env = getattr(self, '_split_skin_part', None) if len(keys) > 1 else None
+            if skin_env and any(self._web_member(s_) for s_ in sids):
+                # MIXED region with Skin + Web members: their web is generated on the
+                # skin walls' own envelope (the generated walls' bands closed off)
+                for j in mine:
+                    j['rings'] = skin_env['rings']
+                mine = []
+            jobs = [j for j in jobs if j not in mine]
+            for j in mine:                          # a Wall Infill here is not printed
+                for info in network.get('infills', []):
+                    if info.get('id') == j['infill'].id:
+                        info['status'] = 'wall system'
+                        info['wall_system'] = ', '.join(sorted(systems_used))
+        return [p for p in result if id(p) not in drop] + new, jobs
+
+    def _split_wall_systems(self, N, rings, members, msid, keyof):
+        """Split a mixed-system region by wall. Every ring edge belongs to the
+        face bead (→ source → system key) it lies on. For each system: its
+        envelope = the rings holding its edges, every maximal run of OTHER
+        edges replaced by the chord across its mouth (an attached line's two
+        faces and cap → the host's face line). Skin + Web runs (key None)
+        whose both neighbours are that system are returned as `skins`: their
+        two mouth points, to be spliced into its route. None if a run cannot
+        be closed off (its chord would not remove it: a partition)."""
+        pts_of = {id(p): p.sample_points() for p in members}
+        bead_w = self.material.bead_width
+
+        def tag(a, b):
+            m = a.lerp(b, 0.5)
+            best = min(members, key=lambda p: N.dist_to_polyline(m, pts_of[id(p)], p.closed))
+            return keyof(msid[id(best)]), msid[id(best)]
+        tagged, srcs = [], []
+        for r in rings:
+            n = len(r)
+            tk = [tag(r[i], r[(i + 1) % n]) for i in range(n)]
+            tagged.append([t for t, _ in tk])
+            srcs.append([sid for _, sid in tk])
+        keys = sorted({t for ts in tagged for t in ts if t is not None and t != '__J'})
+        ends = []                                   # exact end points of the kept skin beads
+        for p in members:
+            if keyof(msid[id(p)]) is None and not p.closed:
+                q = pts_of[id(p)]
+                if q:
+                    ends += [q[0], q[-1]]
+
+        def exact(v):
+            c = min(ends, key=lambda e: e.dist(v), default=None)
+            return c if c is not None and c.dist(v) < 0.05 else v
+        parts = []
+        skin_part = None
+        has_skin = any(t is None for ts in tagged for t in ts)
+        for key in keys + ([None] if has_skin else []):
+            env, skins, chords, host_skins = [], [], [], []
+            partition = False
+            # this system's face RUNS on every ring (maximal stretches of its own
+            # edges) with the gap of other walls that follows each on its ring
+            runs = []
+            for ri, (r, ts, ss) in enumerate(zip(rings, tagged, srcs)):
+                n = len(r)
+                if key not in ts:
+                    continue
+                if all(t == key for t in ts):
+                    env.append(list(r))
+                    continue
+                i0 = next(i for i in range(n) if ts[i] == key and ts[i - 1] != key)
+                j = 0
+                while j < n:
+                    i = (i0 + j) % n
+                    if ts[i] != key:
+                        j += 1
+                        continue
+                    pts = [r[i]]
+                    while j < n and ts[(i0 + j) % n] == key:
+                        pts.append(r[(i0 + j + 1) % n])
+                        j += 1
+                    g0, glen = (i0 + j) % n, 0
+                    while j < n and ts[(i0 + j) % n] != key:
+                        glen += 1
+                        j += 1
+                    runs.append({'ring': ri, 'pts': pts, 'g0': g0, 'glen': glen, 'next': (i0 + j) % n})
+            # STITCH the runs into closed envelope rings: a run's end joins the
+            # NEAREST run start across the mouth (a chord). A T-branch closes on
+            # itself; a wall BRIDGING two others has its two faces on two rings
+            # (the outer boundary and a hole) and is stitched into its true band —
+            # closing each ring separately made two flat slivers (phantom walls)
+            left = list(range(len(runs)))
+            while left:
+                first = left.pop(0)
+                ring_pts, cur = list(runs[first]['pts']), first
+                while True:
+                    R_ = runs[cur]
+                    e = R_['pts'][-1]
+                    cand = left + [first]
+                    follow = self._face_follow(key, R_, [(q, runs[q]['pts'][0]) for q in cand]) \
+                        if key is not None else None
+                    if follow is not None:
+                        nxt, fpath = follow
+                    else:
+                        nxt = min(cand, key=lambda q: (e.dist(runs[q]['pts'][0]), q != first))
+                        fpath = None
+                    S_ = runs[nxt]
+                    sp = S_['pts'][0]
+                    if fpath is not None:
+                        # the wall's own face continues (round a corner hidden in
+                        # another band, or straight across an X / a branch mouth):
+                        # no chord, no end. A SKIN branch in that mouth still meets
+                        # this wall: it is recorded to run into it (_connect_skins)
+                        r_, ts_, ss_ = rings[R_['ring']], tagged[R_['ring']], srcs[R_['ring']]
+                        n_ = len(r_)
+                        if S_['ring'] == R_['ring'] and r_[R_['next']] is sp and R_['glen'] > 0 and \
+                                {ts_[(R_['g0'] + x) % n_] for x in range(R_['glen'])} <= {None, '__J'} and \
+                                any(ts_[(R_['g0'] + x) % n_] is None for x in range(R_['glen'])):
+                            chain = [r_[(R_['g0'] + x) % n_] for x in range(R_['glen'] + 1)]
+                            skins.append({'ends': (exact(e), exact(sp)), 'chain': chain,
+                                          'sids': (ss_[R_['g0'] % n_], ss_[(R_['g0'] + R_['glen'] - 1) % n_])})
+                        ring_pts += fpath
+                        if nxt == first:
+                            break
+                        left.remove(nxt)
+                        ring_pts += S_['pts']
+                        cur = nxt
+                        continue
+                    r, ts, ss = rings[R_['ring']], tagged[R_['ring']], srcs[R_['ring']]
+                    n = len(r)
+                    same = S_['ring'] == R_['ring'] and r[R_['next']] is sp
+                    gap_tags = {ts[(R_['g0'] + x) % n] for x in range(max(1, R_['glen']) if same else 1)}
+                    if same:
+                        length = sum(r[x % n].dist(r[(x + 1) % n]) for x in range(R_['g0'], R_['g0'] + R_['glen']))
+                        if length < 1.05 * e.dist(sp) + 1e-6:
+                            if key is not None:
+                                return None
+                            partition = True       # (skin side: just no web envelope)
+                    # is the chord this part's END (its faces turn into it) or
+                    # just a stretch of its face (the host side)?
+                    pv = R_['pts'][-2] if len(R_['pts']) >= 2 else e
+                    u1, u2 = e - pv, sp - e
+                    # (a host face continues across a mouth nearly straight, even on a
+                    # curve; an incoming wall's faces TURN into its chord — also when it
+                    # meets the host obliquely)
+                    is_end = u1.length() > 1e-9 and u2.length() > 1e-9 and \
+                        abs(u1.x * u2.x + u1.y * u2.y) / (u1.length() * u2.length()) < 0.9
+                    hosts_ = [t_ for t_ in gap_tags if t_ != '__J']
+                    chords.append({'ends': (e, sp), 'other': sorted(t_ for t_ in hosts_ if t_ is not None),
+                                   'is_end': is_end, 'same': same, 'exact': (exact(e), exact(sp)),
+                                   'sid': ss[(R_['g0'] - 1) % n]})
+                    push = None
+                    if key is not None and is_end and hosts_:
+                        # a generated wall's END meeting another wall: its band is
+                        # PUSHED straight into the host (to about the host's centre
+                        # line) — its canonical end cap lies inside the host and its
+                        # lanes CROSS the host's printed paths: real contact, nothing cut
+                        hsid = next((ss[(R_['g0'] + x) % n] for x in range(max(1, R_['glen']) if same else 1)
+                                     if ss[(R_['g0'] + x) % n] != '__J'), None)
+                        hw = (getattr(self, '_source_walls', {}) or {}).get(hsid) or {}
+                        hT = float(hw.get('thickness') or 10.0)
+                        cv = sp - e
+                        nrm = Vec2(cv.y, -cv.x) * (1.0 / cv.length())          # (material on the left)
+                        a_in = e - (R_['pts'][-2] if len(R_['pts']) >= 2 else e)
+                        b_in = (S_['pts'][0] - S_['pts'][1]) if len(S_['pts']) >= 2 else a_in
+                        dv = (a_in * (1.0 / max(1e-9, a_in.length()))) + (b_in * (1.0 / max(1e-9, b_in.length())))
+                        dv = dv * (1.0 / dv.length()) if dv.length() > 1e-9 else nrm
+                        k_ = max(0.3, dv.x * nrm.x + dv.y * nrm.y)
+                        # measured from the host's ACTUAL face (a junction fillet
+                        # puts the chord short of it): ray from the chord's middle
+                        mid_ = e.lerp(sp, 0.5)
+                        t_face = 0.0
+                        hits_ = []
+                        for fpts, fcl in (getattr(self, '_src_faces', {}) or {}).get(hsid, []):
+                            fr = fpts + ([fpts[0]] if fcl else [])
+                            for a_, b_ in zip(fr, fr[1:]):
+                                sg = b_ - a_
+                                den = dv.x * sg.y - dv.y * sg.x
+                                if abs(den) < 1e-12:
+                                    continue
+                                w_ = a_ - mid_
+                                tt = (w_.x * sg.y - w_.y * sg.x) / den
+                                uu = (w_.x * dv.y - w_.y * dv.x) / den
+                                if -1e-9 <= uu <= 1 + 1e-9 and tt > -0.5:
+                                    hits_.append(tt)
+                        if hits_:
+                            t_face = max(0.0, min(hits_))
+                        depth = t_face + (0.5 * hT + 0.25 * bead_w + 0.5 * bead_w) / k_
+                        push = [e + dv * depth, sp + dv * depth]
+                        chords[-1]['pushed'] = True
+                    if key is not None and gap_tags == {None} and (same or is_end):
+                        chain = [r[(R_['g0'] + x) % n] for x in range(R_['glen'] + 1)] if same else [e, sp]
+                        rec = {'ends': (exact(e), exact(sp)), 'chain': chain,
+                               'sids': (ss[R_['g0'] % n], ss[(R_['g0'] + max(0, R_['glen'] - 1)) % n])}
+                        # the chord is THIS system's end: the skins are the HOST
+                        # (this wall is the incoming one) — never spliced into it
+                        if is_end:
+                            host_skins.append(rec)
+                        elif same:
+                            skins.append(rec)
+                    if push:
+                        ring_pts += push
+                    if nxt == first:
+                        break
+                    left.remove(nxt)
+                    ring_pts += S_['pts']
+                    cur = nxt
+                if len(ring_pts) >= 3:
+                    env.append(ring_pts)
+            if key is None:
+                # the SKIN side's own envelope (generated bands closed off): where a
+                # Skin + Web member's web is generated in a mixed region
+                if env and not partition:
+                    skin_part = {'key': None, 'rings': env, 'chords': chords}
+                continue
+            if env:
+                # (not `srcs`: that is the per-ring source tags, needed for the next key)
+                part_srcs = sorted({msid[id(p)] for p in members if keyof(msid[id(p)]) == key})
+                parts.append({'key': key, 'rings': env, 'skins': skins, 'sources': part_srcs, 'chords': chords,
+                              'host_skins': host_skins})
+        self._split_skin_part = skin_part
+        return parts
+
+    def _face_follow(self, sid, run, starts, tol=0.05):
+        """If the run's end lies on one of wall `sid`'s own face lines and,
+        walking FORWARD along that line (the run's direction), a candidate run
+        start lies on it too: (that candidate, the face points in between).
+        The band then continues along its own face — round a corner hidden in
+        another wall's band, or straight through an X crossing."""
+        faces = (getattr(self, '_src_faces', {}) or {}).get(sid) or []
+        e = run['pts'][-1]
+        prev = run['pts'][-2] if len(run['pts']) >= 2 else e
+        best = None
+        for pts, closed in faces:
+            ring = pts + ([pts[0]] if closed else [])
+            cum = [0.0]
+            for a_, b_ in zip(ring, ring[1:]):
+                cum.append(cum[-1] + a_.dist(b_))
+            Ltot = cum[-1]
+
+            def proj(q):
+                bb = None
+                for j, (a_, b_) in enumerate(zip(ring, ring[1:])):
+                    d_ = b_ - a_
+                    L2 = d_.x * d_.x + d_.y * d_.y
+                    t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((q.x - a_.x) * d_.x + (q.y - a_.y) * d_.y) / L2))
+                    dd = (a_ + d_ * t).dist(q)
+                    if bb is None or dd < bb[0]:
+                        bb = (dd, cum[j] + t * (cum[j + 1] - cum[j]), j)
+                return bb
+            pe = proj(e)
+            if pe is None or pe[0] > tol:
+                continue
+            # the run's direction along this face
+            pp = proj(prev)
+            delta = 0.0 if pp is None else pe[1] - pp[1]
+            if closed and Ltot > 0:
+                delta = (delta + 0.5 * Ltot) % Ltot - 0.5 * Ltot      # (the short way round)
+            if abs(delta) < 1e-9:
+                continue                                    # (no direction along this face)
+            fwd = 1.0 if delta > 0 else -1.0
+            for q, sp in starts:
+                ps = proj(sp)
+                if ps is None or ps[0] > tol:
+                    continue
+                gap = (ps[1] - pe[1]) * fwd
+                if closed:
+                    gap %= Ltot
+                if gap <= 1e-6:
+                    continue
+                if best is None or gap < best[0]:
+                    best = (gap, q, pe[1], fwd, ring, cum, closed, Ltot)
+        if best is None:
+            return None
+        gap, q, a0, fwd, ring, cum, closed, Ltot = best
+        # the face points strictly between e and the start (in walking order)
+        pts_between = []
+        for j, v in enumerate(ring[:-1] if closed else ring):
+            x = cum[j]
+            g_ = (x - a0) * fwd
+            if closed:
+                g_ %= Ltot
+            if 1e-6 < g_ < gap - 1e-6:
+                pts_between.append((g_, v))
+        return q, [v for _, v in sorted(pts_between, key=lambda t: t[0])]
+
+    def _connect_generated(self, gen, WS, bead):
+        """An incoming GENERATED wall system (Parallel / Interleaved / Linked /
+        Chained Loop) meeting another system part: its envelope was closed off
+        by the chord across the host's NOMINAL face, so its outer end cap sat
+        there — a visible gap before the host's real material. The outer cap
+        rail along that chord is opened and the remaining route (its two face
+        lanes leading into it) is connected with wall_systems.connect_branch:
+        both face lanes continue STRAIGHT until they reach the host's printed
+        material, the handoff lies inside the host; the nested inner returns
+        stay inside the incoming wall. Fallback: unchanged (two routes)."""
+        R = float(self.junction_radius or 0.0) if self.junction_style == 'round' else 0.0
+        h = 0.5 * bead
+        for g in gen:
+            for ch in g['part'].get('chords', []):
+                if not ch['is_end'] or len(ch['other']) != 1:
+                    continue
+                host = next((x for x in gen if x is not g and x['part']['key'] == ch['other'][0]), None)
+                if host is None:
+                    continue
+                c1, c2 = ch['ends']
+                d = c2 - c1
+                L2 = d.x * d.x + d.y * d.y
+                if L2 < 1e-12:
+                    continue
+
+                ud = d * (1.0 / math.sqrt(L2))
+
+                def on_rail(q):
+                    """q lies on the cap rail: half a bead inside the chord, within it."""
+                    t = ((q.x - c1.x) * d.x + (q.y - c1.y) * d.y) / L2
+                    off = abs((q.x - c1.x) * ud.y - (q.y - c1.y) * ud.x)
+                    return -0.05 <= t <= 1.05 and abs(off - h) <= 0.25
+                for pi, pl in enumerate(g['polys']):
+                    closed = len(pl) > 3 and pl[0].dist(pl[-1]) < 1e-6
+                    if not closed:
+                        continue
+                    core = pl[:-1]
+                    n = len(core)
+                    # the cap rail along this chord: the longest segment parallel
+                    # to it, half a bead inside (the end motif's outer cap)
+                    best = None
+                    for i in range(n):
+                        a_, b_ = core[i], core[(i + 1) % n]
+                        v = b_ - a_
+                        if v.length() < 1e-6 or not (on_rail(a_) and on_rail(b_)):
+                            continue
+                        if abs(v.x * ud.x + v.y * ud.y) / v.length() < 0.95:
+                            continue
+                        if best is None or v.length() > best[1]:
+                            best = (i, v.length())
+                    if best is None:
+                        continue
+                    i = best[0]
+                    chain = [core[(i + 1 + x) % n] for x in range(n)]      # opened at that segment
+                    if len(chain) < 4:
+                        continue
+                    mid = chain[len(chain) // 2]
+                    sid = g['part']['sources'][0]
+                    d1 = self._junction_dir(sid, chain[0], mid)
+                    d2 = self._junction_dir(sid, chain[-1], mid)
+                    if d1 is None or d2 is None:
+                        continue
+                    res = WS.connect_branch(host['polys'], chain, d1, d2, R, bead,
+                                            2.0 * (host['rep'].get('envelope') or 10.0) + 2.0 * bead)
+                    if res is None:
+                        continue
+                    host['polys'], info = res
+                    g['polys'] = g['polys'][:pi] + g['polys'][pi + 1:]
+                    host['rep'].setdefault('junctions', []).append(dict(info, incoming=sid))
+                    g['rep']['joined_into'] = host['rep'].get('system_id')
+                    break
+
+    def _seam_hints(self) -> list:
+        """Positions of the user's route origins (Move Start): wall systems that
+        concentrate their lane changes (Parallel Walls) put that seam there."""
+        out = []
+        for o in self.route_origins or []:
+            pos = o.get('pos') if isinstance(o, dict) else None
+            if pos and len(pos) == 2:
+                out.append(Vec2(float(pos[0]), float(pos[1])))
+        return out
+
+    def _web_member(self, sid) -> bool:
+        """Does source sid print a Skin + Web web (layer system or legacy)?"""
+        ws = self._system_of(sid)
+        if ws is not None and ws.thickness is not None:
+            return ws.type == 'skin_web' and (ws.web or {}).get('pattern', 'none') != 'none'
+        return sid not in (getattr(self, '_wall_systems', {}) or {})
+
+    @staticmethod
+    def _kiss_into_skin(polys, ends, bead):
+        """A generated wall whose end meets SKIN walls: its outer cap rail
+        (straight, half a bead inside the chord across the host's mouth) is
+        bent to touch the chord's middle P, and the host face is closed across
+        the mouth by the bead c1 → P → c2 (two halves ending at P). The
+        incoming loop restarts at P, so host skins + incoming wall form one
+        route through P. (polys, [half1, half2]) or None."""
+        c1, c2 = ends
+        d = c2 - c1
+        L2 = d.x * d.x + d.y * d.y
+        if L2 < 1e-12:
+            return None
+        ud = d * (1.0 / math.sqrt(L2))
+        h = 0.5 * bead
+
+        def on_rail(q):
+            t = ((q.x - c1.x) * d.x + (q.y - c1.y) * d.y) / L2
+            off = abs((q.x - c1.x) * ud.y - (q.y - c1.y) * ud.x)
+            return -0.05 <= t <= 1.05 and abs(off - h) <= 0.25
+        P = c1.lerp(c2, 0.5)
+        for pi, pl in enumerate(polys):
+            if not (len(pl) > 3 and pl[0].dist(pl[-1]) < 1e-6):
+                continue
+            core = pl[:-1]
+            n = len(core)
+            best = None
+            for i in range(n):
+                a_, b_ = core[i], core[(i + 1) % n]
+                v = b_ - a_
+                if v.length() < 1e-6 or not (on_rail(a_) and on_rail(b_)):
+                    continue
+                if abs(v.x * ud.x + v.y * ud.y) / v.length() < 0.95:
+                    continue
+                if best is None or v.length() > best[1]:
+                    best = (i, v.length())
+            if best is None:
+                continue
+            i = best[0]
+            a_, b_ = core[i], core[(i + 1) % n]
+            # rail a → b bent to touch P (a shallow V half a bead deep)
+            loop = [P] + [core[(i + 1 + x) % n] for x in range(n)] + [P]
+            # (loop: P → b … a → P)
+            return polys[:pi] + polys[pi + 1:] + [loop], [[c1, P], [P, c2]]
+        return None
+
+    def _junction_dir(self, sid, e, inner):
+        """The ARCHITECTURAL junction direction of source `sid` at its wall end
+        e: the source's tangent nearest e, pointing from the wall's inside
+        (`inner`, a point further along it) towards the host."""
+        src = next((p for p in self.source_paths if p.id == sid), None)
+        if src is None:
+            return None
+        pts = src.sample_points()
+        if src.closed and pts:
+            pts = pts + [pts[0]]
+        best = None
+        for a, b in zip(pts, pts[1:]):
+            v = b - a
+            L2 = v.x * v.x + v.y * v.y
+            if L2 < 1e-18:
+                continue
+            t = max(0.0, min(1.0, ((e.x - a.x) * v.x + (e.y - a.y) * v.y) / L2))
+            dd = (a + v * t).dist(e)
+            if best is None or dd < best[0]:
+                best = (dd, v * (1.0 / math.sqrt(L2)))
+        if best is None:
+            return None
+        d = best[1]
+        return d if (d.x * (e.x - inner.x) + d.y * (e.y - inner.y)) > 0 else d * -1.0
+
+    def _connect_skins(self, polys, part, WS, envelope):
+        """Join each incoming skin-like wall (single / out-and-back, hollow,
+        Skin + Web) to the host system's ACTUAL printed geometry
+        (wall_systems.connect_branch); where that is not possible (no straight
+        lanes, no contact) fall back to the mouth splice (_splice_skins).
+        → (polys, joined count, chains re-emitted, junction reports)."""
+        R = float(self.junction_radius or 0.0) if self.junction_style == 'round' else 0.0
+        bead = self.material.bead_width
+        joined, infos, fallback = [], [], []
+        for sk in part['skins']:
+            ch = sk['chain']
+            if len(ch) < 3:
+                fallback.append(sk['ends'])
+                continue
+            mid = ch[len(ch) // 2]
+            d1 = self._junction_dir(sk['sids'][0], ch[0], mid)
+            d2 = self._junction_dir(sk['sids'][1], ch[-1], mid)
+            # the lanes run straight THROUGH the host's paths (crossings = contact)
+            # and are capped inside the host: nothing of the host is cut
+            loop = WS.extend_through(ch, d1, d2, sk['ends'][0], sk['ends'][1],
+                                     0.5 * envelope + 0.25 * bead, bead) \
+                if d1 is not None and d2 is not None else None
+            if loop is None:
+                fallback.append(sk['ends'])
+                continue
+            polys = polys + [loop]
+            joined.append(ch)
+            infos.append({'crossing_from': sk['sids'][0],
+                          'cap': [[round(loop[0].x, 4), round(loop[0].y, 4)], [round(loop[-2].x, 4), round(loop[-2].y, 4)]]})
+        n = len(joined)
+        if fallback:
+            polys, k = self._splice_skins(polys, fallback, WS)
+            n += k
+        return polys, n, joined, infos
+
+    @staticmethod
+    def _splice_skins(polys, skins, WS):
+        """Splice each Skin + Web run (its two mouth points e1, e2) into ONE
+        system path: the short stretch of that path between the points
+        nearest e1 and e2 is cut out and both mouth points are joined to the
+        cut ends — the skin run and the system route become one circuit."""
+        spliced = 0
+        polys = [list(pl) for pl in polys]
+        for e1, e2 in skins:
+            best = None
+            for i, pl in enumerate(polys):
+                if len(pl) < 2:
+                    continue
+                cum = [0.0]
+                for a, b in zip(pl, pl[1:]):
+                    cum.append(cum[-1] + a.dist(b))
+
+                def near(e):
+                    bb = None
+                    for j, (a, b) in enumerate(zip(pl, pl[1:])):
+                        d = b - a
+                        L2 = d.x * d.x + d.y * d.y
+                        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((e.x - a.x) * d.x + (e.y - a.y) * d.y) / L2))
+                        q = a + d * t
+                        dd = q.dist(e)
+                        if bb is None or dd < bb[0]:
+                            bb = (dd, cum[j] + t * (cum[j + 1] - cum[j]), q)
+                    return bb
+                n1, n2 = near(e1), near(e2)
+                L = cum[-1]
+                closed = pl[0].dist(pl[-1]) < 1e-6
+                gap = abs(n1[1] - n2[1])
+                short = min(gap, L - gap) if closed else gap
+                if short > max(4.0 * e1.dist(e2), 12.0):
+                    continue
+                score = n1[0] + n2[0]
+                if best is None or score < best[0]:
+                    best = (score, i, n1, n2, cum, closed)
+            if best is None:
+                continue
+            _, i, n1, n2, cum, closed = best
+            pl = polys[i]
+            L = cum[-1]
+
+            def sub(a, b):
+                """Points of pl from arc length a to b (a ≤ b)."""
+                def at(x):
+                    j = max(0, min(len(pl) - 2, next((k for k in range(len(cum) - 1) if cum[k + 1] >= x), len(pl) - 2)))
+                    seg = cum[j + 1] - cum[j]
+                    return pl[j].lerp(pl[j + 1], 0.0 if seg < 1e-12 else (x - cum[j]) / seg)
+                inner = [pl[k] for k in range(len(pl)) if a + 1e-9 < cum[k] < b - 1e-9]
+                return [at(a)] + inner + [at(b)]
+            P1, P2 = n1[2], n2[2]
+            (a1, A), (a2, B) = sorted([(n1[1], P1), (n2[1], P2)], key=lambda x: x[0])
+            if closed and (a2 - a1) <= L - (a2 - a1):
+                keep = [sub(a2, L) + sub(0.0, a1)[1:]]
+                keep[0][0], keep[0][-1] = B, A
+            elif closed:
+                keep = [sub(a1, a2)]
+                keep[0][0], keep[0][-1] = A, B
+            else:
+                keep = [x for x in (sub(0.0, a1), sub(a2, L)) if len(x) >= 2 and
+                        sum(u.dist(v) for u, v in zip(x, x[1:])) > 1e-9]
+                for x in keep:
+                    if x[-1].dist(A) < 1e-9:
+                        x[-1] = A
+                    if x[0].dist(B) < 1e-9:
+                        x[0] = B
+            polys[i:i + 1] = keep
+            polys += [[e1, P1], [e2, P2]]
+            spliced += 1
+        return WS._join(polys), spliced
+
+    def migrate_wall_systems(self) -> dict:
+        """MIGRATION of a legacy design to explicit Wall Systems (pure: the
+        layer is not changed). Every path's EFFECTIVE wall under the old rules
+        (own WallSpec, Network Wall inheritance, the membership-only systems
+        of the previous pass, wall infills reaching its region) is grouped by
+        (thickness, alignment, reference, construction, parameters, web) into
+        one Wall System; the wall infills become webs OWNED by the system of
+        their anchor path (same record and id: Layer-Design lineage is kept).
+        Returns {'wall_systems': [...], 'owners': {infill id: system id},
+        'migrated': bool}; the caller clears path walls / Network Walls."""
+        _, meta = self._build_effective()
+        net = meta['network']
+        sw = net.get('source_walls') or {}
+        nets = {pid: n['sources'] for n in net.get('source_networks') or [] for pid in n['sources']}
+        legacy = any(p.wall is not None for p in self.source_paths) or bool(self.network_walls) or \
+            any(ws.thickness is None for ws in self.wall_systems) or \
+            any(not f.owner and f.kind == 'wall' and sw.get(f.path_id) for f in self.infills)
+        if not legacy:
+            return {'wall_systems': [w.to_dict() for w in self.wall_systems], 'owners': {}, 'migrated': False}
+        groups, order = {}, []
+        sys_of = {}
+        for p in self.source_paths:
+            w = sw.get(p.id)
+            if not w:
+                continue
+            spec = dict(w['system'] or {'type': 'skin_web'})
+            typ = spec.pop('type')
+            ids = nets.get(p.id, [p.id])
+            f = next((f for f in self.infills if not f.owner and f.kind == 'wall' and f.path_id in ids), None)
+            web = {'pattern': f.pattern, 'params': dict(f.params), 'variation_index': f.variation_index} \
+                if (f is not None and typ == 'skin_web') else {'pattern': 'zigzag', 'params': {'spacing': 20.0},
+                                                               'variation_index': 0}
+            if typ == 'skin_web' and f is None:
+                typ = 'hollow'                   # skins, no web: Hollow / Skins Only
+            key = json.dumps([w['thickness'], w['align'], bool(w['print_reference']), typ, spec, web], sort_keys=True)
+            if key not in groups:
+                groups[key] = {'type': typ, 'params': spec, 'web': web, 'thickness': w['thickness'],
+                               'align': w['align'], 'print_reference': bool(w['print_reference']), 'members': []}
+                order.append(key)
+            groups[key]['members'].append(p.id)
+        used, out = set(), []
+        for k, key in enumerate(order):
+            g = groups[key]
+            old = next((ws for ws in self.wall_systems if ws.id not in used and ws.type == g['type']
+                        and set(ws.members) & set(g['members'])), None)
+            taken = used | {ws.id for ws in self.wall_systems}
+            sid = old.id if old is not None else next(f'WS{n}' for n in range(1, 10000) if f'WS{n}' not in taken)
+            used.add(sid)
+            name = (old.name if old is not None and old.name else f'Wall System {k + 1}')
+            ws = WallSystem(sid, g['type'], g['params'], g['members'], name=name, thickness=g['thickness'],
+                            align=g['align'], print_reference=g['print_reference'], web=g['web'])
+            out.append(ws)
+            for pid in g['members']:
+                sys_of[pid] = sid
+        owners = {f.id: sys_of[f.path_id] for f in self.infills
+                  if not f.owner and f.kind == 'wall' and f.path_id in sys_of}
+        return {'wall_systems': [w.to_dict() for w in out], 'owners': owners, 'migrated': True}
+
+    def _system_of(self, pid) -> Optional[WallSystem]:
+        """The Wall System a path explicitly belongs to (first wins; the
+        Designer keeps one system per path)."""
+        return next((ws for ws in self.wall_systems if pid in ws.members), None)
+
+    def _all_infills(self) -> list:
+        """The infills the build uses: the layer's own (unowned) infills,
+        each Skin + Web system's OWNED web infills (anchored on a current
+        member), and — for a system whose web has no owned record yet (an
+        API / test layer) — one synthesised record per member (several on
+        one connected region: the first wins, the rest are shadowed)."""
+        owners = {ws.id: ws for ws in self.wall_systems}
+        out = []
+        for inf in self.infills:
+            if not inf.owner:
+                out.append(inf)
+                continue
+            ws = owners.get(inf.owner)
+            if ws is None or ws.type != 'skin_web' or (ws.web or {}).get('pattern', 'none') == 'none' \
+                    or inf.path_id not in ws.members:
+                continue                       # an inactive web (system changed / member left)
+            out.append(inf)
+        have = {inf.owner for inf in out if inf.owner}
+        for ws in self.wall_systems:
+            web = ws.web or {}
+            if ws.type != 'skin_web' or web.get('pattern', 'none') == 'none' or ws.id in have:
+                continue
+            for pid in ws.members:
+                out.append(RegionInfill(f'{ws.id}~web~{pid}', pid, web['pattern'], dict(web.get('params') or {}),
+                                        int(web.get('variation_index', 0) or 0), 'wall', ws.id))
+        return out
+
     def _wall_offsets(self, sources, processed, source_nets):
         """Offsets generated by wall specs: a path's own WallSpec, else its
         network's NetworkWall."""
         net_of = {pid: ids for ids in source_nets for pid in ids}
         out, ref_only = [], set()
         self._return_lanes = set()
+        self._wall_systems = {}               # source id → its (non Skin + Web) wall system
+        self._wall_system_key = {}            # source id → grouping key (layer system id)
+        self._wall_system_of = {}             # source id → {'id', 'name', 'type', 'filled'}
         mat = self.material
         extra = {ot.source_path_id for ot in self.offset_treatments}
+        self._source_walls = {}               # source id → its effective wall (report / migration)
+        import wall_systems as WS
         for p in sources:
-            spec = p.wall
-            if spec is not None and spec.thickness <= 1e-9:
-                spec = None                      # explicit SINGLE BEAD: no inherited network wall
-            elif spec is None:
-                nw = self._network_wall_for(net_of.get(p.id, [p.id]))
-                if nw is not None:
-                    spec = WallSpec(nw.thickness, nw.align, nw.print_reference)
+            lsys = self._system_of(p.id)
+            if lsys is not None and lsys.type == 'single':
+                # SINGLE / OUT-AND-BACK: the ordinary single-line wall (one bead;
+                # Physical rules → the separated outbound + return lanes below)
+                spec, src = None, 'system'
+            elif lsys is not None and lsys.thickness is not None:
+                spec = lsys.envelope()            # the WALL SYSTEM owns the envelope
+                src = 'system'
+            else:
+                spec, src = p.wall, ('path' if p.wall is not None else None)
+                if spec is not None and spec.thickness <= 1e-9:
+                    spec, src = None, 'single'   # explicit SINGLE BEAD: no inherited network wall
+                elif spec is None:
+                    nw = self._network_wall_for(net_of.get(p.id, [p.id]))
+                    if nw is not None:
+                        spec = WallSpec(nw.thickness, nw.align, nw.print_reference, nw.system)
+                        src = 'network'
+            ws = None
+            if spec is not None and spec.thickness > 1e-9:
+                ws = WS.normalize(lsys.spec()) if lsys is not None else WS.normalize(spec.system)
+                if ws is not None:
+                    self._wall_systems[p.id] = ws
+                    self._wall_system_key[p.id] = lsys.id if lsys is not None else None
+            if lsys is not None:
+                self._wall_system_of[p.id] = {'id': lsys.id, 'name': lsys.name or lsys.id, 'type': lsys.type,
+                                              'filled': spec is not None and spec.thickness > 1e-9}
+            self._source_walls[p.id] = None if spec is None or spec.thickness <= 1e-9 else {
+                'thickness': spec.thickness, 'align': spec.align, 'print_reference': spec.print_reference,
+                'system': ws, 'from': src}
             opened = p.id in {o.source_path_id for o in self.openings} and \
-                p.id not in {inf.path_id for inf in self.infills}
+                p.id not in {inf.path_id for inf in self._all_infills()}
             if spec is None and mat.physical and (not p.closed or opened) and p.id not in extra:
                 # PHYSICAL: a single-bead OPEN wall (or a closed one that an
                 # opening opens) cannot print out and back over itself — it
@@ -3379,13 +4292,16 @@ class PrintLayer:
                             cls_of.get(id(p), N.WIRE), elem_of[id(p)], p)
                      for p in result if id(p) in elem_of
                      and len(_pts(p)) >= 2]
-        infills = [inf for inf in self.infills if inf.path_id in processed]
-        for inf in self.infills:
+        all_infills = self._all_infills()
+        infills = [inf for inf in all_infills if inf.path_id in processed]
+        for inf in all_infills:
             if inf not in infills:
                 summary['infills'].append({'id': inf.id, 'regions': 0,
                                            'shadowed_by': None,
                                            'status': 'missing path'})
-        if len({b.element for b in beads_all}) < 2 and not infills:
+        # sources with a WALL SYSTEM need their material regions (like infills)
+        ws_sources = sorted(set(getattr(self, '_wall_systems', {}) or {}) & set(processed))
+        if len({b.element for b in beads_all}) < 2 and not infills and not ws_sources:
             return result, summary
 
         def _expected(a, b):
@@ -3445,7 +4361,8 @@ class PrintLayer:
                     uf.union(f'S:{inf.path_id}', f'S:{sid}')
             declared[inf.path_id] = rings
         net_roots = {uf.find(a) for a in foreign} | \
-            {uf.find(f'S:{self._anchor(inf)}') for inf in infills}
+            {uf.find(f'S:{self._anchor(inf)}') for inf in infills} | \
+            {uf.find(f'S:{sid}') for sid in ws_sources}
         if not net_roots:
             return result, summary
         filled: dict = {}                        # (root, comp id) → infill id
@@ -3836,6 +4753,7 @@ class PrintLayer:
             'junction_radius': self.junction_radius,
             'junction_overrides': [j.to_dict() for j in self.junction_overrides],
             'network_walls': [w.to_dict() for w in self.network_walls],
+            'wall_systems': [w.to_dict() for w in self.wall_systems],
             'wall_relations': [w.to_dict() for w in self.wall_relations],
             'return_paths': self.return_paths,
             'prefer_closed': self.prefer_closed,
@@ -3937,6 +4855,21 @@ def resolve_route_origins(strands, origins) -> tuple[list, list]:
             report.append({'strand': sid, 'u': u, 'status': 'missing'})
             continue
         target = (u % 1.0 if st.closed else max(0.0, min(1.0, u))) * L
+        pos = o.get('pos')
+        if pos and len(pos) == 2:
+            # the start's POSITION wins over its fraction (the strand's shape can
+            # change — e.g. Parallel Walls move their lane-change seam there)
+            best, acc_ = None, 0.0
+            for i in range(len(lens)):
+                a_, b_ = ring[i], ring[i + 1]
+                dx, dy = b_.x - a_.x, b_.y - a_.y
+                l2 = dx * dx + dy * dy
+                t = 0.0 if l2 < 1e-18 else max(0.0, min(1.0, ((pos[0] - a_.x) * dx + (pos[1] - a_.y) * dy) / l2))
+                dd = math.hypot(a_.x + t * dx - pos[0], a_.y + t * dy - pos[1])
+                if best is None or dd < best[0]:
+                    best = (dd, acc_ + t * lens[i])
+                acc_ += lens[i]
+            target = best[1]
         acc, k = 0.0, 0
         while k < len(lens) - 1 and acc + lens[k] < target:
             acc += lens[k]

@@ -127,7 +127,16 @@ def test_contact_landings_reach_the_requested_overlap(name, pat, O):
     assert rep['contact_violations'] == 0 and abs(rep['contact'] - sep) < 1e-9
 
 
-@pytest.mark.parametrize('name,pat', [('wave_ring', 'wave'), ('lone_wall', 'zigzag'), ('lone_wall', 'wave')])
+def test_corner_motif_keeps_the_contact_at_a_ring_corner():
+    """(2026-10-07) The canonical single-pass corner motif sets its
+    contacts squarely off each face leg: the ring's reflex corners no
+    longer fall short of a large contact separation (they used to — the
+    case was in the shortfall test below)."""
+    p, m = build(PF.wave_ring(pat='wave', O=0.25))
+    assert lattice(m)[0]['contact_violations'] == 0
+
+
+@pytest.mark.parametrize('name,pat', [('lone_wall', 'zigzag'), ('lone_wall', 'wave')])
 def test_contact_shortfall_is_reported_not_hidden(name, pat):
     """Limitation: with a large separation (O = 0.25 → 2.75 in in a 10 in
     wall) a reflex corner / cap V cannot keep the full clearance; every

@@ -60,6 +60,7 @@ const layer = {
   junction_radius: 2,        // radius when junction_style === 'round'
   junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
   network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
+  wall_systems: [],          // [{ id, name, type, thickness, align, params, members, web }] (WALL_SYSTEMS)
   wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
   // MATERIAL / BEAD (physical deposit; see Bead section)
   material: { bead_width: 3.0, contact_overlap: 0.75, return_overlap: 0.75, physical: true },
@@ -1672,7 +1673,14 @@ function _drawRouteMarkers(moves, labels) {
     let pos = mk.pos;
     if (mk.kind === 'origin' && originDrag && originDrag.run === mk.run && originDrag.pos) pos = originDrag.pos;
     const [x, y] = worldToCanvas(pos[0], pos[1]);
-    if (mk.kind === 'origin') { drawDot(x, y, 6, ORIGIN_COLOR); continue; }
+    if (mk.kind === 'origin') {
+      drawDot(x, y, moveStartMode ? 9 : 6, ORIGIN_COLOR);
+      if (moveStartMode) {
+        ctx.font = '9px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = ORIGIN_COLOR;
+        ctx.fillText('START', x + 11, y - 8);
+      }
+      continue;
+    }
     drawDot(x, y, 6, mk.kind === 'start' ? '#33cc66' : '#cc3333');
     if (labels) {
       ctx.font = '9px monospace';
@@ -1725,6 +1733,52 @@ function _projectOnStrands(wx, wy, ids) {
   return best;
 }
 
+// MOVE START mode (toolbar): route starts / seams take the pointer FIRST —
+// no path, opening or handle is selected or dragged — so a start can be moved
+// even where it sits on or next to an opening or other editable geometry.
+// Dragging a start marker moves it along its route; clicking a closed route
+// places its start there. (Open routes: their Start / End follow from the
+// geometry and are not movable.) Leaving the mode restores normal editing.
+let moveStartMode = false;
+function toggleMoveStart(on) {
+  moveStartMode = on === undefined ? !moveStartMode : !!on;
+  if (moveStartMode && !showToolpath) toggleToolpath();      // the starts come from the route
+  const b = document.getElementById('btn-move-start');
+  if (b) b.classList.toggle('toggle-on', moveStartMode);
+  originDrag = null;
+  setStatus(moveStartMode ? 'Move Start: drag a green start marker, or click a closed route to start it there.'
+                          : 'Move Start off — normal editing.');
+  updateHint();
+  repaint();
+}
+
+// Move Start mode's pointer handling (before any design hit test)
+function moveStartMouseDown(wx, wy) {
+  if (!routeResult || !routeResult.moves) return;
+  const runs = buildPrintRuns(routeResult.moves);
+  let best = null;
+  for (const mk of routeMarkers(routeResult.moves)) {
+    const d = Math.hypot(mk.pos[0] - wx, mk.pos[1] - wy);
+    if (d < HIT_DIST * 1.6 && (!best || d < best.d)) best = { ...mk, d };
+  }
+  if (best && best.kind === 'origin') { startOriginDrag(best); return; }
+  if (best && best.kind !== 'origin') {
+    setStatus('This route is open: its Start / End follow from the geometry (they are not movable).');
+    return;
+  }
+  // a click on a closed route: its start goes there
+  let pick = null;
+  runs.forEach((run, i) => {
+    if (!_runIsClosed(run)) return;
+    const strands = new Set(run.moves.map(m => m.strand_id).filter(Boolean));
+    const p = _projectOnStrands(wx, wy, strands);
+    if (p && p.d < HIT_DIST * 1.6 && (!pick || p.d < pick.p.d)) pick = { i, strands, p };
+  });
+  if (!pick) return;
+  originDrag = { run: pick.i, strands: pick.strands, pos: pick.p.pos, strand: pick.p.strand, u: pick.p.u };
+  commitOriginDrag();
+}
+
 function startOriginDrag(mk) {
   const run = buildPrintRuns(routeResult.moves)[mk.run];
   const strands = new Set(run.moves.map(m => m.strand_id).filter(Boolean));
@@ -1742,8 +1796,9 @@ function commitOriginDrag() {
   originDrag = null;
   if (!d || !d.strand) { repaint(); return false; }
   // one origin per component: replace any origin on this run's strands
+  // (pos: where the start is — Parallel Walls put their lane-change seam there)
   layer.route_origins = (layer.route_origins || []).filter(o => !d.strands.has(o.strand))
-    .concat([{ strand: d.strand, u: d.u }]);
+    .concat([{ strand: d.strand, u: d.u, pos: [d.pos[0], d.pos[1]] }]);
   scheduleRefresh();                 // ONE undo step; reroute from the new origin
   setStatus('Route origin moved — the geometry is unchanged; the closed route now begins and ends here.');
   repaint();
@@ -1836,7 +1891,9 @@ function drawTrimHover() {
 
 // After every backend response: refresh what depends on it.
 function _afterNetworkUpdate() {
-  if (!_isTyping()) updateNetworkSection();
+  for (const r of _wsReportEls) _fillWallSystemReport(r.el, r.sys ? { sys: r.sys } : r.id);
+  if (_syncSystemWebs()) scheduleRefresh();     // connectivity changed the web groups
+  if (!_isTyping()) { updateNetworkSection(); updateWallSystemSection(); }
   // Wall Geometry: say when rounded junctions are limited by the geometry
   const lim = ((networkInfo && networkInfo.junctions) || []).filter(j => j.limited && !j.derived);
   const wn = document.getElementById('wg-junction-note');
@@ -1870,6 +1927,7 @@ function _addTrimRows(panel, path) {
 // ---------------------------------------------------------------------------
 
 function setTool(t) {
+  if (moveStartMode) toggleMoveStart(false);     // a tool choice leaves Move Start
   tool = t;
   drawPts = [];
   snapHint = null;
@@ -1887,6 +1945,11 @@ function setTool(t) {
 
 function updateHint() {
   const hint = document.getElementById('hint');
+  if (moveStartMode) {
+    hint.textContent = 'Move Start: drag a green start marker along its route, or click a closed route to start it ' +
+                       'there. Paths and openings are not edited in this mode — click Move Start again to leave.';
+    return;
+  }
   if (tool === 'draw') {
     hint.textContent = 'Click to place control points (they snap onto walls to connect — Alt for free placement). Click start point (≥3 pts) to close. Double-click or Enter to finish open path.';
     return;
@@ -1974,6 +2037,11 @@ function onMouseDown(e) {
     return;
   }
   const [wx, wy] = canvasFromEvent(e);
+
+  if (moveStartMode) {                              // route starts first — nothing else
+    moveStartMouseDown(wx, wy);
+    return;
+  }
 
   if (tool === 'draw') {
     // Snap-to-first: if ≥3 points placed and near first point, close
@@ -2744,6 +2812,16 @@ function updatePathList() {
       badge.title = `Connected wall network ${net.label}: ${net.names.join(', ')}`;
       item.appendChild(badge);
     }
+    const ws = _wsOf(p.id);
+    if (ws) {
+      const b = document.createElement('div');
+      b.className = 'path-type wallsys-badge';
+      b.style.cssText = 'color:var(--accent);margin-left:6px;max-width:78px;overflow:hidden;' +
+                        'text-overflow:ellipsis;white-space:nowrap';
+      b.textContent = `▣ ${_wsLabel(ws)}`;
+      b.title = `Wall System ${_wsLabel(ws)} (${WALL_SYSTEMS[ws.type] ? WALL_SYSTEMS[ws.type].label : ws.type})`;
+      item.appendChild(b);
+    }
     el.appendChild(item);
 
     for (const op of _openingsOf(p.id)) {
@@ -2772,6 +2850,7 @@ function updatePathList() {
 
 function updatePropPanel() {
   updateNetworkSection();
+  updateWallSystemSection();
   const section = document.getElementById('path-props-section');
   const panel   = document.getElementById('path-props');
   // A junction is a corner where walls of the network meet: its treatment is
@@ -2892,6 +2971,15 @@ function _alignLabel(align, closed) {
 // it overrides it — `{ thickness: 0 }` is the explicit single-bead override.
 function _effectiveWall(path) {
   const net = _networkOf()[path.id];
+  const sys = _wsOf(path.id);
+  if (sys && sys.type === 'single') return { wall: null, from: 'system', net, sys };
+  if (sys && sys.thickness != null) {
+    // the WALL SYSTEM owns the envelope
+    return sys.thickness > 0
+      ? { wall: { thickness: sys.thickness, align: sys.align || 'auto', print_reference: !!sys.print_reference },
+          from: 'system', net, sys }
+      : { wall: null, from: 'system', net, sys };
+  }
   const nw = net ? _netWallFor(net.ids) : null;
   if (path.wall && path.wall.thickness > 0) return { wall: path.wall, from: 'path', net, nw };
   if (path.wall && nw) return { wall: null, from: 'single', net, nw };
@@ -2923,79 +3011,450 @@ function _addButton(panel, text, onclick, disabled) {
   panel.appendChild(b);
 }
 
-function _addWallRows(panel, path) {
-  _addSubTitle(panel, 'Wall');
+// WALL SYSTEMS (wall_systems.py; model.WallSystem) — the CONSTRUCTION of an
+// explicit, user-authored group of Design paths (its own sidebar):
+//   layer.wall_systems = [{ id, name, type, thickness, align, print_reference,
+//                           params, members, web: { pattern, params, variation_index } }]
+// A path belongs to at most ONE system and members need not touch: the Wall
+// Network is geometric connectivity only (junctions / envelopes), never
+// construction. A path in no system is a single bead. Skin + Web's web
+// lattice is materialised as infill records OWNED by the system (one per
+// connected group of members; ids kept, so Layer-Design lineage still keys
+// the lattice on them). Legacy walls (path.wall, Network Walls, wall infills,
+// the earlier membership-only systems) are migrated once by the backend.
+const WALL_SYSTEMS = {
+  single: { label: 'Single / Out-and-Back Wall', params: [], noEnvelope: true },
+  hollow: { label: 'Hollow / Skins Only', params: [] },
+  skin_web: { label: 'Skin + Web', params: [] },
+  parallel: { label: 'Parallel Walls', params: [
+    { name: 'walls', label: 'Number of Walls', default: 3, min: 1, max: 12, int: true, unit: '',
+      hint: 'Evenly spread across the Wall Thickness (outermost half a bead inside the faces). ' +
+            'An even number closes into one route at wall ends / openings.' }] },
+  interleaved: { label: 'Interleaved Waves', params: [
+    { name: 'pattern', label: 'Waveform', options: ['wave', 'zigzag'], default: 'wave' },
+    { name: 'paths', label: 'Number of Paths', default: 3, min: 1, max: 12, int: true, unit: '' },
+    { name: 'period', label: 'Period', default: 30, min: 2 },
+    { name: 'depth', label: 'Depth', default: 0, min: 0, hint: '0 = the full envelope' }] },
+  linked: { label: 'Linked Waves', params: [
+    { name: 'pattern', label: 'Waveform', options: ['wave', 'zigzag'], default: 'wave' },
+    { name: 'paths', label: 'Number of Paths', default: 3, min: 2, max: 12, int: true, unit: '' },
+    { name: 'period', label: 'Period', default: 24, min: 2 },
+    { name: 'amplitude', label: 'Amplitude', default: 0, min: 0,
+      hint: '0 = automatic: neighbours just meet at their extrema; more = deeper interlock' }] },
+  chain: { label: 'Chained Loop', params: [
+    { name: 'pitch', label: 'Pitch', default: 0, min: 0,
+      hint: 'Upper loop → lower loop; 0 = 1.2 × Wall Thickness (any value down to 0.1 in)' },
+    { name: 'loop_depth', label: 'Loop Depth', default: 0, min: 0, hint: '0 = the full envelope' },
+    { name: 'loop_width', label: 'Loop Width', default: 0, min: 0, hint: '0 = 0.8 × Pitch' },
+    { name: 'neck', label: 'Neck', default: 0, min: 0, max: 0.9, unit: '',
+      hint: 'Where each loop crosses itself, as a share of Loop Depth (0 = 0.12: loops fill their half of the wall)' },
+    { name: 'phase', label: 'Phase', default: 0, min: 0, max: 0.99, unit: '', hint: 'Fraction of a period (0.5 = start with a lower loop)' }] },
+};
+function _wallSystemType(wall) {          // (legacy wall.system)
+  const t = wall && wall.system && wall.system.type;
+  return WALL_SYSTEMS[t] && t !== 'skin_web' ? t : 'skin_web';
+}
+function _wsOf(pid) { return (layer.wall_systems || []).find(s => s.members.includes(pid)) || null; }
+function _wsLabel(s) { return s.name || s.id; }
+function _newWallSystemId() {
+  let k = 1;
+  while ((layer.wall_systems || []).some(s => s.id === `WS${k}`)) k++;
+  return `WS${k}`;
+}
+function _wsSetMember(pid, s) {             // at most ONE system per path
+  for (const x of layer.wall_systems || []) x.members = x.members.filter(m => m !== pid);
+  if (s && !s.members.includes(pid)) s.members.push(pid);
+}
+function _wsSetType(s, v) {
+  s.type = v;
+  s.params = {};
+  for (const prm of WALL_SYSTEMS[v].params) s.params[prm.name] = prm.default;
+  if (v === 'interleaved' || v === 'linked') s.params.paths = 4;   // even: closes at wall ends
+  if (v === 'parallel') s.params.walls = 4;
+  if (v === 'skin_web' && (!s.web || !s.web.pattern || s.web.pattern === 'none'))
+    s.web = { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 };
+}
+let wallSystemPick = null;                  // the system shown in the Wall System panel
+function _wsNew(pids = []) {
+  layer.wall_systems = layer.wall_systems || [];
+  let k = layer.wall_systems.length + 1;
+  while (layer.wall_systems.some(s => s.name === `Wall System ${k}`)) k++;
+  const s = { id: _newWallSystemId(), name: `Wall System ${k}`, type: 'skin_web', thickness: 10, align: 'auto',
+              print_reference: false, params: {}, members: [],
+              web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } };
+  layer.wall_systems.push(s);
+  for (const pid of pids) _wsSetMember(pid, s);
+  wallSystemPick = s.id;
+  return s;
+}
+// the construction that fills a path's wall ('skin_web' for a plain / no wall)
+function _wallSystemOf(path) {
+  const s = _wsOf(path.id);
+  if (s && s.thickness != null) return s.thickness > 0 ? s.type : 'skin_web';
   const eff = _effectiveWall(path);
-  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); repaint(); };
-  if (eff.from === 'network') {
-    _addNote(panel, `Wall Thickness ${eff.wall.thickness} in · ${_alignLabel(eff.wall.align, path.closed)}` +
-                    ` — inherited from network ${eff.net.label}.`);
-    _addButton(panel, 'Override for this path', () => {
-      path.wall = { thickness: eff.wall.thickness, align: eff.wall.align || 'auto',
-                    print_reference: !!eff.wall.print_reference };
-      refresh();
-    });
-    return;
-  }
-  const own = eff.wall;
-  addPropRowNum(panel, 'Wall Thickness', 'wall-t', own ? own.thickness : 0, v => {
-    const align = (path.wall && path.wall.align) || 'auto';
-    // 0 inside a thick-walled network = the explicit SINGLE-BEAD override
-    // (not "inherit 10 in again", not a fake epsilon wall, never deleted)
-    path.wall = v > 0 ? { thickness: v, align, print_reference: !!(path.wall && path.wall.print_reference) }
-                      : (eff.nw ? { thickness: 0, align } : null);
-    refresh();
-  }, own ? 'in' : 'in · Single bead');
-  if (!own) {
-    _addNote(panel, eff.from === 'single'
-      ? `Single bead — overrides network ${eff.net.label}'s ${eff.nw.thickness} in wall. Printed as one bead ` +
-        '(with Physical rules, an out-and-back return-lane pair); no wall lattice inside it.'
-      : '0 = a single bead (no wall region, no lattice). Set a thickness to make this path a wall; ' +
-        'its faces follow every edit of the path.');
-    if (eff.from === 'single') {
-      _addButton(panel, `Use network ${eff.net.label} wall instead`, () => { path.wall = null; refresh(); });
+  return eff.wall ? _wallSystemType(eff.wall) : 'skin_web';
+}
+
+// SKIN + WEB: materialise each system's web as OWNED infill records — one per
+// connected group of members (Wall Network = connectivity), reusing an owned
+// record already anchored in that group (its id carries the lattice lineage).
+// Inactive webs (another construction / 'none') keep their records.
+function _syncSystemWebs() {
+  let changed = false;
+  const nets = (networkInfo && networkInfo.source_networks) || [];
+  const groupOf = pid => { const n = nets.find(x => x.sources.includes(pid)); return n ? n.id : 'p:' + pid; };
+  const keep = new Set();
+  layer.infills = layer.infills || [];
+  for (const s of layer.wall_systems || []) {
+    if (s.thickness == null) continue;      // (legacy: migrated first)
+    const web = s.web || (s.web = { pattern: 'none', params: {}, variation_index: 0 });
+    if (s.type === 'skin_web' && (!web.pattern || web.pattern === 'none')) {
+      // (earlier designs: Skin + Web with web "None" IS Hollow / Skins Only)
+      s.type = 'hollow';
+      Object.assign(web, { pattern: 'zigzag', params: { spacing: 20, ...web.params }, variation_index: 0 });
+      changed = true;
     }
-    return;
+    const active = s.type === 'skin_web' && web.pattern && web.pattern !== 'none';
+    const owned = layer.infills.filter(f => f.owner === s.id);
+    const groups = new Map();
+    for (const pid of s.members) {
+      if (!layer.source_paths.some(p => p.id === pid)) continue;
+      const g = groupOf(pid);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(pid);
+    }
+    for (const pids of groups.values()) {
+      let f = owned.find(x => !keep.has(x) && pids.includes(x.path_id));
+      if (!f) {
+        if (!active) continue;
+        f = { id: `${s.id}~web~${pids[0]}`, path_id: pids[0], kind: 'wall', owner: s.id,
+              pattern: web.pattern, params: { ...web.params }, variation_index: web.variation_index || 0 };
+        layer.infills.push(f);
+        changed = true;
+      }
+      keep.add(f);
+      if (active && (f.pattern !== web.pattern || JSON.stringify(f.params) !== JSON.stringify(web.params) ||
+                     (f.variation_index || 0) !== (web.variation_index || 0))) {
+        f.pattern = web.pattern; f.params = { ...web.params }; f.variation_index = web.variation_index || 0;
+        changed = true;
+      }
+    }
   }
-  addPropRowSelect(panel, 'Wall Alignment', _alignLabel(own.align, path.closed), _alignOptions(path.closed), v => {
-    path.wall = { ...own, align: ALIGN_UI[v] };
-    refresh();
-  });
-  const centred = _alignLabel(own.align, path.closed) === 'Centered';
-  if (centred) {
-    addPropRowCheck(panel, 'Print reference line', !!own.print_reference, v => {
-      path.wall = { ...own, print_reference: v };
-      refresh();
-    });
+  const n = layer.infills.length;
+  layer.infills = layer.infills.filter(f => !f.owner || keep.has(f) ||
+                                       (layer.wall_systems || []).some(s => s.id === f.owner && s.thickness == null));
+  return changed || layer.infills.length !== n;
+}
+
+// MIGRATION (once per legacy design; not an undo step): the backend groups
+// every path's effective legacy wall into Wall Systems.
+let _wsMigrating = false;
+function _legacyWalls() {
+  return layer.source_paths.some(p => p.wall) || (layer.network_walls || []).length > 0 ||
+         (layer.wall_systems || []).some(s => s.thickness == null);
+}
+async function _maybeMigrateWallSystems() {
+  if (_wsMigrating || !_legacyWalls()) return;
+  _wsMigrating = true;
+  try {
+    const res = await _post('/api/migrate_wall_systems', buildPayload());
+    if (!res || !res.migrated || !_legacyWalls()) return;
+    layer.wall_systems = res.wall_systems.map(w => ({ ...w, params: { ...(w.params || {}) },
+      members: [...(w.members || [])], web: { pattern: 'none', params: {}, variation_index: 0, ...(w.web || {}) } }));
+    for (const f of layer.infills || []) if (res.owners[f.id]) f.owner = res.owners[f.id];
+    for (const p of layer.source_paths) p.wall = null;
+    layer.network_walls = [];
+    if (_hist.current) _hist.current.state = _histState();   // the migrated design IS the current state
+    routeResult = null;
+    updatePathList(); updatePropPanel(); updateInfillList();
+    scheduleRefresh();
+    setStatus('Walls migrated to Wall Systems (same geometry).');
+  } catch (e) { /* keep the legacy design; it still resolves */ } finally { _wsMigrating = false; }
+}
+
+let _wsReportEls = [];            // live readouts of the shown panels: { el, id | sys, owner }
+function _wsReports(r) {
+  const all = (networkInfo && networkInfo.wall_systems) || [];
+  return r.sys ? all.filter(w => w.system_id === r.sys) : all.filter(w => (w.sources || []).includes(r.id));
+}
+function _fillWallSystemReport(d, r) {
+  if (typeof r === 'string') r = { id: r };
+  const reps = _wsReports(r);
+  d.style.color = '';
+  const vals = reps.filter(w => w.min_effective_thickness != null);
+  if (reps.some(w => w.status === 'mixed')) {
+    d.style.color = 'var(--warn)';
+    d.textContent = 'A wall of another construction spans between walls of this system (a partition) — ' +
+                    'that region prints as Skin + Web (V1).';
+  } else if (vals.length) {
+    const worst = vals.reduce((a, b) => (b.min_effective_thickness < a.min_effective_thickness ? b : a));
+    d.textContent = `Minimum effective thickness: ${worst.min_effective_thickness.toFixed(1)} in ` +
+                    `(envelope ${worst.envelope.toFixed(1)} in, bead ${worst.bead} in)`;
+    if (vals.some(w => w.closable === false)) {
+      // odd path count + free wall ends (openings): one strand end must stay
+      // at each end — a closed route is impossible there
+      d.textContent += ' · Odd Number of Paths: at its wall ends / openings the route cannot close ' +
+                       '(start and end stay at the jambs) — choose an even number for one closed route.';
+      d.style.color = 'var(--warn)';
+    }
+  } else {
+    d.textContent = 'Minimum effective thickness: —';
   }
-  _addNote(panel, centred
-    ? 'Thickness is split evenly on both sides of the path; the path itself is a reference line.'
-    : `The path is one face of the wall; the thickness lies ${_alignLabel(own.align, path.closed).toLowerCase()}.`);
-  if (own && own.thickness > 0) {
-    // the normal PARAMETRIC wall: the other face is derived, never drawn by hand
-    const n = document.createElement('div');
-    n.className = 'path-type'; n.id = 'wall-derived-note';
-    n.textContent = `${own.thickness} in wall ${_alignLabel(own.align, path.closed).toLowerCase()} this ${path.closed ? 'boundary' : 'path'}` +
-                    ' — the other face is derived and follows every edit (size, move, rotate, Corner R, thickness).';
-    panel.appendChild(n);
-  }
-  const net = _networkOf()[path.id];
-  if (net && _netWallFor(net.ids)) {
-    _addButton(panel, `Use network ${net.label} wall instead`, () => { path.wall = null; refresh(); });
+}
+function _wallSystemReport(id) { return _wsReports({ id })[0] || null; }
+
+// construction parameters (Interleaved / Linked / Chained Loop)
+function _addWallSystemParams(panel, s) {
+  // a PARAMETER edit only regenerates the geometry (coalesced requests); the
+  // panel is not rebuilt — the input keeps focus and the readout updates in
+  // place when the result arrives
+  const onParam = () => { routeResult = null; scheduleRefresh(); repaint(); };
+  for (const prm of WALL_SYSTEMS[s.type].params) {
+    if (prm.options) {
+      addPropRowSelectTo(panel, prm.label, s.params[prm.name] ?? prm.default, prm.options, v => {
+        s.params[prm.name] = v; onParam();
+      }, { wave: 'Wave', zigzag: 'Zigzag' });
+      continue;
+    }
+    addPropRowNumTo(panel, prm.label, s.params[prm.name] ?? prm.default, v => {
+      let x = Math.max(prm.min ?? 0, Math.min(prm.max ?? 1e9, v));
+      if (prm.int) x = Math.round(x);
+      s.params[prm.name] = x; onParam();
+    }, prm.unit ?? 'in');
+    if (prm.hint) _addNote(panel, prm.hint);
   }
 }
 
-// --- Wall-network properties: apply to EVERY path of the connected network
-// (and to paths joined to it later) unless a path overrides it.
+// SKIN + WEB: the web lattice (formerly the Wall Infill panel) — edits go to
+// the system's web and are synced into its owned infill records
+function _addWebRows(panel, s, rebuild) {
+  const web = s.web || (s.web = { pattern: 'none', params: {}, variation_index: 0 });
+  const onParam = () => { _syncSystemWebs(); routeResult = null; scheduleRefresh(); repaint(); };
+  addPropRowSelectTo(panel, 'Web', web.pattern, _patternsFor('wall'), v => {
+    web.pattern = v;
+    for (const prm of _paramsFor({ pattern: v, kind: 'wall' }))
+      if (web.params[prm.name] == null) web.params[prm.name] = prm.default;
+    if (v === 'truss' && web.params.seed == null) web.params.seed = 0;
+    _syncSystemWebs(); rebuild();
+  }, PATTERN_LABELS);
+  for (const prm of _paramsFor({ pattern: web.pattern, kind: 'wall' })) {
+    addPropRowNumTo(panel, prm.label, web.params[prm.name] ?? prm.default, v => {
+      web.params[prm.name] = Math.max(prm.min ?? -1e9, Math.min(prm.max ?? 1e9, v));
+      onParam();
+    }, prm.unit ?? 'in');
+  }
+  // readouts of the materialised web (the first owned record)
+  const f = (layer.infills || []).find(x => x.owner === s.id);
+  if (f) {
+    const st = _infillStatus(f);
+    if (st && !/already filled/.test(st)) { _addNote(panel, st); panel.lastChild.style.color = 'var(--warn)'; }
+    const lin = _infillLineage(f);
+    if (lin) {
+      const n = document.createElement('div');
+      n.className = 'path-type infill-lineage';
+      n.textContent = lin.text;
+      if (lin.warn) n.style.color = 'var(--warn)';
+      panel.appendChild(n);
+    }
+    const act = _latticeActual(f);
+    if (act) _addNote(panel, act);
+  }
+  if (web.pattern === 'truss') {
+    // REGENERATE: another valid solution under the SAME parameters (a
+    // deterministic solution seed; undoable; lineage-wide like the pattern)
+    const row = document.createElement('div');
+    row.className = 'prop-row truss-regenerate';
+    const lbl = document.createElement('span');
+    lbl.className = 'prop-label';
+    lbl.textContent = `Solution ${(web.params.seed || 0) + 1}`;
+    const btn = document.createElement('button');
+    btn.className = 'add-btn';
+    btn.textContent = 'Regenerate';
+    btn.title = 'Pick another valid lattice with the same parameters';
+    btn.onclick = () => { web.params.seed = (web.params.seed || 0) + 1; _syncSystemWebs(); rebuild(); };
+    row.append(lbl, btn);
+    panel.appendChild(row);
+    _addNote(panel, 'Pitch follows from Brace Angle and the local wall cavity (prototype defaults, not calibrated).');
+    return;
+  }
+  const adv = document.createElement('details');
+  adv.className = 'advanced';
+  const sm = document.createElement('summary');
+  sm.textContent = 'Advanced';
+  adv.appendChild(sm);
+  const advPanel = document.createElement('div');
+  addPropRowNumTo(advPanel, 'Max unsupported', web.params.max_unsupported || 0, v => {
+    web.params.max_unsupported = Math.max(0, v);           // 0 = automatic
+    onParam();
+  }, 'in');
+  _addNote(advPanel, '0 = automatic (1.375 × target). Wins over Target Spacing.');
+  adv.appendChild(advPanel);
+  panel.appendChild(adv);
+}
+
+// WALL SYSTEM PANEL (its own Designer sidebar): the systems, then the picked
+// one's construction, web / parameters and members.
+let _wsLastSel = null;
+function updateWallSystemSection() {
+  const list = document.getElementById('wallsys-list');
+  const panel = document.getElementById('wallsys-props');
+  const edit = document.getElementById('wallsys-edit-section');
+  if (!list || !panel) return;
+  list.innerHTML = ''; panel.innerHTML = '';
+  _wsReportEls = _wsReportEls.filter(r => r.owner !== 'sys');
+  const all = layer.wall_systems || (layer.wall_systems = []);
+  const rebuild = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint(); };
+  const sel = selectedId && layer.source_paths.find(p => p.id === selectedId);
+  if (selectedId !== _wsLastSel) {          // selecting a path shows its system
+    _wsLastSel = selectedId;
+    const ss = sel && _wsOf(sel.id);
+    if (ss) wallSystemPick = ss.id;
+  }
+  const cur = all.find(s => s.id === wallSystemPick) || all[0] || null;
+  wallSystemPick = cur ? cur.id : null;
+  for (const s of all) {
+    const item = document.createElement('div');
+    item.className = 'path-item wallsys-item' + (s === cur ? ' selected' : '');
+    item.onclick = () => { wallSystemPick = s.id; updateWallSystemSection(); };
+    const label = document.createElement('div');
+    label.className = 'path-label';
+    label.textContent = _wsLabel(s);
+    const type = document.createElement('div');
+    type.className = 'path-type';
+    type.textContent = `${WALL_SYSTEMS[s.type] ? WALL_SYSTEMS[s.type].label : s.type} · ${s.members.length}`;
+    item.append(label, type);
+    list.appendChild(item);
+  }
+  const loose = layer.source_paths.filter(p => !_wsOf(p.id)).map(p => _pathName(p.id));
+  if (loose.length) _addNote(list, `No Wall System (single bead): ${loose.join(', ')}`);
+  _addButton(list, sel && !_wsOf(sel.id) ? `+ New Wall System with ${_pathName(sel.id)}` : '+ New Wall System',
+             () => { _wsNew(sel && !_wsOf(sel.id) ? [sel.id] : []); rebuild(); });
+  if (!cur) { if (edit) edit.style.display = 'none'; return; }
+  if (edit) edit.style.display = '';
+  const title = document.getElementById('wallsys-edit-title');
+  if (title) title.textContent = _wsLabel(cur);
+  // MEMBERS first: only this system's paths (compact ×), then Add path…
+  _addSubTitle(panel, 'Members');
+  if (!cur.members.length) _addNote(panel, 'No paths yet.');
+  for (const pid of cur.members) {
+    const r = document.createElement('div');
+    r.className = 'prop-row wallsys-member';
+    const nm = document.createElement('span');
+    nm.className = 'prop-label';
+    nm.style.cssText = 'flex:1;cursor:pointer';
+    nm.textContent = _pathName(pid);
+    nm.onclick = () => { selectedId = pid; updatePathList(); updatePropPanel(); repaint(); };
+    nm.onmouseenter = () => setHighlight(pid);
+    nm.onmouseleave = () => setHighlight(null);
+    const x = document.createElement('button');
+    x.className = 'remove-btn';
+    x.textContent = '×';
+    x.title = `Remove ${_pathName(pid)} from ${_wsLabel(cur)}`;
+    x.onclick = () => { _wsSetMember(pid, null); _syncSystemWebs(); rebuild(); };
+    r.append(nm, x);
+    panel.appendChild(r);
+  }
+  const cand = layer.source_paths.filter(p => !cur.members.includes(p.id));
+  if (cand.length) {
+    const ADD = '__add';
+    addPropRowSelectTo(panel, 'Add path…', ADD, [ADD, ...cand.map(p => p.id)], v => {
+      if (v === ADD) return;
+      _wsSetMember(v, cur);                 // (moves it out of another system)
+      _syncSystemWebs(); rebuild();
+    }, { [ADD]: '— choose a path —', ...Object.fromEntries(cand.map(p => {
+      const o = _wsOf(p.id);
+      return [p.id, _pathName(p.id) + (o ? ` (from ${_wsLabel(o)})` : '')];
+    })) });
+  }
+  _addSubTitle(panel, 'Construction');
+  addPropRowText(panel, 'Name', cur.name || '', v => { cur.name = v.trim() || cur.id; rebuild(); });
+  const types = Object.keys(WALL_SYSTEMS);
+  addPropRowSelectTo(panel, 'Construction', cur.type, types, v => { _wsSetType(cur, v); _syncSystemWebs(); rebuild(); },
+                     Object.fromEntries(types.map(k => [k, WALL_SYSTEMS[k].label])));
+  if (cur.type === 'single') {
+    _addNote(panel, 'The ordinary single-line wall: one bead along each path. With Physical rules an open ' +
+                    'path prints as separated outbound + return lanes (Material / Bead: Return-lane overlap).');
+  } else {
+    addPropRowNumTo(panel, 'Wall Thickness', cur.thickness ?? 10, v => {
+      cur.thickness = Math.max(0.5, v); routeResult = null; scheduleRefresh(); repaint();
+    });
+    const alignOpts = ['Default', 'Centered', 'Inside', 'Outside'];
+    addPropRowSelect(panel, 'Wall Alignment', !cur.align || cur.align === 'auto' ? 'Default' : _alignLabel(cur.align, true),
+                     alignOpts, v => { cur.align = v === 'Default' ? 'auto' : ALIGN_UI[v]; rebuild(); });
+    _addNote(panel, 'Default: Centered on lines, Inside closed shapes.');
+    if (cur.align === 'center') {
+      addPropRowCheck(panel, 'Print reference line', !!cur.print_reference, v => { cur.print_reference = v; rebuild(); });
+    }
+  }
+  if (cur.type === 'single') {
+    // (no envelope parameters)
+  } else if (cur.type === 'hollow') {
+    _addNote(panel, 'The inner and outer skins only — no structural web between them.');
+  } else if (cur.type === 'skin_web') {
+    _addSubTitle(panel, 'Skin + Web');
+    _addWebRows(panel, cur, rebuild);
+  } else {
+    _addSubTitle(panel, WALL_SYSTEMS[cur.type].label);
+    _addWallSystemParams(panel, cur);
+    const d = document.createElement('div');
+    d.className = 'path-type wall-system-report';
+    _wsReportEls.push({ el: d, sys: cur.id, owner: 'sys' });
+    _fillWallSystemReport(d, { sys: cur.id });
+    panel.appendChild(d);
+    _addNote(panel, 'No separate skins: the paths fill the Wall Thickness envelope.');
+  }
+  _addNote(panel, 'Members need not touch. Connected walls still join geometrically (junctions); ' +
+                  'a path in no Wall System prints as a single bead.');
+  _addButton(panel, `Delete ${_wsLabel(cur)}`, () => {
+    layer.wall_systems = layer.wall_systems.filter(s => s !== cur);
+    wallSystemPick = null; _syncSystemWebs(); rebuild();
+  });
+}
+
+// Path Properties: which Wall System builds this path (construction lives
+// in the Wall System panel)
+function _addWallRows(panel, path) {
+  _wsReportEls = _wsReportEls.filter(r => r.owner !== 'path');
+  _addSubTitle(panel, 'Wall System');
+  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint(); };
+  const all = layer.wall_systems || [];
+  const s = _wsOf(path.id);
+  const NONE = 'none';
+  addPropRowSelectTo(panel, 'Wall System', s ? s.id : NONE, [NONE, ...all.map(x => x.id)], v => {
+    const t = all.find(x => x.id === v) || null;
+    _wsSetMember(path.id, t);
+    if (t) wallSystemPick = t.id;
+    _syncSystemWebs();
+    refresh();
+  }, { [NONE]: 'None (single bead)', ...Object.fromEntries(all.map(x => [x.id, _wsLabel(x)])) });
+  if (s && s.type === 'single') {
+    _addNote(panel, 'Single / Out-and-Back Wall: one bead (with Physical rules, separated outbound + return lanes).');
+  } else if (s && s.thickness != null) {
+    _addNote(panel, `${s.thickness} in wall · ${s.align && s.align !== 'auto' ? _alignLabel(s.align, path.closed) : _alignLabel('auto', path.closed)}` +
+                    ` · ${WALL_SYSTEMS[s.type].label} — set in the Wall System panel.`);
+    if (s.type !== 'skin_web') {
+      const d = document.createElement('div');
+      d.className = 'path-type wall-system-report';
+      _wsReportEls.push({ el: d, id: path.id, owner: 'path' });
+      _fillWallSystemReport(d, path.id);
+      panel.appendChild(d);
+    }
+  } else if (_legacyWalls() && _effectiveWall(path).wall) {
+    _addNote(panel, `${_effectiveWall(path).wall.thickness} in wall (older design) — being converted to a Wall System.`);
+  } else {
+    _addNote(panel, 'A single bead (with Physical rules, an out-and-back pair when open). ' +
+                    'Add it to a Wall System to make it a wall.');
+    _addButton(panel, '+ New Wall System with this path', () => { _wsNew([path.id]); _syncSystemWebs(); refresh(); });
+  }
+}
+
+// (legacy) Network Wall of a network — read only by the migration / old designs
 function _netWallFor(ids) {
   return (layer.network_walls || []).find(w => ids.includes(w.path_id)) || null;
 }
 
-// WALL NETWORK — a persistent Design-sidebar section (layer-level, like
-// Wall Geometry): the selected path's network, else the one picked in the
-// selector (several networks), else the first. No selection needed.
-let networkPick = null;      // label ('N1', …) of the network being edited
-
+// WALL NETWORK — geometric CONNECTIVITY only (paths that touch / cross; the
+// engine joins their walls at junctions). It owns no construction.
 function updateNetworkSection() {
   const sec = document.getElementById('network-section');
   const panel = document.getElementById('network-props');
@@ -3003,59 +3462,15 @@ function updateNetworkSection() {
   if (!nets.length) { sec.style.display = 'none'; return; }
   sec.style.display = '';
   panel.innerHTML = '';
-  const bySel = selectedId && nets.find(n => n.sources.includes(selectedId));
-  const cur = bySel || nets.find(n => n.id === networkPick) || nets[0];
-  networkPick = cur.id;
-  if (nets.length > 1) {
-    const label = n => `${n.id} (${n.sources.map(_pathName).join(', ')})`;
-    addPropRowSelect(panel, 'Network', label(cur), nets.map(label), v => {
-      networkPick = nets.find(n => label(n) === v).id;
-      updateNetworkSection();
-    });
-  }
-  const anchor = layer.source_paths.find(p => p.id === cur.sources[0]);
-  if (anchor) _addNetworkPanel(panel, anchor, true);
+  for (const n of nets) _addNote(panel, `${n.id}: ${n.sources.map(_pathName).join(', ')}`);
+  _addNote(panel, 'Connected geometry (junctions, shared wall envelopes). Construction — thickness, system, web — ' +
+                  'is set per Wall System, independently of connectivity.');
 }
 
-function _addNetworkPanel(panel, path, inSection = false) {
+function _addNetworkPanel(panel, path) {
   const net = _networkOf()[path.id];
   if (!net || net.ids.length < 2) return;
-  if (!inSection) {
-    // in the path's Properties: membership only (settings live in Wall Network)
-    _addNote(panel, `Member of wall network ${net.label} (${net.ids.length} paths) — its settings are in Wall Network.`);
-    return;
-  }
-  _addSubTitle(panel, inSection ? net.label : `Wall network ${net.label}`, JUNCTION_COLOR);
-  _addNote(panel, `${net.ids.length} connected paths: ${net.names.join(', ')}`);
-  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updateNetworkSection(); repaint(); };
-  const nw = _netWallFor(net.ids);
-  addPropRowNum(panel, 'Network Wall Thickness', 'net-wall-t', nw ? nw.thickness : 0, v => {
-    let w = _netWallFor(net.ids);
-    if (v > 0) {
-      if (!w) { w = { id: newId(), path_id: path.id, thickness: v, align: 'auto' }; layer.network_walls.push(w); }
-      w.thickness = v;
-    } else if (w) {
-      layer.network_walls = layer.network_walls.filter(x => x !== w);
-    }
-    refresh();
-  });
-  if (nw) {
-    addPropRowSelect(panel, 'Wall Alignment', nw.align === 'auto' || !nw.align ? 'Default' : _alignLabel(nw.align, true),
-                     ['Default', 'Centered', 'Inside', 'Outside'], v => {
-      nw.align = v === 'Default' ? 'auto' : ALIGN_UI[v];
-      refresh();
-    });
-  }
-  const own = net.ids.filter(id => {
-    const p = layer.source_paths.find(s => s.id === id);
-    return p && p.wall && p.wall.thickness > 0;
-  });
-  _addNote(panel, 'Applies to every path in this network unless a path overrides it. ' +
-                  'Default alignment: Centered on lines, Inside closed shapes.' +
-                  (own.length ? ` Overridden by: ${own.map(id => _pathName(id)).join(', ')}.` : ''));
-  const hasInfill = (layer.infills || []).some(f => net.ids.includes(f.path_id));
-  _addButton(panel, hasInfill ? 'Infill: see Infill section' : '+ Add infill to network',
-             () => { selectedId = path.id; addInfill(); updatePropPanel(); }, hasInfill);
+  _addNote(panel, `Connected to ${net.ids.filter(id => id !== path.id).map(_pathName).join(', ')} (wall network ${net.label}).`);
 }
 
 function _pathName(id) {
@@ -3347,7 +3762,7 @@ function _infillLineage(f) {
   if (!lin) return null;
   const names = (lin.members || []).map(_designName).join(', ');
   let text = `Shared lattice: ${names} print one vertically registered lattice. ` +
-             `Pattern, spacing and variation apply to the whole lineage (defined in ${_designName(lin.owner)}).`;
+             `Pattern and spacing apply to the whole lineage (defined in ${_designName(lin.owner)}).`;
   let warn = false;
   const un = (lin.jambs && lin.jambs.unresolved) || [];
   if (un.length) {
@@ -3362,7 +3777,7 @@ function updateInfillList() {
   const el = document.getElementById('infill-list');
   if (!el) return;
   el.innerHTML = '';
-  for (const f of layer.infills || []) {
+  for (const f of (layer.infills || []).filter(x => !x.owner)) {   // (wall webs: Wall System panel)
     const block = document.createElement('div');
     block.className = 'treatment-block';
     const hdr = document.createElement('div');
@@ -3413,17 +3828,30 @@ function updateInfillList() {
       if (lin.warn) n.style.color = 'var(--warn)';
       panel.appendChild(n);
     }
+    const hostPath = layer.source_paths.find(s => s.id === f.path_id);
+    if (f.kind !== 'solid' && hostPath && _wallSystemOf(hostPath) !== 'skin_web') {
+      // only Skin + Web walls are filled by a Wall Infill
+      _addNote(panel, `This wall uses the ${WALL_SYSTEMS[_wallSystemOf(hostPath)].label} wall system — ` +
+                      'Wall Infill applies to Skin + Web walls only (kept, not printed).');
+      block.appendChild(panel);
+      el.appendChild(block);
+      continue;
+    }
     const names = _patternsFor(f.kind);
     addPropRowSelectTo(panel, 'Pattern', f.pattern, names, v => {
-      f.pattern = v; routeResult = null; scheduleRefresh(); repaint();
-    });
+      f.pattern = v;
+      // the new pattern's own parameters (existing values kept)
+      for (const prm of _paramsFor(f)) if (f.params[prm.name] == null) f.params[prm.name] = prm.default;
+      if (v === 'truss' && f.params.seed == null) f.params.seed = 0;
+      routeResult = null; scheduleRefresh(); updateInfillList(); repaint();
+    }, PATTERN_LABELS);
     for (const prm of _paramsFor(f)) {
       addPropRowNumTo(panel, prm.label, f.params[prm.name] ?? prm.default, v => {
         let x = Math.max(prm.min ?? -1e9, Math.min(prm.max ?? 1e9, v));
         if (prm.name === 'perimeters') x = Math.round(x);
         f.params[prm.name] = x;
         routeResult = null; scheduleRefresh(); repaint();
-      }, prm.name === 'angle' ? '°' : prm.name === 'perimeters' ? '' : 'in');
+      }, prm.unit ?? (prm.name === 'angle' ? '°' : prm.name === 'perimeters' ? '' : 'in'));
     }
     if (f.kind === 'solid') {
       const sact = _solidActual(f);
@@ -3460,6 +3888,33 @@ function updateInfillList() {
       d.className = 'path-type';
       d.textContent = act;
       panel.appendChild(d);
+    }
+    if (f.pattern === 'truss') {
+      // REGENERATE: another valid solution under the SAME parameters — a
+      // deterministic solution seed (geometry + parameters + seed reproduce
+      // the lattice; undoable like any edit; lineage-wide like the pattern)
+      const row = document.createElement('div');
+      row.className = 'prop-row truss-regenerate';
+      const lbl = document.createElement('span');
+      lbl.className = 'prop-label';
+      lbl.textContent = `Solution ${(f.params.seed || 0) + 1}`;
+      const btn = document.createElement('button');
+      btn.className = 'add-btn';
+      btn.textContent = 'Regenerate';
+      btn.title = 'Pick another valid lattice with the same parameters';
+      btn.onclick = () => {
+        f.params.seed = (f.params.seed || 0) + 1;
+        routeResult = null; scheduleRefresh(); updateInfillList(); repaint();
+      };
+      row.append(lbl, btn);
+      panel.appendChild(row);
+      const hint = document.createElement('div');
+      hint.className = 'path-type';
+      hint.textContent = 'Pitch follows from Brace Angle and the local wall cavity (prototype defaults, not calibrated).';
+      panel.appendChild(hint);
+      block.appendChild(panel);
+      el.appendChild(block);
+      continue;                       // no Target Spacing / V1–V2 phase for the truss
     }
     // Advanced: structural bound (target spacing stays the main control)
     const adv = document.createElement('details');
@@ -3505,6 +3960,18 @@ function updateInfillList() {
 // Add infill to the region of the selected path (else the outermost closed
 // boundary, else the first path).
 function addInfill() {
+  // a WALL SYSTEM member: its web is configured on the system (Skin + Web)
+  const ws = selectedId && _wsOf(selectedId);
+  if (ws && ws.thickness != null) {
+    if (ws.type === 'skin_web' && (!ws.web || ws.web.pattern === 'none'))
+      ws.web = { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 };
+    wallSystemPick = ws.id;
+    _syncSystemWebs();
+    routeResult = null; scheduleRefresh(); updatePropPanel(); updateInfillList();
+    setStatus(ws.type === 'skin_web' ? `The web of ${_wsLabel(ws)} is set in the Wall System panel.`
+                                     : `${_wsLabel(ws)} is ${WALL_SYSTEMS[ws.type].label}: no web (change its Construction).`);
+    return;
+  }
   // REGION: the selected path if the designer picked one (an inner shape
   // too — explicit wins); otherwise the OUTERMOST closed boundary (closed
   // paths nested inside it become voids, by geometry not creation order).
@@ -3538,13 +4005,13 @@ function addPropRowNumTo(panel, label, value, onChange, unit = 'in') {
   panel.appendChild(row);
 }
 
-function addPropRowSelectTo(panel, label, value, options, onChange) {
+function addPropRowSelectTo(panel, label, value, options, onChange, labels = null) {
   const row = document.createElement('div'); row.className = 'prop-row';
   const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
   const sel = document.createElement('select'); sel.className = 'prop-input';
   for (const o of options) {
     const opt = document.createElement('option');
-    opt.value = o; opt.textContent = o;
+    opt.value = o; opt.textContent = (labels && labels[o]) || o;
     if (o === value) opt.selected = true;
     sel.appendChild(opt);
   }
@@ -3556,8 +4023,30 @@ function addPropRowSelectTo(panel, label, value, options, onChange) {
 // Live derived-path refresh + auto-routing
 // ---------------------------------------------------------------------------
 
+// Any wall (own or network) using a non-default Wall System?
+function _anyWallSystem() {
+  return (layer.wall_systems || []).some(s => s.type !== 'skin_web') ||
+         layer.source_paths.some(p => p.wall && p.wall.thickness > 0 && _wallSystemType(p.wall) !== 'skin_web') ||
+         (layer.network_walls || []).some(w => _wallSystemType(w) !== 'skin_web');
+}
+
+// REQUEST COALESCING: at most one resolve in flight; edits arriving meanwhile
+// collapse into ONE follow-up request with the latest state (a slow resolve
+// never queues a backlog of stale ones).
+let _reqBusy = false, _reqNext = null;
+async function _coalesced(fn) {
+  if (_reqBusy) { _reqNext = fn; return; }
+  _reqBusy = true;
+  try { await fn(); } finally {
+    _reqBusy = false;
+    if (_reqNext) { const f = _reqNext; _reqNext = null; _coalesced(f); }
+  }
+}
+
 function scheduleRefresh() {
   _syncRelations();
+  _syncSystemWebs();
+  _maybeMigrateWallSystems();
   historyCheckpoint();
   clearTimeout(_refreshTimer);
   if (layer.source_paths.length === 0) {
@@ -3568,17 +4057,18 @@ function scheduleRefresh() {
     repaint();
     return;
   }
+  const ws = _anyWallSystem();
   if (showToolpath) {
     // Auto-route: also updates derivedPaths
-    _refreshTimer = setTimeout(runRoute, 200);
+    _refreshTimer = setTimeout(() => _coalesced(runRoute), ws ? 300 : 200);
   } else {
     // ≥ 2 paths may form a wall network (junction markers, trimmed faces)
     const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0 ||
                        (layer.infills || []).length > 0 ||
                        (layer.openings || []).length > 0 || (layer.trims || []).length > 0 ||
-                       layer.source_paths.length > 1;
+                       layer.source_paths.length > 1 || ws;
     if (hasDerived || showBeads) {           // beads need the resolved printable set
-      _refreshTimer = setTimeout(fetchEffectivePaths, 120);
+      _refreshTimer = setTimeout(() => _coalesced(fetchEffectivePaths), ws ? 250 : 120);
     } else {
       derivedPaths = [];
       repaint();
@@ -3689,6 +4179,8 @@ function buildPayload() {
     junction_radius: layer.junction_radius || 0,
     junction_overrides: (layer.junction_overrides || []).map(o => ({ ...o })),
     network_walls: (layer.network_walls || []).map(w => ({ ...w })),
+    wall_systems: (layer.wall_systems || []).map(w => ({ ...w, params: { ...(w.params || {}) },
+                                                          members: [...w.members], web: { ...(w.web || {}) } })),
     wall_relations: (layer.wall_relations || []).map(w => ({ ...w })),
     return_paths: layer.return_paths !== false,
     prefer_closed: layer.prefer_closed !== false,
@@ -4151,6 +4643,7 @@ function toggleToolpath() {
     _showTransport(false);
     routeResult = null;
     document.getElementById('metrics-section').style.display = 'none';
+    if (moveStartMode) toggleMoveStart(false);
     repaint();
   }
 }
@@ -4225,6 +4718,8 @@ function deletePath(id) {
     w.path_id = other || null;
   }
   layer.network_walls = (layer.network_walls || []).filter(w => w.path_id);
+  for (const s of layer.wall_systems || []) s.members = s.members.filter(m => m !== id);
+  _syncSystemWebs();
   selectedId = null;
   selectedOpeningId = null;
   routeResult = null;
@@ -4249,6 +4744,7 @@ function clearAll() {
   layer.region_overrides = [];
   layer.infills = [];
   layer.network_walls = [];
+  layer.wall_systems = [];
   layer.wall_relations = [];
   layer.return_paths = true;
   layer.prefer_closed = true;
@@ -4832,6 +5328,9 @@ const _SOLID_PARAMS = [
 const SOLID_FALLBACK = { rectilinear: { kind: 'solid', parameters: _SOLID_PARAMS },
                          serpentine: { kind: 'solid', parameters: _SOLID_PARAMS } };
 
+const PATTERN_LABELS = { zigzag: 'Zigzag', wave: 'Wave', truss: 'Adaptive Truss',
+                         rectilinear: 'Rectilinear', serpentine: 'Serpentine' };
+
 function _patternsFor(kind) {
   const names = Object.keys(infillPatterns).filter(k => (infillPatterns[k].kind || 'wall') === kind);
   if (names.length) return names;
@@ -4876,6 +5375,16 @@ function _latticeActual(f) {
   const lat = info && info.lattice;
   if (!lat || lat.pitch_min == null) return '';
   const a = lat.pitch_min.toFixed(1), b = lat.pitch_max.toFixed(1);
+  if (lat.truss) {
+    // Adaptive Truss: pitch is derived (brace angle × cavity + bond)
+    const st = lat.truss.stitches || {};
+    const reduced = (st.truss_short || 0) + (st.truss_plain || 0);
+    let t = `Pitch: ${a === b ? a : a + '–' + b} in (straight-wall ${lat.truss.effective_pitch.toFixed(1)} in)`;
+    if (lat.max_unsupported != null)
+      t += ` · Longest station gap ${lat.max_unsupported.toFixed(1)} in (≤ ${lat.max_unsupported_limit.toFixed(1)}: each skin within the span)`;
+    if (reduced) t += ` · Bond reduced at ${reduced} stitch${reduced > 1 ? 'es' : ''}`;
+    return t;
+  }
   let txt = `Actual: ${a === b ? a : a + '–' + b} in`;
   if (lat.max_unsupported != null)
     txt += ` · Max unsupported: ${lat.max_unsupported.toFixed(1)} in (limit ${lat.max_unsupported_limit.toFixed(1)})`;

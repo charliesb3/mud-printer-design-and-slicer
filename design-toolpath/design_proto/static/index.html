@@ -490,6 +490,8 @@
   <button class="tool-btn toggle-on" id="btn-toolpath" onclick="toggleToolpath()">Toolpath ON</button>
   <button class="tool-btn" id="btn-arrows"   onclick="toggleArrows()">Arrows</button>
   <button class="tool-btn" id="btn-dims"     onclick="toggleDimensions()">Dimensions</button>
+  <button class="tool-btn" id="btn-move-start" onclick="toggleMoveStart()"
+          title="Move route starts / seams: start markers take every click (paths and openings are not edited)">Move Start</button>
   <button class="tool-btn" id="btn-beads"    onclick="toggleBeads()" title="Show the physical mud bead around every printable centerline (Material / Bead)">Beads</button>
   <div class="tool-sep"></div>
   <button class="tool-btn" onclick="clearAll()">Clear All</button>
@@ -559,23 +561,39 @@
         </div>
       </div>
 
-      <!-- WALL NETWORK (a layer-level object: paths that touch / cross) -->
+      <!-- WALL NETWORK (geometric connectivity only: paths that touch / cross) -->
       <div id="network-section" style="display:none">
-        <div class="section-title">Wall Network</div>
+        <div class="section-title">Wall Network (connectivity)</div>
         <div class="prop-panel" id="network-props"></div>
       </div>
+
 
       <!-- OFFSET TREATMENT -->
       <details id="offset-section" class="advanced">
         <summary class="section-title">Advanced: Extra Offsets</summary>
         <div class="path-type" style="margin:4px 0 6px">
           Extra parallel beads at a fixed distance from a path. Not the normal way to make a
-          wall — use the path's Wall Thickness.
+          wall — put the path in a Wall System.
         </div>
         <div id="offset-list"></div>
         <button class="add-btn" onclick="addOffset()" style="margin-top:4px">+ Add Extra Offset</button>
       </details>
 
+    </div>
+  </div>
+
+  <!-- WALL SYSTEM — how the Design's paths are CONSTRUCTED (explicit groups) -->
+  <div class="sidebar sidebar-left" id="sidebar-wallsys">
+    <div class="sidebar-head">Wall System</div>
+    <div class="sidebar-scroll">
+      <div id="wallsys-section">
+        <div class="section-title">Wall Systems</div>
+        <div class="path-list" id="wallsys-list"></div>
+      </div>
+      <div id="wallsys-edit-section" style="display:none">
+        <div class="section-title" id="wallsys-edit-title">Wall System</div>
+        <div class="prop-panel" id="wallsys-props"></div>
+      </div>
     </div>
   </div>
 
@@ -642,14 +660,6 @@
     <div id="sidebar-print">
     <div class="sidebar-head">Print / Toolpath</div>
     <div class="sidebar-scroll">
-
-      <!-- INFILL (lattice of a whole wall region) -->
-      <div id="infill-section">
-        <div class="section-title">Infill</div>
-        <div id="infill-list"></div>
-        <button class="add-btn" onclick="addInfill()" style="margin-top:4px"
-                title="Fill the selected path's region (else the outermost closed boundary; closed paths inside it are voids). Closed single-bead boundary → Solid infill; wall with thickness → Wall infill">+ Add Infill</button>
-      </div>
 
       <!-- ROUTING OVERRIDES -->
       <div>

@@ -683,6 +683,8 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 
 ### UI organization — Design / Print sidebars (2026-10-05, Designer checkpoint 2026-10-06)
 
+> **UPDATED 2026-10-07 (Wall System ownership pass, see Wall Systems → pass 5):** the Designer now has a fourth column, **WALL SYSTEM** (`#sidebar-wallsys`, between Design and the canvas). Wall Thickness / Alignment / Print reference, the construction and the Skin + Web web moved there from the path Properties, the Network panel and the Infill list. The path Properties keep only a Wall System choice; the Wall Network section is read-only connectivity; the Infill list shows only non-wall (solid / region) fills. The bullets below describe the earlier layout.
+
 **Decision:** the workspace has three columns. On the left is **DESIGN**, "what am I designing?". In the center is the canvas, which takes all the remaining width. On the right is **PRINT / TOOLPATH**, "how will it print?". The single long right sidebar was replaced because it scrolled a lot while horizontal space went unused. The split follows the project's DESIGN GEOMETRY → WALL / REGION SEMANTICS → TOOLPATH layers. It is not meant to balance the amount of content on each side. This pass is layout only: no behavior, API payload, keyboard shortcut or toolbar change.
 - **Left (`#sidebar-design`):**
   - the Paths list
@@ -707,7 +709,7 @@ Tangent is derived from the rounded source polyline (`src_pts[1] − src_pts[0]`
 - Both sidebars are 230 px (the old width) and scroll independently, and the page itself never scrolls. The canvas hint now wraps inside the center column instead of being clipped.
 - **Tests:** `test_app.py::TestWorkspaceLayout` checks the left / right / toolbar placement of control ids and the column order. `ui_network_smoke.js` checks that the junction panel renders in its own section, not in the path Properties.
 
-### Z PHASE — CURRENT ARCHITECTURE (Layer Designs, semantic transforms, cross-Z lattice; 2026-10-06, uncommitted, audited for checkpoint)
+### Z PHASE — CURRENT ARCHITECTURE (Layer Designs, semantic transforms, cross-Z lattice; 2026-10-06, checkpoint 8d9d439, pushed)
 
 Read this section for any Layer Design / Assembly-facing Designer work. The Assembly side is in `layer_assembly/PROJECT_MEMORY.md`. Superseded same-day approaches are compressed at the end ("Z-phase history").
 
@@ -789,6 +791,241 @@ Read this section for any Layer Design / Assembly-facing Designer work. The Asse
 - Wall Thickness 0 used to mean "inherit the network wall again" in the UI → explicit single-bead override.
 - Round-junction scaffold failures: fillet arcs taken as end walls; stitches leaving a concave fillet; jambs just short of a junction end; disconnected lattice systems in stand-alone plans — all fixed (`tests/test_reference_network.py`).
 - Assembly tool: `layer_assembly/bench.py`. Fixtures: `tests/multi_opening_fixtures.py` (rect + line + circle), `tests/reference_network.py` (PRIMARY realistic integration fixture).
+
+### Wall Systems V1 (2026-10-07; manually reviewed — Wall Systems checkpoint 2026-10-07)
+
+- **Known remaining limitations (at the checkpoint):**
+  - Wave systems (Interleaved / Linked): the closing end-lane permutation (`_end_perm`) may swap an outer lane inside the end fade (the exterior-lane rule was applied to Parallel Walls and splices only).
+  - A partition of another construction prints as its own route (not spliced into the host).
+  - An L corner made of two SEPARATE line sources in one generated system prints as two overlapping capped bands (one route); a single polyline gives the canonical corner.
+  - Odd lane / path counts cannot close at free ends (parity); pieces separated by openings need travel between them.
+  - Junction R / rounded junctions between two GENERATED walls are envelope-only (no pattern follows the fillet; the fillet is not printed).
+  - Solid / region infills from older designs still build but have no authoring UI (the right-sidebar Infill UI was removed).
+  - Derived Layer Designs are migrated to Wall Systems only when edited.
+  - The retired splice helpers (`connect_branch`, `_connect_generated`, `_kiss_into_skin`, `_splice_skins` fallback) remain in code; only `_splice_skins` is still reachable (fallback).
+  - Running `toolpath_proto/tests` and `design_proto/tests` in ONE pytest process fails one test (module-name clash of the two `app` modules): run the suites separately.
+
+
+- **What:** a first-class Wall System. `wall_systems.py`; `model.WallSystem`, `model._apply_wall_systems`.
+  - Since pass 5: the layer-level `WallSystem` OWNS the construction of an explicit group of paths (envelope, construction, parameters, Skin + Web web); see pass 5. (Pass 4 had membership-only systems with network inheritance — superseded.)
+  - Originally stored as `wall.system` on a path's own wall / its Network Wall. The model still reads that legacy form (no network spreading); the client migrates it on load.
+- **Systems:**
+
+  | System | What it prints | Controls |
+  |---|---|---|
+  | Skin + Web | Unchanged (incl. canonical corners, Adaptive Truss) | — |
+  | Interleaved Waves | N full-depth paths, one waveform / period, phases k/N | Waveform, Number of Paths, Period, Depth (0 = full envelope) |
+  | Linked Waves | N antiphase paths; auto amplitude H/N, so neighbouring centrelines meet at their extrema; spacing derived so the outer paths reach the envelope; more amplitude = deeper interlock (`closest_approach`) | Waveform, Number of Paths (≥ 2), Period, Amplitude |
+  | Chained Loop (provisional) | One open path of alternating, staggered self-intersecting loops (see correction pass) | Pitch, Loop Depth, Loop Width, Neck, Phase |
+
+- **Mechanism:**
+  - The normal pipeline builds the envelope (faces, openings, junctions, material regions). Wall-system sources anchor network resolution, so lone walls get regions too.
+  - A region whose bounding walls all share one system has its face / cap beads replaced by the system's paths, and its Wall Infill job dropped (infill status 'wall system').
+  - Paths are in the production runs' strip coordinates (wall-relative), with bead centrelines ≥ ½ bead inside the faces.
+  - Mixed-system regions: split by wall since pass 4 (below). Only a removed PARTITION still falls back to Skin + Web ('mixed').
+- **Minimum effective thickness** (read-only, network summary `wall_systems`):
+  - Cross-sections every ½ t along each run (away from free ends) are cut by all paths; the value is (outermost-to-outermost span + bead width), clipped to the local envelope.
+  - The Chained Loop gives exactly one bead at each eight's waist.
+- **V1 limits:**
+  - No junction motifs: paths stop at junction ends (gaps at T / X hubs). Chained Loop corners are followed wall-relatively only.
+  - (End caps / closed routes: solved in correction pass 3 for even path counts and the chain; odd Interleaved / Linked counts stay open at free ends, by parity.)
+  - No cross-Z / Assembly-specific handling beyond the normal pipeline.
+- **Correction pass (2026-10-07, after live review):**
+  - Persistence: a Wall Thickness / Alignment edit keeps `wall.system` and its parameters.
+  - Responsiveness:
+    - The strip frame is sampled once per run (0.5 in) and interpolated; output polylines are lightly simplified. Reference network: effective 0.6–1.2 → 0.2–0.3 s, route 1.2–2.9 → 0.7–0.8 s.
+    - UI requests are coalesced (one in flight, one follow-up with the latest state).
+    - Parameter edits no longer rebuild the panel; the readout updates in place.
+    - A lone wall with a system now resolves (it was never fetched).
+  - Corners for Interleaved / Linked are HARD anchors, as for Zigzag / Wave:
+    - Each span gets whole periods and the same phase at every corner.
+    - The waves fade (0.35 P) into distinct lanes, which turn the corner as mitred offset lines (zone 0.6 t).
+    - Interleaved corner phase π/2 − π/2N keeps every lane distinct.
+  - Chained Loop: an interim ∞∞∞ stroke, then REPLACED again (same day, designer's topology spec).
+    - The current primitive is ONE continuous OPEN path progressing along the wall: upper loop → lower loop → …, staggered by one pitch, each loop self-intersecting once at its neck:
+          x(u) = a·u + w·sin 2u,   y(u) = D·sgn(sin u)·|sin u|^q
+    - Parameters: a = pitch / π. w > a/2 doubles back near each crest, and u and π − u share a height, so there is exactly one crossing per loop; upper / lower strands meet only at y = 0, so there are no other crossings. q places the neck.
+    - Controls:
+      - Pitch (0 = 1.2 t);
+      - Loop Depth;
+      - Loop Width (→ w by bisection; 0 = 0.8 × pitch, ≤ 1.6 × pitch);
+      - Neck (share of depth; 0 = 0.12, so loops fill their half of the wall);
+      - Phase.
+    - Roundness is not exposed: the curve is analytic and smooth.
+    - Open runs fit a whole number of loops between the ends; rings use an even count (closed), with the seam between corners.
+    - Saved designs with the old 'period' map to pitch = period / 2.
+    - The reference drawing was not visible to the agent; built from the written topology.
+- **Correction pass 3 (2026-10-07): rounded envelope, end caps, closed routes, chain pitch.**
+  - Rounded-geometry bug, root cause: the Interleaved / Linked corner lanes turned at the MITRE point of the two straight legs, which lies outside a Corner R / rounded-junction envelope. The envelope itself was already the resolved, rounded one.
+    - Now a mitre is kept only where every mitre point is half a bead inside the envelope; otherwise the lanes follow the resolved wall through the corner (concentric with a round).
+    - The strip frame also keeps every bead half a bead inside the resolved faces (sharp-corner frames are only approximate).
+  - End caps:
+    - The cap rail is the region ring's own cap / opening-face arc between the end's two face points (the very cap Skin + Web prints, flat or full round), inset by half a bead. Points that a local inset brings too close to another boundary part are pushed towards the wall end's middle.
+    - Interleaved / Linked strands fade into lanes at free ends. One end gets adjacent U-turns, with the two outermost ones hugging the cap rail from each face side; the other end gets nested U-turns plus the outermost pair along the whole cap.
+    - Walked as a boustrophedon, this is ONE closed circuit for an EVEN path count.
+    - ODD counts cannot close at free ends (each end then holds an odd number of strand ends, and every connector graph has an even total degree). They are joined into one open path per piece; the report says `closable: False` and the UI warns.
+    - Chained Loop on a wall with two free ends: the path turns through the cap rail and returns as the MIRRORED chain. One closed stroke, no retrace; loop density on such walls is therefore doubled.
+  - Measured: each connected piece = one closed route, no internal travel, no retrace (one / three openings, opening near a corner, flat and full-round caps, Corner R 10 / 20 / 40, rounded and mitred junctions).
+  - Chain pitch floor CHAIN_PITCH_MIN = 0.1 in (was 2 in); sampling ≥ 24 points per loop, budget 60 000 points per run.
+  - Reference network (round junctions + opening): effective ≈ 0.4–0.5 s, route ≈ 1.2 s. The chain's route costs more because of the return lap.
+- **Pass 4 (2026-10-07): canonical end motifs, Wall System membership, Wall Systems section.** (SUPERSEDES pass 3's cap turnarounds: adjacent U-turns hugging the cap from each side read as arbitrary strand pairings.)
+  - **End motif = hard architectural boundary motif** (analogous to canonical corners), identical at source ends and opening jambs:
+    - At a free end the strands fade (0.35 P) into N EVENLY spaced end lanes; the outermost two sit half a bead inside the faces.
+    - Lanes r and N−1−r are joined by the resolved cap ring arc inset by ½ bead + r × lane spacing. r = 0 is the cap itself (one straight flat cap / the round arc); inner pairs return nested inside it, parallel to it (concentric rectangles / arcs). `_Envelope.cap_rail(…, inset)`, `_cap_turns`.
+    - Closure: every Interleaved / Linked strand has an antipodal partner (value −y) holding the mirror lane at BOTH ends, so nested motifs alone give N/2 separate loops. `_end_perm(N)` swaps adjacent hi-end lanes of strands in different components (N//2 − 1 swaps, the minimum, inside the hi-end fade) → one circuit for even N, one open path for odd N (middle lane ends at each jamb; `closable: False`, as before).
+    - Chained Loop: loops end 0.6 t short of each free end; the forward lap leads (smoothstep) out to the f0 face lane, the return lap to the f1 lane, and one cap joins them.
+  - **Single vs doubled Chained Loop (reported, no mode built):** a run with two FREE ends (a lone line, a ring piece cut by openings) gets the mirrored RETURN LAP (the only way to close one stroke without retrace), so it reads as a doubled, mirror-crossing chain. Closed rings (no free ends) print the single lap. Runs with a junction end stay a single open lap (V1).
+  - **Membership (decision):** Wall Network membership = physically connected; Wall System membership = shared construction + parameters. Independently editable.
+    - A source uses the system listing it in `members`. Otherwise it INHERITS the first system with an explicit member in its Wall Network (convenient default: a newly attached wall picks it up), unless listed in that system's `excluded`.
+    - A system fills only a thick envelope; a single-bead member keeps its bead.
+    - Report: `network.wall_system_membership` {pid: {id, via: member | network | excluded, type, filled}}; each region report carries `system_id`.
+  - **Mixed regions split by wall** (`_split_wall_systems`, `_splice_skins`):
+    - Every ring edge is tagged with its face bead's source → system.
+    - Each system fills ITS envelope: the rings with each maximal run of other walls' edges replaced by the chord across its mouth (an attached line's faces + cap → the host's face line).
+    - Skin + Web walls keep their own face / cap beads (a single-bead line = its physical out-and-back lanes). Each such run is spliced into ONE system path: the short stretch between the points nearest its two mouth points is cut out and both are joined → one closed route, no travel, no retrace.
+    - A removed wall with its own system gets its own envelope (closed off by the chord, which caps it): two touching closed routes (one travel between them).
+    - Limits: a removed PARTITION (wall spanning between two system walls; chord ≈ run) → whole region Skin + Web, reported 'mixed'. A Skin + Web part's Wall Infill (web) is not generated in a mixed region. Walls that INHERIT the system across a junction still have the V1 junction gaps.
+  - **UI:** a persistent **Wall Systems** section (Design sidebar, below Wall Network): system selector, Type, parameters, Minimum Effective Thickness (+ odd-count warning), members (explicit / via network / single bead not filled), removed paths, + Add / Remove selected path, + New system, Delete.
+    - Path Properties show one membership row (+ Remove from Wall System / Use Wall System / + New) and, for an inherited network wall, "Single bead (out and back)".
+    - The Network panel no longer holds system controls. New systems default to Interleaved Waves, 4 paths (even: closable).
+- **Pass 5 (2026-10-07): the WALL SYSTEM OWNS CONSTRUCTION — model + UI reorganisation.** (SUPERSEDES pass 4's membership: network inheritance and `excluded` are gone; geometry work unchanged.)
+  - **Conceptual model (designer decision):** DESIGN = source geometry (paths, dimensions, Corner R, junction / end-cap style, openings, trims, connectivity) · WALL SYSTEM = construction specification + explicit path membership · MATERIAL / BEAD = shared physical / process properties · PRINT / TOOLPATH = the resulting route and diagnostics.
+  - **`model.WallSystem`** = {id, name, members, thickness, align, print_reference, type (skin_web | interleaved | linked | chain), params, web {pattern none | zigzag | wave | truss, params, variation_index}}.
+    - Explicit, user-authored groups: members need NOT touch or share a Wall Network. At most ONE system per path (first wins in the model; the UI moves a path).
+    - A member's envelope comes from its system (winning over any legacy path wall). A path in no system = a single bead (physical out-and-back when open).
+    - `thickness None` = a legacy pass-4 system (envelope from the path / network wall), migrated.
+  - **Skin + Web web (the former Wall Infill UI):** configured on the system. It is materialised as `RegionInfill` records OWNED by the system (`owner` field; one per connected group of members, client `_syncSystemWebs`), because Layer-Design lineage / the cross-Z lattice key the lattice on infill ids and own its definition (`LATTICE_DEFINITION`); a migrated infill keeps its id. The model uses owned records as they are (it never overrides them from `web`, respecting lineage); records of an inactive web (other construction / 'none' / member left) are kept but not built; a system with a web but no owned record (API / tests) gets one synthesised record per member (`PrintLayer._all_infills`).
+  - **Migration (decision: backend-assisted, geometry-preserving):** `PrintLayer.migrate_wall_systems()` / `POST /api/migrate_wall_systems`.
+    - It builds the legacy design, groups every path's EFFECTIVE wall (own WallSpec, Network Wall inheritance, legacy `wall.system`, pass-4 systems, the wall infill reaching its network) by (thickness, alignment, reference, construction, parameters, web) into systems (old system ids kept), and makes wall infills owned webs.
+    - The Designer applies it once after the first response (`_maybeMigrateWallSystems`: path walls / Network Walls cleared). It is not an undo step (the current history entry is replaced).
+    - Tested: printable centrelines + route identical after migration (own walls + infill, reference network, single-bead line override, line override, legacy chain system, pass-4 system, truss web); idempotent.
+    - Legacy data still resolves in the model (fixtures, Python tests). Limitation: derived Layer Designs are migrated only when edited (their patch may still carry legacy path walls until then; a member's system envelope wins).
+  - **Wall Network now** = geometric connectivity only: `source_networks` (junction resolution, shared envelopes, web grouping, mixed-region splitting). `NetworkWall` / `network_walls` are legacy (read by the model and the migration, never authored).
+  - **UI:**
+    - **Wall System sidebar:** list of systems (type · member count) + paths in no system; + New (with the selected path); editor: Name, Construction, Wall Thickness, Wall Alignment (+ Print reference when Centered), Skin + Web → Web (None / Zigzag / Wave / Adaptive Truss) with its parameters, actual-spacing / lineage readouts, Regenerate (truss), Advanced, V1 / V2; other constructions → their parameters + Minimum Effective Thickness; Members checklist (shows "(in X)", checking moves the path), + Add / Remove selected path, Delete.
+    - Path Properties: Wall System select (None = single bead) + envelope note; the list badges each path with its system.
+    - Design → Wall Network (connectivity): read-only. Print → Infill: unowned (solid / region) fills only; "+ Add Infill" on a member opens its system's web.
+  - **Tests:** model / migration in `test_wall_systems.py` (envelope ownership, non-touching members, one system per path, owned / synthesised / inactive webs, legacy compat, migration equivalence ×7, grouping); `ui_wall_system_smoke.js` rewritten for the sidebar; `ui_network_smoke.js` / `ui_edit_smoke.js` updated (connectivity section; path Wall System row); layout test (`sidebar-wallsys` between Design and the canvas); `ui_assembly_smoke.js` seeds its wall through a Wall System.
+- **Pass 6 (2026-10-07): construction catalogue, member editor, mixed junctions meet ACTUAL material.**
+  - **Constructions** (`WallSystem.type`; `wall_systems.SYSTEMS / LABELS`):
+    - `single` — Single / Out-and-Back Wall: the ordinary single-line wall. No envelope (Wall Thickness hidden / ignored); the existing bead + Physical return-lane rules (separated outbound + return lanes, U-turn).
+    - `hollow` — Hollow / Skins Only: the two skins, no web (owned web records kept, inactive).
+    - `skin_web` — skins + Zigzag / Wave / Adaptive Truss web. "None" is no longer a web choice: Skin + Web with web None (pass-5 designs / migration of infill-less walls) becomes `hollow`.
+    - `parallel` — Parallel Walls: Number of Walls N (default 4), evenly spread across the thickness, outermost half a bead inside the faces (`_wave_paths` with constant lane values). Corners and wall ends reuse the Interleaved / Linked machinery (mitre-or-follow lanes, canonical nested end motif + `_end_perm` closure: one route at wall ends for even N). V1: on a closed ring the N walls are N separate concentric loops (travel between them).
+    - `interleaved`, `linked`, `chain` unchanged.
+  - **Member editor:** Members first (only this system's paths, click = select, compact ×), then "Add path…" (every other path; "(from X)" when it moves from another system). The all-path checkbox list and Add / Remove selected buttons are gone.
+  - **Mixed junction bug, root cause:** in a mixed region the incoming skin-like wall (single / hollow / skin_web) kept its beads, which END at the host's NOMINAL face (the chord), and `_splice_skins` joined each end to the NEAREST host point by a diagonal connector. That worked by accident where host material reached the face, but gave hooks / gaps where the host's printed path lies inward (wave troughs, chain necks). With Junction R the envelope fillets were also in the host's envelope (the host pattern bulged into them) and on the incoming chain (the lanes bent along them).
+  - **Fix — printed material to printed material** (`wall_systems.connect_branch`, `model._connect_skins`):
+    - The architectural junction direction is the SOURCE wall's tangent at that end (`_junction_dir`).
+    - Each incoming lane starts at its first long straight segment along that direction (fillets / corner bits before it are dropped) and continues STRAIGHT until its first valid contact with the host system's generated paths. The two contacts must lie on one host path, close along it; the nearest such pair is used.
+    - The host stretch between the contacts is cut; branch + host are one circuit. The incoming beads are re-emitted as part of the joined path.
+    - Junction fillets between systems of different constructions belong to the incoming wall, never to the host envelope (the host keeps its straight face). Junction R (layer, round style) becomes a tangent blend at each REAL contact; the contacts do not move with R (to ~0.01 in).
+    - Fallback (no straight lanes / no contact): the pass-4 mouth splice.
+    - Incoming GENERATED systems (parallel / waves / chain into another system) still meet at the chord as separate closed routes (V1).
+  - **Fixed in passing:** the junction-fillet source parsing must resolve bead ids (e.g. `L1_ce~n0`) to real source ids.
+- **Pass 7 (2026-10-07): cleanup, Parallel Walls ends, route start / travel order.**
+  - **UI cleanup:** the Skin + Web web no longer shows V1 / V2 (phase variation relic; `variation_index` stays 0 in data). The right-sidebar Infill section ("+ Add Infill", the infill list) is REMOVED — the web is configured only in its Wall System; Print / Toolpath keeps Routing Overrides, metrics and the legend. (`addInfill` / `updateInfillList` remain only for the console fixtures; solid / region infills in old data still build but have no authoring UI.)
+  - **Parallel Walls ends, root cause:** Parallel reused the wave machinery's hi-end LANE PERMUTATION (`_end_perm`, needed only because wave strands come in antipodal pairs): straight lanes swapped ranks across the end fade → diagonal stubs and crossings. Round caps were additionally askew: a free end's strip station sat INSIDE the round cap (face points at different depths), so lanes ended on a slanted section while the rails started square.
+  - **Fix:**
+    - No permutation for Parallel. The canonical nested end motif (`_cap_turns`, shared with the waves) gives concentric loops; neighbouring loops are joined by a RUNG PAIR (two parallel rungs between lanes r, r+1 mid-span of the longest straight span, `_parallel_rungs`) → one route, nothing crosses. A closed ring's N walls are joined the same way (one route instead of N loops). Odd N with free ends: one open route (parity).
+    - Free-end stations are moved back (≤ 0.75 t) to a square, full-width cross-section (`_Strip._square`) — all systems' round ends now start their rails cleanly.
+    - Cap rails keep only the part beyond the lane ends. A nested return that would fold over itself / the return outside it (a cap distorted by a nearby corner) becomes a nested U-turn scaled inside it. A degenerate end with no square section (an opening cutting through a corner) gets nested U-turns with one common scale. The strip's clearance guard now scales a whole side of the cross-section by one factor, so lanes keep their order.
+    - Verified: 2–6 walls × one / three openings / near a corner × flat / round: no self-crossings, inside the envelope, one route per piece (closed for even N).
+  - **Route start + travel order (decision; `toolpath_proto/graph.py`, bounded — routing architecture unchanged):**
+    - A CLOSED component without a Route Origin starts (its seam) at the node minimising travel + SEAM_WEIGHT (12 in) × exposure: web / lattice / internal 0, wall-system path 0.4, inner skin 0.7, outer / free / cap 1, +0.5 at a corner. A seam sits on a bead vertex (splitting a segment for a mid-face seam was tried and reverted: it breaks the one-move-per-segment invariants).
+    - OPEN components start at the end that leaves the other end nearest the next component.
+    - Components are ordered by nearest neighbour from every possible first component (or from the manual start), then 2-opt on the open tour (≤ 150 components).
+    - Constraints kept: Route Origins (manual seams), the manual start position, an explicit component order.
+    - Measured: 12 hollow rects travel 1813 → 1608 in, 20 single-bead rects 1824 → 1444, 10 Skin + Web rects 1506 → 1346; the one-void fixture's seam moved from an outer corner onto the web.
+    - Note: running `toolpath_proto/tests` and `design_proto/tests` in ONE pytest process fails one test (module name clash of the two `app` modules) — pre-existing; run the suites separately.
+- **Tests:** `tests/test_wall_systems.py` (+ Parallel ends: 60 parametrised cases, rings, lone line) and new `tests/test_route_planning.py` (web seam, inner-skin seam, travel ≤ nearest-neighbour, closure, Route Origin kept, manual start honoured); the layout test asserts the Infill section is gone.
+- **Pass 8 (2026-10-07): Move Start mode; consistent Parallel ends; exterior-lane continuity.**
+  - **Move Start (toolbar, next to Arrows / Dimensions; `toggleMoveStart`, `moveStartMouseDown`):** while on, every canvas click goes to route starts first — no path / opening / handle is selected or dragged (normal priority: editable geometry outranks the overlay, so a start on an opening was unreachable). Drag a start marker along its route, or click a closed route to start it there (both write `route_origins`, one undo step). Open routes' Start / End are explained, not moved. Leaving: the button again, choosing a tool, or Toolpath OFF. Default seam / travel order (pass 7) unchanged.
+  - **Inconsistent end, root cause:** the end frame and the "square end" test used the SKELETON centre line, which runs askew near a free end on a short leg (e.g. a jamb ~20 in from a corner). That end was judged degenerate and got the inset U-turn fallback while equivalent ends got the canonical motif.
+  - **Fix:** the end section is judged on the FACES (perpendicular to both face tangents, full median width, every lane half a bead clear), the outward direction is perpendicular to that section, and the station is the first such section from t/2 in with a stable square stretch behind it (`_Strip.is_square`, `_first_square`, `_lanes_clear`). Rails get loop removal (`_unloop`) round concave notches. Verified: every clean jamb at 4–40 in from a corner, flat / round, ends half a bead from the cut; only genuinely degenerate ends (a cut through a corner; a round cap that does not fit before a corner) use the nested-U-turn fallback.
+  - **Visible Parallel seams, root causes:** (1) the rung pair joining the outermost loop to the next CUT THE EXTERIOR LANE (a visible break, also on curved walls); (2) `_simplify` dropped the second visit of a shared vertex; (3) an incoming GENERATED wall (Parallel / waves / chain) at a mixed junction was capped at the host's NOMINAL face (chord) — a gap before the host's real material. Found in passing: `_split_wall_systems` overwrote its per-ring source tags (`srcs`) after the first system key, so with two generated systems the second lost rings (the host built on a broken envelope) — fixed.
+  - **Priority rule (decision): preserve continuous exterior / outermost lanes; put any splice, handoff or seam on an interior lane, else inside host / junction material, else at the least exposed place.**
+    - Parallel loops are joined by KISSES: an INTERIOR lane bulges (cos^1.5 profile, slight angle at the touch) to touch its neighbour at one shared vertex the route passes twice — no material removed, nothing crosses, face lanes never cut or moved (only a two-wall ring must bulge a face lane). Junction cuts never remove a touch vertex.
+    - Incoming generated walls: the outer cap rail on the chord is opened and the route handed to `connect_branch` (`_connect_generated`): both face lanes continue straight into the host's printed material; the nested inner returns stay inside the incoming wall. Every tested host × incoming combination prints one route, no travel.
+    - Not changed: the wave systems' end lane permutation (`_end_perm`) may still swap an outer lane inside the end fade (scope: Parallel + splices first).
+- **Pass 9 (2026-10-07): mixed regions on the reference network; lane-by-lane Parallel Walls.**
+  - **Phantom connector walls, root causes:** (1) `_split_wall_systems` closed every ring SEPARATELY: Line 1 bridges Rect 2 and the circle, so its two faces lie on two rings (the outer boundary and a hole) and each face + chord became a flat sliver that the generated system filled; (2) any skin-type run next to a generated part was treated as an INCOMING skin to splice into it, so the HOST's Skin + Web faces were spliced into the generated line and the failing splice fell back to two mouth connectors.
+  - **Fix:** each system's face runs are STITCHED across rings (a run's end joins the nearest run start across the mouth; a T-branch closes on itself, a bridge becomes its true band, the host side gets its true outline). A chord that is the generated part's END means the skins are the HOST (`host_skins`): the host face is closed across the mouth by a skin bead c1 → P → c2 and the incoming generated loop restarts at P (`_kiss_into_skin`) — one route. End test relaxed (turn > ~25°: oblique incoming walls). Found in passing: a partition of another construction no longer forces the whole region to Skin + Web (the host envelope stitches across it; the partition keeps its skins, printed as its own route — not yet spliced).
+  - **Mixed Skin + Web web:** the region's Wall Infill job is no longer dropped — it runs on the SKIN side's own envelope (`_split_skin_part`: generated bands closed off) whenever a Skin + Web member is present (`_web_member`).
+  - **Parallel Walls route (designer decision; SUPERSEDES the pass-8 interior-lane kisses):** lane by lane. Every lane is cut once over a 2-bead window; lane k's end steps diagonally to lane k+1's start (parallel steps); one RETURN diagonal closes the route and crosses the steps (a crossing, never a retrace). All lane changes sit in that ONE seam zone (`_parallel_lanes`). Free ends keep the canonical nested caps (steps use the f0-side lanes of the nested loops); odd N cuts the middle lane too (open route, parity).
+  - **Seam zone ↔ Move Start:** route origins now store their position (`pos`); the model passes them as seam hints (`_seam_hints` → `generate(…, seam_hints)`): the seam zone moves to the nearest origin on the wall, and origins resolve by position (`resolve_route_origins`), so the route starts there. Default: middle of the longest straight span.
+  - (Generated systems stopping at junctions between their own members — still true after this pass — was RESOLVED in pass 10: walls meet by crossing printed paths.)
+- **Pass 10 (2026-10-07): generated walls meet by CROSSING printed paths (decision).**
+  - **Rule (designer):** preserve the native Wall System paths → allow real printed-path crossings / contact (a crossing is deposited-material contact, NOT a retrace) → add only the minimum transitions for one printable route → hide them where possible. Never cut or stop a valid generated path because another wall enters its nominal envelope; never deform good architectural geometry to tidy the routing graph. Several runs are acceptable where topology truly needs them; physically disconnected intersecting walls are not.
+  - **Root cause of the non-contacting intersections:** a generated system filled a region along its skeleton runs; at every T / X junction the runs END at the junction node, so all walls' lanes stopped there (gaps; V1 "paths stop at junction ends"). The pass-6..9 splices then cut host stretches / opened caps locally.
+  - **Representation now:** whenever a region holds more than one generated wall (or skins), EVERY generated wall gets its own band (`partkey`: per source; skin walls together; junction fillets between generated walls (`'__J'`) belong to neither band and are not printed — no pattern bends round them).
+    - Bands are stitched by FOLLOWING the wall's own face lines (`_src_faces`: untrimmed offsets; `_face_follow`) — straight through an X or a branch mouth, round corners hidden inside another band; chords only at real ends.
+    - X junction: both bands include the crossing square → both patterns run straight through and cross.
+    - T junction: the branch's END chord is PUSHED straight into the host (measured from the host's actual face, to about its centre line + ¼ bead): its canonical end cap lies inside the host and its lanes cross the host's paths (`chords[].pushed`).
+    - Skin branch (single / hollow) into a generated host: lanes run straight through the host's paths and are capped inside it (`wall_systems.extend_through`) — no host cut. Skin wall bridging generated walls (faces on two rings): both face ends at each mouth continue into the host and are capped (`~cross` beads).
+    - Generated branch into a skin host: pushed across a straight host skin bead closing the mouth (replaces the pass-9 kiss).
+    - The router already treats face-path crossings as junctions (degree-4 nodes: parity unchanged), so it solves one route through the contacts. `_connect_generated` / `connect_branch` (cut-and-splice) are retired from the pipeline (kept in code).
+  - **Parallel seam:** window 2 beads → ½ bead (75 % less lane removed); the steps are nearly transverse and may cross.
+  - **Measured:** reference network, hosts Skin + Web / Interleaved / Parallel × all 7 line constructions → 21/21 one route, no travel (Interleaved / Parallel on the whole network were 30–43 runs). All T fixtures (4 hosts × 5 branches × R 0 / 6), Parallel × Parallel X, Interleaved × Linked X, Parallel into a curved host: one route. Timings ~0.3 s effective, ≤ 1.3 s route.
+  - **Legitimately several runs / open:** odd lane / path counts at free ends (parity); pieces separated by openings (travel between pieces); a partition of another construction (own route). An L of two SEPARATE line sources prints as two overlapping capped bands (one route) — a single polyline gives the canonical corner.
+- **Tests (pass 10):** T junctions by crossing (4 hosts × 5 branches × R 0 / 6: crossings ≥ 2, branch reaches the host's centre, host lanes complete), X junctions (3 pairings), curved host, contact at every architectural junction of the reference network (3 hosts × 7 lines), compact seam. design_proto 1445.
+- **Tests (pass 9):** reference network × 7 line constructions (one route, host web printed, no geometry outside the line's band, two kisses), lane-by-lane topology (N − 1 steps + 1 return in one zone, lane order), seam follows the route origin, partition, updated Parallel tests (crossings only in the seam zone, one seam window per lane); `ui_origin_smoke.js` (start position stored). design_proto 1411.
+- **Tests (pass 8):** `test_wall_systems.py` (equivalent ends over corner distances, exterior-lane coverage on rings / curved wall / pieces, 16 incoming-generated junctions; 212 total), `ui_origin_smoke.js` (Move Start priority on an opening, click-to-place, open routes, leaving the mode).
+- **Tests (pass 6):** `tests/test_wall_systems.py` (153: … + single branch → Interleaved / Linked / Chain / Parallel host at R 0 / 6 with straight-lane and on-material checks, crest vs trough depths, Junction R contact invariance, chain phase sweep, hollow branch, Single / Hollow / Parallel semantics) and `tests/js/ui_wall_system_smoke.js` (member list, Add path…, seven constructions, Single hides thickness, Parallel walls).
+
+### Canonical corner motifs — Zigzag / Wave (2026-10-07; manually reviewed — Wall Systems checkpoint 2026-10-07)
+
+- **Decision (designer):** significant corners are HARD lattice anchors with one canonical treatment, independent of spacing / phase. The ordinary lattice is fitted between them; Target Spacing is a preference between anchors. Adaptive Truss is deliberately unchanged.
+- **Supersedes:** the pass-7 single-pass corner brace (one outer ↔ inner diagonal) and "V1 / V2 move a closed loop's phase" for CORNERED loops (corner-less loops keep it). Old tests rewritten to the new rule: `test_pass7` corner tests, `test_wall_lattice::test_wave_keeps_structure` (motif braces are straight), `test_infill_junctions` (motif stitches counted apart; V1/V2), `test_physical` (the wave ring no longer falls short of the contact at reflex corners).
+- **Single pass** (reference: wall-web experiment Candidate B, lower-left corner of `out/08_multiple_openings.png`): Ia → Oa → Ob → Ib.
+  - Inner face 0.55 t before / after the inner corner; outer face 0.30 t either side of the outer corner (Oa → Ob wraps it).
+  - Contacts sit squarely off each face leg.
+  - The segment-parity constraint means every corner is entered on its inner face.
+- **Double pass** (reference: production's upper corners in the same sheet): the existing corner station (both phases, inner + outer corner points), now on every detected corner.
+- **Corner detection:**
+  - Added a localisation rule (turn over 3 t ≥ 0.75 × turn over 6 t). Sharp corners and Corner R ≤ ~20 on 10 in walls are corners; R 40, circles and gentle curves are not.
+  - Cap-end turn readings are no longer rivals: the short leg beside an opening now gets its corner.
+- **Measured:** reference stack support findings zigzag 51 → 55, wave 71 → 65, truss 65 (unchanged).
+- **Tests:** `tests/test_corner_motifs.py` (18). Module doc §9.
+
+### Adaptive Truss wall infill — production V1 (2026-10-07; manually reviewed — Wall Systems checkpoint 2026-10-07)
+
+- **What:** a third Wall Infill pattern, **Adaptive Truss** (`pattern 'truss'`), next to Zigzag / Wave (both unchanged; not the default; no migration). It implements the wall-web experiment's phase-field direction INSIDE `wall_lattice.plan` (module doc §8); it is not a second lattice system. Runs, anchors (corners / ends / junctions / jambs), pass multiplicity, caps, junction pairing, lineage scaffold, tracking, Physical Rules and closure are production's.
+- **Parameters** (`infill.TRUSS_PARAMETERS`, prototype defaults, NOT calibrated): Brace Angle 45° (15–75), Bond Length 3 in (= the default bead width), Max Unsupported Span 40 in (per skin), Min Turn Radius 1.5 in (½ bead), plus `seed` (Regenerate). No Target Spacing / V1–V2 for this pattern.
+- **Mechanism:**
+  - Station parameter u = S_eff·φ, φ = ∫ds/a, a = w·cot θ + bond. w = the cavity between the contact rails across the run (wall-relative angle). Counts are chosen with production's cost; stations are even in φ.
+  - S_eff = the straight-wall pitch, standing in for Target Spacing. DMAX = max_span / 2. The wall / area test uses max(S_eff, max_span / 2).
+  - Stitch: half bond → fillet → strip-coordinate brace → fillet → half bond. It is halved, then dropped where it doesn't fit (`truss_short` / `truss_plain`), then falls back to the ordinary constructions.
+  - Lineage jamb margin scaled to the pitch (the zigzag-sized ½-thickness margin rejected every jamb).
+- **Contact identity:** each segment's normalised station phases are in the track (`phases`). A tracked count change inserts / removes a PAIR locally (`_adapt_phases`).
+- **Regenerate:** `params.seed` (UI "Solution N"; undo / redo via the snapshot history; lineage-owned like the rest of the lattice definition).
+  - Seed 0 is the planner's own optimum. Seeds ≥ 1 apply hashed LOCAL choices `_hchoice(seed, feature key, kind)`, with keys quantised to 12 in: each run's preferred start face (alternatives ≤ 0.25 × thickness costlier), a nearly tied segment count (≤ 8 %), a corner-less loop's seam, and the gap a carried pair goes into.
+  - Tracked runs hash their REFERENCE identity.
+- **Measured:**
+  - The reference network (round / miter, Base + gaps) closes as one route with the shared scaffold.
+  - Assembly reference stack (32 layers) support findings: zigzag 51 / wave 71 / **truss 65**. Junction zones are similar (lens 20 vs 23; crossing 18 vs 15). The extra findings are on ordinary scaling walls: a longitudinal station drift moves a 45° brace sideways ≈ 0.7× the drift (zigzag 15°: ≈ 0.27×).
+  - Assembly resolve ≈ 2.7× zigzag time.
+  - Corner-anchor jitter under an opening edit is visible: ≤ 1.3 in on the far wall vs 0.3 in for zigzag.
+- **Known limits / next:**
+  - With Physical Rules, lone walls / dead ends / doubled runs keep production's mirrored out-and-back: two 45° passes, a dense chain of cells (review whether doubled runs should use 2a).
+  - Strict alternation inside segments is the V1 default; same-skin motifs (loops / teardrops) at corners / junctions are the planned motif vocabulary (wall-web NOTE §11). The objective is both skins within the max span, not alternation.
+  - Untracked edits can flip a segment count near a half-integer phase (that segment re-phases).
+  - The field fallback for wide areas uses Target Spacing 20.
+- **Tests:** `tests/test_adaptive_truss.py` (21, incl. `tests/js/ui_truss_smoke.js`).
+
+### Wall-web research experiment (2026-10-07; EXPERIMENTAL — not adopted, production unchanged)
+
+- **Question:** what mathematical rule should generate the structural web between a wall's two skins? Harness and full note: `design_proto/experiments/wall_web/` (`NOTE.md`; `run.py` regenerates `out/index.html` + `results.json` in ≈ 30 s; `sheets.py` makes PNG review sheets `out/01_straight.png` … `out/10_cross_z_tracking.png`; `out/` is gitignored). Reuses the production skeleton / `_Geo` read-only; not wired into the UI.
+- **Compared:** production (zigzag / wave, S 20) vs **A, adaptive truss phase field** (brace angle θ, bond b, turn radius r, max skin span D, congestion floor; crossing advance a = w·cot θ + b; integer phases between production's anchors) vs **B, fixed-angle boundary propagation** (structural billiard), on 12 fixtures incl. openings, T / X junctions and the reference network, with perturbation and cross-Z tests.
+- **Findings (measured):**
+  - Production at the default S 20 on 10 in walls braces at ≈ 15–16° (cavity 5.5 in between contact rails); A at the equivalent θ reproduces production's stations (median 0.06 in).
+  - Spacing also acts as the wall / area classifier (thickness ≤ 1.6·S), capping braces at ≈ 41° on 10 in walls.
+  - B is rejected as a generator: initial-value propagation is neutral (never damps) and discontinuous at terminations. A 1 in bump removed 31 contacts; a 2 in opening move shifted 100 %; brace counts jumped 35 → 68 between layers; it grazes past the inner skin when cos θ ≥ R_i/R_o (whispering gallery; U bend fails below ≈ 28°).
+  - Alternating ±θ diagrids are unprintable for stacked mud (overhang). A diagrid can only be a slow per-layer phase drift.
+  - Any uniform two-point station layout (production and A) re-phases a whole segment when its count changes. Locality needs: crossings changed only in PAIRS; per-segment canonical start faces + corner braces; a canonical run direction / face (skeleton labels flip between layers). With these, tracked A kept contacts within ≈ 0.4 in per layer.
+- **Physical objective (designer clarification, 2026-10-07; durable requirement):** the web must keep BOTH skins bonded and supported. Strict alternation between skins is NOT required: cross-wall braces are the normal mechanism, but same-skin contacts (loops / teardrops / same-skin braces, e.g. outer → inner → inner → outer round a concave corner) are allowed where useful. Evaluation rule: **neither skin may exceed its maximum unsupported longitudinal span**. Distinguish useful local same-skin contacts from pathological grazing (the opposite skin neglected beyond the span).
+- **Proposal (NOT adopted; needs designer review):** a two-level hybrid. The anchored adaptive truss / phase field (A) is the global rule (density, contact identity, locality, cross-Z). A local, evaluation-chosen motif vocabulary (loops, teardrops, same-skin braces, diamonds) replaces it only in windows at corners / tight curvature / junctions / ends, entering and leaving at the phase field's boundary contacts. Not implemented.
+- **Original proposal detail:** keep the skeleton / anchors / route layer / tracking; replace in-segment station placement + stitch shape with A. Parameters: θ primary, flat bond, filleted turns, explicit D, hysteresis + pair insertion. Decouple the wall classifier from spacing. Integration path and open questions in `NOTE.md` §11–12.
 
 ### Trim ghost fix (2026-10-06, Designer checkpoint 2026-10-06)
 
@@ -1057,9 +1294,10 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
 
 ## Next Steps
 
-Current priority order (Z phase, uncommitted batch audited 2026-10-06):
+Current priority order (after the Wall Systems checkpoint, 2026-10-07; Wall Systems, canonical corner motifs and Adaptive Truss manually reviewed and accepted):
 
-1. **Manual browser review of the Z-phase batch, then the checkpoint commit** (Layer Designs, shared lineage lattice, Assembly workspace, semantic transform groups, support, five columns, Wall Thickness 0 = single bead).
+0. **Machine testing of Wall Systems** (bead overlap of closely spaced lanes, crossings at junctions, Parallel seam, Chained Loop return lap) and of Adaptive Truss; then address the known Wall Systems limitations listed in that section (wave end-lane permutation vs exterior lanes, partitions of another construction, L corners of separate lines).
+1. **Adaptive Truss iteration** after machine feedback (motif vocabulary at corners / junctions; drift-aware tracking for steep braces).
 2. **Transformed-junction lattice coherence** — the one open geometry problem; precise statement in "Z PHASE — CURRENT ARCHITECTURE → Transformed-junction lattice". Attack only this in its own pass.
 3. **Cheaper transformed layers:** reuse stable topology (carry stations / geometry instead of a full plan per variant); share the untransformed tracking reference across worker processes.
 4. Decide whether the run-scale doubling of jammed lattice runs is acceptable on the machine; persistent attachment constraints (also needed by semantic transforms); a transition motif when a tracked count must change.
@@ -1072,6 +1310,30 @@ Current priority order (Z phase, uncommitted batch audited 2026-10-06):
 ---
 
 ## Last Updated
+
+2026-10-07 — WALL SYSTEMS CHECKPOINT (committed and pushed; the git log holds the hash): Wall Systems V1 → pass 10, canonical corner motifs, Adaptive Truss, route start / travel order, Move Start, the wall-web research experiment (source only). All "uncommitted" entries below, back to the Z-phase checkpoint 8d9d439, are included in it. design_proto 1445, layer_assembly 124, toolpath_proto 90, pi-interface green (see the commit).
+
+2026-10-07 — WALL SYSTEM pass 10 (uncommitted): generated walls meet by crossing printed paths (per-wall bands, face-following stitching, pushed T ends, skin branches through hosts); compact Parallel seam (½ bead). design_proto 1445, layer_assembly 124, toolpath_proto 90 green.
+
+2026-10-07 — WALL SYSTEM pass 9 (uncommitted): cross-ring envelope stitching (no phantom connectors), generated walls entering skin hosts kiss the closed host face, mixed Skin + Web keeps its web, lane-by-lane Parallel Walls with one seam zone that follows Move Start. design_proto 1411, layer_assembly 124, toolpath_proto 90 green.
+
+2026-10-07 — WALL SYSTEM pass 8 (uncommitted): Move Start mode; face-based end sections (consistent canonical ends); Parallel loops joined by interior-lane kisses (exterior lanes continuous); incoming generated walls run into the host's printed material; split-source shadowing bug fixed. design_proto 1400, layer_assembly 124, toolpath_proto 90 green.
+
+2026-10-07 — WALL SYSTEM pass 7 (uncommitted): V1 / V2 and the right-sidebar Infill UI removed; Parallel Walls ends on the canonical motif with rung joins (no crossings; rings one route); square free-end stations for round caps; concealed default route seam + travel-minimising component order (`toolpath_proto/graph.py`). design_proto 1376, layer_assembly 124, toolpath_proto 90 green.
+
+2026-10-07 — WALL SYSTEM pass 6 (uncommitted): seven constructions (Single / Out-and-Back, Hollow, Skin + Web, Parallel Walls, Interleaved, Linked, Chain); compact member editor; mixed-system junctions extend incoming lanes straight to the host's ACTUAL printed material (Junction R blends at the real contact).
+
+2026-10-07 — WALL SYSTEM OWNERSHIP pass (uncommitted): explicit Wall Systems own thickness / alignment / construction / parameters / the Skin + Web web (owned infill records); Wall System sidebar; Wall Network = connectivity only; backend migration of legacy walls (geometry-preserving). design_proto 1321, layer_assembly 124 green.
+
+2026-10-07 — WALL SYSTEMS pass 4 (uncommitted): canonical flat / round end motifs with nested returns and a closing lane permutation; layer-level Wall System membership independent of Wall Network (inherit / remove / own system); mixed regions split by wall with spliced skins; Wall Systems sidebar section. design_proto 1305, layer_assembly 124 green.
+
+2026-10-07 — WALL SYSTEMS V1 (Skin + Web / Interleaved Waves / Linked Waves / Chained Loop; `wall_systems.py`), uncommitted, awaiting live review.
+
+2026-10-07 — CANONICAL CORNER MOTIFS for Zigzag / Wave (`wall_lattice` §9), uncommitted, awaiting live review. Adaptive Truss untouched.
+
+2026-10-07 — ADAPTIVE TRUSS wall infill V1 in production (`wall_lattice` §8, `infill.TRUSS_PARAMETERS`, Wall Infill UI + Regenerate), uncommitted, awaiting live review.
+
+2026-10-07 — WALL-WEB RESEARCH EXPERIMENT (`design_proto/experiments/wall_web/`, uncommitted): production vs adaptive truss phase field vs fixed-angle propagation; findings and an unadopted proposal in the section of that name. Production unchanged. The Z-phase batch was committed and pushed as 8d9d439.
 
 2026-10-06 — CHECKPOINT AUDIT of the uncommitted Z-phase batch: architecture documented ("Z PHASE — CURRENT ARCHITECTURE" replaces seven same-day sections; history compressed), dead / superseded code removed (legacy Assembly `min_overlap` input, attribution strand-prefix fallback, per-vertex placement helper, unused helpers), stale docstrings corrected, design relations cached, test tiers defined. Before it, the same day: Z phase (Layer Designs, layer_assembly subsystem), shared lineage lattice, semantic transform groups, two stabilization passes (identity, closure on the reference network, single-bead semantics, derived junctions vs connectors, cross-Z tracking). Uncommitted, awaiting manual browser approval.
 
