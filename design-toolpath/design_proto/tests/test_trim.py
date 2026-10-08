@@ -410,3 +410,13 @@ def test_ui_trim_smoke():
     script = os.path.join(os.path.dirname(__file__), 'js', 'ui_trim_smoke.js')
     proc = subprocess.run(['node', script], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')
+def test_ui_trim_after_wall_system_smoke():
+    """Trim after Wall System assignment: membership kept, the last unwanted
+    section still trimmable, web regrouping folded into the trim's undo step,
+    Undo / Redo coherent (correction pass 2026-10-07)."""
+    script = os.path.join(os.path.dirname(__file__), 'js', 'ui_trim_wall_system_smoke.js')
+    proc = subprocess.run(['node', script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr

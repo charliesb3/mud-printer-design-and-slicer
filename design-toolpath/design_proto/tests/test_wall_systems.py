@@ -563,6 +563,7 @@ def test_rounded_junctions_are_followed(system, style):
 # --- pass 4 (2026-10-07): canonical end motifs, Wall System membership ---------------------
 
 from model import WallSystem, RegionInfill, CirclePath   # noqa: E402
+from trim_fixtures import trim_of                         # noqa: E402
 import wall_systems as WSm      # noqa: E402
 
 H_ = 0.5 * T - 0.5 * BEAD       # how far a bead centreline may go off the wall's middle
@@ -1318,7 +1319,13 @@ def test_t_junction_walls_touch_by_crossing(host, branch, R):
     assert br_p and host_p
     assert _crossing_count(br_p, host_p) >= 2                               # printed material touches
     deepest = max(q.y for pl in br_p for q in pl)
-    assert deepest >= 140 + 0.4 * 10                                        # into the host (≈ its centre)
+    if host == 'parallel4' and BRANCHES[branch][0] not in ('single', 'hollow'):
+        # (correction pass: a Parallel host's lanes are straight — the branch
+        # reaches just past its NEAR lane (1.5 in), not its centre: contact
+        # without piling the branch's caps onto the host's inner lanes)
+        assert 140 + 0.5 * BEAD + 0.5 <= deepest <= 140 + 0.5 * 10, deepest
+    else:
+        assert deepest >= 140 + 0.4 * 10                                    # into the host (≈ its centre)
     # the host's own paths are complete: no gap under the branch
     if host == 'parallel4':
         for k in range(4):
@@ -1409,3 +1416,176 @@ def test_parallel_seam_is_compact():
         y0 = round(140 + 0.5 * BEAD + k * 2 * H / 3, 6)
         gaps = _covered([pts], _lane_on_y(y0, 100 + T, 300 - T), 100 + T, 300 - T)
         assert _lane_gaps_ok(gaps, d=0.5 * BEAD), (k, gaps)
+
+
+# --- correction pass (2026-10-07): compact generated junctions; Trim stays authoritative --------
+
+def _len_in_box(polys, x0, x1, y0, y1):
+    """Printed length of the polylines inside an axis-aligned box (sampled)."""
+    tot = 0.0
+    for pl in polys:
+        for a, b in zip(pl, pl[1:]):
+            n = max(1, int(a.dist(b) / 0.1))
+            tot += sum(a.dist(b) / n for i in range(n)
+                       if x0 <= a.lerp(b, (i + 0.5) / n).x <= x1 and y0 <= a.lerp(b, (i + 0.5) / n).y <= y1)
+    return tot
+
+
+def _pts_of(sp, sid):
+    return [x.sample_points() + ([x.sample_points()[0]] if x.closed else []) for x in sp if x.source_id == sid]
+
+
+def test_parallel_x_parallel_is_a_compact_junction():
+    """Parallel × Parallel X: one wall (A — equal thickness / lanes, the
+    earlier path) runs every lane straight through; the other YIELDS — two
+    branches pushed in just past A's near lane, so their lanes cross only
+    that lane instead of every lane through every lane. Contact is real
+    (crossings), the route is one, and B deposits far less in the square."""
+    p, m, closure, mt = _route(_cross_layer(('parallel', {'walls': 4}), ('parallel', {'walls': 4})))
+    assert mt['print_runs'] == 1 and mt['travel_distance'] == 0 and not closure['open']
+    sp = system_paths(p)
+    pa, pb = _pts_of(sp, 'A'), _pts_of(sp, 'B')
+    for k in range(4):                                         # A complete through the square
+        y0 = round(200 - 3.5 + k * 7.0 / 3, 6)
+        assert _lane_gaps_ok(_covered(pa, _lane_on_y(y0, 150, 250), 150, 250), d=0.5 * BEAD), k
+    assert _crossing_count(pa, pb) >= 4                       # both halves touch A (crossings)
+    near = [abs(q.y - 200) for pl in pb for q in pl if 190 <= q.x <= 210]
+    assert min(near) >= 5.0 - 3.0, min(near)                  # B never reaches A's centre lanes
+    for side in (-1, 1):                                       # …but crosses A's near lane on each side
+        assert any(side * (q.y - 200) < -(5.0 - 0.5 * BEAD) + 1e-6 and side * (q.y - 200) > -5.0
+                   for pl in pb for q in pl if 196 <= q.x <= 204)
+    # B deposits nothing over A's inner lanes, and less in the square than
+    # passing through (≥ 4 lanes × 10 in, plus A's lanes crossed by every lane)
+    assert _len_in_box(pb, 195, 205, 200 - 2.0, 200 + 2.0) == 0.0
+    assert _len_in_box(pb, 195, 205, 195, 205) < 0.8 * 4 * 10
+
+
+@pytest.mark.parametrize('swap', [False, True], ids=['A-first', 'B-first'])
+def test_x_yield_is_deterministic(swap):
+    """The thicker wall passes through whatever the path order; equal walls:
+    the earlier path passes through."""
+    L = _cross_layer(('parallel', {'walls': 4}), ('parallel', {'walls': 4}))
+    if swap:
+        L.source_paths.reverse()
+    p, m = L._build_effective()
+    sp = system_paths(p)
+    through = 'B' if swap else 'A'
+    yields = 'A' if through == 'B' else 'B'
+    pt, py = _pts_of(sp, through), _pts_of(sp, yields)
+    cross = lambda pl, sid: [q for x in pl for q in x if (abs(q.x - 200) < 1.0 if sid == 'A' else abs(q.y - 200) < 1.0)
+                             and (195 <= q.y <= 205 if sid == 'A' else 195 <= q.x <= 205)]
+    assert not cross(py, yields) and cross(pt, through)        # only the through wall spans the centre
+    L2 = _cross_layer(('parallel', {'walls': 4}), ('parallel', {'walls': 4}))
+    L2.wall_systems[1].thickness = 12                          # B thicker: B passes, A yields
+    p2, _ = L2._build_effective()
+    a2 = _pts_of(system_paths(p2), 'A')
+    assert not [q for pl in a2 for q in pl if abs(q.x - 200) < 1.0 and 194 <= q.y <= 206]
+
+
+@pytest.mark.parametrize('sa,sb', [(('parallel', {'walls': 3}), ('parallel', {'walls': 3})),
+                                   (('interleaved', {'paths': 4}), ('linked', {'paths': 4})),
+                                   (('parallel', {'walls': 4}), ('chain', {}))],
+                         ids=['odd_parallel', 'interleaved_x_linked', 'parallel_x_chain'])
+def test_x_junction_falls_back_to_pass_through(sa, sb):
+    """Where a yield could cost connectivity (odd lane count: the halves
+    could not close) or needs a motif we do not have (wave / chain walls),
+    both walls keep passing straight through and cross."""
+    p, m, closure, mt = _route(_cross_layer(sa, sb))
+    sp = system_paths(p)
+    pb = _pts_of(sp, 'B')
+    assert [x for x in _xs_at(pb, 200.0) if 195 <= x <= 205], 'B passes through'
+    assert _crossing_count(_pts_of(sp, 'A'), pb) >= 4
+    if sa[0] != 'parallel' or sa[1]['walls'] % 2 == 0:
+        assert mt['print_runs'] == 1 and not closure['open']
+
+
+def test_overlapping_parallel_rects_yield_at_both_crossings():
+    """Two Parallel rects crossing twice: the later one yields at both X
+    crossings (its piece inside the other is a short capped band) — every
+    piece touches the through wall, one route."""
+    A = RectanglePath(100, 100, 200, 120, id='A')
+    B = RectanglePath(220, 160, 200, 120, id='B')
+    L = PF._phys(PrintLayer('t', source_paths=[A, B]))
+    L.wall_systems = [WallSystem('WS1', 'parallel', {'walls': 4}, ['A', 'B'], thickness=10)]
+    p, m, closure, mt = _route(L)
+    assert mt['print_runs'] == 1 and mt['travel_distance'] == 0 and not closure['open']
+    sp = system_paths(p)
+    pa, pb = _pts_of(sp, 'A'), _pts_of(sp, 'B')
+    assert len(pb) >= 2 and _crossing_count(pa, pb) >= 4
+    ok, bad = inside_envelope(m, [q for q in pa + pb], 0.5 * BEAD - 0.05)
+    assert ok, bad
+
+
+LATE = [('parallel', {'walls': 4}), ('interleaved', {'paths': 4}), ('chain', {})]
+
+
+def _late_rects(system, trims=()):
+    A = RectanglePath(100, 100, 200, 120, id='A')
+    B = RectanglePath(220, 160, 200, 120, id='B')
+    L = PF._phys(PrintLayer('t', source_paths=[A, B], trims=list(trims)))
+    L.wall_systems = [WallSystem('WS1', system[0], dict(system[1]), ['A', 'B'], thickness=10)]
+    return L
+
+
+def _late_lines(system, trims=()):
+    A = LinePath(Vec2(100, 200), Vec2(330, 200), id='A')
+    B = LinePath(Vec2(300, 80), Vec2(300, 230), id='B')
+    L = PF._phys(PrintLayer('t', source_paths=[A, B], trims=list(trims)))
+    L.wall_systems = [WallSystem('WS1', system[0], dict(system[1]), ['A', 'B'], thickness=10)]
+    return L
+
+
+def _sec(L, source, pred):
+    from trim_fixtures import sections as trim_sections
+    (s,) = [s for s in trim_sections(L).values() if s['source'] == source and pred(s)]
+    return s
+
+
+def _late_ok(L):
+    """Generated paths lie only in the TRIMMED envelope (no ghost of a removed
+    section), the Wall System is unchanged, one route."""
+    p, m, closure, mt = _route(L)
+    sp = system_paths(p)
+    assert sp and all(r['status'] == 'ok' and r.get('system_id') == 'WS1' for r in m['network']['wall_systems'])
+    assert all(v['status'] == 'ok' for v in m['network']['trims'].values())
+    ok, bad = inside_envelope(m, [x.sample_points() for x in sp], 0.5 * BEAD - 0.05)
+    assert ok, bad
+    assert mt['print_runs'] == 1 and mt['travel_distance'] == 0 and not closure['open']
+    return p, m
+
+
+@pytest.mark.parametrize('system', LATE, ids=[s[0] for s in LATE])
+def test_trim_after_wall_system_assignment_is_authoritative(system):
+    """Regression (live review): trimming overlapping walls AFTER a generated
+    Wall System was assigned regenerated the full untrimmed walls / unrelated
+    geometry (each band followed its own UNTRIMMED face lines through the
+    removed sections). Trims now cut the generated walls like any wall."""
+    L0 = _late_rects(system)
+    t1 = trim_of(_sec(L0, 'A', lambda s: s['inside'].get('B')), 't1')
+    t2 = trim_of(_sec(L0, 'B', lambda s: s['inside'].get('A')), 't2')
+    p, m = _late_ok(_late_rects(system, [t1]))
+    p, m = _late_ok(_late_rects(system, [t1, t2]))
+    pts = [q for x in system_paths(p) for q in x.sample_points()]
+    # nothing where the removed sections were (away from the two contacts)
+    for c in (Vec2(300, 190), Vec2(260, 220), Vec2(220, 190), Vec2(260, 160)):
+        assert min(q.dist(c) for q in pts) > 5.0, c
+
+
+@pytest.mark.parametrize('system', LATE, ids=[s[0] for s in LATE])
+def test_repeated_trims_with_wall_systems(system):
+    """Two overshooting lines in one generated system: trim one stub, then
+    the remaining unwanted one. Each stage regenerates cleanly (no detached
+    geometry, membership kept, one route), the final L meets in its corner,
+    trim order does not matter, and removing the trims (Undo) restores the
+    untrimmed result exactly."""
+    L0 = _late_lines(system)
+    stub_a = trim_of(_sec(L0, 'A', lambda s: s['a'] > 150), 't1')
+    stub_b = trim_of(_sec(L0, 'B', lambda s: s['a'] > 100), 't2')
+    _late_ok(_late_lines(system, [stub_a]))
+    p, m = _late_ok(_late_lines(system, [stub_a, stub_b]))
+    pts = [q for x in system_paths(p) for q in x.sample_points()]
+    assert max(q.x for q in pts) <= 305.0 + 1e-6 and max(q.y for q in pts) <= 205.0 + 1e-6   # stubs gone
+    p_rev, _ = _late_lines(system, [stub_b, stub_a])._build_effective()
+    key = lambda ps: sorted(tuple((round(q.x, 6), round(q.y, 6)) for q in x.sample_points()) for x in system_paths(ps))
+    assert key(p) == key(p_rev)
+    assert key(_late_lines(system, [])._build_effective()[0]) == key(_late_lines(system)._build_effective()[0])

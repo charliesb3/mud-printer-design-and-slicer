@@ -1892,7 +1892,15 @@ function drawTrimHover() {
 // After every backend response: refresh what depends on it.
 function _afterNetworkUpdate() {
   for (const r of _wsReportEls) _fillWallSystemReport(r.el, r.sys ? { sys: r.sys } : r.id);
-  if (_syncSystemWebs()) scheduleRefresh();     // connectivity changed the web groups
+  // connectivity changed the web groups (e.g. a Trim split a member group): the
+  // owned web records are DERIVED bookkeeping of the edit that caused it — folded
+  // into that undo step, never a step of their own (which would make Undo re-sync
+  // against the response and clear Redo)
+  const clean = !!_hist.current && _histState() === _hist.current.state;
+  if (_syncSystemWebs()) {
+    if (clean) _hist.current.state = _histState();
+    scheduleRefresh();
+  }
   if (!_isTyping()) { updateNetworkSection(); updateWallSystemSection(); }
   // Wall Geometry: say when rounded junctions are limited by the geometry
   const lim = ((networkInfo && networkInfo.junctions) || []).filter(j => j.limited && !j.derived);
@@ -4043,9 +4051,10 @@ async function _coalesced(fn) {
   }
 }
 
+let _histRestoring = false;    // Undo / Redo: the restored state is already consistent
 function scheduleRefresh() {
   _syncRelations();
-  _syncSystemWebs();
+  if (!_histRestoring) _syncSystemWebs();      // (networkInfo is still the undone state's)
   _maybeMigrateWallSystems();
   historyCheckpoint();
   clearTimeout(_refreshTimer);
@@ -4890,7 +4899,9 @@ function _histRestore(entry) {
   updateOffsetList();
   updateInfillList();
   updateHint();
-  scheduleRefresh();                       // state == current: no new step
+  _histRestoring = true;
+  try { scheduleRefresh(); }               // state == current: no new step
+  finally { _histRestoring = false; }
   updateUndoButtons();
   repaint();
 }

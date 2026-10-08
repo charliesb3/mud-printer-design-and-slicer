@@ -2054,6 +2054,31 @@ class _WallPiece:
     end_cut: Optional[_Cut]
 
 
+def _x_arms(ring, closed, L, at, need, c, d):
+    """Does the polyline (ring points, total length L) run on STRAIGHT for
+    `need` both ways from arc position `at`, its two arms on opposite sides
+    of the line c→d (the other wall's centre line there)?"""
+    if not closed and (at < need or L - at < need):
+        return False
+    pa = _point_at(ring, (at - need) % L if closed else at - need)
+    pb = _point_at(ring, (at + need) % L if closed else at + need)
+    if pa.dist(pb) < 1.8 * need:
+        return False
+    side = lambda q: (d.x - c.x) * (q.y - c.y) - (d.y - c.y) * (q.x - c.x)
+    return side(pa) * side(pb) < 0
+
+
+def _point_at(ring, s):
+    """The point at arc length s along an open polyline."""
+    acc = 0.0
+    for a, b in zip(ring, ring[1:]):
+        l_ = a.dist(b)
+        if acc + l_ >= s:
+            return a.lerp(b, 0.0 if l_ < 1e-12 else (s - acc) / l_)
+        acc += l_
+    return ring[-1]
+
+
 class _OpeningPlan:
     """
     How a source's openings cut its wall assembly. Built from the FULL
@@ -2830,6 +2855,23 @@ class PrintLayer:
                         all_offsets.append(derived)
                         source_of[part] = p.id
                         self._absorbed[part] = p.id
+        # a cut wall's face lines are only its SURVIVING pieces: a generated
+        # band must never follow its own face through a trimmed-away section
+        # (or an opening) — trims stay authoritative after Wall System assignment
+        for sid_, plan in plans.items():
+            faces = []
+            for pc in plan.pieces:
+                fl = [list(wp) for _, wp in pc.walls if len(wp) >= 2]
+                if len(fl) == 1 and len(pc.src_pts) >= 2:
+                    fl.append(list(pc.src_pts))       # (aligned wall: the path is a face)
+                faces += [(f, False) for f in fl]
+            self._src_faces[sid_] = faces
+        # each source's surviving CENTRE lines (X crossings between generated walls)
+        self._src_center = {p.id: ([(list(pc.src_pts), False) for pc in plans[p.id].pieces
+                                    if len(pc.src_pts) >= 2] if p.id in plans
+                                   else [(list(processed[p.id]), bool(p.closed))])
+                            for p in source_paths_in_order}
+        self._src_order = {p.id: i for i, p in enumerate(source_paths_in_order)}
 
         # 5) Lattice — generated on the FULL walls (so generator validity is
         # unchanged), then clipped out of any opening of the walls it uses.
@@ -3580,10 +3622,32 @@ class PrintLayer:
                     R_ = runs[cur]
                     e = R_['pts'][-1]
                     cand = left + [first]
+                    cand_ = None                       # (an X yield: the starts across its own band)
                     follow = self._face_follow(key, R_, [(q, runs[q]['pts'][0]) for q in cand]) \
                         if key is not None else None
+                    if follow is not None and key is not None:
+                        # an X crossing of two Parallel Walls walls: one YIELDS (its
+                        # face is not followed across the other wall; it ends there and
+                        # is pushed in just past the other's near lane — see _x_yield)
+                        r_, ts_ = rings[R_['ring']], tagged[R_['ring']]
+                        # (the wall crossed here: the first one after the run's end on its ring)
+                        crossed = next((ts_[(R_['g0'] + x) % len(r_)] for x in range(R_['glen'])
+                                        if ts_[(R_['g0'] + x) % len(r_)] != '__J'), None)
+                        if crossed not in (None, key) and self._x_yield(key, crossed, e):
+                            own = [f for f, fc in (getattr(self, '_src_faces', {}) or {}).get(key, [])
+                                   if N.dist_to_polyline(e, f, fc) < 0.05]
+                            # (the start across this wall's own band, at the same mouth)
+                            wT = float(((getattr(self, '_source_walls', {}) or {}).get(key) or {}).get('thickness') or 10.0)
+                            across = [q for q in cand if runs[q]['pts'][0].dist(e) < 1.5 * wT + bead_w and not any(
+                                N.dist_to_polyline(runs[q]['pts'][0], f, False) < 0.05 for f in own)]
+                            if across:
+                                follow = None
+                                cand_ = across
                     if follow is not None:
                         nxt, fpath = follow
+                    elif cand_:
+                        nxt = min(cand_, key=lambda q: (e.dist(runs[q]['pts'][0]), q != first))
+                        fpath = None
                     else:
                         nxt = min(cand, key=lambda q: (e.dist(runs[q]['pts'][0]), q != first))
                         fpath = None
@@ -3656,7 +3720,10 @@ class PrintLayer:
                         hits_ = []
                         for fpts, fcl in (getattr(self, '_src_faces', {}) or {}).get(hsid, []):
                             fr = fpts + ([fpts[0]] if fcl else [])
+                            flen = sum(a_.dist(b_) for a_, b_ in zip(fr, fr[1:]))
+                            fpos = 0.0
                             for a_, b_ in zip(fr, fr[1:]):
+                                fpos += a_.dist(b_)
                                 sg = b_ - a_
                                 den = dv.x * sg.y - dv.y * sg.x
                                 if abs(den) < 1e-12:
@@ -3664,13 +3731,38 @@ class PrintLayer:
                                 w_ = a_ - mid_
                                 tt = (w_.x * sg.y - w_.y * sg.x) / den
                                 uu = (w_.x * dv.y - w_.y * dv.x) / den
-                                if -1e-9 <= uu <= 1 + 1e-9 and tt > -0.5:
-                                    hits_.append(tt)
+                                # (only the host face AT this mouth: a face far beyond it —
+                                # the ray missing a trimmed / ending host at a corner — is
+                                # another stretch of that wall, never a push target)
+                                if not (-1e-9 <= uu <= 1 + 1e-9 and -0.5 < tt <= hT + 2.0 * bead_w):
+                                    continue
+                                # (and a face that runs ON past the mouth both ways: a host
+                                # face ENDING here — an L corner — only grazes the ray)
+                                at_ = fpos - (1.0 - uu) * sg.length()
+                                if not fcl and min(at_, flen - at_) < 0.4 * cv.length():
+                                    continue
+                                hits_.append(tt)
                         if hits_:
                             t_face = max(0.0, min(hits_))
-                        depth = t_face + (0.5 * hT + 0.25 * bead_w + 0.5 * bead_w) / k_
-                        push = [e + dv * depth, sp + dv * depth]
-                        chords[-1]['pushed'] = True
+                            depth = t_face + (self._push_reach(hsid, hT, bead_w) + 0.5 * bead_w) / k_
+                            push = [e + dv * depth, sp + dv * depth]
+                            chords[-1]['pushed'] = True
+                        else:
+                            # no host face across this mouth: a CORNER (two walls ending
+                            # on each other — e.g. trimmed into an L), not a T. The end
+                            # is squared at the chord's far end, filling the corner square
+                            # (both bands overlap there: contact), never pushed past the
+                            # corner out of the envelope
+                            se, ss_ = e.x * dv.x + e.y * dv.y, sp.x * dv.x + sp.y * dv.y
+                            far = max(se, ss_)
+                            sq = [e + dv * (far - se), sp + dv * (far - ss_)]
+
+                            def _in_env(q):
+                                return sum(_point_in_polygon(q, rr) for rr in rings) % 2 == 1
+                            if far - min(se, ss_) > 1e-6 and \
+                                    all(_in_env(q.lerp(e.lerp(sp, 0.5), 0.05)) for q in sq):
+                                push = [q for q, s0 in zip(sq, (se, ss_)) if far - s0 > 1e-6]
+                                chords[-1]['pushed'] = 'corner'
                     if key is not None and gap_tags == {None} and (same or is_end):
                         chain = [r[(R_['g0'] + x) % n] for x in range(R_['glen'] + 1)] if same else [e, sp]
                         rec = {'ends': (exact(e), exact(sp)), 'chain': chain,
@@ -3703,6 +3795,67 @@ class PrintLayer:
                               'host_skins': host_skins})
         self._split_skin_part = skin_part
         return parts
+
+    def _parallel_spec(self, sid):
+        """(thickness, N lanes) of a PARALLEL WALLS source (straight lanes), else None."""
+        ws = (getattr(self, '_wall_systems', {}) or {}).get(sid)
+        sw = (getattr(self, '_source_walls', {}) or {}).get(sid)
+        if not ws or ws.get('type') != 'parallel' or not sw:
+            return None
+        return float(sw.get('thickness') or 0.0), int(ws.get('walls') or ws.get('paths') or 2)
+
+    def _push_reach(self, hsid, hT, bead):
+        """How far past the host's face an incoming generated wall's outer cap
+        rail lies. A PARALLEL host has straight lanes: just past its near lane
+        (half way to the next) is real contact — the lanes cross that one host
+        lane, nothing piles up on the inner lanes. Other hosts (waves / chain
+        strands cross the centre line, not the near lane): about the centre line."""
+        ps = self._parallel_spec(hsid)
+        if ps is not None and ps[1] >= 2 and ps[0] > bead:
+            gap = (ps[0] - bead) / (ps[1] - 1)
+            return min(0.5 * hT + 0.25 * bead, 0.5 * bead + 0.5 * gap)
+        return 0.5 * hT + 0.25 * bead
+
+    def _x_yield(self, sid, other, near):
+        """At an X crossing (both centre lines continue through) of two
+        PARALLEL WALLS walls near `near`: does `sid` YIELD — print as two
+        branches shallowly pushed into `other` — instead of both walls running
+        every lane through every lane of the other (a dense knot)? Deterministic:
+        the thicker wall, then the one with more lanes, then the earlier path
+        passes through. Only with an even lane count (each half closes: no new
+        runs); anything else keeps the pass-through crossing."""
+        from wall_systems import _cross as WS_cross
+        a, b = self._parallel_spec(sid), self._parallel_spec(other)
+        if a is None or b is None or a[1] % 2 or a[1] < 2:
+            return False
+        order = getattr(self, '_src_order', {}) or {}
+        if (a[0], a[1], -order.get(sid, 0)) >= (b[0], b[1], -order.get(other, 0)):
+            return False
+        cen = getattr(self, '_src_center', {}) or {}
+        reach = 0.5 * max(a[0], b[0])
+        for pa, ca in cen.get(sid, []):
+            for pb, cb in cen.get(other, []):
+                ra, rb = pa + ([pa[0]] if ca else []), pb + ([pb[0]] if cb else [])
+                la = sum(x.dist(y) for x, y in zip(ra, ra[1:]))
+                lb = sum(x.dist(y) for x, y in zip(rb, rb[1:]))
+                sa = 0.0
+                for x1, x2 in zip(ra, ra[1:]):
+                    sb = 0.0
+                    for y1, y2 in zip(rb, rb[1:]):
+                        t = WS_cross(x1, x2, y1, y2)
+                        u = WS_cross(y1, y2, x1, x2)
+                        if t is not None and u is not None and 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+                            q = x1.lerp(x2, t)
+                            at, bt = sa + t * x1.dist(x2), sb + u * y1.dist(y2)
+                            # both walls continue straight PAST each other (four arms:
+                            # an X — not a T, an L, or a corner hidden in the other band)
+                            need = reach + self.material.bead_width
+                            if q.dist(near) < 2.0 * reach + self.material.bead_width and \
+                                    _x_arms(ra, ca, la, at, need, y1, y2) and _x_arms(rb, cb, lb, bt, need, x1, x2):
+                                return True
+                        sb += y1.dist(y2)
+                    sa += x1.dist(x2)
+        return False
 
     def _face_follow(self, sid, run, starts, tol=0.05):
         """If the run's end lies on one of wall `sid`'s own face lines and,
