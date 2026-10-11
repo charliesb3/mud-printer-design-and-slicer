@@ -96,12 +96,16 @@ class SpanFinding:
     header: str = ''
     coverage: float = 0.0         # fraction over a header
     override: int = -1            # index of the matching SupportOverride
+    profile: str = ''             # at a self-supporting Assembly opening (its id; web.py) —
+                                  # never a header request
+    opening: Optional[dict] = None   # caused by an ordinary DESIGNER opening (web.py): which one —
+                                     # the UI offers "Convert to self-supporting opening"
 
     def to_dict(self) -> dict:
         return {k: getattr(self, k) for k in ('id', 'layer', 'section', 'local_layer', 'z', 'centre',
                                               'local_centre', 'angle', 'span', 'depth', 'runs',
                                               'status', 'kind', 'min_overlap', 'overlap',
-                                              'header', 'coverage', 'override')}
+                                              'header', 'coverage', 'override', 'profile', 'opening')}
 
 
 @dataclass
@@ -417,11 +421,42 @@ def _bound(t0, t1, bbox):
 
 # ---------------------------------------------------------------------------
 
-def analyse_support(resolved, geometry, assembly=None, groups=None) -> SupportReport:
+def _pair_findings(resolved, i, up, points, runs, run_of, tf_of, ov_of, d_of, empty_of, b, o) -> list:
+    """The findings of one layer boundary from its sampled unsupported points."""
+    out = []
+    sec = resolved.sections[up.section_index]
+    n = 0
+    for members in _clusters(points, LINK_FACTOR * b):
+        pts = [points[j] for j in members]
+        rset = sorted({run_of[j] for j in members})
+        centre, ang, span, across = _principal(pts, [runs[r] for r in rset])
+        if span < MIN_SPAN_FACTOR * b:
+            continue
+        votes = defaultdict(int)                   # the placement most of it uses
+        for j in members:
+            votes[tf_of[j]] += 1
+        t = max(votes, key=votes.get)
+        local = ((centre[0] - t.tx) / t.scale, (centre[1] - t.ty) / t.scale)
+        bridge = max(d_of[j] for j in members) > BRIDGE_FACTOR * b or \
+            _longest_empty(members, run_of, points, empty_of) >= GAP_FACTOR * b - 1e-9
+        out.append(SpanFinding(f'{i}:{n}', i, up.section_index, i - sec.first_layer, up.z_bottom,
+                               centre, local, ang, span, across + b, [runs[r] for r in rset], pts,
+                               'needs_header' if bridge else 'insufficient_support',
+                               'bridge' if bridge else 'overlap', o, min(ov_of[j] for j in members)))
+        n += 1
+    return out
+
+
+def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) -> SupportReport:
     """geometry: {design id: (polylines, bead_width)} — the designs' resolved
     printable centrelines (untransformed; optional per-vertex 'src').
     assembly: its objects (Headers), overrides and max_overhang. groups: the
-    groups.GroupModel when layers carry per-group placements."""
+    groups.GroupModel when layers carry per-group placements.
+    cache: a dict that lives exactly as long as the geometry behind each
+    geometry key (DesignerSource.support_cache): the expensive per-boundary
+    sampling of a layer pair is reused while both layers' geometry, placement
+    and bead parameters are unchanged (an edit of one plane re-analyses only
+    the boundaries it changed). Not used with transform groups."""
     vgs = groups.vertex_groups if groups is not None else {}
 
     def group_at(inst, p):
@@ -499,6 +534,17 @@ def analyse_support(resolved, geometry, assembly=None, groups=None) -> SupportRe
         if gk(lo) == gk(up) and moved(lo, up) <= allow:
             continue
         reach = BRIDGE_FACTOR * b + bl
+        ckey = None
+        if cache is not None and groups is None:
+            ckey = ('pair', gk(lo), gk(up), lo.transform, up.transform, tuple(sorted(lo.parts.items())),
+                    tuple(sorted(up.parts.items())), b, bl, allow, o)
+            hit = cache.get(ckey)
+            if hit is not None:
+                points, runs, run_of, tf_of, ov_of, d_of, empty_of = hit
+                if points:
+                    findings += _pair_findings(resolved, i, up, points, runs, run_of, tf_of, ov_of, d_of,
+                                               empty_of, b, o)
+                continue
         lkey = (gk(lo), lo.transform, tuple(sorted(lo.parts.items())), reach)
         if lkey not in index_cache:
             index_cache[lkey] = _SegIndex([p for p, _ in placed(lo)], reach)
@@ -533,29 +579,13 @@ def analyse_support(resolved, geometry, assembly=None, groups=None) -> SupportRe
                 if emp and alt is not None:
                     emp = covered_width(p, alt, corridor, idx, bl / 2) <= 1e-9
                 empty_of.append(emp)
+        if ckey is not None:
+            cache[ckey] = (points, runs, run_of, tf_of, ov_of, d_of, empty_of)
+            if len(cache) > 4096:
+                cache.pop(next(iter(cache)))
         if not points:
             continue
-        sec = resolved.sections[up.section_index]
-        n = 0
-        for members in _clusters(points, LINK_FACTOR * b):
-            pts = [points[j] for j in members]
-            rset = sorted({run_of[j] for j in members})
-            centre, ang, span, across = _principal(pts, [runs[r] for r in rset])
-            if span < MIN_SPAN_FACTOR * b:
-                continue
-            votes = defaultdict(int)                   # the placement most of it uses
-            for j in members:
-                votes[tf_of[j]] += 1
-            t = max(votes, key=votes.get)
-            local = ((centre[0] - t.tx) / t.scale, (centre[1] - t.ty) / t.scale)
-            bridge = max(d_of[j] for j in members) > BRIDGE_FACTOR * b or \
-                _longest_empty(members, run_of, points, empty_of) >= GAP_FACTOR * b - 1e-9
-            f = SpanFinding(f'{i}:{n}', i, up.section_index, i - sec.first_layer, up.z_bottom,
-                            centre, local, ang, span, across + b, [runs[r] for r in rset], pts,
-                            'needs_header' if bridge else 'insufficient_support',
-                            'bridge' if bridge else 'overlap', o, min(ov_of[j] for j in members))
-            findings.append(f)
-            n += 1
+        findings += _pair_findings(resolved, i, up, points, runs, run_of, tf_of, ov_of, d_of, empty_of, b, o)
 
     headers = []
     for h in objects:
@@ -563,6 +593,8 @@ def analyse_support(resolved, geometry, assembly=None, groups=None) -> SupportRe
             continue
         out = {'id': h.id, 'kind': h.kind, 'error': '', 'snapped': False, 'supports': [],
                'pocket_layers': []}
+        if getattr(h, 'profile', ''):
+            out.update({'profile': h.profile, 'member': h.member})     # generated for an Assembly opening
         if not (0 <= h.section < len(resolved.sections)) or resolved.sections[h.section].first_layer is None \
                 or not (0 <= h.layer < resolved.sections[h.section].layers):
             out['error'] = 'its layer boundary no longer exists'
@@ -573,13 +605,15 @@ def analyse_support(resolved, geometry, assembly=None, groups=None) -> SupportRe
             out['error'] = 'nothing can rest on a header at the build plate'
         t = insts[i].transform_of(group_at(insts[i], (h.x, h.y)))
         if h.snap:
-            cands = [f for f in findings if f.layer == i and f.kind == 'bridge']
+            # (a GENERATED header — its opening's flat top — takes any span there)
+            cands = [f for f in findings if f.layer == i and (f.kind == 'bridge' or getattr(h, 'profile', ''))]
             best = min(cands, key=lambda f: math.dist(f.local_centre, (h.x, h.y)), default=None)
             if best is not None and math.dist(best.local_centre, (h.x, h.y)) <= \
                     max(best.span / t.scale / 2, 2 * bead(insts[i])):
                 h.x, h.y = best.local_centre
                 t = insts[i].transform_of(group_at(insts[i], (h.x, h.y)))
-                h.angle, h.span = best.angle, best.span / t.scale
+                # (a generated header spans at least its opening's clear width)
+                h.angle, h.span = best.angle, max(best.span / t.scale, h.span if getattr(h, 'profile', '') else 0.0)
                 out['snapped'] = True
         rect = h.support_rect(t)
         z_top = insts[i].z_bottom

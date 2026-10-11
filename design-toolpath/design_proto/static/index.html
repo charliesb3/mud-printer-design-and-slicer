@@ -60,22 +60,65 @@
     .design-tabs { margin-left: 12px; padding-left: 12px; border-left: 1px solid #333; }
     .design-tab { padding: 3px 10px; font-size: 10px; }
     .design-tab.active { background: #252525; border-color: #666; color: #e0e0e0; }
+    .project-btns { display: flex; gap: 2px; margin-left: auto; }
+    /* print simulation */
+    .sidebar.sim-nav-col { width: 270px; }
+    .sidebar.sim-time-col { width: 330px; }
+    .sidebar.sim-nav-col .prop-row .prop-label { width: 96px; flex: none; white-space: nowrap; }
+    .sidebar.sim-nav-col .sim-minor .prop-row .prop-label { width: auto; flex: 1; color: #999; font-size: 10px; white-space: nowrap; }
+    .sim-minor .num-field { flex-basis: 76px; width: 76px; }
+    .sim-time-col .sim-layer-nav .num-field { flex-basis: 76px; width: 76px; }
+    .sim-time-col .tool-btn { padding-left: 6px; padding-right: 6px; }
+    .sim-center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .sim-canvas-wrap { padding: 0; }
+    .sim-transport { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: #131313;
+                     border-top: 1px solid var(--border); flex-shrink: 0; }
+    .sim-transport input[type=range] { flex: 1; }
+    .sim-scrub-wrap { flex: 1; position: relative; display: flex; align-items: center; min-width: 0; }
+    .sim-scrub-wrap input[type=range] { width: 100%; }
+    .sim-marks { position: absolute; left: 0; right: 0; top: -4px; height: 4px; pointer-events: none; }
+    .sim-mark { position: absolute; top: 0; width: 2px; height: 22px; margin-left: -1px; background: #ffd43b; opacity: 0.8; }
+    .sim-indent { padding-left: 10px; }
+    /* one line, never wrapping: it changes with the stack and sits above editable fields */
+    .sim-frame-node { color: #ffd43b; padding: 1px 3px; }
+    .sim-now .asm-kv-row { color: #ddd; }
+    .sim-time { font-size: 11px; color: #ccc; min-width: 230px; text-align: center; font-variant-numeric: tabular-nums; }
+    .sim-check { font-size: 10px; color: #aaa; display: flex; align-items: center; gap: 2px; }
+    .sim-layer-nav input { width: 56px; }
+    .sim-tree { font-size: 10px; line-height: 1.55; }
+    .sim-tree .sim-node { cursor: pointer; padding: 1px 3px; border-radius: 2px; white-space: nowrap; display: flex; gap: 6px; }
+    .sim-tree .sim-node > .sim-node-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .sim-tree .sim-node > .sim-node-time { flex: none; color: #9a9a9a; font-variant-numeric: tabular-nums; }
+    .sim-tree .sim-node.sel > .sim-node-time { color: inherit; }
+    .sim-tree .sim-node:hover { background: #252525; }
+    .sim-tree .sim-node.sel { background: #1c3a5a; color: var(--accent); }
+    .sim-tree .sim-kids { padding-left: 10px; }
+    .sim-run-row { cursor: pointer; }
+    .sim-run-row.sel { color: var(--accent); }
     .design-tab .dt-parent { color: #666; margin-left: 4px; }
     /* assembly */
-    .asm-designs-col { width: 190px; }
+    .asm-designs-col { width: 180px; }
     .asm-stack-col { width: 230px; border-left: 1px solid #222; }
-    .asm-transform-col { width: 240px; }
     .asm-stack-col .sidebar-scroll { overflow-y: auto; }
     .asm-kv { font-size: 10px; color: #999; line-height: 1.6; margin: 2px 0 4px; }
     .asm-kv .asm-kv-row { display: flex; justify-content: space-between; }
     .asm-kv .asm-kv-row b { color: #ddd; font-weight: normal; }
     .asm-kv .asm-kv-hint { color: #777; margin-top: 2px; }
-    #asm-physical .prop-label { width: 110px; }
+    #asm-physical .prop-label { width: 84px; }
     .asm-support-card details { margin-top: 3px; color: #999; font-size: 10px; }
-    @media (max-width: 1280px) {
+    #ws-assembly .asm-support-box { display: none; border-top: 1px solid #2a2a2a; margin: 4px 0; }
+    #ws-assembly.asm-has-support .asm-support-box { display: block; }
+    .asm-support-box > summary { cursor: pointer; }
+    .asm-right-col { width: 270px; }
+    .asm-right-sec { border-bottom: 1px solid #2a2a2a; }
+    .asm-right-sec > summary { cursor: pointer; list-style: none; }
+    .asm-right-sec > summary::before { content: '▾ '; color: #666; }
+    .asm-right-sec:not([open]) > summary::before { content: '▸ '; }
+    .asm-right-sec > .asm-pane { padding: 4px 10px 8px; }
+    @media (max-width: 1100px) {
       #ws-assembly .main { flex-wrap: wrap; }
-      .asm-designs-col, .asm-stack-col { width: 25%; max-height: 40vh; }
-      #asm-preview-wrap { flex-basis: 100%; min-height: 60vh; }
+      .asm-designs-col, .asm-stack-col { width: 33.3%; max-height: 40vh; }
+      #asm-preview-wrap { flex-basis: 100%; min-height: 60vh; order: -1; }
     }
     .asm-design { padding: 6px 8px; border: 1px solid #2a2a2a; border-radius: 3px; margin-bottom: 4px; }
     .asm-design .asm-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
@@ -90,6 +133,7 @@
     .asm-section .prop-label { width: 52px; }
     .asm-tf { border-top: 1px dashed #333; margin-top: 4px; padding-top: 4px; }
     .asm-tf-head .mini-btn { background: #222; color: #999; border-color: #333; }
+    .asm-tf-head .asm-tf-sum { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .asm-design .asm-name { flex: 1; min-width: 0; }
     .asm-support-card { border: 1px solid #333; border-left: 3px solid #555; border-radius: 3px; padding: 5px 7px; margin: 6px 0; font-size: 11px; }
     .asm-support-card.asm-needs_header { border-left-color: #ff4d4d; }
@@ -99,7 +143,7 @@
     .asm-support-card.asm-supported { border-left-color: #888; }
     .asm-support-card.asm-insufficient_support { border-left-color: #c56cf0; }
     .asm-support-card.asm-insufficient_support .asm-support-title { color: #d68df5; }
-    .asm-physical { border-top: 1px solid #2a2a2a; margin-top: 6px; padding-top: 4px; }
+    .asm-physical { margin: 2px 0 4px; }
     .asm-physical .asm-calc, #asm-assembly-tf .asm-calc { color: #888; font-size: 10px; }
     #asm-assembly-tf .asm-center.asm-selected { background: #262a33; border-radius: 3px; }
     #asm-assembly-tf .asm-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
@@ -108,6 +152,22 @@
     .asm-support-card.asm-header { border-left-color: #d8d8dc; }
     .asm-support-title { font-weight: bold; flex: 1; }
     .asm-support-card .prop-label { width: 64px; }
+    .asm-profiles-col .asm-row { display: flex; gap: 6px; align-items: center; margin: 2px 0; flex-wrap: wrap; }
+    .asm-profiles-col .asm-row input, .asm-profiles-col .asm-row select { flex: 1; min-width: 0; }
+    .asm-profiles-col .prop-label { width: 84px; }
+    .asm-profiles-col .asm-profile .prop-label { width: 76px; flex: none; }
+    .asm-profiles-col .asm-subhead { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #5fb8b8; margin: 6px 0 1px; }
+    .asm-profiles-col .asm-row input[type=checkbox] { flex: none; }
+    .asm-profiles-col .asm-total-value { flex: 1; color: #ccc; padding-left: 4px; }
+    .asm-profiles-col .asm-profile .num-field { flex: 1 1 70px; width: 70px; min-width: 62px; }
+    .asm-profiles-col .asm-profile .asm-row { flex-wrap: nowrap; }
+    .asm-profiles-col .asm-array { border-top: 1px dashed #2f3a3b; margin-top: 4px; padding-top: 2px; }
+    .asm-support-card .asm-row { flex-wrap: wrap; }
+    .asm-profiles-col .asm-calc { color: #888; font-size: 10px; }
+    .asm-profiles-col .mini-btn.active { background: #00a8a8; color: #fff; }
+    .asm-support-card.asm-profile { border-left-color: #00d2d3; }
+    .asm-support-card.asm-profile.asm-selected { background: #1d2a2b; }
+    .asm-support-card.asm-profile-bad { border-left-color: #ff4d4d; border-left-style: dashed; }
     .asm-hist { display: flex; gap: 6px; margin-bottom: 6px; }
     .asm-bar { padding: 6px 10px 0; border-bottom: 1px solid #2a2a2a; }
     .asm-hist .mini-btn:disabled { opacity: 0.4; }
@@ -287,6 +347,31 @@
     .prop-input:focus { outline: none; border-color: var(--accent-dim); }
     select.prop-input { appearance: none; -webkit-appearance: none; cursor: pointer; }
     .prop-unit { color: #555; font-size: 10px; margin-left: 4px; flex-shrink: 0; }
+    /* NUMERIC FIELDS (static/numeric.js): one field everywhere — − value +,
+       large step targets, no native spinner. Its width depends only on the
+       row's static content (preferred 88 px, shrinking only in a row too
+       narrow for it) — never on the value: nothing moves when it changes */
+    .num-field { display: inline-flex; align-items: stretch; flex: 0 1 88px; width: 88px; min-width: 66px; height: 22px;
+                 box-sizing: border-box; }
+    .num-field.num-compact { flex-basis: 76px; width: 76px; }
+    .speed-row .prop-label { width: 58px; }
+    .speed-row select.prop-input { flex: 0 0 58px; width: 58px; }
+    .num-field > input.prop-input { flex: 1 1 auto; width: 0; min-width: 0; height: 100%; box-sizing: border-box;
+                                    border-radius: 0; text-align: right; padding: 2px 4px;
+                                    font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+    .num-field > input.prop-input::-webkit-inner-spin-button,
+    .num-field > input.prop-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .num-step { flex: 0 0 20px; width: 20px; height: 100%; padding: 0; margin: 0; box-sizing: border-box;
+                background: #262626; color: #aaa; border: 1px solid #333; font: 13px/1 inherit; cursor: pointer;
+                user-select: none; -webkit-user-select: none; touch-action: none; }
+    .num-field.num-compact .num-step { flex-basis: 18px; width: 18px; }
+    .speed-row .num-field { flex-basis: 76px; width: 76px; }
+    .prop-row.num-row:has(> .mini-btn) { flex-wrap: wrap; row-gap: 3px; }   /* (static content: wraps the same way always) */
+    .num-step.num-down { border-right: none; border-radius: 2px 0 0 2px; }
+    .num-step.num-up { border-left: none; border-radius: 0 2px 2px 0; }
+    .num-step:hover { background: #303a46; color: #dde; }
+    .num-step:active { background: #1c3050; }
+    .num-field > input.prop-input:disabled ~ .num-step, .num-field > .num-step:has(~ input:disabled) { opacity: 0.4; cursor: default; }
 
     /* ---- TREATMENTS ---- */
     .treatment-block {
@@ -456,9 +541,22 @@
   <div class="ws-tabs" id="ws-tabs">
     <button class="ws-tab active" id="ws-tab-designer" onclick="setWorkspace('designer')">Designer</button>
     <button class="ws-tab" id="ws-tab-assembly" onclick="setWorkspace('assembly')">Assembly</button>
+    <button class="ws-tab" id="ws-tab-simulation" onclick="setWorkspace('simulation')">Print Simulation</button>
   </div>
   <!-- the Layer Design being edited (shown once derived designs exist) -->
   <div class="design-tabs" id="design-tabs" style="display:none"></div>
+  <!-- PROJECT FILE: the whole project (every Layer Design + the Assembly),
+       shared by both workspaces — a .muddesign JSON file (project_file.py) -->
+  <div class="project-btns" id="project-btns">
+    <button class="ws-tab" id="btn-project-new" onclick="newProject()"
+            title="Start over: discard every Layer Design and the whole Assembly (asks first). Saved .muddesign files are not affected.">New Project</button>
+    <button class="ws-tab" id="btn-project-open" onclick="openProjectDialog()"
+            title="Open a project file (.muddesign) — replaces the current project">Open Project…</button>
+    <button class="ws-tab" id="btn-project-save" onclick="saveProject()"
+            title="Save the whole project (every Layer Design and the Assembly) as a .muddesign file">Save Project</button>
+    <input type="file" id="project-file-input" accept=".muddesign,.json,application/json" style="display:none"
+           onchange="openProjectFile(this.files && this.files[0])">
+  </div>
 </header>
 
 <div class="workspace" id="ws-designer">
@@ -494,7 +592,8 @@
           title="Move route starts / seams: start markers take every click (paths and openings are not edited)">Move Start</button>
   <button class="tool-btn" id="btn-beads"    onclick="toggleBeads()" title="Show the physical mud bead around every printable centerline (Material / Bead)">Beads</button>
   <div class="tool-sep"></div>
-  <button class="tool-btn" onclick="clearAll()">Clear All</button>
+  <button class="tool-btn" id="btn-clear-all" onclick="clearAll()"
+          title="Clear the Layer Design being edited: its paths, Wall Systems, openings, trims and routing (undoable). Other Layer Designs, the Assembly and the project are kept — to start over entirely use New Project.">Clear Design</button>
 </div>
 
 <div class="main">
@@ -723,8 +822,6 @@
     <div class="sidebar sidebar-left asm-designs-col">
       <div class="sidebar-head">Layer Designs</div>
       <div class="sidebar-scroll">
-        <div class="path-type">Reusable 2D layer designs, edited in the Designer tab. A derived design inherits
-          everything from its parent and keeps only its own differences.</div>
         <div id="asm-designs"></div>
         <div class="asm-new">
           <div class="section-title">New derived design</div>
@@ -752,42 +849,38 @@
                  onchange="asmSetLayerHeight(this.value)">
           <span class="prop-unit">in</span>
         </div>
-        <div class="asm-totals" id="asm-totals"></div>
-        <button class="add-btn" onclick="asmAddSection()">+ Add Section (on top)</button>
-        <div id="asm-sections"></div>
-        <div class="asm-plate">▁▁ build plate · z = 0 ▁▁</div>
-        <div class="path-type" id="asm-warnings" style="color:var(--warn)"></div>
-      </div>
-    </div>
-    <!-- ASSEMBLY TRANSFORM: assembly-wide transform, transform centres / groups,
-         geometry assignment, regenerated connectors -->
-    <div class="sidebar sidebar-left asm-stack-col asm-transform-col" id="asm-col-transform">
-      <div class="sidebar-head">Assembly Transform</div>
-      <div class="sidebar-scroll asm-pane" id="asm-pane-transform">
-        <div id="asm-assembly-tf"></div>
-      </div>
-    </div>
-    <!-- STRUCTURE / SUPPORT: physical support (material + overhang), findings, headers -->
-    <div class="sidebar sidebar-left asm-stack-col asm-structure-col" id="asm-col-structure">
-      <div class="sidebar-head">Structure</div>
-      <div class="sidebar-scroll asm-pane" id="asm-pane-structure">
+        <!-- physical support inputs (compact; the findings get their own Support column when there are any) -->
         <div class="asm-physical" id="asm-physical">
-          <div class="section-title">Physical support</div>
           <div class="prop-row" title="Width of ONE deposited mud bead — the project material (the same value as the Designer's Material / Bead). Changing it rebuilds every design.">
             <span class="prop-label">Bead width</span>
             <input type="number" class="prop-input" id="asm-bead-width" value="3" min="0.25" step="0.25"
                    onchange="asmSetBeadWidth(this.value)">
             <span class="prop-unit">in</span>
           </div>
-          <div class="prop-row" title="Printability constraint (not a transform): how far a bead may hang past the bead below (0 … bead width)">
-            <span class="prop-label">Maximum overhang</span>
+          <div class="prop-row" title="Printability constraint (not a transform): how far a bead may hang past the bead below (0 … bead width). Minimum overlap = bead width − maximum overhang.">
+            <span class="prop-label">Max overhang</span>
             <input type="number" class="prop-input" id="asm-max-overhang" value="1.5" min="0" step="0.0625"
                    onchange="asmSetMaxOverhang(this.value)">
             <span class="prop-unit">in</span>
           </div>
           <div class="asm-kv" id="asm-overlap-note"></div>
+          <div class="asm-kv" id="asm-support-summary"></div>
         </div>
-        <div id="asm-support"></div>
+        <!-- PRINT PLAN: its settings (speeds, lifts, frame time) and estimates live in the Print Simulation -->
+        <div class="asm-plan-box" id="asm-col-plan">
+          <button class="add-btn" id="asm-plan-btn" onclick="setWorkspace('simulation')"
+                  title="Speeds, lift height, frame reposition time and the time estimate are in the Print Simulation">Print plan &amp; estimate →</button>
+        </div>
+        <!-- SUPPORT findings / headers / ignored spans: only while there are any -->
+        <details class="asm-support-box" id="asm-col-support" open>
+          <summary class="section-title" id="asm-support-head">Support</summary>
+          <div id="asm-support"></div>
+        </details>
+        <div class="asm-totals" id="asm-totals"></div>
+        <button class="add-btn" onclick="asmAddSection()">+ Add Section (on top)</button>
+        <div id="asm-sections"></div>
+        <div class="asm-plate">▁▁ build plate · z = 0 ▁▁</div>
+        <div class="path-type" id="asm-warnings" style="color:var(--warn)"></div>
       </div>
     </div>
     <div class="canvas-wrap asm-preview-wrap" id="asm-preview-wrap">
@@ -798,15 +891,153 @@
         <button class="tool-btn" onclick="asmViewPreset('side')">Side</button>
         <button class="tool-btn" onclick="asmViewPreset('top')">Top</button>
         <button class="tool-btn" onclick="asmViewPreset('fit')">Fit</button>
+        <button class="tool-btn" id="asm-elevation-btn" onclick="asmViewPreset('elevation')" title="Back to the selected profile's canonical elevation (distance along the wall × Z)" disabled>Elevation</button>
       </div>
       <div class="canvas-hint">Drag: orbit · Shift / right-drag: pan · Wheel: zoom</div>
+    </div>
+    <!-- RIGHT of the preview: ASSEMBLY TRANSFORM and PROFILES (separate
+         subsystems) stacked in one column as collapsible sections — no tabs -->
+    <div class="sidebar asm-stack-col asm-right-col" id="asm-col-right">
+      <div class="sidebar-scroll asm-pane" id="asm-pane-right">
+        <details class="asm-right-sec asm-transform-col" id="asm-col-transform" open>
+          <summary class="sidebar-head">Assembly Transform</summary>
+          <div class="asm-pane" id="asm-pane-transform"><div id="asm-assembly-tf"></div></div>
+        </details>
+        <details class="asm-right-sec asm-profiles-col" id="asm-col-profiles" open>
+          <summary class="sidebar-head">Profiles</summary>
+          <div class="asm-pane" id="asm-pane-profiles"><div id="asm-profiles"></div></div>
+        </details>
+      </div>
     </div>
   </div>
 </div>
 
 <div id="status-bar">Ready.</div>
 
+<!-- PRINT SIMULATION: the authoritative print plan (layer_assembly/print_plan.py) played back -->
+<div class="workspace" id="ws-simulation" style="display:none">
+  <div class="main">
+    <div class="sidebar sidebar-left sim-nav-col">
+      <div class="sidebar-head">Print plan</div>
+      <div class="sidebar-scroll">
+        <div class="asm-kv" id="sim-status"></div>
+        <div class="prop-row">
+          <button class="tool-btn" id="sim-rebuild" onclick="simRebuild()"
+                  title="Plan the print again from the current Designer and Assembly (recovery: drops the cached plan and routes). Keeps the project, camera, layer and playhead.">↻ Rebuild Simulation</button>
+        </div>
+        <div>
+          <div class="section-title">Speeds</div>
+          <div class="prop-row speed-row" title="Speed while extruding. A placeholder until measured on the machine.">
+            <span class="prop-label">Print speed</span>
+            <input type="number" class="prop-input" id="sim-print-speed" min="0" step="0.1" onchange="simSetSpeed('print', this.value)">
+            <select class="prop-input" id="sim-speed-unit" onchange="simSetSpeedUnit(this.value)" title="in/s, in/min, ft/min, mm/s — or s/in: time per inch">
+              <option value="in/s">in/s</option><option value="in/min">in/min</option>
+              <option value="ft/min">ft/min</option><option value="mm/s">mm/s</option><option value="s/in">s/in</option>
+            </select>
+          </div>
+          <div class="prop-row speed-row" title="Speed of non-printing moves (travel and moves between pieces / layers).">
+            <span class="prop-label">Travel speed</span>
+            <input type="number" class="prop-input" id="sim-travel-speed" min="0" step="0.1" onchange="simSetSpeed('travel', this.value)">
+            <span class="prop-unit" id="sim-travel-unit">in/s</span>
+          </div>
+        </div>
+        <div>
+          <div class="section-title">Lifts</div>
+          <div class="prop-row" title="MACHINE LIMIT: usable Z travel with the XY frame in one place. No lift can be taller than this.">
+            <span class="prop-label">Max Z travel</span>
+            <input type="number" class="prop-input" id="sim-max-z" min="1" step="0.5" onchange="simSetMachine('max_z_travel', this.value)">
+            <span class="prop-unit">in</span>
+          </div>
+          <div class="prop-row" title="PLANNING CHOICE (≤ max Z travel): how tall each lift should be. Actual lifts are whole layers up to this height; each lift is printed completely, then the whole XY frame is raised.">
+            <span class="prop-label">Preferred lift</span>
+            <input type="number" class="prop-input" id="sim-lift-height" min="0.5" step="0.5" onchange="simSetMachine('lift_height', this.value)">
+            <span class="prop-unit">in</span>
+          </div>
+          <div class="prop-row" title="Inside a lift, geometry closer than one bead width + this to where the nozzle prints must be printed first. Separate islands further apart are built one after another.">
+            <span class="prop-label">Head clearance</span>
+            <input type="number" class="prop-input" id="sim-head-clearance" min="0" step="0.25" onchange="simSetMachine('head_clearance', this.value)">
+            <span class="prop-unit">in</span>
+          </div>
+          <div class="asm-kv"><div class="asm-calc" id="sim-lift-info"></div></div>
+          <div class="asm-kv" id="sim-param-error"></div>
+        </div>
+        <div class="sim-minor">
+          <div class="prop-row" title="ESTIMATED duration of one frame reposition between lifts (manual; not a height and not machine-controlled; 0 = not estimated). Added to the time estimate separately.">
+            <span class="prop-label">Frame reposition time</span>
+            <input type="number" class="prop-input" id="sim-frame-time" min="0" step="5" onchange="simSetFrameTime(this.value)">
+            <span class="prop-unit">min</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="sim-center">
+      <div class="canvas-wrap sim-canvas-wrap" id="sim-canvas-wrap">
+        <canvas id="sim-canvas"></canvas>
+        <div class="view-controls">
+          <button class="tool-btn" onclick="simViewPreset('iso')">Iso</button>
+          <button class="tool-btn" onclick="simViewPreset('top')">Top</button>
+          <button class="tool-btn" onclick="simViewPreset('front')">Front</button>
+          <label class="sim-check"><input type="checkbox" id="sim-ghost" checked onchange="simSetOption('ghost', this.checked)"> ghost unprinted</label>
+          <label class="sim-check"><input type="checkbox" id="sim-travel" checked onchange="simSetOption('travel', this.checked)"> travel</label>
+        </div>
+        <div class="canvas-hint" id="sim-hint">Drag to orbit · Shift-drag to pan · wheel to zoom</div>
+      </div>
+      <div class="sim-transport" id="sim-transport">
+        <button class="tool-btn" id="sim-restart" onclick="simRestart()" title="Back to the start">⏮</button>
+        <button class="tool-btn" id="sim-play" onclick="simTogglePlay()" title="Play / Pause (Space)">▶</button>
+        <div class="sim-scrub-wrap">
+          <div class="sim-marks" id="sim-marks"></div>
+          <input type="range" id="sim-scrub" min="0" max="10000" step="1" value="0"
+                 oninput="simScrub(this.value, true)" onchange="simScrub(this.value, false)">
+        </div>
+        <span class="sim-time" id="sim-time">0 s / 0 s</span>
+        <select class="prop-input" id="sim-rate" onchange="simSetRate(this.value)" title="Playback speed (1× = the estimated machine time)">
+          <option value="1">1× real speed</option><option value="2">2×</option><option value="5">5×</option>
+          <option value="10">10×</option><option value="30">30×</option><option value="60" selected>60× (1 min/s)</option>
+          <option value="300">300×</option><option value="900">900×</option><option value="3600">3600× (1 h/s)</option>
+        </select>
+      </div>
+    </div>
+    <div class="sidebar sim-time-col">
+      <div class="sidebar-head">Time estimates</div>
+      <div class="sidebar-scroll">
+        <div class="asm-kv" id="sim-times"></div>
+        <div>
+          <div class="section-title">Playhead</div>
+          <div class="asm-kv sim-now" id="sim-now"></div>
+        </div>
+        <div>
+          <div class="section-title">Building → Lift → Island → Layer → Run</div>
+          <div id="sim-tree" class="sim-tree"></div>
+        </div>
+        <div>
+          <div class="section-title" id="sim-sel-head">Selected layer</div>
+          <div class="prop-row sim-layer-nav">
+            <button class="tool-btn" id="sim-prev-layer" onclick="simStepLayer(-1)" title="Previous layer">◀</button>
+            <input type="number" class="prop-input" id="sim-layer-input" min="1" step="1" onchange="simSelectLayer(this.value - 1)">
+            <span class="prop-unit" id="sim-layer-count">/ 0</span>
+            <button class="tool-btn" id="sim-next-layer" onclick="simStepLayer(1)" title="Next layer">▶</button>
+          </div>
+          <div class="prop-row">
+            <button class="tool-btn" id="sim-top-btn" onclick="simTopView()" title="The selected layer's complete toolpath, from above">Top view of layer</button>
+            <button class="tool-btn" id="sim-3d-btn" onclick="sim3D()" title="The whole print in 3D">3D print</button>
+          </div>
+          <div class="asm-kv" id="sim-layer-info"></div>
+          <div class="asm-kv" id="sim-runs"></div>
+        </div>
+        <details>
+          <summary class="section-title">Sections</summary>
+          <div class="asm-kv" id="sim-sections"></div>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/numeric.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/opening_shape.js"></script>
 <script src="/static/assembly.js"></script>
+<script src="/static/simulation.js"></script>
 </body>
 </html>

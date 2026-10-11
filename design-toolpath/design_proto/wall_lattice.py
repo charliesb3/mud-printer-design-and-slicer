@@ -2572,6 +2572,17 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     # exactly grazing the fillet would be split by clipping
                     good = next((g for g in (good + 0.1, good + 0.05) if ok_k(g)), good)
                     point = at(good)
+            if contact > 0 and point is apex and i == j and _straight_face(sk, i, thick):
+                # a junction-triangle vertex on a STRAIGHT face (the far face
+                # of a T-junction's through wall), not a concave corner: the
+                # passes meet on its CONTACT RAIL like any other landing —
+                # Contact Overlap respected. (A concave corner stays exact:
+                # it is where the route joins the faces. Connectivity of the
+                # lattice to this ring is then guaranteed by the TRANSFER
+                # rule below, which sees this point as inside the wall.)
+                q_ = _inward(sk, i, centre, contact)
+                if q_ is not None and region.inside(q_) and all(_strut_ok(q_, nx_, region) for nx_ in nexts):
+                    point = q_
             for ri_, end, side in (x, y):
                 r = runs[ri_]
                 sv = 0.0 if end == 0 else r.length
@@ -2937,6 +2948,39 @@ def _no_foldback(poly):
                 changed = True
                 break
     return out
+
+
+def _straight_face(sk, i, thick, tol=math.radians(15.0)):
+    """Is the boundary STRAIGHT through sample i (turning < tol within
+    ½ thickness either side) — a face, not a corner?"""
+    ri = sk.ring_of[i]
+    L = sk.R.length(ri)
+    w = min(0.5 * thick, 0.25 * L)
+    s = sk.arc_of[i]
+    a, m, b = sk.R.point(ri, s - w), sk.pts[i], sk.R.point(ri, s + w)
+    u, v = m - a, b - m
+    lu, lv = u.length(), v.length()
+    if lu < 1e-9 or lv < 1e-9:
+        return False
+    c = max(-1.0, min(1.0, (u.x * v.x + u.y * v.y) / (lu * lv)))
+    return math.acos(c) < tol
+
+
+def _inward(sk, i, towards, d):
+    """Boundary sample i moved d along the face normal, to the side of
+    `towards` (into the wall)."""
+    ri = sk.ring_of[i]
+    s = sk.arc_of[i]
+    a, b = sk.R.point(ri, s - 0.5), sk.R.point(ri, s + 0.5)
+    t = b - a
+    lt = t.length()
+    if lt < 1e-9:
+        return None
+    n = Vec2(-t.y / lt, t.x / lt)
+    p = sk.pts[i]
+    if (towards.x - p.x) * n.x + (towards.y - p.y) * n.y < 0:
+        n = Vec2(-n.x, -n.y)
+    return Vec2(p.x + n.x * d, p.y + n.y * d)
 
 
 def _xy(p):

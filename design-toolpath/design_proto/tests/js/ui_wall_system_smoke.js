@@ -57,8 +57,8 @@ eval(src + `
   selectedId = A.id;
   panels();
   check(/No Wall System \\(single bead\\)/.test(text(list)), 'Wall System panel: every path starts as a single bead');
-  check(/Wall System/.test(text(pathPanel)) && row(pathPanel, 'Wall System').children[1].children[0].value === 'none',
-        'path Properties: Wall System = None (single bead)');
+  check(/None \\(single bead\\)/.test(text(row(pathPanel, 'Wall System'))) && !all(pathPanel).some(n => n.tagName === 'SELECT' &&
+        all(row(pathPanel, 'Wall System')).includes(n)), 'path Properties: Wall System = None (single bead), identity only');
   historyCheckpoint();
   btn(list, /New Wall System with/).onclick();
   const S = layer.wall_systems[0];
@@ -143,6 +143,26 @@ eval(src + `
   check(S2.type === 'chain' && !!row(sysPanel, 'Pitch') && !!row(sysPanel, 'Loop Depth') && !!row(sysPanel, 'Neck') &&
         !row(sysPanel, 'Web') && /Minimum effective thickness/.test(text(sysPanel)),
         'Chained Loop: its parameters + Minimum Effective Thickness, no web');
+  {
+    // a Chained Loop value applies with immediate "Updating…" feedback; the blur that
+    // follows a live (typed) apply does not apply the same value again (2026-10-08)
+    const pin = row(sysPanel, 'Pitch').children[1];
+    check(typeof pin.oninput === 'function', 'construction numbers apply live while typing (debounced)');
+    pin.value = '14'; pin.onchange();
+    check(S2.params.pitch === 14 && /Updating/.test(document.getElementById('status-bar').textContent),
+          'a Pitch edit applies with immediate "Updating…" feedback');
+    const n1 = _hist.undo.length;
+    pin.onchange();
+    check(_hist.undo.length === n1, 'the same value again (the blur after a live apply) applies nothing');
+  }
+  // (Interleaved Depth / Linked Amplitude removed: the Wall Thickness owns the envelope)
+  for (const [t, gone] of [['interleaved', 'Depth'], ['linked', 'Amplitude']]) {
+    const cx = row(sysPanel, 'Construction').children[1];
+    cx.value = t; cx.onchange();
+    panels();
+    check(S2.type === t && !row(sysPanel, gone) && !!row(sysPanel, 'Period') && !(gone.toLowerCase() in S2.params),
+          WALL_SYSTEMS[t].label + ': no ' + gone + ' control (the Wall Thickness is the envelope)');
+  }
   const c3 = row(sysPanel, 'Construction').children[1];
   c3.value = 'parallel'; c3.onchange();
   panels();
@@ -158,9 +178,12 @@ eval(src + `
   // path Properties: membership row
   selectedId = Ln.id;
   panels();
-  const wr = row(pathPanel, 'Wall System').children[1];
-  wr.value = S.id; wr.onchange();
-  check(_wsOf(Ln.id) === S, 'path Properties: choose its Wall System');
+  check(!/\\(in /.test(text(row(pathPanel, 'Wall System'))) && /None/.test(text(row(pathPanel, 'Wall System'))),
+        'path Properties: identity row for a path in no system');
+  _wsSetMember(Ln.id, S); _syncSystemWebs();
+  panels();
+  check(_wsOf(Ln.id) === S && text(row(pathPanel, 'Wall System')).includes(_wsLabel(S)),
+        'path Properties name the system that builds the path (membership is edited in the Wall System panel)');
   updatePathList();
   check(all(document.getElementById('path-list')).some(c => c.className === 'path-type wallsys-badge' &&
                                                            /Outer/.test(c.textContent)), 'path list badge names the system');
@@ -201,7 +224,16 @@ eval(src + `
     setTimeout(() => {
       check(calls === 2, 'the queued edits became ONE follow-up resolve');
       release();
-      console.log('UI WALL SYSTEM SMOKE PASSED');
+      // LIVE numeric input: nothing while typing, ONE apply once typing pauses
+      const box = document.createElement('div'), got = [];
+      addPropRowNumTo(box, 'X', 1, v => got.push(v), 'in', { live: true });
+      const inp = box.children[0].children[1];
+      inp.value = '1'; inp.oninput(); inp.value = '14'; inp.oninput();
+      check(got.length === 0, 'typing: nothing applied while still typing');
+      setTimeout(() => {
+        check(got.join() === '14', 'a typed value applies ONCE when typing pauses (no Enter / blur needed)');
+        console.log('UI WALL SYSTEM SMOKE PASSED');
+      }, LIVE_INPUT_MS + 60);
     }, 0);
   });
 })();

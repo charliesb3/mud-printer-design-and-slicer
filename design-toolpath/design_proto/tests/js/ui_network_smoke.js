@@ -168,23 +168,21 @@ eval(src + `
   check(panelEl.children.some(c => (c.textContent || '').startsWith('Connected to')),
         'the path Properties show connectivity');
   const wsRow = findRow('Wall System');
-  check(!!wsRow && wsRow.children[1].children[0].value === 'none',
-        'path Properties: a Wall System choice, None (single bead) first');
+  check(!!wsRow && wsRow.id === 'path-wallsys-row' && /None \\(single bead\\)/.test(wsRow.children[1].textContent) &&
+        !wsRow.children.some(c => c.tagName === 'SELECT' || (c.children || []).some(k => k.tagName === 'SELECT')),
+        'path Properties: which Wall System builds it (identity only — no duplicated editing controls)');
   check(!findRow('Wall Thickness') && !findRow('Network Wall Thickness'), 'no wall thickness editor on the path');
+  check(!panelEl.children.some(c => /New Wall System/.test(c.textContent || '')),
+        'no Wall System creation in the path Properties (the Wall System panel owns it)');
+  const WS = _wsNew([R.id]);
   selectedId = R.id; rebuild();
-  panelEl.children.find(c => c.textContent === '+ New Wall System with this path').onclick();
-  const WS = layer.wall_systems[0];
-  check(WS && WS.members.join() === R.id && WS.thickness === 10 && WS.type === 'skin_web',
-        'new Wall System (Skin + Web, 10 in) with the path');
+  const r2 = findRow('Wall System');
+  check(r2.children[1].textContent.includes(_wsLabel(WS)) && r2.children[2] && r2.children[2].textContent === 'Edit',
+        'a member shows its system with an Edit link');
+  wallSystemPick = null;
+  r2.children[2].onclick();
+  check(wallSystemPick === WS.id, 'Edit opens that system in the Wall System panel');
   check(_wsOf(P.id) === null, 'the touching path is NOT forced into it (membership is explicit)');
-  selectedId = P.id; rebuild();
-  const pr = findRow('Wall System').children[1];
-  pr.value = WS.id; pr.onchange();
-  check(_wsOf(P.id) === WS && _effectiveWall(P).wall.thickness === 10, 'Wall System chosen on the path: its wall');
-  rebuild();
-  const pr2 = findRow('Wall System').children[1];
-  pr2.value = 'none'; pr2.onchange();
-  check(_wsOf(P.id) === null && !_effectiveWall(P).wall, 'None: back to a single bead');
   layer.wall_systems = []; layer.infills = layer.infills.filter(f => !f.owner);
   // --- path picker: hover / arrow keys highlight the candidate path
   const pk = addPathPickerRow({ appendChild() {} }, 'Source', P.id, id => { picked = id; });

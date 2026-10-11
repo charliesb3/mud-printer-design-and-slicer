@@ -188,6 +188,18 @@ def resolve(trims, secs: dict, source_ids) -> tuple[dict, dict]:
         if t.source_path_id not in source_ids:
             info.update(status='missing source', reason='its path no longer exists')
             continue
+        if getattr(t, 'pinned', None):
+            # a PINNED trim (Assembly profile variants): the section the trim
+            # resolved to in the AUTHORED design, as an arc interval of this
+            # (possibly cut / re-parametrised) source — a cut changes the
+            # contacts the signature names, never what the trim removed
+            a, b, pa, pb = (list(t.pinned) + [None, None])[:4]
+            from model import Vec2
+            pa = Vec2(*pa) if pa is not None else None
+            pb = Vec2(*pb) if pb is not None else None
+            info.update(status='ok', section='pinned')
+            removed.setdefault(t.source_path_id, []).append((float(a), float(b), pa, pb))
+            continue
         cands = [s for s in secs.get(t.source_path_id, [])
                  if s.matches(t.start, t.end, t.inside)]
         if len(cands) > 1:
@@ -201,7 +213,9 @@ def resolve(trims, secs: dict, source_ids) -> tuple[dict, dict]:
                         reason='the intersections that bounded it no longer exist — not trimmed')
             continue
         sec = cands[0]
-        info.update(status='ok', section=f'{sec.source}:{sec.index}')
+        info.update(status='ok', section=f'{sec.source}:{sec.index}', a=sec.a, b=sec.b,
+                    pa=None if sec.pa is None else [sec.pa.x, sec.pa.y],
+                    pb=None if sec.pb is None else [sec.pb.x, sec.pb.y])
         if sec.trimmed_by is None:
             sec.trimmed_by = t.id
             removed.setdefault(sec.source, []).append((sec.a, sec.b, sec.pa, sec.pb))

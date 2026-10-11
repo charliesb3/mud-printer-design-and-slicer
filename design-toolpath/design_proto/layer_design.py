@@ -100,6 +100,18 @@ def _shared(key, make):
     return val
 
 
+PROBE_WIDTH = 0.5     # in: the narrow cut that probes / places an Assembly opening's lattice STATION
+
+
+def _cut_key(cuts) -> str:
+    """'' without ASSEMBLY PROFILE cuts (the plain / transform-only keys
+    are then exactly as before)."""
+    if not cuts:
+        return ''
+    import profile_cuts as PC
+    return '|cut:' + PC.cut_key(cuts)
+
+
 def _transforms_active(transforms) -> bool:
     import semantic_transform as ST
     return bool(transforms) and ST.spec_key(transforms) != '[]'
@@ -284,6 +296,8 @@ class BuiltLayer:
     strand_sources: dict = field(default_factory=dict)   # printable strand id → the SOURCE PATH it
                                                          # is a face / cap of (lattice: absent)
     semantic: dict = field(default_factory=dict)         # semantic-transform report (connectors …)
+    ws_frames: list = field(default_factory=list)        # generated Wall System frames (cut-variant phase reference)
+    routing: dict = field(default_factory=dict)          # how the Designer routes `printable` (layer_route.py)
     timing: dict = field(default_factory=dict)           # seconds per build stage (instrumentation)
 
 
@@ -482,11 +496,21 @@ class DesignLibrary:
             return frozenset(out)
         return _shared(('caps', json.dumps(doc, sort_keys=True)), make)
 
-    def transformed(self, design_id, transforms=None) -> tuple:
+    def transformed(self, design_id, transforms=None, cuts=None) -> tuple:
         """(document, report) of a design with SEMANTIC transforms applied
         to its source geometry (semantic_transform.py); the identity /
-        None gives the plain document."""
-        return self._transformed_doc(self.document(design_id), transforms)
+        None gives the plain document. cuts: ASSEMBLY PROFILE cuts
+        (profile_cuts.py), applied FIRST — to the untransformed sources —
+        so the transform treats the resulting openings / walls like any
+        Designer geometry; the report then carries `profile`."""
+        doc = self.document(design_id)
+        if not cuts:
+            return self._transformed_doc(doc, transforms)
+        import profile_cuts as PC
+        cdoc, crep = _shared(('cuts', json.dumps(doc, sort_keys=True), PC.cut_key(cuts)),
+                             lambda: PC.apply_cuts(doc, cuts))
+        tdoc, trep = self._transformed_doc(cdoc, transforms)
+        return tdoc, dict(trep, profile=crep)
 
     @staticmethod
     def _transformed_doc(doc, transforms):
@@ -544,7 +568,7 @@ class DesignLibrary:
                             'report': reports}
         return out
 
-    def lattice_lineage(self, design_id, transforms=None) -> dict:
+    def lattice_lineage(self, design_id, transforms=None, cuts=None) -> dict:
         """Diagnostics of the shared lattice, per wall infill: its owner,
         family, jamb crossings (resolved / unresolved — an unresolved jamb
         means that member's route cannot close there) and conflicts."""
@@ -571,7 +595,7 @@ class DesignLibrary:
                         'variation_effective': any(run.get('phase_free', run.get('motif') in ('loop', 'lone'))
                                                    for r in sc.get('report') or []
                                                    for run in r.get('runs') or [])}
-        v = self.scaffold_verdict(design_id, transforms) if out else {'closes': True}
+        v = self.scaffold_verdict(design_id, transforms, cuts) if out else {'closes': True}
         if not v['closes']:
             for inf in out:
                 out[inf]['planned_alone'] = True
@@ -598,7 +622,7 @@ class DesignLibrary:
         rep = closure_report(build_graph(layer.to_routing_layer(paths, meta)))
         return [[round(v, 3) for v in q] for o in rep.get('open') or [] for q in o.get('at', [])]
 
-    def scaffold_verdict(self, design_id, transforms=None) -> dict:
+    def scaffold_verdict(self, design_id, transforms=None, cuts=None) -> dict:
         """Does this member CLOSE printing the shared scaffold clipped to its
         material? {'closes': bool, 'at': open ends}. The catch-all for what
         the local jamb motifs do not cover: an opening reaching into another
@@ -609,14 +633,14 @@ class DesignLibrary:
         ON ITS OWN instead (lattice_reference → none; reported in
         lattice_lineage as 'planned_alone')."""
         import semantic_transform as ST
-        key = ('verdict', design_id, ST.spec_key(transforms) if transforms else '[]')
+        key = ('verdict', design_id, ST.spec_key(transforms) if transforms else '[]', _cut_key(cuts))
         if key in self._cache:
             return self._cache[key]
         out = {'closes': True, 'at': []}
         sc = self.scaffold(design_id, transforms)
         if sc:
             from app import _deserialise_layer
-            layer = _deserialise_layer(self.transformed(design_id, transforms)[0])
+            layer = _deserialise_layer(self.transformed(design_id, transforms, cuts)[0])
             layer.lattice_reference = {k: v['polylines'] for k, v in sc.items()}
             paths, meta = layer._build_effective()
             ends = self._open_ends(layer, paths, meta)
@@ -626,26 +650,33 @@ class DesignLibrary:
         self._cache[key] = out
         return out
 
-    def lattice_reference(self, design_id, transforms=None) -> dict:
+    def lattice_reference(self, design_id, transforms=None, cuts=None) -> dict:
         """What model.PrintLayer.lattice_reference gets for this design: the
         shared scaffold — or nothing when the member cannot close with it
         (it is then planned on its own; see scaffold_verdict)."""
         sc = self.scaffold(design_id, transforms)
-        if not sc or not self.scaffold_verdict(design_id, transforms)['closes']:
+        if not sc or not self.scaffold_verdict(design_id, transforms, cuts)['closes']:
             return {}
         return {k: v['polylines'] for k, v in sc.items()}
 
     # -- building (the Designer) ---------------------------------------------------
-    def build(self, design_id: str, inherit_lattice: bool = True, transforms=None) -> BuiltLayer:
+    def build(self, design_id: str, inherit_lattice: bool = True, transforms=None,
+              cuts=None) -> BuiltLayer:
         """Resolve and build a design with the Designer. Wall infills shared
         by a lattice family print the family scaffold (see module doc).
         transforms: SEMANTIC transforms {source id: (k, tx, ty)} applied to
         the design's source geometry BEFORE resolution (Layer Assembly
         transform groups; semantic_transform.py) — walls, junctions,
         openings and the lineage scaffold are all resolved for the
-        transformed architecture (the scaffold with the same transforms)."""
+        transformed architecture (the scaffold with the same transforms).
+        cuts: ASSEMBLY PROFILE cuts (profile_cuts.py) applied to the
+        document before the transforms — a profiled layer is a VARIANT like
+        a transformed one (cached in _tbuilds). The lineage scaffold stays
+        the family's (planned from the real designs); a profiled member that
+        cannot close with it is planned on its own (scaffold_verdict)."""
         import semantic_transform as ST
-        tkey = ST.spec_key(transforms) if transforms else '[]'
+        ckey = _cut_key(cuts)
+        tkey = (ST.spec_key(transforms) if transforms else '[]') + ckey
         key = ('build', design_id, inherit_lattice, tkey)
         if tkey != '[]':
             hit = self._tbuilds.get(key)
@@ -658,9 +689,21 @@ class DesignLibrary:
         import time as _t
         tm = {}
         t0 = _t.perf_counter()
-        doc, trep = self.transformed(design_id, transforms)
+        doc, trep = self.transformed(design_id, transforms, cuts)
         tm['semantic_transform'] = _t.perf_counter() - t0
         layer = _deserialise_layer(doc)
+        if any(c.get('op') in ('opening', 'extent', 'plane') for c in cuts or []):
+            # generated Wall Systems keep the UNCUT layer's pattern (period,
+            # phase, lanes, loop stations) and solve only their new ends
+            layer.wall_system_reference = self.build(design_id, inherit_lattice, transforms).ws_frames or None
+        t0 = _t.perf_counter()
+        joined = self._cut_join(design_id, transforms, cuts, doc) if cuts and inherit_lattice else None
+        if joined is not None:
+            # ASSEMBLY PROFILE cut: the UNCUT layer's lattice, clipped at the
+            # new end walls and joined there — local (see _cut_join)
+            layer, paths, meta = joined
+            tm['cut_join'] = _t.perf_counter() - t0
+            return self._finish(design_id, doc, trep, layer, paths, meta, tm, key, tkey)
         t0 = _t.perf_counter()
         if inherit_lattice:
             self.scaffold(design_id, transforms)
@@ -669,21 +712,22 @@ class DesignLibrary:
         if inherit_lattice:
             # (scaffold_verdict resolves the member with the clipped scaffold
             # and checks closure; that resolve is reused below)
-            layer.lattice_reference = self.lattice_reference(design_id, transforms) or None
-            layer.lattice_lineage = self.lattice_lineage(design_id, transforms) or None
+            layer.lattice_reference = self.lattice_reference(design_id, transforms, cuts) or None
+            layer.lattice_lineage = self.lattice_lineage(design_id, transforms, cuts) or None
         tm['scaffold_resolve_closure_check'] = _t.perf_counter() - t0
         t0 = _t.perf_counter()
         if tkey != '[]' and not layer.lattice_reference:
             # a design planned on its own: its transformed lattice keeps the
             # untransformed plan's stations (cross-Z correspondence)
             ref = self.build(design_id, inherit_lattice)
-            tmap = _track_map(self.document(design_id), transforms)
+            tmap = _track_map(self.document(design_id), transforms) if _transforms_active(transforms) \
+                else (lambda p: p)
             layer.lattice_track = {inf: (_merged_track(info.get('regions') or []), tmap)
                                    for inf, info in (ref.network.get('lattice') or {}).items()
                                    if any(r_.get('track') for r_ in info.get('regions') or [])}
         tm['tracking_reference'] = _t.perf_counter() - t0
         t0 = _t.perf_counter()
-        pre = self.scaffold_verdict(design_id, transforms).pop('_built', None) \
+        pre = self.scaffold_verdict(design_id, transforms, cuts).pop('_built', None) \
             if inherit_lattice and layer.lattice_reference else None
         if pre is not None:                  # resolved by the closure check already
             lineage = layer.lattice_lineage
@@ -697,6 +741,125 @@ class DesignLibrary:
         else:
             paths, meta = layer._build_effective()
         tm['resolve_walls_lattice'] = _t.perf_counter() - t0
+        return self._finish(design_id, doc, trep, layer, paths, meta, tm, key, tkey)
+
+    def _cut_join(self, design_id, transforms, cuts, doc):
+        """(layer, paths, meta) of an ASSEMBLY PROFILE cut variant printing
+        the REFERENCE lattice of the same layer without the cuts, clipped to
+        the cut material, the strands each new end wall cuts joined pairwise
+        on it (model._join_cut_ends) — None when there is no wall lattice or
+        that route cannot close (the caller then plans the cut layer as
+        before: lineage scaffold / tracked re-plan).
+        Why: a cut changes the length of the wall runs, and a re-plan
+        re-fits the stitches of the WHOLE run (they moved by up to half a
+        pitch far from the opening and the layer no longer stacked on its
+        neighbours). The reference clipped stays identical everywhere except
+        within one end-wall length of each cut.
+        The reference: the uncut layer's own lattice (its plan, or the
+        lineage scaffold it prints) — or, when the cut spec carries STATION
+        ops (an Assembly opening on a wall of this design somewhere in the
+        stack), the station reference (_station_reference): every layer of
+        the stack prints the same one, so the layers stack."""
+        walls = {f.get('id') for f in doc.get('infills') or [] if (f.get('kind') or 'wall') == 'wall'}
+        if not walls:
+            return None
+        stations = [c for c in cuts or [] if c.get('op') == 'station']
+        if stations:
+            src = self._station_reference(design_id, transforms, stations)
+        else:
+            src = self.build(design_id, True, transforms).lattice_source or {}
+        # (a web cloned onto a sibling piece of a cut ring — `<id>~p<k>` —
+        # clips the same reference lattice as the web it was cloned from)
+        src = {w: src.get(w, src.get(w.split('~p')[0])) for w in walls}
+        src = {k: v for k, v in src.items() if v}
+        if not src:
+            return None
+        from app import _deserialise_layer
+        layer = _deserialise_layer(doc)
+        layer.lattice_reference = src
+        layer.lattice_join = True
+        layer.wall_system_reference = self.build(design_id, True, transforms).ws_frames or None
+        paths, meta = layer._build_effective()
+        if self._open_ends(layer, paths, meta):
+            return None
+        return layer, paths, meta
+
+    def _station_reference(self, design_id, transforms, stations) -> dict:
+        """{infill id: polylines} — the reference lattice of a design for a
+        stack in which Assembly openings cut its walls (STATION ops: source,
+        edge, at). A run printed by ONE pass (a ring with no junction, a run
+        between junctions) cannot be clipped and closed locally: an opening
+        cuts that single strand once per cut face (an odd end each — parity).
+        As for a Door Gap derived design (lineage scaffold), the run must
+        carry TWO mirrored passes on EVERY layer of the stack, cut layers and
+        uncut layers alike, so they stack. So: probe each station with a
+        narrow cut; if the uncut reference already clips and closes there
+        (doubled / lone-loop runs) it is kept unchanged; otherwise the
+        reference is re-planned with lineage JAMB STATIONS at the probes'
+        cut faces (+ the family's own lines), tracked against the uncut
+        plan (counts / sides kept where possible)."""
+        import profile_cuts as PC
+        import semantic_transform as ST
+        key = ('stations', design_id, ST.spec_key(transforms) if transforms else '[]', PC.cut_key(stations))
+        if key in self._cache:
+            return self._cache[key]
+        base = self.build(design_id, True, transforms)
+        ref0 = dict(base.lattice_source or {})
+        out = ref0
+        doc0 = self.transformed(design_id, transforms)[0]
+        probes = []
+        for c in stations:
+            if c.get('plane') is not None:            # a PLANAR cut's first cut: probes at its removed stretches
+                probes += PC.plane_probes(doc0, c['plane'], PROBE_WIDTH)
+            else:
+                probes.append(dict(op='opening', source=c['source'], edge=c.get('edge'), at=c['at'],
+                                   width=PROBE_WIDTH, profile='probe'))
+        bad = False
+        for pr in probes:
+            pdoc = self.transformed(design_id, transforms, [pr])[0]
+            from app import _deserialise_layer
+            lay = _deserialise_layer(pdoc)
+            lay.lattice_reference = ref0
+            lay.lattice_join = True
+            paths, meta = lay._build_effective()
+            if self._open_ends(lay, paths, meta):
+                bad = True
+                break
+        if bad and ref0:
+            pdoc = self.transformed(design_id, transforms, probes)[0]
+            extra = self._caps(pdoc) - self._caps(doc0)
+            sc = self.scaffold(design_id, transforms)
+            out = {}
+            for inf in ref0:
+                fam = sc.get(inf)
+                if fam:
+                    g = fam['generator']
+                    sdoc = self._transformed_doc(dict(self.document(g), openings=[]), transforms)[0]
+                    lines = sorted(set(map(tuple, fam['stations'])) | extra)
+                    rep = fam.get('report')
+                else:
+                    sdoc = doc0
+                    lines = sorted(extra)
+                    rep = ((base.network.get('lattice') or {}).get(inf) or {}).get('regions')
+                tracking = (_merged_track(rep), lambda p_: p_) if rep else None
+
+                def make(sdoc=sdoc, lines=lines, inf=inf, tracking=tracking):
+                    from app import _deserialise_layer
+                    from model import Vec2
+                    lay = _deserialise_layer(sdoc)
+                    lay.lattice_stations = {inf: [(Vec2(*a), Vec2(*b)) for a, b in lines]}
+                    if tracking:
+                        lay.lattice_track = {inf: tracking}
+                    paths, meta = lay._build_effective()
+                    return [p.sample_points() for p in paths
+                            if getattr(p, 'treatment_id', '') == 'infill' and p.source_id == inf]
+                out[inf] = _shared(('station_scaffold', json.dumps(sdoc, sort_keys=True), inf, tuple(lines),
+                                    bool(tracking)), make)
+        self._cache[key] = out
+        return out
+
+    def _finish(self, design_id, doc, trep, layer, paths, meta, tm, key, tkey) -> 'BuiltLayer':
+        import time as _t
         lattice: dict = {}
         for p in paths:
             if getattr(p, 'treatment_id', '') == 'infill':
@@ -710,8 +873,11 @@ class DesignLibrary:
             if getattr(p, 'treatment_id', '') != 'infill' and sid in src_ids:
                 strand_sources[p.id] = sid
         t0 = _t.perf_counter()
-        built = BuiltLayer(design_id, doc, layer.printable_centerlines(paths, meta),
-                           lattice, meta['network'], source, strand_sources, trep)
+        import layer_route
+        printable, routing = layer_route.describe(layer, paths, meta, doc, strand_sources)
+        built = BuiltLayer(design_id, doc, printable,
+                           lattice, meta['network'], source, strand_sources, trep,
+                           ws_frames=list(getattr(layer, '_ws_frames', None) or []), routing=routing)
         tm['printable'] = _t.perf_counter() - t0
         built.timing = {k: round(v, 4) for k, v in tm.items()}
         if tkey != '[]':

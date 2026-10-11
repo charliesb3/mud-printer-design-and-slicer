@@ -78,6 +78,12 @@ The eventual solution may involve GRBL, separate hardware control, the Raspberry
 
 Treat this as an open architectural question.
 
+### Lifts and frame repositioning (stated 2026-10-09)
+
+The machine has approximately 18 inches of usable Z travel. A building is printed in vertical LIFTS: after a lift is complete, the ENTIRE XY frame is physically raised before the next lift is printed. Frame repositioning is a major, manual operation (not assumed motorized) and must be minimized; printing never returns to a lift below the frame.
+
+The print plan (Design + Toolpath) divides the stack into lifts of whole layers, completes each lift (independent islands built upward one after another, merged geometry after its parts) and represents each frame repositioning as an explicit event between lifts. Physical frame-lifting control, and how the Raspberry Pi interface will guide the operator through it, are not yet designed.
+
 ---
 
 ## Project Philosophy
@@ -118,6 +124,11 @@ Design + Toolpath
   │         ↓ narrow interface (LayerSource: design info + resolved 2D printable geometry)
   └─ Layer Assembly (layer_assembly): stacks Layer Designs by physical height → layers + Z
         ↓
+  PRINT PLAN (layer_assembly/print_plan.py, 2026-10-09): every layer routed and
+  ordered (runs, travels, layer transitions, source identities) + time estimates —
+  the ONE representation simulation, G-code export and machine execution consume
+  (Print Simulation workspace: playback of it, 2026-10-09)
+        ↓
 machine instructions / G-code
         ↓
 Raspberry Pi / Printer Interface
@@ -135,6 +146,13 @@ future automation method TBD
 Extrusion:
 independently controlled external system
 not controlled by this software
+
+Project persistence (Design + Toolpath, 2026-10-09):
+the whole editable project (every Layer Design + the Assembly) is saved / opened
+as ONE versioned JSON project file (`.muddesign`, format "mud-printer-project",
+schema_version) holding AUTHORING state only — resolved geometry, routes and
+support results are regenerated. It is NOT machine output: G-code export is a
+separate, future artifact derived from a project.
 
 These subproject boundaries are useful organizational and architectural boundaries.
 
@@ -299,6 +317,14 @@ The current preferred architecture uses machine-specific G-code as the boundary 
 Do not modify GRBL merely to avoid generating appropriate G-code in the higher-level software.
 
 ---
+
+### Project files store authoring state, versioned, separate from machine output
+
+Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release. Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
+
+### One authoritative print plan feeds simulation, G-code and machine execution
+
+The whole-print plan (ordered layers → continuous runs, travels and layer transitions in world coordinates, with source identities) is produced once by the Design + Toolpath subsystem from the exact geometry the designer sees. Print Simulation, G-code export and any machine-controller execution consume that plan (and its timeline) instead of re-deriving order, starts or timing. Time figures from it are estimates (constant speeds), not machine timing. Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "Print plan".
 
 ### Do not replace GRBL without demonstrated need
 
@@ -538,10 +564,24 @@ Allow the architecture to evolve as the machine and software become better under
 
 ## Last Updated
 
+2026-10-10
+
+Design + Toolpath: CHECKPOINT of the work since 951c42b (Designer, Assembly, Print Simulation, lift-aware print plan, Save / Open, Assembly openings) committed as one checkpoint. Assembly openings: Diamond (angular / curved vesica) and Arch (lower flat / angular / curved / rounded + optional middle + upper angular / curved Gothic / header), constrained live so the stored dimensions are always printable (the edited dimension wins); the Header upper generates associated Assembly headers (support, preview, print plan). Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "OPENING SHAPES, SECOND PASS".
+
+2026-10-09
+
+Design + Toolpath: LIFT-AWARE PRINT PLANNING — lifts of whole layers (≤ 18 in Z travel), explicit frame-reposition events, island-by-island scheduling inside a lift, followed by the Print Simulation (see "Lifts and frame repositioning"). Before it, a reliability pass: Simulation sync / cancellation / Rebuild, stable numeric fields, New Project. Uncommitted, pending manual review.
+
+Design + Toolpath: PRINT SIMULATION — a third application section (Designer | Assembly | Print Simulation) that plays back the authoritative print plan (no separate slicer: geometry, order and timing all come from the planner); layer inspection, time estimates, plan navigation. Uncommitted, pending manual review. design_proto 1723, layer_assembly 315, toolpath_proto 92 tests green.
+
+Design + Toolpath: whole-print PLAN (every Assembly layer routed by the Designer's router, ordered with automatic starts / layer transitions, manual Route Origins kept) + time estimates; connected-wall routing fixes (a line through a generated wall, grazing walls bonded). New decision: "One authoritative print plan feeds simulation, G-code and machine execution". Uncommitted, pending manual review. design_proto 1723, layer_assembly 312, toolpath_proto 92 tests green.
+
+Design + Toolpath: whole-project Save / Open — one versioned JSON project file (`.muddesign`, authoring state of every Layer Design + the Assembly, central schema migrations, newer versions refused); see the new decision "Project files store authoring state, versioned, separate from machine output". Uncommitted, pending manual review. design_proto 1678, layer_assembly 300, toolpath_proto 92 tests green.
+
 2026-10-06
 
 Pi Interface Milestone 1 software complete on Mac. Physical testing pending.
 Design + Toolpath: Phase 2 complete (90 tests). Phase 3 design canvas: checkpoints 414c283 / 51387d3 / 0898d16, then the 2026-10-06 Designer checkpoint (Design / Print sidebars, Trim, rounded-junction assemblies, Material / Bead, Contact + Return-Lane Overlap, no-retrace closed routes, attached-branch return geometry, Route Origin, blue bead / vector rendering, zoom / pan, persistent Wall Network, trim ghost fix): design_proto 1059 + toolpath_proto 90 + pi-interface 78 tests green. Then the Z-phase checkpoint 8d9d439 (Layer Designs, Assembly, semantic transforms) and the 2026-10-07 WALL SYSTEMS checkpoint (explicit Wall Systems owning construction — Single / Hollow / Skin + Web / Parallel / Interleaved / Linked / Chained Loop; canonical end caps; mixed-system junctions by printed-path crossings; Wall System sidebar; canonical lattice corner motifs; Adaptive Truss; concealed route seam, travel order and Move Start): design_proto 1445 + layer_assembly 124 + toolpath_proto 90 tests green.
-Z phase (2026-10-06; checkpoint 8d9d439, pushed): Layer Designs with live inheritance, a shared lineage lattice and one project bead width (Designer); the Layer Assembly subsystem and workspace (stack by physical height, section / assembly-wide transforms, semantic transform groups, vertical support with HEADER NEEDED / INSUFFICIENT LAYER SUPPORT, headers, undo / redo, 3D preview). Stable boundary: the Designer owns source / wall semantics, junctions, openings, lattice, printable geometry, routes and the material; the Assembly owns layer order, Z, transforms, group choices, vertical support and assembly objects; the Assembly asks the Designer for each grouped layer's design with its SOURCES moved and receives resolved, source-tagged geometry (never rubber-sheets beads). Principles: a closed print route outranks vertical lattice registration; lattice identity persists through Z where topology is unchanged; routine edits must not re-solve unchanged layers; mud requires physical support below — checked in the Assembly, never weakened to hide findings. Main open issue: lattice coherence at independently transformed junctions (legitimate support findings on the reference network). Tests (2026-10-06 audit): design_proto 1143, layer_assembly 124, toolpath_proto 90, pi-interface 78 — all green.
+Z phase (2026-10-06; checkpoint 8d9d439, pushed): Layer Designs with live inheritance, a shared lineage lattice and one project bead width (Designer); the Layer Assembly subsystem and workspace (stack by physical height, section / assembly-wide transforms, semantic transform groups, vertical support with HEADER NEEDED / INSUFFICIENT LAYER SUPPORT, headers, undo / redo, 3D preview). Stable boundary: the Designer owns source / wall semantics, junctions, openings, lattice, printable geometry, routes and the material; the Assembly owns layer order, Z, transforms, group choices, vertical support and assembly objects; the Assembly asks the Designer for each grouped layer's design with its SOURCES moved and receives resolved, source-tagged geometry (never rubber-sheets beads). Assembly Profiles (2026-10-08, uncommitted) use the same boundary: per layer Z the Assembly names which part of a straight source wall survives (a self-supporting opening, a taper) and the Designer resolves that layer with those source cuts — profiles never generate toolpaths. Principles: a closed print route outranks vertical lattice registration; lattice identity persists through Z where topology is unchanged; routine edits must not re-solve unchanged layers; mud requires physical support below — checked in the Assembly, never weakened to hide findings. Main open issue: lattice coherence at independently transformed junctions (legitimate support findings on the reference network). Tests (2026-10-06 audit): design_proto 1143, layer_assembly 124, toolpath_proto 90, pi-interface 78 — all green.
 Repository permanently relocated to `/Users/charliebritton/Projects/mudprintersoftware` (previously `/Users/charliebritton/Documents/mude printer/mudprintersoftware`). Post-move environment restored 2026-10-05: the three `.venv`s were recreated with the same package versions, and all suites pass from the new path (Pi 78, toolpath_proto 90, design_proto 889 incl. 3 JS UI smoke tests).
 Arduino/GRBL subproject not yet started.

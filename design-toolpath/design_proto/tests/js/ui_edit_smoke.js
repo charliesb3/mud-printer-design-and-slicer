@@ -394,7 +394,7 @@ eval(src + `
   let nodes = panelNodes();
   const iWall = nodes.findIndex(n => n.textContent === 'Wall System');
   const iAdv = nodes.findIndex(n => n.id === 'adv-geometry');
-  check(iWall >= 0 && iAdv > iWall, 'the Wall System choice is the primary wall control (before the Advanced section)');
+  check(iWall >= 0 && iAdv > iWall, 'the Wall System identity row comes before the Advanced section');
   check(nodes.find(n => n.id === 'adv-geometry').open !== true, 'Advanced (link / inset) starts collapsed');
   check(nodes.some(n => n.id === 'relation-none') && !nodes.some(n => n.id === 'relation-picker'),
         'no candidate → an explanation, not a dead picker');
@@ -404,8 +404,8 @@ eval(src + `
   WO.wall = null;
   _wsNew([WO.id]).align = 'inside';
   nodes = panelNodes();
-  check(nodes.some(n => typeof n.textContent === 'string' && n.textContent.startsWith('10 in wall · Inside · Skin + Web')),
-        'Wall section names the Wall System envelope');
+  check(nodes.some(n => typeof n.textContent === 'string' && /Skin \\+ Web · 10 in$/.test(n.textContent)),
+        'the Wall System identity row names the system, its construction and thickness (edited in its panel)');
   layer.wall_systems = []; layer.infills = layer.infills.filter(f => !f.owner);
   WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
   derivedPaths = [{ id: WO.id + '.wall', source_id: WO.id, treatment_id: WO.id + '.wall', closed: true,

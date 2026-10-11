@@ -214,6 +214,18 @@ class Assembly:
     # width − overhang for equal widths). The bead width is NOT stored here:
     # it is the Designer's MATERIAL (one project-wide value).
     max_overhang: float = DEFAULT_MAX_OVERHANG
+    # ASSEMBLY PROFILES (profiles.py, 2026-10-08): Z-dependent SOURCE-geometry
+    # profiles (self-supporting openings, wall tapers). A separate subsystem:
+    # resolve() never reads them (placements are unchanged); profiles.
+    # apply_profiles attaches each layer's cut spec afterwards.
+    profiles: list = field(default_factory=list)
+    # PRINT SPEEDS (print_plan.py, 2026-10-09): {'print': in/s, 'travel': in/s}
+    # for time estimates; {} = the planner's placeholders. Project settings.
+    print_speeds: dict = field(default_factory=dict)
+    # MACHINE / LIFTS (lifts.py, 2026-10-09): {'max_z_travel', 'lift_height',
+    # 'head_clearance'} in inches; {} = the defaults (18 / 18 / 1). The print
+    # plan divides the stack into lifts of whole layers with these.
+    machine: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {'name': self.name, 'layer_height': self.layer_height,
@@ -225,11 +237,15 @@ class Assembly:
                 'overrides': [o.to_dict() for o in self.overrides],
                 'center_mode': self.center_mode,
                 'centers': [c.to_dict() for c in self.centers],
-                'max_overhang': self.max_overhang}
+                'max_overhang': self.max_overhang,
+                'profiles': [p.to_dict() for p in self.profiles],
+                'print_speeds': dict(self.print_speeds),
+                'machine': dict(self.machine)}
 
     @staticmethod
     def from_dict(d: dict) -> 'Assembly':
         from .objects import object_from_dict, SupportOverride
+        from .profiles import profile_from_dict
         return Assembly(float(d['layer_height']),
                         [Section(s['design_id'], float(s['height']), s.get('label', ''),
                                  SectionTransform.from_dict(s.get('transform')))
@@ -239,7 +255,36 @@ class Assembly:
                         [SupportOverride.from_dict(o) for o in d.get('overrides') or []],
                         d.get('center_mode') or 'footprint',
                         [TransformCenter.from_dict(c) for c in d.get('centers') or []],
-                        _max_overhang(d.get('max_overhang')))
+                        _max_overhang(d.get('max_overhang')),
+                        [profile_from_dict(p) for p in d.get('profiles') or []],
+                        _print_speeds(d.get('print_speeds')), _machine(d.get('machine')))
+
+
+def _print_speeds(v) -> dict:
+    out = {}
+    for k in ('print', 'travel'):
+        if v and v.get(k) is not None:
+            x = float(v[k])
+            if not (x > 0 and math.isfinite(x)):
+                raise AssemblyError(f'the {k} speed must be greater than 0')
+            out[k] = x
+    if v and v.get('frame') is not None:              # s per frame reposition (an estimate; 0 = none)
+        x = float(v['frame'])
+        if not (x >= 0 and math.isfinite(x)):
+            raise AssemblyError('the frame reposition time must be ≥ 0')
+        out['frame'] = x
+    return out
+
+
+def _machine(v) -> dict:
+    """Validated machine / lift settings (lifts.LiftSettings)."""
+    from .lifts import LiftSettings, LiftError
+    out = {k: float(v[k]) for k in ('max_z_travel', 'lift_height', 'head_clearance') if v and v.get(k) is not None}
+    try:
+        LiftSettings.from_dict(out)
+    except (LiftError, ValueError) as e:
+        raise AssemblyError(str(e))
+    return out
 
 
 def _max_overhang(v) -> float:
@@ -264,6 +309,9 @@ class LayerInstance:
                                                                # placement ('multiple' mode)
     semantic: tuple = field(default=(), compare=False)         # ((source, k, tx, ty), …): the
                                                                # SEMANTIC transforms of its geometry
+    cuts: tuple = field(default=(), compare=False)             # ASSEMBLY PROFILE cut spec of this
+                                                               # layer (profiles.py; applied by the
+                                                               # Designer before the semantic transform)
 
     def transform_of(self, key) -> 'InstanceTransform':
         return self.parts.get(key, self.transform)
@@ -272,10 +320,25 @@ class LayerInstance:
     def geometry_key(self) -> str:
         """Which geometry this layer prints: its design, or the design's
         semantically transformed VARIANT."""
-        if not self.semantic:
+        if not self.semantic and not self.cuts:
             return self.design_id
-        return self.design_id + '|' + ';'.join(f'{s}:{k:.12g},{x:.9g},{y:.9g}'
-                                               for s, k, x, y in self.semantic)
+        key = self.design_id
+        if self.semantic:
+            key += '|' + ';'.join(f'{s}:{k:.12g},{x:.9g},{y:.9g}' for s, k, x, y in self.semantic)
+        if self.cuts:
+            from .profiles import cut_key
+            key += '|cut:' + cut_key(self.cuts)
+        return key
+
+    @property
+    def is_variant(self) -> bool:
+        """Prints a Designer-resolved VARIANT of its design (transform groups
+        and / or profile cuts), not the canonical design."""
+        return bool(self.semantic or self.cuts)
+
+    def cut_spec(self) -> list:
+        from .profiles import cuts_to_dicts
+        return cuts_to_dicts(self.cuts)
 
     def transforms(self) -> dict:
         return {s: (k, x, y) for s, k, x, y in self.semantic}

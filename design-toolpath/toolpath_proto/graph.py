@@ -42,10 +42,103 @@ def _pt(v: Vec2) -> tuple[float, float]:
     return (v.x, v.y)
 
 
+# SUPERSEDED-RESOLVE checkpoint: the Designer's server sets this to a
+# function that raises when a newer request of the same page has begun
+# (design_proto/resolve_cancel.py); None = never cancelled. Called between
+# the routing stages only — the result is unchanged.
+CHECKPOINT = None
+
+
+def _checkpoint():
+    if CHECKPOINT is not None:
+        CHECKPOINT()
+
+
 JUNCTION_TOL = 1e-6     # a vertex this close to a segment touches it
+
+# The junction search buckets geometry in a grid. Its cell follows the
+# geometry's own scale (4 × the median segment length, 0.5 … 10 in): with a
+# fixed 10 in cell a densely sampled construction (a Chained Loop's loops,
+# small-pitch waves) put hundreds of segments in one cell and the pairwise
+# test went quadratic. The grid only selects CANDIDATES — the junctions found
+# are exactly the same for any cell size.
+GRID_MIN, GRID_MAX = 0.5, 10.0
+
+
+def _grid_cell(layer: Layer) -> float:
+    ls = sorted(a.dist(b) for st in layer.strands for a, b in st.segments())
+    if not ls:
+        return GRID_MAX
+    cell = max(GRID_MIN, min(GRID_MAX, 4.0 * ls[len(ls) // 2]))
+    return _dense_cell(layer, cell)
+
+
+GRID_DENSE_MIN = 0.25    # in: the finest cell a DENSE layer may get
+
+
+def _dense_cell(layer: Layer, cell: float) -> float:
+    """The median rule fails where many LONG segments lie close together
+    (a 0.1 in Chained Loop pitch: full-depth strokes 0.1 in apart, median
+    0.8 in → 3 in cells of hundreds of strokes). Estimate the pair work
+    (Σ n² over the cells, by segment midpoints) plus the registration work
+    (cells per segment box) for this cell and finer ones (½, ¼, ⅛, ≥
+    GRID_DENSE_MIN) and take the cheapest. Same junctions for any cell."""
+    segs = [(a, b) for st in layer.strands for a, b in st.segments()]
+    if len(segs) < 2000:
+        return cell
+    k = max(1, len(segs) // 16000)              # (an estimate: every k-th segment, scaled)
+    segs = segs[::k]
+
+    def work(c):
+        occ: dict = {}
+        reg = 0
+        for a, b in segs:
+            key = (math.floor((a.x + b.x) * 0.5 / c), math.floor((a.y + b.y) * 0.5 / c))
+            occ[key] = occ.get(key, 0) + 1
+            reg += (math.floor(max(a.x, b.x) / c) - math.floor(min(a.x, b.x) / c) + 1) * \
+                (math.floor(max(a.y, b.y) / c) - math.floor(min(a.y, b.y) / c) + 1)
+        return k * sum(n * n for n in occ.values()) + 2 * reg
+    best, best_w = cell, work(cell)
+    if best_w < 48 * len(segs):                 # sparse cells already: keep the median rule
+        return cell
+    c = cell
+    for _ in range(3):
+        c *= 0.5
+        if c < GRID_DENSE_MIN:
+            break
+        w = work(c)
+        if w < 0.5 * best_w:               # (only a clear gain changes the cell)
+            best, best_w = c, w
+    return best
+
+
+# A route request builds the graph of ONE routing layer several times (the
+# route, graph_info, the closure report): the junction splits — the costly
+# part — are kept for the last few layers by CONTENT (every strand attribute
+# they depend on), never by identity.
+_SPLITS_CACHE: dict = {}
+_SPLITS_CACHE_MAX = 4
+
+
+def _splits_key(layer: Layer):
+    return tuple((st.id, bool(st.closed), getattr(st, 'kind', 'face'), getattr(st, 'join_group', None),
+                  tuple(tuple(q) for q in (getattr(st, 'join_points', None) or ())),
+                  tuple((p.x, p.y) for p in st.points)) for st in layer.strands)
 
 
 def _junction_splits(layer: Layer) -> dict:
+    key = _splits_key(layer)
+    hit = _SPLITS_CACHE.get(key)
+    if hit is not None:
+        return hit
+    out = _junction_splits_uncached(layer)
+    _SPLITS_CACHE[key] = out
+    while len(_SPLITS_CACHE) > _SPLITS_CACHE_MAX:
+        _SPLITS_CACHE.pop(next(iter(_SPLITS_CACHE)))
+    return out
+
+
+def _junction_splits_uncached(layer: Layer) -> dict:
     """
     Junctions inside segments: for each segment (strand_id, seg_idx), the
     points where other geometry meets its INTERIOR — vertices of any strand
@@ -57,14 +150,17 @@ def _junction_splits(layer: Layer) -> dict:
     """
     verts = {_pt(p) for st in layer.strands for p in st.points}
     owners = _vertex_owners(layer)
-    cell = 10.0
+    cell = _grid_cell(layer)
     grid: dict = {}
     for v in verts:
         grid.setdefault((math.floor(v[0] / cell), math.floor(v[1] / cell)),
                         []).append(v)
     splits: dict = {}
     for st in layer.strands:
+        _checkpoint()
         for idx, (a, b) in enumerate(st.segments()):
+            if not idx & 4095:
+                _checkpoint()
             dx, dy = b.x - a.x, b.y - a.y
             L2 = dx * dx + dy * dy
             if L2 < 1e-18:
@@ -86,7 +182,7 @@ def _junction_splits(layer: Layer) -> dict:
                             hits.append((t, v))
             if hits:
                 splits[(st.id, idx)] = hits
-    for key, t, p in _crossings(layer):
+    for key, t, p in _crossings(layer, cell):
         splits.setdefault(key, []).append((t, p))
     out = {}
     group_of = {st.id: getattr(st, 'join_group', None) for st in layer.strands}
@@ -138,7 +234,7 @@ def _node(v: tuple, group, owners: dict) -> tuple:
     return v
 
 
-def _crossings(layer: Layer):
+def _crossings(layer: Layer, cell: float = GRID_MAX):
     """
     X junctions: two segments crossing in both their interiors physically
     meet there, so both are split at a shared node. Yields
@@ -158,7 +254,6 @@ def _crossings(layer: Layer):
         n_seg = len(st.segments())
         for idx, (a, b) in enumerate(st.segments()):
             segs.append((st.id, idx, n_seg, st.closed, a, b))
-    cell = 10.0
     grid: dict = {}
     for k, (_, _, _, _, a, b) in enumerate(segs):
         for gx in range(math.floor(min(a.x, b.x) / cell),
@@ -166,14 +261,21 @@ def _crossings(layer: Layer):
             for gy in range(math.floor(min(a.y, b.y) / cell),
                             math.floor(max(a.y, b.y) / cell) + 1):
                 grid.setdefault((gx, gy), []).append(k)
-    seen = set()
-    for cands in grid.values():
+    box = [(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y)) for _, _, _, _, a, b in segs]
+    for n_cell, ((gx, gy), cands) in enumerate(grid.items()):
+        if not n_cell & 1023:
+            _checkpoint()
         for i in range(len(cands)):
             for j in range(i + 1, len(cands)):
                 k1, k2 = min(cands[i], cands[j]), max(cands[i], cands[j])
-                if (k1, k2) in seen:
+                b1, b2 = box[k1], box[k2]
+                lo_x, lo_y = max(b1[0], b2[0]), max(b1[1], b2[1])
+                if lo_x > min(b1[2], b2[2]) or lo_y > min(b1[3], b2[3]):
+                    continue                     # boxes apart: no crossing
+                # each pair is tested ONCE: in the cell holding the low corner
+                # of its boxes' overlap (both segments are registered there)
+                if math.floor(lo_x / cell) != gx or math.floor(lo_y / cell) != gy:
                     continue
-                seen.add((k1, k2))
                 s1, i1, n1, c1, a, b = segs[k1]
                 s2, i2, _, _, c, d = segs[k2]
                 if s1 == s2 and (abs(i1 - i2) == 1 or
@@ -206,7 +308,9 @@ def _crossing_is_junction(k1: str, k2: str) -> bool:
 
 def build_graph(layer: Layer) -> nx.MultiGraph:
     G = nx.MultiGraph()
+    _checkpoint()
     splits = _junction_splits(layer)
+    _checkpoint()
     owners = _vertex_owners(layer)
     for strand in layer.strands:
         factor = getattr(strand, 'retrace_cost', 1.0)
@@ -497,6 +601,7 @@ def _route_component(
     G_work = _augment_by_retrace(comp, pinned_start) if allow_retrace else \
         _pair_by_travel(comp)
 
+    _checkpoint()
     source = _choose_source(G_work, current, pinned_start)
     residual_odd = [n for n, d in G_work.degree() if d % 2 == 1]
     own_odd = [n for n, d in comp.degree() if d % 2 == 1]
@@ -512,6 +617,7 @@ def _route_component(
                     (min(_euclid(b, r) for r in next_reps) if next_reps else 0.0)
             source = min(own_odd, key=total)
 
+    _checkpoint()
     if not residual_odd:
         path = list(nx.eulerian_circuit(G_work, source=source, keys=True))
     else:
@@ -530,6 +636,7 @@ def route_layer(
     component_order: list[int] | None = None,
     allow_retrace: bool = True,
     origins: list[Vec2] | None = None,
+    G: nx.MultiGraph | None = None,
 ) -> list[PrintMove]:
     """
     Route all strands in layer, returning an ordered list of PrintMove objects.
@@ -544,9 +651,17 @@ def route_layer(
                        circuit begins and returns (at most one per component;
                        ignored for open components, which keep their own
                        start / end)
+    G                – build_graph(layer), when the caller already built it
+                       (never modified here)
     """
-    G = build_graph(layer)
-    raw_comps = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+    if G is None:
+        G = build_graph(layer)
+    # (the components of a graph routed again — the print planner routes the
+    # same geometry on many layers — are copied once; routing never modifies them)
+    raw_comps = G.graph.get('_route_comps')
+    if raw_comps is None:
+        raw_comps = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+        G.graph['_route_comps'] = raw_comps
     strands = {s.id: s for s in layer.strands}
     origin_nodes = [_pt(o) for o in (origins or [])]
 
@@ -581,6 +696,7 @@ def route_layer(
     while pending:
         comp_idx += 1
         comp = pending.pop(0)
+        _checkpoint()
         # A closed component starts at its route origin (the user's seam);
         # otherwise the pinned start applies to the very first component
         # only; else the concealed-seam / open-orientation rules
@@ -667,8 +783,9 @@ def compute_metrics(moves: list[PrintMove]) -> dict:
     }
 
 
-def graph_info(layer: Layer) -> dict:
-    G = build_graph(layer)
+def graph_info(layer: Layer, G: nx.MultiGraph | None = None) -> dict:
+    if G is None:
+        G = build_graph(layer)
     comps = list(nx.connected_components(G))
     odd = [n for n, d in G.degree() if d % 2 == 1]
     return {

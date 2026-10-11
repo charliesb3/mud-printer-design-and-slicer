@@ -31,15 +31,16 @@ class PreviewLayer:
 
 def build_stack(resolved, source, groups=None) -> list:
     """Every layer with its geometry: a grouped layer gets its design's
-    SEMANTIC variant (source.geometry(design, transforms)), fetched once per
-    distinct variant; any other layer its design's geometry, once per design."""
+    SEMANTIC variant (source.geometry(design, transforms)), a layer with
+    Assembly-profile cuts its cut variant — each fetched once per distinct
+    variant; any other layer its design's geometry, once per design."""
+    from .source import layer_geometry
     geom = {}
     out = []
     for inst in resolved.instances:
         k = inst.geometry_key
         if k not in geom:
-            geom[k] = (source.geometry(inst.design_id, inst.transforms()) if inst.semantic
-                       else source.geometry(inst.design_id)).polylines
+            geom[k] = layer_geometry(source, inst).polylines
         out.append(PreviewLayer(inst.index, inst.design_id, inst.z_bottom, inst.z_top,
                                 geom[k], inst.transform))
     return out

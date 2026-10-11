@@ -38,8 +38,21 @@ a corner is a HARD anchor. Each span between anchors gets a whole number of
 periods (nearest the Period), its phase starts at the same value at every
 corner, and the oscillation fades into fixed LANES (each path's own value at
 that phase) which turn the corner as mitred offset lines. Equivalent corners
-therefore look identical whatever the period or the span lengths. The chain
-follows corners wall-relatively (V1). No junction motifs yet.
+therefore look identical whatever the period or the span lengths.
+
+CHAINED LOOP MOTIFS (2026-10-09; LOCAL — the chain outside them is unchanged,
+sample for sample):
+  corner    within a window of ~2 pitches (≥ 1.5 t) each side of a corner the
+            loops are laid in a CORNER FRAME (straight legs + a sector where
+            every lane turns round the inner corner, the outer lanes squarer
+            so the outermost loops fill the outer corner) and re-timed (≤ the
+            window, rate ½…2) so one whole loop crest sits on the bisector:
+            the outer lobe on a ring / single lap; on a doubled run the
+            nearest crest (the mirror lap holds the inner one, made shallower).
+  junction  a branch end pushed into a host (pass-10 band push) joins its two
+            mirrored laps by one round EYE reaching into the host — the chain's
+            last link — instead of face-lane leads + a flat cap; the model keeps
+            it only where it really crosses the host's paths (else the cap).
 """
 from __future__ import annotations
 
@@ -48,6 +61,7 @@ import math
 
 import wall_lattice as WL
 from model import Vec2
+from resolve_cancel import check as _cancel_check     # (a superseded Designer resolve stops here)
 
 SYSTEMS = ('single', 'hollow', 'skin_web', 'parallel', 'interleaved', 'linked', 'chain')
 LABELS = {'single': 'Single / Out-and-Back Wall', 'hollow': 'Hollow / Skins Only', 'skin_web': 'Skin + Web',
@@ -56,8 +70,11 @@ LABELS = {'single': 'Single / Out-and-Back Wall', 'hollow': 'Hollow / Skins Only
 GENERATED = ('parallel', 'interleaved', 'linked', 'chain')     # paths generated here (else: skins / beads)
 DEFAULTS = {
     'parallel': {'walls': 3},
-    'interleaved': {'pattern': 'wave', 'paths': 3, 'period': 30.0, 'depth': 0.0},
-    'linked': {'pattern': 'wave', 'paths': 3, 'period': 24.0, 'amplitude': 0.0},
+    # (Interleaved Depth / Linked Amplitude REMOVED 2026-10-08: the Wall
+    # Thickness alone owns the transverse envelope — full depth / H / N; a
+    # stored legacy value is ignored by normalize)
+    'interleaved': {'pattern': 'wave', 'paths': 3, 'period': 30.0},
+    'linked': {'pattern': 'wave', 'paths': 3, 'period': 24.0},
     'chain': {'pitch': 0.0, 'loop_depth': 0.0, 'loop_width': 0.0, 'neck': 0.0, 'phase': 0.0},
 }
 LIMITS = {'paths': (1, 12), 'period': (2.0, 600.0)}
@@ -69,7 +86,10 @@ CHAIN_NECK = 0.12                    # chain: default neck height / loop depth (
 # chain: smallest pitch. The loop geometry is scale-free; below ~0.1 in the
 # samples per loop (≥ 24) and the router's point tolerances are the limit.
 CHAIN_PITCH_MIN = 0.1
-CHAIN_MAX_POINTS = 60000             # sampling budget of one run's chain
+CHAIN_SLACK = 1.0                    # × lead: a loop crest may pass the usable end by this much at a cut
+CHAIN_MAX_POINTS = 60000             # sampling budget of one run's chain …
+CHAIN_SAMPLES = 96                   # … samples per loop (half period) within it
+CHAIN_MIN_SAMPLES = 24               # … and never fewer per loop
 PARALLEL_SPAN = 60.0                 # parallel walls: span length unit (only sets the end fade length)
 
 
@@ -222,8 +242,9 @@ class _Strip:
         u = d * (1.0 / T) if T > 1e-9 else Vec2(0.0, 0.0)
         return f0.lerp(f1, 0.5), u, max(0.0, 0.5 * T - 0.5 * self.bead)
 
-    def at(self, s, y):
-        m, u, H = self.frame(s)
+    def at(self, s, y, fr=None):
+        """fr: frame(s) already evaluated by the caller (same result)."""
+        m, u, H = fr or self.frame(s)
         y = max(-H, min(H, y))
         q = m + u * y
         if self.env is not None and abs(y) > 1e-9 and not self.env.clear(q, 0.5 * self.bead - 0.02):
@@ -499,13 +520,31 @@ def _join(pieces):
 # generation
 # ---------------------------------------------------------------------------
 
-def _wave_paths(st, sp, H0, env):
+def _wave_paths(st, sp, H0, env, ref=None, vcuts=()):
     """Interleaved / linked paths of one run: spans between anchors (ends,
     corners) with whole periods, phase anchored at the corners, fading into
-    lanes that turn each corner mitred."""
+    lanes that turn each corner mitred.
+    ref (PHASE REFERENCE, _ref_map): the run lies on a run of the uncut
+    wall — every sample takes the REFERENCE span's period and phase (and its
+    corner fades) at s_ref, the across sign of the reference; only this
+    run's own free ends fade into the end lanes (a cut end is solved
+    locally, the pattern is not re-fitted)."""
     t, N, pat = sp['type'], sp['paths'], sp['pattern']
     th = st.thick
     cs = _corners(st)
+    if ref is not None and cs and ref[0].get('corner_s'):
+        # corners at the REFERENCE's positions (this piece's own detection
+        # differs by a fraction of an inch — and moves the mitres with it)
+        Lr, snapped = ref[0]['L'], []
+        for c in cs:
+            xr = ref[1](c[0])
+            best = None
+            for sr in ref[0]['corner_s']:
+                for k in ((-1, 0, 1) if ref[0]['cycle'] else (0,)):
+                    if abs(sr + k * Lr - xr) < st.thick and (best is None or abs(sr + k * Lr - xr) < abs(best - xr)):
+                        best = sr + k * Lr
+            snapped.append(((ref[2](best),) + tuple(c[1:])) if best is not None else c)
+        cs = snapped
     g = CORNER_ZONE * th
     L = st.L
     if st.run.cycle:
@@ -528,13 +567,17 @@ def _wave_paths(st, sp, H0, env):
     # symmetric about 90°, i.e. phases π/2 − mπ/N; take the one half way
     phi0 = (math.pi / 2 - math.pi / (2 * N)) if t == 'interleaved' else 0.0
 
+    tau = ref[3] if ref is not None else 1.0       # across sign of the reference run
+
     def value(k, phase, H):
+        return tau * _value(k, phase, H)
+
+    def _value(k, phase, H):
         if t == 'parallel':                      # N evenly spread longitudinal walls
             return 0.0 if N < 2 else -H + k * (2.0 * H / (N - 1))
-        if t == 'interleaved':
-            A = min(sp['depth'], H) if sp['depth'] > 0 else H
-            return A * _wave(pat, phase + 2 * math.pi * k / N)
-        a = min(sp['amplitude'], H) if sp['amplitude'] > 0 else H / N
+        if t == 'interleaved':                   # full depth: the envelope
+            return H * _wave(pat, phase + 2 * math.pi * k / N)
+        a = H / N                                # neighbours meet at their extrema
         d = 2.0 * (H - a) / (N - 1) if N > 1 else 0.0
         return (k - (N - 1) / 2.0) * d + a * _wave(pat, phase + k * math.pi)
 
@@ -550,12 +593,80 @@ def _wave_paths(st, sp, H0, env):
     # nested loops are joined by rungs instead, see _parallel_rungs)
     perm = _end_perm(N) if (e_lo and e_hi and t != 'parallel') else list(range(N))
     end_lane = {'lo': {k: rank[k] for k in range(N)}, 'hi': {k: perm[rank[k]] for k in range(N)}}
+    if ref is not None and e_lo and e_hi and t != 'parallel':
+        # the closing lane permutation stays where the REFERENCE has it (its
+        # 'hi' end), expressed in this run's lanes — else an untouched
+        # original end would change motif whenever the skeleton orients the
+        # cut piece the other way: against the reference → the other end;
+        # across sign flipped → the permutation mirrored (lane r ↔ N−1−r)
+        pl = perm if tau > 0 else [N - 1 - perm[N - 1 - r] for r in range(N)]
+        ident = {k: rank[k] for k in range(N)}
+        permd = {k: pl[rank[k]] for k in range(N)}
+        end_lane = {'lo': ident, 'hi': permd} if ref[1](1.0) > ref[1](0.0) else {'lo': permd, 'hi': ident}
 
     def end_y(r, H):
         return 0.0 if N < 2 else -H + r * (2.0 * H / (N - 1))
 
+    # CROSS-Z TRANSITION (vcuts): toward the end lanes the cut pieces use —
+    # the closing permutation on the low-s face (that piece's far end in the
+    # reference orientation), the plain ranks on the high-s face; between the
+    # two end stations the lanes are interpolated (no cut: strands go on)
+    # (the low-s piece carries the permutation only when both its ends are
+    # free: a ring cut open, or a run starting at a free wall end)
+    perm_t = _end_perm(N) if t != 'parallel' and (st.run.cycle or st.run.a[0] == 'E') else list(range(N))
+    dst = 0.5 * st.thick
+    Fv = max(st.bead, 0.5 * st.thick)
+
+    def adj(k, s, y, H):
+        for (fa, fb, al) in vcuts:
+            for sh in ((0.0, st.L) if st.run.cycle else (0.0,)):
+                s_ = s + sh
+                sa, sb = fa - dst, fb + dst
+                if s_ < sa - Fv or s_ > sb + Fv:
+                    continue
+                left, right = end_y(perm_t[rank[k]], H), end_y(rank[k], H)
+                if s_ <= sa:
+                    wv, tgt = _smooth((sa - s_) / Fv), left
+                elif s_ >= sb:
+                    wv, tgt = _smooth((s_ - sb) / Fv), right
+                else:
+                    wv, tgt = 0.0, left + (right - left) * (s_ - sa) / max(1e-9, sb - sa)
+                y = tgt + (y - tgt) * (1.0 - al * (1.0 - wv))
+        return y
+
     polys = [[] for _ in range(N)]
     info = {'periods': [], 'corners': len(cs)}
+    ref_spans = []
+    ref_corners = []
+    rspans = []
+    if ref is not None:
+        rf, fwd = ref[0], ref[1]
+        rspans = rf.get('spans') or []
+        if not rspans:
+            ref = None
+
+    # a NEW end (a cut) fades in half a wall thickness: the smallest local
+    # change that still lands the strands on the end lanes (an ORIGINAL end
+    # keeps the reference fade, identical to the uncut wall)
+    Fcut = max(st.bead, 0.5 * st.thick)
+    orig_lo = orig_hi = False
+    if ref is not None:
+        rf0 = ref[0]
+        ends_r = (rf0['lo'], rf0['hi'])
+        orig_lo = e_lo and min(abs(ref[1](st.lo) - e) for e in ends_r) < 1e-6
+        orig_hi = e_hi and min(abs(ref[1](st.hi) - e) for e in ends_r) < 1e-6
+
+    def ref_span(sr):
+        """(a, b, P, fade-at-a, fade-at-b, sr in its frame) of the reference span at sr."""
+        L_ = rf['L']
+        cands = [sr] + ([sr % L_, sr % L_ + L_] if rf['cycle'] else [])
+        for x in cands:
+            for (ra, rb, rP, rca, rcb) in rspans:
+                if ra - 1e-6 <= x <= rb + 1e-6:
+                    return ra, rb, rP, rca, rcb, x
+        x = min(cands, key=lambda x: min(min(abs(x - ra), abs(x - rb)) for ra, rb, *_ in rspans))
+        ra, rb, rP, rca, rcb = min(rspans, key=lambda q: min(abs(x - q[0]), abs(x - q[1])))
+        return ra, rb, rP, rca, rcb, x
     for a, b, ca, corner in spans:
         ln = b - a
         if ln <= 1e-6:
@@ -563,6 +674,7 @@ def _wave_paths(st, sp, H0, env):
         n = max(1, round(ln / sp['period']))
         P = ln / n
         info['periods'].append(round(P, 3))
+        ref_spans.append((a, b, P, bool(ca), corner is not None))
         F = min(0.35 * P, 0.5 * ln)          # the fade into the corner lanes
         step = max(0.25, min(1.0, P / 32))
         free_a = e_lo and not ca and abs(a - st.lo) < 1e-9
@@ -571,6 +683,27 @@ def _wave_paths(st, sp, H0, env):
         fb = corner is not None or free_b
         for s in _samples(a, b, step):
             H = st.half(s)
+            if ref is not None:
+                # the REFERENCE pattern at s_ref; the reference's corner fades;
+                # this run's own free ends (original or cut) fade into the end lanes
+                ra, rb, rP, rca, rcb, x = ref_span(fwd(s))
+                ph = phi0 + 2 * math.pi * (x - ra) / rP
+                Fr = min(0.35 * rP, 0.5 * (rb - ra))
+                wc = min(_smooth((x - ra) / Fr) if rca else 1.0, _smooth((rb - x) / Fr) if rcb else 1.0)
+                wl = _smooth((s - st.lo) / (Fr if orig_lo else Fcut)) if e_lo else 1.0
+                wh = _smooth((st.hi - s) / (Fr if orig_hi else Fcut)) if e_hi else 1.0
+                w = min(wc, wl, wh)
+                for k in range(N):
+                    if wl <= min(wc, wh):
+                        lk = end_y(end_lane['lo'][k], H)
+                    elif wh <= wc:
+                        lk = end_y(end_lane['hi'][k], H)
+                    else:
+                        lk = lane(k, H)
+                    q = st.at(s, adj(k, s, lk + (value(k, ph, H) - lk) * w, H))
+                    if not polys[k] or polys[k][-1].dist(q) > 1e-9:
+                        polys[k].append(q)
+                continue
             ph = phi0 + 2 * math.pi * (s - a) / P
             wa = _smooth((s - a) / F) if fa else 1.0
             wb = _smooth((b - s) / F) if fb else 1.0
@@ -581,7 +714,7 @@ def _wave_paths(st, sp, H0, env):
                     lk = end_y(end_lane['lo'][k], H) if free_a else lane(k, H)
                 else:
                     lk = end_y(end_lane['hi'][k], H) if free_b else lane(k, H)
-                q = st.at(s, lk + (value(k, ph, H) - lk) * w)
+                q = st.at(s, adj(k, s, lk + (value(k, ph, H) - lk) * w, H))
                 if not polys[k] or polys[k][-1].dist(q) > 1e-9:
                     polys[k].append(q)
         if corner is not None:
@@ -596,7 +729,18 @@ def _wave_paths(st, sp, H0, env):
                 A = st.at(b, lane(k, st.half(b)))
                 B = st.at(nxt, lane(k, st.half(nxt)))
                 mits.append(_miter(A, corner[1], B, corner[2]))
-            if all(env.clear(M, 0.5 * st.bead - 0.05) for M in mits):
+            forced = None
+            if ref is not None:                      # the reference's own choice at this corner
+                xr = ref[1](b)
+                Lr = ref[0]['L']
+                for (cb, ck) in ref[0].get('corner_kinds') or []:
+                    dd = abs(cb - xr)
+                    if ref[0]['cycle']:
+                        dd = min(dd, Lr - dd % Lr if dd % Lr else 0.0, dd % Lr)
+                    if dd < st.thick:
+                        forced = ck
+                        break
+            if forced == 'mitre' or (forced is None and all(env.clear(M, 0.5 * st.bead - 0.05) for M in mits)):
                 for k in range(N):
                     polys[k].append(mits[k])
                 kind = 'mitre'
@@ -610,6 +754,7 @@ def _wave_paths(st, sp, H0, env):
                     polys[k] += lane_pts
                     pts_.append(lane_pts[len(lane_pts) // 2])
             info.setdefault('corner_kinds', []).append(kind)
+            ref_corners.append((b, kind))
             info.setdefault('corner_points', []).append([(round(M.x, 4), round(M.y, 4)) for M in pts_])
     if st.run.cycle and cs:
         for pl in polys:
@@ -629,14 +774,17 @@ def _wave_paths(st, sp, H0, env):
     if not st.run.cycle and (e_lo or e_hi):
         info['closed'] = all(len(pl) > 2 and pl[0].dist(pl[-1]) < 1e-6 for pl in polys)
     info['period'] = info['periods'][0] if info['periods'] else None
+    info['_ref'] = {'spans': ref_spans, 'corner_kinds': ref_corners, 'corner_s': [c[0] for c in cs]}
+    if ref is not None:
+        info['phase_ref'] = True
     if t == 'parallel':
         info['spacing'] = round(2.0 * H0 / (N - 1), 3) if N > 1 else 0.0
     elif t == 'linked':
-        a = min(sp['amplitude'], H0) if sp['amplitude'] > 0 else H0 / N
+        a = H0 / N
         d = 2.0 * (H0 - a) / (N - 1) if N > 1 else 0.0
         info.update({'amplitude': round(a, 3), 'spacing': round(d, 3), 'closest_approach': round(d - 2 * a, 3)})
     else:
-        info['amplitude'] = round(min(sp['depth'], H0) if sp['depth'] > 0 else H0, 3)
+        info['amplitude'] = round(H0, 3)
     return polys, info
 
 
@@ -861,7 +1009,7 @@ def _cap_turns(st, polys, e_lo, e_hi, env, N, end_lane):
         g = 2.0 * H / (N - 1) if N > 1 else 0.0
         at_lane = {end_lane[end][k]: k for k in range(N) if polys[k]}
         pt = (lambda k: polys[k][0]) if end == 'lo' else (lambda k: polys[k][-1])
-        square = st.is_square(s_e)
+        square = st.is_square(s_e) or round(s_e, 9) in getattr(st, '_ref_square', ())
         prev = []
         for r in range(N // 2):
             if r not in at_lane or N - 1 - r not in at_lane:
@@ -951,7 +1099,264 @@ def chain_shape(pitch, width, neck):
     return a, w, q
 
 
-def _chain_path(st, sp, T, H0, env=None):
+# ---------------------------------------------------------------------------
+# CHAINED LOOP CORNER MOTIF (2026-10-09)
+# ---------------------------------------------------------------------------
+# The strip frame crosses a sharp corner on the skeleton's diagonal, so the
+# loops there were squeezed onto it (an angular, crushed loop). Within a LOCAL
+# WINDOW round each corner the chain is instead laid in a CORNER FRAME:
+#   - legs: the straight wall before / after (identical to the strip there);
+#   - sector: every lane (constant distance ρ from the turn-inside face) turns
+#     round one pivot P (the inner face corner; the inner fillet's centre when
+#     that face is rounded) — inner lanes as round arcs, the outer ones
+#     squarer (a superellipse, exponent κ growing with ρ), so the outermost
+#     loops reach into the outer corner while every lane stays ½ bead inside
+#     the resolved faces (κ is lowered until it does: rounded corners).
+# The loops keep their own curve; only their PROGRESS is remapped smoothly:
+# the strip length of the window onto the frame's centre-lane length, plus a
+# small timing shift (≤ ½ pitch, zero slope at the window ends) that puts the
+# nearest loop CREST on the corner bisector — the corner always holds one
+# whole, symmetric loop (an outer lobe filling the corner, or an inner
+# teardrop round the inner corner), never a loop cut by it. Outside the
+# window the chain is unchanged (byte-identical samples).
+CHAIN_MOTIFS = True                  # corner + junction motifs on (False: the plain V1 chain — tests / comparison)
+CHAIN_CORNER_WINDOW = 2.0            # × pitch: half window (≥ 1.5 t) — the loops a corner may absorb
+CHAIN_CORNER_KAPPA = (6.0, 4.0, 3.0, 2.5, 2.0)    # outer-lane squareness, tried in order
+CHAIN_CORNER_MAX_TURN = math.radians(135.0)       # sharper turns keep the strip frame
+CHAIN_CORNER_INNER = 0.5           # inside-of-turn depth reduction at the bisector
+CHAIN_CORNER_MIN_RATE = 0.5          # the timing shift keeps the loops' progress rate within [½, 2]
+
+
+def _dot(a, b):
+    return a.x * b.x + a.y * b.y
+
+
+def _bell(f):
+    """0 → 1 → 0 over f ∈ [−1, 1] (smoothstep each way: zero slope at both ends and the top)."""
+    return _smooth(1.0 - abs(f))
+
+
+class _CornerFrame:
+    """The corner frame of one chain corner window [sa, sb] round sc (see
+    CHAINED LOOP CORNER MOTIF). `ok` False: no motif (the strip is kept)."""
+
+    def __init__(self, st, sa, sc, sb, H, bead, env, D):
+        self.ok = False
+        self.sa, self.sc, self.sb, self.H, self.bead = sa, sc, sb, H, bead
+        L = st.L
+        ma, ua, _ = st.frame(sa % L if st.run.cycle else sa)
+        mb, ub, _ = st.frame(sb % L if st.run.cycle else sb)
+        if ua.length() < 0.5 or ub.length() < 0.5:
+            return
+        nx = lambda s: st.frame(s % L if st.run.cycle else s)[0]
+        e1 = Vec2(ua.y, -ua.x)
+        if _dot((nx(sa + 0.5) - ma), e1) < 0:
+            e1 = e1 * -1.0
+        e2 = Vec2(ub.y, -ub.x)
+        if _dot((mb - nx(sb - 0.5)), e2) < 0:
+            e2 = e2 * -1.0
+        cr = e1.x * e2.y - e1.y * e2.x
+        phi = math.acos(max(-1.0, min(1.0, _dot(e1, e2))))
+        if phi < math.radians(20.0) or phi > CHAIN_CORNER_MAX_TURN:
+            return
+        left = 1.0 if cr > 0 else -1.0                 # the turn's inside: left of travel for a left turn
+        si = 1.0 if _dot(ua, Vec2(-e1.y, e1.x)) * left > 0 else -1.0     # y sign of the inside face (incoming)
+        si_b = 1.0 if _dot(ub, Vec2(-e2.y, e2.x)) * left > 0 else -1.0
+        if si_b != si:                                  # (the across direction flips: not one wall)
+            return
+        # both legs must be STRAIGHT over the window (the frame's legs are
+        # lines): the strip's centre line within ¼ bead of them
+        zone = 0.75 * (2.0 * H + bead)                  # (the skeleton's own corner zone)
+        for s in _samples(sa, sb, 0.5):
+            if abs(s - sc) < zone:
+                continue
+            m = nx(s)
+            off = _dot(m - ma, Vec2(-e1.y, e1.x)) if s < sc else _dot(m - mb, Vec2(-e2.y, e2.x))
+            if abs(off) > 0.25 * bead:
+                return
+        self.T = T = 2.0 * H + bead
+        self.si, self.ma, self.mb, self.ua, self.ub, self.e1, self.e2 = si, ma, mb, ua, ub, e1, e2
+        self.n1, self.n2 = ua * -si, ub * -si          # outward (turn-outside) normals of the legs
+        c = _dot(self.n1, self.n2)
+        self.o_u = (self.n1 + self.n2) * (c / (1.0 + c))
+        self.a1, self.a2 = self.n1 - self.o_u, self.n2 - self.o_u
+        dext = max(0.5 * bead, min(H, D))               # the deepest lane the loops use
+        env_ok = (lambda q, mg: True) if env is None else env.clear
+        tol = 0.5 * bead - 0.05
+        # the pivot: the inner face corner (r_i = 0), or the centre of a ROUNDED
+        # inner face (r_i grows until the innermost lane stays in the material)
+        built = False
+        for r_i in (0.0, 0.1 * T, 0.25 * T, 0.5 * T, 1.0 * T, 2.0 * T):
+            if not self._place(r_i):
+                continue
+            if all(env_ok(self._sector(th, si * dext, 2.0), tol) for th in self._ths(16)):
+                built = True
+                break
+        if not built:
+            return
+        # the outer lanes' squareness: the squarest κ whose outermost loop lane
+        # stays ½ bead inside the resolved outer face (a rounded corner: lower)
+        for k in CHAIN_CORNER_KAPPA:
+            self.k_out = k
+            if all(env_ok(self._sector(th, -si * dext), tol) for th in self._ths(24)):
+                break
+        else:
+            return
+        # the centre lane's arc length (progress ↔ angle in the sector)
+        ths = self._ths(64)
+        pts = [self._sector(th, 0.0) for th in ths]
+        cum = [0.0]
+        for p, q in zip(pts, pts[1:]):
+            cum.append(cum[-1] + p.dist(q))
+        self.ths, self.cum, self.arc = ths, cum, cum[-1]
+        self.L1 = self.la + 0.5 * self.arc
+        self.L2 = 0.5 * self.arc + self.lb
+        self.E1 = self.L1 - (sc - sa)
+        self.E2 = self.L2 - (sb - sc)
+        self.shift = None
+        self.ok = True
+
+    def _place(self, r_i):
+        """Pivot P at distance r_i + T/2 inside both centre lines; leg lengths."""
+        off = r_i + 0.5 * self.T
+        A = self.ma + self.ua * (self.si * off)
+        B = self.mb + self.ub * (self.si * off)
+        P = _miter(A, self.e1, B, self.e2)
+        la, lb = _dot((P - self.ma), self.e1), _dot((self.mb - P), self.e2)
+        if la < 0 or lb < 0:
+            return False
+        self.P, self.r_i, self.la, self.lb = P, r_i, la, lb
+        return True
+
+    @staticmethod
+    def _ths(n):
+        return [0.5 * math.pi * k / n for k in range(n + 1)]
+
+    def _kappa(self, rho):
+        t = max(0.0, min(1.0, (rho - 0.5 * self.bead) / max(1e-9, self.T - self.bead)))
+        return 2.0 + (getattr(self, 'k_out', 2.0) - 2.0) * t * t
+
+    def _sector(self, th, y, kappa=None):
+        rho = 0.5 * self.T - self.si * y               # distance from the inside face
+        k = kappa if kappa is not None else self._kappa(rho)
+        e = 2.0 / k
+        cs, sn = max(0.0, math.cos(th)), max(0.0, math.sin(th))
+        return self.P + (self.o_u + self.a1 * (cs ** e) + self.a2 * (sn ** e)) * (self.r_i + rho)
+
+    def _warp(self, s):
+        """The TIMING shift: a monotone C1 map of [sa, sb] onto itself (slope 1
+        at both ends) taking the chosen crest s* to the corner sc — a cubic
+        Hermite through (sa, sa), (s*, sc'), (sb, sb)."""
+        if self.shift is None:
+            return s
+        x1, y1, k1 = self.shift
+        if s <= x1:
+            x0, y0, k0, xe, ye, ke = self.sa, self.sa, 1.0, x1, y1, k1
+        else:
+            x0, y0, k0, xe, ye, ke = x1, y1, k1, self.sb, self.sb, 1.0
+        h = xe - x0
+        t = (s - x0) / h
+        t2, t3 = t * t, t * t * t
+        return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * h * k0 + (-2 * t3 + 3 * t2) * ye + (t3 - t2) * h * ke
+
+    def progress(self, s):
+        """Strip position s → centre-lane progress (window start = 0): the
+        timing shift, then the window's strip length matched to the frame's
+        (sc → the sector's middle; slope 1 at sa, sc, sb)."""
+        s = self._warp(s)
+        sa, sc, sb = self.sa, self.sc, self.sb
+        if s <= sc:
+            return (s - sa) + self.E1 * _smooth((s - sa) / (sc - sa))
+        return self.L1 + (s - sc) + self.E2 * _smooth((s - sc) / (sb - sc))
+
+    def set_crest(self, s_crest):
+        """Shift the timing so the curve's crest at s_crest lands on the
+        corner (sc → the bisector), as far as the progress rate stays within
+        [CHAIN_CORNER_MIN_RATE, 1 / CHAIN_CORNER_MIN_RATE]."""
+        self.shift = None
+        sa, sc, sb = self.sa, self.sc, self.sb
+        if not sa + 0.05 * (sc - sa) < s_crest < sb - 0.05 * (sb - sc):
+            return
+        zs = _samples(sa, sb, 0.25)
+        for lam in (1.0, 0.8, 0.6, 0.4, 0.2):
+            y1 = s_crest + lam * (sc - s_crest)
+            self.shift = (s_crest, y1, 1.0)          # (slope 1 at the crest: the corner loop is moved, not distorted)
+            ws = [self._warp(z) for z in zs]
+            rates = [(q - p) / (z1 - z0) for p, q, z0, z1 in zip(ws, ws[1:], zs, zs[1:])]
+            if min(rates) >= CHAIN_CORNER_MIN_RATE and max(rates) <= 1.0 / CHAIN_CORNER_MIN_RATE:
+                return
+        self.shift = None
+
+    def point(self, s, y):
+        t = self.progress(s)
+        if y * self.si > 0:
+            # the INSIDE of the turn is short: loops reaching into it are made
+            # shallower round the bisector (no crumpled curl at the inner corner)
+            y *= 1.0 - CHAIN_CORNER_INNER * _bell((t - self.L1) / (0.5 * self.arc + 0.5 * self.T))
+        if t <= self.la:
+            return self.ma + self.e1 * t + self.ua * y
+        if t >= self.la + self.arc:
+            return self.mb - self.e2 * (self.L1 + self.L2 - t) + self.ub * y
+        d = t - self.la
+        k = min(len(self.cum) - 2, max(0, bisect.bisect_right(self.cum, d) - 1))
+        f = (d - self.cum[k]) / max(1e-12, self.cum[k + 1] - self.cum[k])
+        return self._sector(self.ths[k] + (self.ths[k + 1] - self.ths[k]) * f, y)
+
+
+def _chain_corners(st, T, H, bead, env, lo, hi, pitch, D, s_of_u, u_lo, u_hi, doubled=False, ysign=1.0):
+    """[_CornerFrame] of the run's corners (windows inside [lo, hi], never
+    overlapping); each with its timing shift set (s_of_u: the curve's strip
+    position of a parameter u, monotonic in the loop's mean progress)."""
+    cs = [c[0] for c in _corners(st)]
+    if not cs:
+        return []
+    L = st.L
+    if st.run.cycle:
+        cs = sorted(c + L if c < lo else c for c in cs)
+    out = []
+    for i, sc in enumerate(cs):
+        A = max(1.5 * T, CHAIN_CORNER_WINDOW * pitch)
+        if st.run.cycle:
+            prev = cs[i - 1] - (L if i == 0 else 0.0)
+            nxt = cs[(i + 1) % len(cs)] + (L if i == len(cs) - 1 else 0.0)
+            room_a, room_b = 0.5 * (sc - prev), 0.5 * (nxt - sc)
+            if len(cs) == 1:
+                room_a = room_b = 0.5 * L
+            room_a, room_b = min(room_a, sc - lo), min(room_b, lo + L - sc)
+        else:
+            room_a = (sc - lo) if i == 0 else 0.5 * (sc - cs[i - 1])
+            room_b = (hi - sc) if i == len(cs) - 1 else 0.5 * (cs[i + 1] - sc)
+        Aa, Ab = min(A, room_a - 0.25), min(A, room_b - 0.25)
+        if min(Aa, Ab) < 0.9 * T:
+            continue
+        fr = _CornerFrame(st, sc - Aa, sc, sc + Ab, H, bead, env, D)
+        if not fr.ok:
+            continue
+        # the loop CREST (u = kπ + π/2) to put on the corner: on a single lap
+        # (a ring, a run between junctions) the nearest OUTER crest — every
+        # corner gets the outer lobe; on a doubled run (two mirrored laps)
+        # the nearest crest of either side (the other lap holds the mirror)
+        a_mean = (s_of_u(u_hi) - s_of_u(u_lo)) / max(1e-12, u_hi - u_lo)
+        if abs(a_mean) < 1e-12:
+            continue
+        uc = u_lo + (sc - s_of_u(u_lo)) / a_mean
+        k = round((uc - 0.5 * math.pi) / math.pi)
+        best = None
+        for kk in range(k - 2, k + 3):
+            u_ = kk * math.pi + 0.5 * math.pi
+            if not doubled and (math.sin(u_) * ysign > 0) != (fr.si < 0):
+                continue
+            if u_lo <= u_ <= u_hi:
+                s_ = s_of_u(u_)
+                if best is None or abs(s_ - sc) < abs(best - sc):
+                    best = s_
+        if best is not None:
+            fr.set_crest(best)
+        out.append(fr)
+    return out
+
+
+def _chain_path(st, sp, T, H0, env=None, vcuts=(), jends=()):
     """The loop chain along one run, through the strip coordinates (so it
     follows the wall and stays in the envelope). Open run: a whole number of
     loops fitted between the ends, starting and ending on the centre line (at
@@ -981,22 +1386,56 @@ def _chain_path(st, sp, T, H0, env=None):
     a, w, q = chain_shape(span / m, sp['loop_width'], sp['neck'])
     u0 = 2 * math.pi * sp['phase']
     u1 = u0 + m * math.pi
-    n = max(64, min(int(m * 96), max(int(m * 24), CHAIN_MAX_POINTS)))
+    n = max(64, min(int(m * CHAIN_SAMPLES), max(int(m * CHAIN_MIN_SAMPLES), CHAIN_MAX_POINTS)))
     us = [u0 + (u1 - u0) * k / n for k in range(n + 1)]
     xs = [a * u + w * math.sin(2 * u) for u in us]
     if st.run.cycle:
         x0 = xs[0]
         ss = [lo + (x - x0) for x in xs]                 # exactly one turn of the loop: closes
+        ref_c = {'lo': lo, 'span': span, 'm': m, 'u0': u0, 'xmin': x0, 'k': 1.0}
     else:
         xmin, xmax = min(xs), max(xs)
         k_ = span / (xmax - xmin) if xmax > xmin else 1.0
         ss = [lo + (x - xmin) * k_ for x in xs]          # (backtracking loops kept inside the ends)
+        ref_c = {'lo': lo, 'span': span, 'm': m, 'u0': u0, 'xmin': xmin, 'k': k_}
+    # CROSS-Z TRANSITION (vcuts, capped runs): toward the cut layer's end
+    # motif — the forward lap toward face 0, the return lap toward face 1,
+    # over the lead before each end station, held between the stations
+    dst, lead_v = 0.5 * T, min(CORNER_ZONE * T, 0.25 * (hi - lo))
+
+    def adj(s, y, side, H):
+        for (fa, fb, al) in vcuts:
+            sa, sb = fa - dst, fb + dst
+            if s < sa - lead_v or s > sb + lead_v:
+                continue
+            wv = _smooth((sa - s) / lead_v) if s <= sa else (_smooth((s - sb) / lead_v) if s >= sb else 0.0)
+            tgt = side * H
+            y = tgt + (y - tgt) * (1.0 - al * (1.0 - wv))
+        return y
+    vc_on = bool(vcuts) and capped
+    eyes = 0
+    # CORNER MOTIFS: the samples inside a corner window are laid in its
+    # corner frame (one loop depth there: the run's own envelope)
+    D0 = min(sp['loop_depth'], H0) if sp['loop_depth'] > 0 else H0
+    xr = (x0, 1.0) if st.run.cycle else (xmin, k_)
+    cfs = [] if not CHAIN_MOTIFS else _chain_corners(st, T, H0, st.bead, env, lo, hi, span / m, D0,
+                         lambda u_: lo + (a * u_ + w * math.sin(2 * u_) - xr[0]) * xr[1], u0, u1, capped) \
+        if env is not None else []
+    win = [next((f for f in cfs if f.sa < s < f.sb), None) for s in ss] if cfs else [None] * len(ss)
+    # the strip frame ONCE per sample: both laps run over the same stations
+    # (st.half / st.at would each evaluate it again — identical values)
+    frs = [st.frame(s) if f is None else None for s, f in zip(ss, win)]
+    _cancel_check()
     out = []
-    for u, s in zip(us, ss):
-        H = st.half(s)
-        D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
+    for u, s, fr, cf in zip(us, ss, frs, win):
         sn = math.sin(u)
-        out.append(st.at(s, D * math.copysign(abs(sn) ** q, sn)))
+        if cf is not None:
+            out.append(cf.point(s, D0 * math.copysign(abs(sn) ** q, sn)))
+            continue
+        H = fr[2]
+        D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
+        y = D * math.copysign(abs(sn) ** q, sn)
+        out.append(st.at(s, adj(s, y, -1.0, H) if vc_on else y, fr))
     if st.run.cycle and out:
         out[-1] = out[0]
     closed = st.run.cycle
@@ -1007,12 +1446,17 @@ def _chain_path(st, sp, T, H0, env=None):
         # face lane, the return lap to the f1 face lane, and the resolved end
         # cap (flat / round) joins the two lanes — the outermost lanes are
         # the wall faces, the cap the deliberate wall end
+        _cancel_check()
         back = []
-        for u, s in zip(reversed(us), reversed(ss)):
-            H = st.half(s)
-            D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
+        for u, s, fr, cf in zip(reversed(us), reversed(ss), reversed(frs), reversed(win)):
             sn = math.sin(u)
-            back.append(st.at(s, -D * math.copysign(abs(sn) ** q, sn)))
+            if cf is not None:
+                back.append(cf.point(s, -D0 * math.copysign(abs(sn) ** q, sn)))
+                continue
+            H = fr[2]
+            D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
+            y = -D * math.copysign(abs(sn) ** q, sn)
+            back.append(st.at(s, adj(s, y, 1.0, H) if vc_on else y, fr))
 
         def lead_pts(s0, s1, side):
             """Centre at s0 → face lane (side −1: f0, +1: f1) at s1."""
@@ -1024,16 +1468,256 @@ def _chain_path(st, sp, T, H0, env=None):
         hi_back = list(reversed(lead_pts(hi, st.hi, 1.0)))       # f1 lane → return lap
         lo_back = lead_pts(lo, st.lo, 1.0)                       # return lap → f1 lane
         lo_out = list(reversed(lead_pts(lo, st.lo, -1.0)))       # f0 lane → forward lap
+        # a JUNCTION end (pushed into a host): the chain's last link — one eye
+        # joining the two laps (_chain_eye); a free end keeps the canonical
+        # end motif (face lanes + the resolved cap)
+        tips = (st.centre(0.0), st.centre(st.L))
+        at_j = [CHAIN_MOTIFS and any(tp.dist(j) < 0.75 * T for j in (jends or ())) for tp in tips]
+        # the eye starts at the lap's last WAIST (a centre crossing, u = kπ):
+        # a partial loop beyond it (Phase ≠ 0) is absorbed into the eye
+        i_lo, i_hi = 0, len(out) - 1
+        if at_j[1]:
+            uw = math.floor((u1 + 1e-9) / math.pi) * math.pi
+            i_hi = max(range(len(us)), key=lambda i: -abs(us[i] - uw)) if uw > u0 + 0.5 * math.pi else i_hi
+        if at_j[0]:
+            uw = math.ceil((u0 - 1e-9) / math.pi) * math.pi
+            i_lo = min(range(len(us)), key=lambda i: abs(us[i] - uw)) if uw < u1 - 0.5 * math.pi else 0
+        nb = len(back)
+        eye_hi = _chain_eye(st, 'hi', ss[i_hi], out[i_hi], out[i_hi] - out[i_hi - 1], back[nb - 1 - i_hi], env, H0) \
+            if at_j[1] and i_hi > i_lo + 1 else None
+        eye_lo = _chain_eye(st, 'lo', ss[i_lo], back[nb - 1 - i_lo], back[nb - 1 - i_lo] - back[nb - 2 - i_lo],
+                            out[i_lo], env, H0) if at_j[0] and i_hi > i_lo + 1 else None
+        if eye_hi or eye_lo:
+            j_lo, j_hi = (i_lo if eye_lo else 0), (i_hi if eye_hi else len(out) - 1)
+            out, back = out[j_lo:j_hi + 1], back[nb - 1 - j_hi:nb - j_lo]
+        hi_tr = eye_hi[1:-1] if eye_hi else \
+            hi_out[1:] + _chain_cap(st, 'hi', hi_out[-1], hi_back[0], env)[1:-1] + hi_back[:-1]
+        if eye_lo:
+            out = out + hi_tr + back + eye_lo[1:-1] + out[:1]
+        else:
+            cap_lo = _chain_cap(st, 'lo', lo_back[-1], lo_out[0], env)
+            out = lo_out[:-1] + out + hi_tr + back + lo_back[1:] + cap_lo[1:-1] + lo_out[:1]
+        eyes = int(bool(eye_hi)) + int(bool(eye_lo))
+        closed = True
+    v = _neck_v(a, w)
+    return [out], {'pitch': round(span / m, 3), 'loops': m, 'loop_width': round(_loop_width(a, w), 3),
+                   'closed': closed, '_ref': {'chain': ref_c},
+                   'corner_motifs': len(cfs), 'junction_motifs': eyes,
+                   'neck': round((math.cos(v) ** q) if v is not None else 0.0, 3), 'q': round(q, 3),
+                   'loop_depth': round(min(sp['loop_depth'], H0) if sp['loop_depth'] > 0 else H0, 3)}
+
+
+def _chain_path_ref(st, sp, T, H0, env, ref):
+    """The chain of a run lying on a reference run (PHASE REFERENCE): the
+    REFERENCE curve (same pitch, same loop stations — mapped s_ref → s),
+    kept where it lies inside this run's usable length; at a cut end the
+    chain is clipped where it leaves (any phase) and the canonical end
+    motif — a lead from the curve to the face lanes + the resolved cap — is
+    solved locally. (Tried 2026-10-08 and measured on 5 profiles: clipping
+    at loop boundaries, clipping by the curve's mean progression, and
+    warping the last 2–5 pitches so the end starts on a centre crossing —
+    all left more support findings at the cut: 11–44 vs 10.)
+    (None, None) when nothing maps (own fit then)."""
+    f, fwd, inv, tau = ref
+    c = f.get('chain')
+    if not c or st.run.cycle:
+        return None, None
+    m_r = int(c['m'])
+    a, w, q = chain_shape(c['span'] / m_r, sp['loop_width'], sp['neck'])
+    K = 48                                             # samples per half loop (π)
+    # (a RING reference: two turns of its chain, so a piece lying across the
+    # ring's seam is covered continuously)
+    if f['cycle']:
+        # a RING reference: the curve over exactly the parameter range that
+        # covers this piece's reference range (± a loop) — any position,
+        # across the ring's seam, continuous (u on the reference's loop grid)
+        r0, r1 = sorted((fwd(st.lo), fwd(st.hi)))
+        u_of = lambda sr: ((sr - c['lo']) / c['k'] + c['xmin']) / a
+        j0 = math.floor((u_of(r0) - c['u0']) / math.pi) - 1
+        j1 = math.ceil((u_of(r1) - c['u0']) / math.pi) + 1
+        us = [c['u0'] + math.pi * (j0 + i / K) for i in range((j1 - j0) * K + 1)]
+    else:
+        us = [c['u0'] + math.pi * i / K for i in range(m_r * K + 1)]
+    sref = [c['lo'] + (a * u + w * math.sin(2 * u) - c['xmin']) * c['k'] for u in us]
+    L_ = f['L']
+
+    def local(x):
+        if not f['cycle']:
+            return inv(x)
+        cands = [inv(x + j * L_) for j in (-1, 0, 1)]
+        return min(cands, key=lambda v: 0.0 if st.lo - 1 <= v <= st.hi + 1 else min(abs(v - st.lo), abs(v - st.hi)))
+    if f['cycle']:
+        # a ring reference: each sample maps to ±L candidates — keep the
+        # mapped curve CONTINUOUS (the candidate nearest the previous one)
+        sl = [inv(x) for x in sref]                  # (two turns: the plain mapping is continuous)
+    else:
+        sl = [local(x) for x in sref]
+    e_lo = st.run.a[0] == 'E'
+    e_hi = st.run.b[0] == 'E'
+    capped = env is not None and e_lo and e_hi
+    lead = min(CORNER_ZONE * T, 0.25 * (st.hi - st.lo)) if capped else 0.0
+    lo_l, hi_l = st.lo + lead, st.hi - lead
+    # the reference curve inside this run's usable length: an original end
+    # keeps the reference loops to the end; at a cut the curve is clipped
+    # where it leaves (any phase). A loop's crest may reach a little past
+    # the end of the usable length and come back: the run is taken with a
+    # looser bound (CHAIN_SLACK), then trimmed to the last / first sample
+    # within it — no whole loop is lost at a cut.
+    slack = CHAIN_SLACK * lead if capped else 0.0
+    loose = [lo_l - slack - 1e-6 <= v <= hi_l + slack + 1e-6 for v in sl]
+    best, cur = None, None
+    for i, o in enumerate(loose + [False]):
+        if o and cur is None:
+            cur = i
+        elif not o and cur is not None:
+            if best is None or i - cur > best[1] - best[0]:
+                best = (cur, i)
+            cur = None
+    if best is None:
+        return None, None
+    strict = [i for i in range(best[0], best[1]) if lo_l - 1e-6 <= sl[i] <= hi_l + 1e-6]
+    if len(strict) < K:
+        return None, None
+    best = (strict[0], strict[-1] + 1)
+    idx = list(range(best[0], best[1]))
+    if sl[idx[-1]] < sl[idx[0]]:
+        idx.reverse()
+
+    # CORNER MOTIFS as on the uncut wall (the crest rule of the reference: a
+    # ring's single lap puts its OUTER crest on each corner)
+    D0 = min(sp['loop_depth'], H0) if sp['loop_depth'] > 0 else H0
+    loc = inv if f['cycle'] else local
+    ua_, ub_ = sorted((us[idx[0]], us[idx[-1]]))
+    cfs = _chain_corners(st, T, H0, st.bead, env, sl[idx[0]], sl[idx[-1]], c['span'] / m_r, D0,
+                         lambda u_: loc(c['lo'] + (a * u_ + w * math.sin(2 * u_) - c['xmin']) * c['k']), ua_, ub_,
+                         not f['cycle'], tau) if env is not None and CHAIN_MOTIFS else []
+
+    def pt(i, sign=1.0):
+        s_ = sl[i]
+        sn = math.sin(us[i])
+        for cf in cfs:
+            if cf.sa < s_ < cf.sb:
+                return cf.point(s_, sign * tau * D0 * math.copysign(abs(sn) ** q, sn))
+        H = st.half(s_)
+        D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
+        return st.at(s_, sign * tau * D * math.copysign(abs(sn) ** q, sn))
+    out = [pt(i) for i in idx]
+    lo, hi = sl[idx[0]], sl[idx[-1]]
+
+    def ycur(i):                                       # the curve's offset at sample i (local)
+        s_ = sl[i]
+        H = st.half(s_)
+        D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
+        sn = math.sin(us[i])
+        return tau * D * math.copysign(abs(sn) ** q, sn)
+    y_lo, y_hi = ycur(idx[0]), ycur(idx[-1])
+    closed = False
+    if capped:
+        back = [pt(i, -1.0) for i in reversed(idx)]
+
+        def lead_pts(s0, s1, side, y0):
+            """From (s0, y0) on the curve to the face lane `side` at s1."""
+            zs = _samples(min(s0, s1), max(s0, s1), 0.25)
+            if s1 < s0:
+                zs = list(reversed(zs))
+            return [st.at(z, y0 + (side * st.half(z) - y0) * _smooth(abs(z - s0) / abs(s1 - s0))) for z in zs]
+        # lap → face lane in REFERENCE terms (the forward lap to the
+        # reference's face 0), whatever way the skeleton orients this piece
+        fs = -tau
+        hi_out = lead_pts(hi, st.hi, fs, y_hi)
+        hi_back = list(reversed(lead_pts(hi, st.hi, -fs, -y_hi)))
+        lo_back = lead_pts(lo, st.lo, -fs, -y_lo)
+        lo_out = list(reversed(lead_pts(lo, st.lo, fs, y_lo)))
         cap_hi = _chain_cap(st, 'hi', hi_out[-1], hi_back[0], env)
         cap_lo = _chain_cap(st, 'lo', lo_back[-1], lo_out[0], env)
         out = (lo_out[:-1] + out + hi_out[1:] + cap_hi[1:-1] + hi_back[:-1] + back + lo_back[1:]
                + cap_lo[1:-1] + lo_out[:1])
         closed = True
+    else:                                              # a junction end: run on to the centre line
+        if lo > st.lo + 1e-6:
+            zs = _samples(st.lo, lo, 0.5)[:-1]
+            out = [st.at(z, y_lo * _smooth((z - st.lo) / max(1e-9, lo - st.lo))) for z in zs] + out
+        if hi < st.hi - 1e-6:
+            zs = _samples(hi, st.hi, 0.5)[1:]
+            out = out + [st.at(z, y_hi * _smooth((st.hi - z) / max(1e-9, st.hi - hi))) for z in zs]
     v = _neck_v(a, w)
-    return [out], {'pitch': round(span / m, 3), 'loops': m, 'loop_width': round(_loop_width(a, w), 3),
-                   'closed': closed,
+    return [out], {'pitch': round(c['span'] / m_r, 3), 'loops': round((best[1] - best[0]) / (2 * K), 2),
+                   'corner_motifs': len(cfs),
+                   'loop_width': round(_loop_width(a, w), 3), 'closed': closed, 'phase_ref': True,
                    'neck': round((math.cos(v) ** q) if v is not None else 0.0, 3), 'q': round(q, 3),
                    'loop_depth': round(min(sp['loop_depth'], H0) if sp['loop_depth'] > 0 else H0, 3)}
+
+
+def _hermite(P0, T0, P1, T1, n):
+    """n + 1 points of the cubic Hermite P0 (tangent T0) → P1 (tangent T1)."""
+    out = []
+    for k in range(n + 1):
+        t = k / n
+        t2, t3 = t * t, t * t * t
+        out.append(P0 * (2 * t3 - 3 * t2 + 1) + T0 * (t3 - 2 * t2 + t) + P1 * (-2 * t3 + 3 * t2) + T1 * (t3 - t2))
+    return out
+
+
+def _chain_eye(st, end, s_l, A, dA, B, env, H):
+    """CHAINED LOOP JUNCTION MOTIF (2026-10-09): at a branch end pushed into
+    a host, the two mirrored laps are joined by ONE round EYE — the chain's
+    last link — instead of leading out to the face lanes and a flat cap.
+    From A (the forward lap's last waist, arriving along dA) the path swings
+    to the side it is already heading for, out along that lane, round the
+    apex on the resolved end cap (inset ½ bead: inside the host, so it
+    crosses the host's printed paths), back along the other lane and into B
+    (the mirrored return lap) — mirror symmetric, so the laps cross at the
+    eye's throat like every other link. None when the eye does not fit ½
+    bead inside the envelope. (The model checks the eye really crosses the
+    host and otherwise regenerates that end with the canonical cap.)"""
+    s_e, f0, f1, t = _end_frame(st, end)
+    O, n, _ = st.frame(s_l)
+    rail = env.cap_rail(f0, f1, st.at(s_e, 0.0)) if env is not None else None
+    if not rail or len(rail) < 2:
+        return None
+    # the APEX: the middle of the end cap (by length) — the eye points along
+    # the cap's own normal, so at an oblique end (a wall meeting its host at
+    # an angle) it still reaches straight into the host
+    cum = [0.0]
+    for p_, q_ in zip(rail, rail[1:]):
+        cum.append(cum[-1] + p_.dist(q_))
+    half = 0.5 * cum[-1]
+    k = min(len(cum) - 2, max(0, bisect.bisect_right(cum, half) - 1))
+    Ap = rail[k].lerp(rail[k + 1], (half - cum[k]) / max(1e-12, cum[k + 1] - cum[k]))
+    ch = rail[-1] - rail[0]
+    if ch.length() < 1e-9:
+        return None
+    t2 = Vec2(-ch.y, ch.x) * (1.0 / ch.length())
+    if _dot(t2, t) < 0:
+        t2 = t2 * -1.0
+    if _dot(t2, t) < 0.5:                               # (more than 60° off the wall: not an end cap)
+        return None
+    n2 = Vec2(-t2.y, t2.x)
+    if _dot(n2, n) < 0:
+        n2 = n2 * -1.0
+    if _dot(Ap - O, t) < 0.25 * st.bead:
+        return None
+    dA = dA * (1.0 / max(1e-12, dA.length()))
+    side = 1.0 if _dot(dA, n) >= 0 else -1.0
+    dB = (dA - n * (2.0 * _dot(dA, n))) * -1.0          # the mirrored lap leaves this way
+    for f in (1.0, 0.85, 0.7, 0.55):
+        Hs = f * H
+        Apf = Ap if f == 1.0 else O.lerp(Ap, 0.5 + 0.5 * f)
+        # a LINK: the sides run along the lanes into the host (where they
+        # cross its paths, as the canonical cap's sides do) and close with a
+        # half circle at the apex
+        S1 = Apf - t2 * Hs + n2 * (side * Hs)
+        S2 = Apf - t2 * Hs - n2 * (side * Hs)
+        if _dot(S1 - O, t) < 0.25 * st.bead or _dot(S2 - O, t) < 0.25 * st.bead:
+            continue
+        k1, k1b = max(A.dist(S1), 1.0), max(B.dist(S2), 1.0)
+        k2 = 1.57 * Hs
+        half1 = _hermite(A, dA * k1, S1, t2 * k1, 16) + _hermite(S1, t2 * k2, Apf, n2 * (-side * k2), 10)[1:]
+        half2 = _hermite(Apf, n2 * (-side * k2), S2, t2 * -k2, 10) + _hermite(S2, t2 * -k1b, B, dB * k1b, 16)[1:]
+        pts = half1 + half2[1:]
+        if env is None or all(env.clear(q, 0.5 * st.bead - 0.05) for q in pts[1:-1]):
+            return pts
+    return None
 
 
 def _chain_cap(st, end, A, B, env):
@@ -1267,21 +1951,23 @@ def _simplify(pl, tol=0.01):
     (no visible change; fewer vertices for the router)."""
     if len(pl) < 3:
         return pl
-    key = lambda q: (round(q.x, 6), round(q.y, 6))
+    keys = [(round(q.x, 6), round(q.y, 6)) for q in pl]     # (once per point)
     seen = {}
-    for q in pl[1:-1]:
-        seen[key(q)] = seen.get(key(q), 0) + 1
+    for k in keys[1:-1]:
+        seen[k] = seen.get(k, 0) + 1
     out = [pl[0]]
+    hypot = math.hypot
     for i in range(1, len(pl) - 1):
         a, b, c = out[-1], pl[i], pl[i + 1]
-        if seen[key(b)] > 1:                      # a vertex the path visits twice (a touch point): keep
+        if seen[keys[i]] > 1:                     # a vertex the path visits twice (a touch point): keep
             out.append(b)
             continue
-        d = c - a
-        L2 = d.x * d.x + d.y * d.y
+        dx, dy = c.x - a.x, c.y - a.y
+        L2 = dx * dx + dy * dy
         if L2 > 1e-18:
-            t = max(0.0, min(1.0, ((b.x - a.x) * d.x + (b.y - a.y) * d.y) / L2))
-            if (a + d * t).dist(b) < tol:
+            t = max(0.0, min(1.0, ((b.x - a.x) * dx + (b.y - a.y) * dy) / L2))
+            # (= (a + d * t).dist(b), the same float operations)
+            if hypot(a.x + dx * t - b.x, a.y + dy * t - b.y) < tol:
                 continue
         out.append(b)
     out.append(pl[-1])
@@ -1300,6 +1986,125 @@ def _cross(a, b, c, d):
     u = (w.x * r.y - w.y * r.x) / den
     if 0 <= t <= 1 and 0 <= u <= 1:
         return t
+    return None
+
+
+def contact_near(polys, others, tip, radius):
+    """Does a path of `polys` CROSS a path of `others` within `radius` of
+    `tip`? (The junction motif's contact check: real printed contact.)
+    Segments are bucketed in a 1 in grid round the tip: dense chains stay
+    cheap."""
+    h = 1.0
+
+    def near(pls):
+        for pl in pls:
+            for a, b in zip(pl, pl[1:]):
+                if min(a.dist(tip), b.dist(tip)) < radius + a.dist(b):
+                    yield a, b
+    grid = {}
+    for c, d in near(others):
+        for i in range(int(math.floor(min(c.x, d.x) / h)), int(math.floor(max(c.x, d.x) / h)) + 1):
+            for j in range(int(math.floor(min(c.y, d.y) / h)), int(math.floor(max(c.y, d.y) / h)) + 1):
+                grid.setdefault((i, j), []).append((c, d))
+    for a, b in near(polys):
+        seen = set()
+        for i in range(int(math.floor(min(a.x, b.x) / h)), int(math.floor(max(a.x, b.x) / h)) + 1):
+            for j in range(int(math.floor(min(a.y, b.y) / h)), int(math.floor(max(a.y, b.y) / h)) + 1):
+                for sg in grid.get((i, j), ()):
+                    if id(sg) in seen:
+                        continue
+                    seen.add(id(sg))
+                    c, d = sg
+                    if _cross(a, b, c, d) is not None and _cross(c, d, a, b) is not None:
+                        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# CONTACT STAPLE (2026-10-09): two generated walls that touch architecturally
+# (their bands meet or overlap by less than ~a bead: a circle grazing a
+# rectangle) print no crossing — each pattern keeps ½ bead inside its OWN
+# faces, so the walls' beads only graze or leave a gap, and the router sees two
+# separate components. A STAPLE is one small closed loop across the contact:
+# two strands one bead apart from inside one wall's printed paths to inside
+# the other's, round caps. It crosses both walls' paths (degree-4 crossings:
+# parity unchanged), so the walls are BONDED (physical contact) and the route
+# can continue through the junction. Used only where the bands touch and no
+# printed path of one crosses the other's near the contact.
+# ---------------------------------------------------------------------------
+
+def _segs_near(polys, c, radius):
+    out = []
+    for pl in polys:
+        for a, b in zip(pl, pl[1:]):
+            if min(a.dist(c), b.dist(c)) < radius + a.dist(b):
+                out.append((a, b))
+    return out
+
+
+def _closest_on(segs, q):
+    best = None
+    for a, b in segs:
+        d = b - a
+        L2 = d.x * d.x + d.y * d.y
+        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((q.x - a.x) * d.x + (q.y - a.y) * d.y) / L2))
+        p = a + d * t
+        dd = p.dist(q)
+        if best is None or dd < best[0]:
+            best = (dd, p, d)
+    return best
+
+
+def band_contact(rings_a, rings_b, tol):
+    """The point where two bands' rings meet (closest approach ≤ tol), or None."""
+    best = None
+    sb = [(r[k], r[(k + 1) % len(r)]) for r in rings_b for k in range(len(r))]
+    for r in rings_a:
+        n = len(r)
+        for k in range(n):
+            a = r[k]
+            for c_, d_ in sb:
+                if max(c_.x, d_.x) < a.x - tol - 50 or min(c_.x, d_.x) > a.x + tol + 50:
+                    continue
+                cl = _closest_on([(c_, d_)], a)
+                if best is None or cl[0] < best[0]:
+                    best = (cl[0], a.lerp(cl[1], 0.5))
+    return best[1] if best is not None and best[0] <= tol else None
+
+
+def contact_staple(polys_a, polys_b, c, bead, thick, inside=None):
+    """A closed staple loop bonding walls a and b at their contact point c
+    (see CONTACT STAPLE), or None when one is not needed (their paths cross
+    near c) or not possible. `inside(q)`: q lies in the material."""
+    radius = 3.0 * thick + bead
+    if contact_near(polys_a, polys_b, c, radius):
+        return None
+    sa, sb = _segs_near(polys_a, c, radius), _segs_near(polys_b, c, radius)
+    if not sa or not sb:
+        return None
+    _, pa, ta = _closest_on(sa, c)
+    _, pb, _ = _closest_on(sb, c)
+    u = pb - pa
+    if u.length() < 0.25 * bead:                        # (touching paths: across the a path)
+        u = Vec2(-ta.y, ta.x)
+        if _dot(u, c - pa) < 0 and (c - pa).length() > 1e-9:
+            u = u * -1.0
+    if u.length() < 1e-9:
+        return None
+    u = u * (1.0 / u.length())
+    n = Vec2(-u.y, u.x)
+    for e, w in ((bead, bead), (1.5 * bead, bead), (0.5 * thick, bead), (bead, 0.5 * bead), (0.5 * thick, 0.5 * bead)):
+        A0, B0 = pa - u * e, pb + u * e
+        h = 0.5 * w
+        cap = lambda C, d, k=8: [C + (n * math.cos(math.pi * i / k) + d * math.sin(math.pi * i / k)) * h
+                                 for i in range(k + 1)]
+        loop = [A0 + n * h, B0 + n * h] + cap(B0, u)[1:-1] + [B0 - n * h, A0 - n * h] + \
+               [A0 + (n * -math.cos(math.pi * i / 8) - u * math.sin(math.pi * i / 8)) * h for i in range(1, 8)]
+        loop.append(loop[0])
+        if inside is not None and not all(inside(q) for q in loop):
+            continue
+        if contact_near([loop], polys_a, c, radius) and contact_near([loop], polys_b, c, radius):
+            return loop
     return None
 
 
@@ -1341,11 +2146,24 @@ def min_effective_thickness(strips, polys, bead, thick):
     return worst
 
 
-def generate(rings, system, bead, contact, seam_hints=None):
+def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, transitions=None, junction_ends=None):
     """(polylines, report) of a wall system filling one wall-material region
     (rings: the envelope, material on the left). seam_hints: points where the
     user placed route starts (Parallel Walls put their lane-change seam zone
-    at the nearest one on the wall)."""
+    at the nearest one on the wall).
+    report['frames']: per run, the REFERENCE FRAME of what was generated (its
+    centre line, the spans / periods / phase anchors of Interleaved / Linked,
+    the loop parameters of Chained Loop) — see PHASE REFERENCE.
+    phase_ref: frames of the same wall system generated WITHOUT an Assembly
+    profile cut (layer_design). A run lying on a reference run keeps that
+    run's period, phase, lane identity and loop stations; only its NEW free
+    ends (the cut) get the canonical end motif (_ref_map).
+    transitions: virtual openings [(face point a, face point b, normal a,
+    normal b, alpha)] — an Assembly opening's CROSS-Z TRANSITION: no cut;
+    Interleaved / Linked strands are pre-deformed by alpha toward the end
+    lanes that cut would give them (_wave_paths vcuts).
+    junction_ends: tips of this band's ends PUSHED into a host wall (model
+    _split_wall_systems): a Chained Loop ends there in its junction motif."""
     sp = normalize(system)
     if sp is not None and seam_hints:
         sp = dict(sp, seam_hint=list(seam_hints))
@@ -1359,20 +2177,32 @@ def generate(rings, system, bead, contact, seam_hints=None):
     runs = [r for r in sk.runs if r.length > 1e-6 or r.cycle]
     env = _Envelope(rings, bead)
     strips = [_Strip(geo, r, bead, thick, env) for r in runs]
-    polys, infos, Ts = [], [], []
+    polys, infos, Ts, frames = [], [], [], []
+    refs = [f for f in (phase_ref or []) if f.get('type') == sp['type'] and f.get('key') == _sp_key(sp)]
     for st in strips:
+        _cancel_check()
         if st.hi - st.lo < 0.5 * bead:
             continue
         ws_ = sorted(2 * st.half(st.lo + (st.hi - st.lo) * k / 8) + bead for k in range(1, 8))
         T = ws_[len(ws_) // 2]                       # the run's true (median) thickness
         Ts.append(T)
         H0 = max(0.0, 0.5 * T - 0.5 * bead)
+        ref = _ref_map(st, refs, thick) if refs and sp['type'] in ('interleaved', 'linked', 'chain') else None
+        p = None
         if sp['type'] == 'chain':
-            p, info = _chain_path(st, sp, T, H0, env)
+            if ref is not None:
+                p, info = _chain_path_ref(st, sp, T, H0, env, ref)
+            if p is None:
+                vc = _virtual_cuts(st, transitions, thick) if transitions else []
+                p, info = _chain_path(st, sp, T, H0, env, vc, junction_ends)
+                info['phase_ref'] = False        # (no reference could be used: own fit)
         else:
-            p, info = _wave_paths(st, sp, H0, env)
+            vc = _virtual_cuts(st, transitions, thick) if transitions and sp['type'] in ('interleaved', 'linked') else []
+            p, info = _wave_paths(st, sp, H0, env, ref, vc)
+        info['phase_ref'] = ref is not None and info.get('phase_ref', True)
         polys += [_simplify(pl) for pl in p if len(pl) >= 2]
         infos.append(info)
+        frames.append(_frame(st, sp, info))
     worst = min_effective_thickness(strips, polys, bead, thick)
     env = sorted(Ts) or [thick]
     rep = {'system': sp['type'], 'label': LABELS[sp['type']], 'params': sp,
@@ -1387,5 +2217,180 @@ def generate(rings, system, bead, contact, seam_hints=None):
            # wall end: odd Interleaved / Linked path counts cannot close there
            'free_ends': sum(1 for st in strips if not st.run.cycle for nd in (st.run.a, st.run.b) if nd[0] == 'E'),
            'closable': not (sp['type'] in ('interleaved', 'linked', 'parallel') and sp['paths'] % 2 and
-                            any(not st.run.cycle and 'E' in (st.run.a[0], st.run.b[0]) for st in strips))}
+                            any(not st.run.cycle and 'E' in (st.run.a[0], st.run.b[0]) for st in strips)),
+           'phase_ref_runs': sum(1 for i in infos if i.get('phase_ref')),
+           'frames': frames}
+    if sp['type'] == 'chain':
+        # COMPLEXITY of the chain (the Designer warns before it gets slow): the
+        # loops / points generated, the fitted pitch range, and DENSE when
+        # loops are closer than one bead (they overlap: the route gets large)
+        ps = [i['pitch'] for i in infos if 'pitch' in i]
+        rep['chain'] = {'loops': round(sum(i.get('loops', 0) for i in infos), 2),
+                        'points': sum(len(p) for p in polys),
+                        'pitch_min': min(ps) if ps else None, 'pitch_max': max(ps) if ps else None,
+                        'dense': bool(ps) and min(ps) < bead,
+                        'corner_motifs': sum(i.get('corner_motifs', 0) for i in infos),
+                        'junction_motifs': sum(i.get('junction_motifs', 0) for i in infos)}
+    for i in infos:
+        i.pop('_ref', None)
     return polys, rep
+
+
+# ---------------------------------------------------------------------------
+# PHASE REFERENCE (Assembly profiles, 2026-10-08): a profile CUTS the pattern
+# of the uncut wall; it never re-fits it. The uncut generation reports one
+# frame per run; a run of a cut variant is mapped onto the reference run it
+# lies on (its centre line projected onto the reference centre line: s →
+# s_ref, and the across direction compared: y → ±y) and is drawn with the
+# REFERENCE period / phase / lanes / loop stations. Only the run's NEW free
+# ends (cut faces, a tapered end) are solved locally: the strands fade into
+# the canonical end lanes there and the normal cap turns join them
+# (Interleaved / Linked), or the chain stops at the last whole loop before
+# the cut and leads out to the cap (Chained Loop).
+
+def _virtual_cuts(st, transitions, thick):
+    """[(s of face a, s of face b, alpha)] of the virtual openings on this run."""
+    out = []
+    zs = _samples(0.0, st.L, 0.5)
+    mids = [st.frame(z)[0] for z in zs]
+
+    def s_of(P):
+        k = min(range(len(zs)), key=lambda i: mids[i].dist(P))
+        return zs[k] if mids[k].dist(P) < 0.5 * thick else None
+    for (pa, pb, _na, _nb, al) in transitions or []:
+        sa, sb = s_of(pa), s_of(pb)
+        if sa is None or sb is None or al <= 0:
+            continue
+        if st.run.cycle and abs(sb - sa) > 0.5 * st.L:     # the opening spans the seam
+            sa, sb = (sa, sb + st.L) if sa > sb else (sb, sa + st.L)
+        out.append((min(sa, sb), max(sa, sb), al))
+    return out
+
+
+def _sp_key(sp):
+    return repr(sorted((k, v) for k, v in sp.items() if k != 'seam_hint'))
+
+
+def _frame(st, sp, info):
+    ss = _samples(0.0, st.L, 1.0)
+    cen, acr = [], []
+    for z in ss:
+        m, u, _ = st.frame(z)
+        cen.append((m.x, m.y))
+        acr.append((u.x, u.y))
+    out = {'type': sp['type'], 'key': _sp_key(sp), 'L': st.L, 'cycle': st.run.cycle, 'ss': ss,
+           'centre': cen, 'across': acr, 'lo': st.lo, 'hi': st.hi}
+    out.update(info.get('_ref') or {})
+    return out
+
+
+def _ref_map(st, refs, thick):
+    """(frame, s → s_ref, s_ref → s, across sign) of the reference run this
+    run lies on, or None."""
+    n = max(4, int(math.ceil((st.hi - st.lo) / 2.0)))
+    zs = [st.lo + (st.hi - st.lo) * k / n for k in range(n + 1)]
+    pts = [st.frame(z) for z in zs]
+    for f in refs:
+        cen, fss, L = f['centre'], f['ss'], f['L']
+        segs = list(range(len(cen) - 1)) + ([len(cen) - 1] if f['cycle'] else [])
+        sr, ok, sign_votes = [], True, 0
+        for (m, u, _) in pts:
+            best = None
+            for i in segs:
+                a, b = cen[i], cen[(i + 1) % len(cen)]
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                l2 = dx * dx + dy * dy
+                t = 0.0 if l2 < 1e-18 else max(0.0, min(1.0, ((m.x - a[0]) * dx + (m.y - a[1]) * dy) / l2))
+                d = math.hypot(a[0] + t * dx - m.x, a[1] + t * dy - m.y)
+                if best is None or d < best[0]:
+                    s1 = fss[i + 1] if i + 1 < len(fss) else L
+                    best = (d, fss[i] + t * (s1 - fss[i]), i)
+            if best is None or best[0] > 0.25 * thick:
+                ok = False
+                break
+            sr.append(best[1])
+            ua = f['across'][best[2]]
+            sign_votes += 1 if u.x * ua[0] + u.y * ua[1] >= 0 else -1
+        if not ok:
+            continue
+        if f['cycle']:                               # unwrap across the reference seam
+            for k in range(1, len(sr)):
+                while sr[k] - sr[k - 1] > 0.5 * L:
+                    sr[k] -= L
+                while sr[k] - sr[k - 1] < -0.5 * L:
+                    sr[k] += L
+        d = [b - a for a, b in zip(sr, sr[1:])]
+        if not d or not (all(x > 0 for x in d) or all(x < 0 for x in d)):
+            continue
+        if abs(abs(sr[-1] - sr[0]) - (zs[-1] - zs[0])) > 0.05 * (zs[-1] - zs[0]) + 0.5:
+            continue                                 # not the same length along the wall
+        # the SAME wall axis: s_ref = σ·s + β exactly (arc length is
+        # preserved); β from the interior samples (the frames near a cap are
+        # askew), median for robustness
+        sg = 1.0 if d[0] > 0 else -1.0
+        # s_ref = σ·s + β(s): σ = ±1 (arc length is preserved), β measured
+        # along the run — constant on a straight wall, stepping by a fraction
+        # of an inch at each corner (the cut piece's and the ring's chordal
+        # axes round a corner slightly differently). Samples within a
+        # thickness of a free end (frames askew near a cap) take the nearest
+        # interior β; then a running median (3).
+        bs = [r - sg * z for z, r in zip(zs, sr)]
+        inner = [k for k, z in enumerate(zs) if st.lo + thick <= z <= st.hi - thick]
+        if inner:
+            for k in range(len(bs)):
+                if k not in inner:
+                    bs[k] = bs[min(inner, key=lambda j: abs(j - k))]
+        bs = [sorted(bs[max(0, k - 1):k + 2])[len(bs[max(0, k - 1):k + 2]) // 2] for k in range(len(bs))]
+
+        def fwd(z, sg=sg, zs=zs, bs=bs):
+            return sg * z + _interp_ext_flat(zs, bs, z)
+
+        def inv(r, sg=sg, zs=zs, bs=bs):
+            z = (r - bs[0]) * sg
+            for _ in range(3):                      # β varies slowly: a fixed point in 2–3 steps
+                z = (r - _interp_ext_flat(zs, bs, z)) * sg
+            return z
+        # an ORIGINAL free end of the reference run keeps the reference's end
+        # station (the same end motif); a NEW end (a cut) keeps its own
+        # (identified by the run's TIP — its end face — which maps onto the
+        # reference run's tip only for an original end; the end STATIONS may
+        # differ by a search step, a cut close to the end must not match)
+        for side in (() if st.run.cycle else ('lo', 'hi')):
+            if (st.run.a if side == 'lo' else st.run.b)[0] != 'E':
+                continue
+            tip = fwd(0.0 if side == 'lo' else st.L)
+            for r_tip, rs in ((0.0, f['lo']), (L, f['hi'])):
+                if abs(tip - r_tip) < 0.25 * st.bead:
+                    z = inv(rs)
+                    if 0.0 <= z <= st.L:
+                        if side == 'lo':
+                            st.lo = z
+                        else:
+                            st.hi = z
+                        # the reference judged that station square; this
+                        # run's own frame samples (another grid) may not
+                        st.__dict__.setdefault('_ref_square', set()).add(round(z, 9))
+                    break
+        return f, fwd, inv, (1.0 if sign_votes >= 0 else -1.0)
+    return None
+
+
+def _interp_ext_flat(xs, ys, x):
+    """Piecewise-linear interpolation (xs increasing), held flat past the ends."""
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1]
+    return _interp_ext(xs, ys, x)
+
+
+def _interp_ext(xs, ys, x):
+    """Piecewise-linear interpolation (xs increasing), linearly extended past the ends."""
+    if x <= xs[0]:
+        k = 0
+    elif x >= xs[-1]:
+        k = len(xs) - 2
+    else:
+        k = max(0, min(len(xs) - 2, bisect.bisect_right(xs, x) - 1))
+    x0, x1, y0, y1 = xs[k], xs[k + 1], ys[k], ys[k + 1]
+    return y0 if x1 == x0 else y0 + (y1 - y0) * (x - x0) / (x1 - x0)

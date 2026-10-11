@@ -357,7 +357,7 @@ def transform_document(doc, transforms, atts=None, _maps_only=False) -> tuple:
         new_src.append(_transform_record(d, m))
         moved.append(d['id'])
     out['source_paths'] = new_src
-    for o in out.get('openings') or []:                 # width physical; position scales
+    for o in (out.get('openings') or []) + (out.get('cut_transitions') or []):   # width physical; position scales
         m = maps.get(o.get('source_path_id'))
         if m is not None:
             o['center_s'] = float(o.get('center_s', 0.0)) * _scale_of(m)

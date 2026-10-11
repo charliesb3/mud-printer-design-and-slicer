@@ -124,9 +124,23 @@ def test_linked_neighbours_meet_at_their_extrema():
     for a, b in zip(sp, sp[1:]):
         dmin = min(min(q.dist(r) for r in b if abs(r.x - q.x) < 2) for q in a if 80 < q.x < 280)
         assert dmin < 0.6                                         # they touch (sampling tolerance)
-    # more amplitude interlocks deeper (neighbours cross)
-    _, meta2 = build(make('line', {'type': 'linked', 'paths': 3, 'period': 24, 'amplitude': 2.5}))
-    assert meta2['network']['wall_systems'][0]['closest_approach'] < 0
+    # (Amplitude removed 2026-10-08: the Wall Thickness owns the envelope — a
+    # stored legacy amplitude is ignored, the geometry is the automatic one)
+    paths2, meta2 = build(make('line', {'type': 'linked', 'paths': 3, 'period': 24, 'amplitude': 2.5}))
+    assert abs(meta2['network']['wall_systems'][0]['closest_approach']) < 1e-6
+    key = lambda P: sorted([(round(q.x, 9), round(q.y, 9)) for q in p.sample_points()] for p in system_paths(P))
+    assert key(paths2) == key(paths)
+
+
+def test_interleaved_depth_is_the_wall_thickness():
+    """(Depth removed 2026-10-08) a stored legacy depth is ignored: full envelope."""
+    a, m1 = build(make('line', {'type': 'interleaved', 'paths': 3, 'period': 30}))
+    b, m2 = build(make('line', {'type': 'interleaved', 'paths': 3, 'period': 30, 'depth': 2.0}))
+    key = lambda P: sorted([(round(q.x, 9), round(q.y, 9)) for q in p.sample_points()] for p in system_paths(P))
+    assert key(a) == key(b)
+    import wall_systems as WS
+    assert 'depth' not in WS.normalize({'type': 'interleaved', 'depth': 2.0})
+    assert 'amplitude' not in WS.normalize({'type': 'linked', 'amplitude': 2.0})
 
 
 @pytest.mark.parametrize('system', SYSTEMS, ids=IDS)

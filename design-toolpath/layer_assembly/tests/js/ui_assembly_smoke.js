@@ -54,6 +54,7 @@ global.setTimeout = (fn, ms, ...a) => (fn && /^(runRoute|fetchEffectivePaths)$/.
 const STATIC = path.join(__dirname, '..', '..', '..', 'design_proto', 'static');
 let src = fs.readFileSync(path.join(STATIC, 'app.js'), 'utf8');
 src = src.replace(/\ninit\(\);\s*$/, '\n') + '\ncanvas.width = 800; canvas.height = 800;\n';
+src += '\n' + fs.readFileSync(path.join(STATIC, 'opening_shape.js'), 'utf8');
 src += '\n' + fs.readFileSync(path.join(STATIC, 'assembly.js'), 'utf8');
 eval(src + `
 ;(async function run() {
@@ -308,12 +309,13 @@ eval(src + `
   const gBefore = geoCalls(), nMo = asm.hist.undo.length;
   check(asm.state.max_overhang === 1.5 && asm.state.min_overlap === undefined && el('asm-max-overhang').value === 1.5 &&
         el('asm-bead-width').value === 3 && txtOf('asm-overlap-note').includes('Minimum overlap') &&
-        txtOf('asm-overlap-note').includes('1.50 in (derived)') && txtOf('asm-overlap-note').includes('bead width − maximum overhang'),
+        txtOf('asm-overlap-note').includes('1.50 in') &&
+        el('asm-overlap-note').children.some(c => /bead width − maximum overhang/.test(c.title || '')),
         'Physical support: Bead width 3, Maximum overhang 1.5 (editable), Minimum overlap 1.50 in (derived)');
   await asmSetTransform(2, 'dx', 1.25);                 // the top section leans 1.25 in / layer
   check(SP().insufficient_support === 0, '1.25 in / layer lean with 1.5 in max overhang: supported');
   await asmSetMaxOverhang(1);
-  check(txtOf('asm-overlap-note').includes('2.00 in (derived)') && SP().min_overlap === 2 && SP().max_overhang === 1,
+  check(txtOf('asm-overlap-note').includes('2.00 in') && SP().min_overlap === 2 && SP().max_overhang === 1,
         'Bead 3 − Maximum overhang 1 = Minimum overlap 2.00 in (derived, also in the report)');
   const ins = SP().findings.filter(f => f.status === 'insufficient_support');
   check(ins.length > 3 && ins.every(f => f.kind === 'overlap' && f.min_overlap === 2 && Math.abs(f.overlap - 1.75) < 0.01),
@@ -427,28 +429,33 @@ eval(src + `
   await asmSetTransform('asm', 'scale_in', 0);
   asmViewPreset('iso');
 
-  // ---- Layer Designs | Layers | Assembly Transform | Structure | 3D preview: five columns ----
+  // ---- recentred layout (2026-10-08): Layer Designs | Layers | 3D preview | Assembly Transform + Profiles ----
   const html = fs.readFileSync(path.join(STATIC, 'index.html'), 'utf8');
   const iD = html.indexOf('asm-designs-col'), iL = html.indexOf('id="asm-col-layers"'),
-        iT = html.indexOf('id="asm-col-transform"'), iS = html.indexOf('id="asm-col-structure"'),
-        iEnd = html.indexOf('id="asm-preview-wrap"');
+        iV = html.indexOf('id="asm-preview-wrap"'), iR = html.indexOf('id="asm-col-right"'),
+        iT = html.indexOf('id="asm-col-transform"'), iP = html.indexOf('id="asm-col-profiles"');
   const paneOf = id => { const i = html.indexOf('id="' + id + '"');
-    return i < 0 ? 'missing' : (i > iS && i < iEnd) ? 'structure' : (i > iT && i < iS) ? 'transform'
-         : (i > iL && i < iT) ? 'layers' : 'none'; };
-  check(iD > 0 && iL > iD && iT > iL && iS > iT && iEnd > iS,
-        'Layer Designs | Layers | Assembly Transform | Structure | 3D preview, side by side');
-  check(!html.includes('asm-tab') && typeof asmSetTab === 'undefined', 'no tabs');
+    return i < 0 ? 'missing' : i > iP ? 'profiles' : i > iT ? 'transform' : i > iV ? 'preview'
+         : i > iL ? 'layers' : 'none'; };
+  check(iD > 0 && iL > iD && iV > iL && iR > iV && iT > iR && iP > iT,
+        'Layer Designs | Layers | 3D preview (centred) | Assembly Transform + Profiles on the right');
+  check(/<details class="asm-right-sec asm-transform-col" id="asm-col-transform" open>/.test(html) &&
+        /<details class="asm-right-sec asm-profiles-col" id="asm-col-profiles" open>/.test(html),
+        'Assembly Transform and Profiles share ONE right column as collapsible sections (separate subsystems, no tabs)');
+  check(!html.includes('asm-col-structure') && !html.includes('asm-tab') && typeof asmSetTab === 'undefined', 'no Structure column, no tabs');
   check(['asm-layer-height', 'asm-totals', 'asm-sections', 'asm-undo', 'asm-redo'].every(id => paneOf(id) === 'layers'),
         'Layer height, totals, the section cards (with their own transforms) and Undo / Redo are in the Layers column');
-  check(paneOf('asm-assembly-tf') === 'transform',
-        'the Assembly Transform (profile / shift / scale, transform groups, assignment, connectors) has its own column');
-  check(['asm-physical', 'asm-bead-width', 'asm-max-overhang', 'asm-overlap-note', 'asm-support'].every(id => paneOf(id) === 'structure') &&
-        paneOf('asm-min-overlap') === 'missing',
-        'Structure: Bead width, Maximum overhang, derived Minimum overlap, findings / headers (no editable min overlap)');
-  check(html.indexOf('asmAddSection()') > iL && html.indexOf('asmAddSection()') < iT, 'Add Section is in the Layers column');
-  check(['asm-pane-layers', 'asm-pane-transform', 'asm-pane-structure'].every(id => paneOf(id) !== 'missing' && el(id).style.display !== 'none') &&
-        /\.asm-stack-col \.sidebar-scroll \{ overflow-y: auto; \}/.test(html),
-        'all three control columns are visible at once and scroll independently');
+  check(['asm-physical', 'asm-bead-width', 'asm-max-overhang', 'asm-overlap-note', 'asm-support-summary', 'asm-support'].every(id => paneOf(id) === 'layers') &&
+        html.indexOf('id="asm-bead-width"') > html.indexOf('id="asm-layer-height"') && paneOf('asm-min-overlap') === 'missing',
+        'Bead width, Maximum overhang, derived Minimum overlap, the support summary and the Support findings block live in Layers');
+  check(/#ws-assembly \.asm-support-box \{ display: none;/.test(html) && /#ws-assembly\.asm-has-support \.asm-support-box \{ display: block; \}/.test(html),
+        'the Support block is hidden while there is nothing in it (no column of its own: the preview stays centred)');
+  check(paneOf('asm-assembly-tf') === 'transform' && paneOf('asm-profiles') === 'profiles', 'transform / profiles content in their sections');
+  check(html.indexOf('asmAddSection()') > iL && html.indexOf('asmAddSection()') < iV, 'Add Section is in the Layers column');
+  check(/\.asm-stack-col \.sidebar-scroll \{ overflow-y: auto; \}/.test(html) && /@media \\(max-width: 1100px\\)/.test(html) &&
+        /\.asm-right-col \{ width: 270px; \}/.test(html) && /\.asm-designs-col \{ width: 180px; \}/.test(html),
+        'three control columns (180 + 230 | preview | 270 px) scrolling independently; wrap only below 1100 px');
+  check(!/Reusable 2D layer designs, edited in the Designer tab/.test(html), 'no explanatory paragraph above the Layer Designs');
   await asmSetCenterMode('multiple');
   const tfBox = el('asm-assembly-tf');
   const flatT = n => [n, ...(n.children || []).flatMap(flatT)];
@@ -482,7 +489,7 @@ eval(src + `
   check(window.Designer.beadWidth() === 3.5 && rootMat() === 3.5 && el('bead-width').value === '3.50' &&
         Object.values(asm.geometry).every(g => g.bead_width === 3.5) && geoCalls() > gB,
         'Assembly → Bead width 3.5 edits the Designer material itself (Material panel shows it; geometry rebuilt)');
-  check(SP().min_overlap === 2 && txtOf('asm-overlap-note').includes('2.00 in (derived)'),
+  check(SP().min_overlap === 2 && txtOf('asm-overlap-note').includes('2.00 in'),
         'support re-analysed: minimum overlap = 3.5 − 1.5 = 2.00 (derived)');
   check((await window.Designer.designsForBackend()).every(d => d.parent == null ? d.document.material.bead_width === 3.5
                                                             : !(d.settings.material || {}).bead_width),
@@ -526,8 +533,144 @@ eval(src + `
   check(layer.infills[0].pattern === 'zigzag' && layer.infills[0].params.spacing === 30,
         'Base shows the lineage-wide lattice definition');
 
+  // ---- PRINT PLAN settings: Assembly state, edited in the Print Simulation (one place) ----
+  check(html.includes('id="asm-plan-btn"') && html.includes('id="asm-plan-btn" onclick="setWorkspace(') && paneOf('asm-plan-btn') === 'layers' &&
+        !html.includes('id="asm-print-speed"') && !html.includes('id="asm-plan"'),
+        'Layers column: a link to the Print Simulation, no second copy of the print-plan settings / estimate');
+  asmSetSpeedUnit('s/in');
+  await asmSetSpeed('print', 0.25);                          // 0.25 s per inch = 4 in/s
+  check(asm.state.print_speeds.print === 4, 'print speed entered as TIME PER INCH (0.25 s/in) is stored as 4 in/s');
+  asm.hist.group = null;
+  await asmUndo();
+  check(!asm.state.print_speeds || asm.state.print_speeds.print == null || asm.state.print_speeds.print === 2,
+        'a speed edit is an Assembly undo step');
+  await asmRedo();
+  asmSetSpeedUnit('in/s');
+
+  // ---- PROJECT FILE: Save / Open the whole project (project_file.py) ----
+  check(html.includes('id="btn-project-save"') && html.includes('id="btn-project-open"') &&
+        html.includes('id="project-file-input"') && html.indexOf('id="btn-project-save"') < html.indexOf('id="ws-designer"'),
+        'Save Project / Open Project… sit in the shared header (both workspaces)');
+  // Assembly content worth saving: a transform group, a header, an ignored finding, a profile
+  asm.state.center_mode = 'multiple';
+  asm.state.centers = [{ id: 'c1', x: 200, y: 200, sources: [R.id], label: 'Room' }];
+  asm.state.center_counter = 1;
+  asm.state.objects = [{ kind: 'header', id: 'h1', section: 1, layer: 2, x: 150, y: 200, angle: 0, span: 30,
+                         bearing: 8, depth: 10, thickness: 6, snap: true }];
+  asm.headerCounter = 1;
+  asm.state.overrides = [{ section: 0, layer: 3, x: 140, y: 140, note: '' }];
+  asm.state.profiles = [{ kind: 'opening', id: 'p1', wall: { source: R.id, edge: 0 }, position: 60, z_bottom: 3,
+                          height: 24, width: 12, shape: 'diamond', label: '',
+                          upper: 'pointed', lower: 'pointed', bottom_depth: null, upper_height: null, middle: false,
+                          middle_height: null }];   // (the current form; older forms are migrated on Open)
+  asm.state.profile_counter = 1;
+  // the open design is DERIVED and has an edit not yet stored as its delta
+  await editDesign(d1);
+  addPrimitive('CirclePath');
+  historyCheckpoint();
+  const newPid = layer.source_paths[layer.source_paths.length - 1].id;
+  project.name = 'Smoke house';
+  let saved = null;
+  _downloadText = (name, text) => { saved = { name, text }; };
+  await saveProject();
+  const F = JSON.parse(saved.text);
+  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 1 &&
+        saved.text.indexOf('"schema_version"') < saved.text.indexOf('"project"'),
+        'Save Project downloads Smoke house.muddesign: format id + schema version first, human-readable JSON');
+  const FD = F.project.designer;
+  check(FD.designs.map(d => d.id).join() === 'base,' + d1 && FD.active_design === d1 &&
+        !!FD.designs[1].patch.source_paths[newPid] && !FD.designs[1].document,
+        'every Layer Design saved (Base full, the derived one as its delta — incl. the edit made just before saving)');
+  check(JSON.stringify(F.project.assembly.state) === JSON.stringify(asm.state) && F.project.assembly.header_counter === 1,
+        'the Assembly state saved as it is edited (sections, groups, header, ignored finding, profile, counters)');
+  check(!/"printable"|"moves"|"polylines"|"findings"|"undo"/.test(saved.text), 'no derived geometry, results or histories in the file');
+  const savedDesigns = JSON.stringify(await window.Designer.designsForBackend());
+  const canon = o => JSON.stringify(o, (k, v) => (v && typeof v === 'object' && !Array.isArray(v))
+    ? Object.fromEntries(Object.keys(v).sort().map(x => [x, v[x]])) : v);
+  const firstDiff = (x, y, at) => {
+    if (canon(x) === canon(y)) return null;
+    if (x && y && typeof x === 'object' && typeof y === 'object')
+      for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) { const d = firstDiff(x[k], y[k], at + '.' + k); if (d) return d; }
+    return at + ' : ' + canon(x) + ' ≠ ' + canon(y);
+  };
+  const savedLayer = JSON.stringify(layer), savedAsm = JSON.stringify(asm.state), savedIdc = _idCounter;
+
+  // change everything afterwards (to be replaced by Open)
+  await editDesign('base');
+  addPrimitive('LinePath'); historyCheckpoint();
+  createDerivedDesign('Scratch', 'base');
+  await asmSetLayerHeight(2);
+  check(asm.hist.undo.length > 0 && _hist.undo.length > 0, '(edits made after saving: undo histories exist)');
+  const changed = () => JSON.stringify([layer, project.designs, project.deltas, asm.state]);
+  const before = changed();
+
+  // a BAD file: nothing changes
+  const st0 = typeof alert;
+  global.alert = undefined;
+  check(await openProjectText('{"format": "mud-printer-project", ', 'bad.muddesign') === false && changed() === before &&
+        /could not be opened/.test(el('status-bar').textContent),
+        'a malformed file is refused with a message; the open project is untouched');
+  const future = JSON.parse(saved.text); future.schema_version = 99;
+  check(await openProjectText(JSON.stringify(future), 'new.muddesign') === false && changed() === before &&
+        /newer version/.test(el('status-bar').textContent),
+        'a file of a NEWER schema is refused clearly; nothing loaded');
+  global.confirm = () => false;
+  check(await openProjectText(saved.text, 'Smoke house.muddesign') === false && changed() === before,
+        'declining the "replaces the current project" confirmation keeps it');
+  global.confirm = () => true;
+
+  // a response for the previous project landing AFTER Open is dropped
+  // (held back until the project has been replaced)
+  const oldBody = JSON.stringify(buildPayload());
+  let release; const gate = new Promise(res => { release = res; });
+  const fetchNow = global.fetch;
+  global.fetch = async (url, opts) => { await gate; return fetchNow(url, opts); };
+  // (Open aborts it if still in flight; else its result is dropped by the project epoch)
+  const pending = _fetchGeometry(oldBody, _histState()).catch(e => { if (_isAbort(e)) return false; throw e; });
+  global.fetch = fetchNow;
+  const ep0 = _projectEpoch;
+
+  // OPEN: the project REPLACES the current one
+  check(await openProjectText(saved.text, 'Smoke house.muddesign') === true, 'Open Project… opens the saved file');
+  release();
+  check(_projectEpoch === ep0 + 1 && (await pending) === false && networkInfo === null && printable.length === 0,
+        'a resolve of the previous project landing after Open is dropped (nothing of it drawn or applied)');
+  check(project.designs.map(d => d.id + ':' + d.name).join() === FD.designs.map(d => d.id + ':' + d.name).join() &&
+        !project.designs.some(d => d.name === 'Scratch'), 'Layer Designs replaced (the design made after saving is gone)');
+  if (canon(layer) !== canon(JSON.parse(savedLayer))) {
+    const a = JSON.parse(savedLayer);
+    for (const k of new Set([...Object.keys(a), ...Object.keys(layer)]))
+      if (canon(a[k]) !== canon(layer[k])) console.log('DIFF', k, canon(a[k]).slice(0, 400), '||', canon(layer[k]).slice(0, 400));
+  }
+  check(project.active === d1 && canon(layer) === canon(JSON.parse(savedLayer)) && layer.source_paths.some(p => p.id === newPid),
+        'the design that was open is open again, with its document exactly as saved');
+  const nowDesigns = await window.Designer.designsForBackend();
+  if (canon(nowDesigns) !== canon(JSON.parse(savedDesigns))) console.log('DIFF3', firstDiff(JSON.parse(savedDesigns), nowDesigns, 'designs'));
+  check(canon(nowDesigns) === canon(JSON.parse(savedDesigns)), 'every design exactly as saved');
+  check(JSON.stringify(asm.state) === savedAsm && asm.headerCounter === 1, 'the Assembly state exactly as saved');
+  check(_hist.undo.length === 0 && _hist.redo.length === 0 && asm.hist.undo.length === 0 && Object.keys(project.hist).length === 0,
+        'no undo into the previous project (Designer + Assembly histories reset)');
+  check(selectedId === null && routeResult === null && asm.resolved === null && project.name === 'Smoke house',
+        'selection and derived results reset; the project name restored');
+  check(_idCounter === savedIdc && ('p' + _idCounter) !== newPid && !layer.source_paths.some(p => p.id === 'p' + _idCounter) && !project.designs.some(d => d.id === 'd' + _designCounter),
+        'id counters restored: new records / designs never collide with loaded ones');
+  setWorkspace('assembly');
+  await asmResolve();
+  check(asm.resolved && asm.resolved.sections.length === asm.state.sections.length && asm.state.profiles.length === 1,
+        'the opened Assembly resolves (sections, profile)');
+  // SAVE again: the same project
+  let saved2 = null;
+  _downloadText = (name, text) => { saved2 = { name, text }; };
+  await saveProject();
+  const P1 = JSON.parse(saved.text).project, P2 = JSON.parse(saved2.text).project;
+  if (canon(P1) !== canon(P2)) console.log('DIFF2', firstDiff(P1, P2, 'project'));
+  check(canon(P2) === canon(P1),
+        'save → open → save: the same project file content');
+  global.alert = st0 === 'undefined' ? undefined : global.alert;
+
   // ---- back to the Designer ----
   setWorkspace('designer');
+  await editDesign('base');
   check(currentWorkspace === 'designer' && el('ws-designer').style.display === '' &&
         el('design-tabs').style.display === '' && layer.source_paths.length === 1,
         'back in the Designer: state intact, design tabs shown (2 designs)');

@@ -47,16 +47,25 @@ class Header:
     thickness: float = 6.0       # vertical (in)
     snap: bool = True
     kind: str = 'header'
+    # GENERATED for an Assembly opening with the Header upper (profiles.
+    # _opening_headers, 2026-10-10): the opening profile and which of its
+    # openings. Never stored in the Assembly state — derived at every resolve.
+    profile: str = ''
+    member: int = -1
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if not self.profile:
+            d.pop('profile')
+            d.pop('member')
+        return d
 
     @staticmethod
     def from_dict(d: dict) -> 'Header':
         f = {k: d[k] for k in ('id', 'section', 'layer', 'x', 'y', 'angle', 'span', 'bearing',
-                               'depth', 'thickness', 'snap') if k in d}
+                               'depth', 'thickness', 'snap', 'profile', 'member') if k in d}
         h = Header(**f)
-        h.section, h.layer = int(h.section), int(h.layer)
+        h.section, h.layer, h.member = int(h.section), int(h.layer), int(h.member)
         for k in ('x', 'y', 'angle', 'span', 'bearing', 'depth', 'thickness'):
             setattr(h, k, float(getattr(h, k)))
         return h

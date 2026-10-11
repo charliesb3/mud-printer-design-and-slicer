@@ -1508,11 +1508,17 @@ class Trim:
     end: list = field(default_factory=list)
     inside: dict = field(default_factory=dict)
     u_mid: float = 0.5
+    # [a, b, point at a | None, point at b | None]: the resolved section as an
+    # arc interval, frozen — set only by Assembly profile cuts (trim.resolve)
+    pinned: list = None
 
     def to_dict(self) -> dict:
-        return {'id': self.id, 'source_path_id': self.source_path_id,
-                'start': list(self.start), 'end': list(self.end),
-                'inside': dict(self.inside), 'u_mid': self.u_mid}
+        d = {'id': self.id, 'source_path_id': self.source_path_id,
+             'start': list(self.start), 'end': list(self.end),
+             'inside': dict(self.inside), 'u_mid': self.u_mid}
+        if self.pinned:
+            d['pinned'] = list(self.pinned)
+        return d
 
 
 @dataclass
@@ -2467,6 +2473,22 @@ class PrintLayer:
     lattice_stations: Optional[dict] = None   # infill id → [(Vec2, Vec2)] lineage jamb lines
     lattice_lineage: Optional[dict] = None    # infill id → shared-lattice diagnostics (layer_design)
     lattice_track: Optional[dict] = None      # infill id → (reference track, map): cross-Z station tracking
+    # LOCAL CUT JOIN (ASSEMBLY PROFILES, layer_design.py): with a
+    # lattice_reference, the reference strands a NEW end wall (an Assembly
+    # opening's cut face / a tapered wall's free end) cuts are paired along
+    # that end wall and their tails bent to meet at one point on it
+    # (_join_cut_ends) — the cut stays local, the route can close.
+    lattice_join: bool = False
+    # PHASE REFERENCE (ASSEMBLY PROFILES, layer_design.py): the generated Wall
+    # System frames of the same layer WITHOUT the cuts (wall_systems.generate
+    # report['frames']); a cut variant's Interleaved / Linked / Chained Loop
+    # runs keep that pattern and only solve their new free ends. None = off.
+    wall_system_reference: Optional[list] = None
+    # CROSS-Z TRANSITION of an Assembly opening (layer_assembly/profiles.py):
+    # virtual openings [{source_path_id, center_s, width, alpha}] — NOT cut;
+    # Wall Systems / the referenced lattice are pre-deformed by alpha toward
+    # the end motif such a cut would have (_virtual_faces).
+    cut_transitions: list = field(default_factory=list)
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -3081,6 +3103,7 @@ class PrintLayer:
         regions = network.pop('_rings', [])
         jobs = network.pop('_infill_jobs', [])
         network['wall_systems'] = []
+        self._ws_frames = []                 # generated Wall System frames (the PHASE REFERENCE of cut variants)
         network['wall_system_membership'] = dict(getattr(self, '_wall_system_of', {}) or {})
         network['source_walls'] = dict(getattr(self, '_source_walls', {}) or {})
         if getattr(self, '_wall_systems', None):
@@ -3142,6 +3165,11 @@ class PrintLayer:
                     # inherited lattice: the parent's stitches clipped to
                     # this design's material — local change only at the cut
                     pieces = _clip_to_rings(ref, job['rings'])
+                    joined = None
+                    if self.lattice_join:
+                        pieces, joined = _join_cut_ends(pieces, ref, job['rings'], self.material.bead_width)
+                    if self.cut_transitions:
+                        pieces = _bend_virtual(pieces, self._virtual_faces(), job['rings'], self.material.bead_width)
                     for j, poly in enumerate(pieces):
                         dp = DerivedPath(poly, closed=False, role='lattice',
                                          label=inf.pattern, source_id=inf.id,
@@ -3151,7 +3179,8 @@ class PrintLayer:
                     rep_ = lattice.setdefault(inf.id, {'motif': False, 'inherited': True, 'regions': [],
                                                       'lineage': (self.lattice_lineage or {}).get(inf.id)})
                     rep_['regions'].append({'inherited': True, 'pieces': len(pieces),
-                                            'reference_polylines': len(ref)})
+                                            'reference_polylines': len(ref),
+                                            **({'joined': joined} if joined is not None else {})})
                     continue
                 phys = self.material.physical
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
@@ -3194,8 +3223,11 @@ class PrintLayer:
                         'pitch_max': max((b for _, b in ps), default=None),
                         'target': float(next((x.params.get('spacing', 20.0) for x in self._all_infills()
                                               if x.id == info['id']), 20.0)),
-                        'max_unsupported': max((r['max_unsupported'] for r in regs), default=None),
-                        'max_unsupported_limit': max((r['max_unsupported_limit'] for r in regs), default=None),
+                        # (a run-less plan — no cavity — reports neither)
+                        'max_unsupported': max((r['max_unsupported'] for r in regs
+                                                if r.get('max_unsupported') is not None), default=None),
+                        'max_unsupported_limit': max((r['max_unsupported_limit'] for r in regs
+                                                      if r.get('max_unsupported_limit') is not None), default=None),
                         'corners': sum(run.get('corners', 0) for r in regs for run in r['runs']),
                         # V1 / V2 only move the phase of closed loops and lone
                         # walls; in networks junction coherence fixes it
@@ -3450,7 +3482,9 @@ class PrintLayer:
                 return sid_ if keyof(sid_) is not None else None
             if len(gen_sids) == 1 and len(keys) == 1 and '__J' not in set(msid.values()):
                 system = self._wall_systems[next(iter(sids))]
-                polys, rep = WS.generate(rings, system, bead, contact, self._seam_hints())
+                polys, rep = WS.generate(rings, system, bead, contact, self._seam_hints(), self.wall_system_reference,
+                                         self._virtual_faces())
+                self._ws_frames.extend(rep.pop('frames', []))
                 drop |= {id(p) for p in members}
                 emit(polys, system, k, sorted(sids)[0])
                 rep.update({'sources': sorted(sids), 'region': k, 'status': 'ok',
@@ -3471,7 +3505,10 @@ class PrintLayer:
                 for pi, part in enumerate(parts):
                     sid0 = part['sources'][0]
                     system = self._wall_systems[sid0]
-                    polys, rep = WS.generate(part['rings'], system, bead, contact, self._seam_hints())
+                    polys, rep = WS.generate(part['rings'], system, bead, contact, self._seam_hints(),
+                                             self.wall_system_reference, self._virtual_faces(),
+                                             [c['tip'] for c in part.get('chords', []) if c.get('tip') is not None])
+                    self._ws_frames.extend(rep.pop('frames', []))
                     polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
                     for ch in joined:                # the incoming beads are re-emitted, extended
                         drop |= {id(p) for p in members if keyof(msid[id(p)]) is None and
@@ -3481,6 +3518,8 @@ class PrintLayer:
                                 'shared_with': sorted(sids - set(part['sources'])),
                                 'spliced_skins': spliced, 'junctions': jinfo})
                     gen.append({'part': part, 'polys': polys, 'rep': rep, 'system': system, 'sid0': sid0})
+                self._check_junction_motifs(gen, WS, bead, contact)
+                self._contact_staples(gen, rings, bead, WS)
                 # (pass 10: generated walls meet by PUSHED bands that cross the host's
                 # paths — the earlier open-the-cap-and-cut splice is retired)
                 skin_part = getattr(self, '_split_skin_part', None)
@@ -3488,8 +3527,21 @@ class PrintLayer:
                     # a SKIN wall bridging generated walls (its two faces on two rings):
                     # at each mouth its two face ends continue straight into the host
                     # and are capped there — crossing the host's printed paths
+                    # (a mouth the HOST already joined — the skin run there is one of a
+                    # generated part's `skins`, carried into the host by _connect_skins —
+                    # gets no second bead: its ends would land on that joined run's
+                    # vertices as two odd nodes, splitting the route. Case: a line
+                    # crossing a generated wall from outside to outside — its exterior
+                    # stub is joined by the host, its interior piece bridges)
+                    host_mouths = [tuple(sk['ends']) for g in gen for sk in g['part'].get('skins', [])]
+
+                    def _host_joined(ends, tol=0.05):
+                        return any(min(ends[0].dist(a) + ends[1].dist(b), ends[0].dist(b) + ends[1].dist(a)) < tol
+                                   for a, b in host_mouths)
                     for ci, ch in enumerate(skin_part.get('chords', [])):
                         if not (ch.get('is_end') and not ch.get('same') and ch.get('other') and ch.get('exact')):
+                            continue
+                        if _host_joined(ch['exact']):
                             continue
                         e_, s_ = ch['exact']
                         cv = s_ - e_
@@ -3543,6 +3595,59 @@ class PrintLayer:
                         info['status'] = 'wall system'
                         info['wall_system'] = ', '.join(sorted(systems_used))
         return [p for p in result if id(p) not in drop] + new, jobs
+
+    def _contact_staples(self, gen, rings, bead, WS):
+        """GENERATED walls that TOUCH (their bands meet, or overlap by less than
+        about a bead — a circle grazing a rectangle) but print no crossing near
+        the contact get one CONTACT STAPLE (wall_systems.contact_staple): a
+        small closed loop crossing both walls' printed paths — physical contact
+        and a routing junction, parity unchanged. Walls whose paths already
+        cross there (X / T / deep overlaps, pushed branches) are untouched."""
+        import network as N_
+
+        def inside(q):                     # (on the faces counts: two walls just touching)
+            if sum(_point_in_polygon(q, r) for r in rings) % 2 == 1:
+                return True
+            return min(N_.dist_to_polyline(q, r, True) for r in rings) <= 0.25 * bead
+        for i, ga in enumerate(gen):
+            for gb in gen[i + 1:]:
+                T_ = max(float(ga['rep'].get('envelope') or 10.0), float(gb['rep'].get('envelope') or 10.0))
+                c = WS.band_contact(ga['part']['rings'], gb['part']['rings'], 0.25 * bead)
+                if c is None:
+                    continue
+                loop = WS.contact_staple(ga['polys'], gb['polys'], c, bead, T_, inside)
+                if loop is None:
+                    continue
+                ga['polys'] = list(ga['polys']) + [loop]
+                ga['rep'].setdefault('contact_staples', []).append(
+                    {'with': gb['part']['sources'], 'at': [round(c.x, 3), round(c.y, 3)]})
+
+    def _check_junction_motifs(self, gen, WS, bead, contact):
+        """A Chained Loop JUNCTION MOTIF (the eye at a branch end pushed into a
+        host, wall_systems._chain_eye) must really CROSS the host's printed
+        paths (or the skin bead closing a skin host's mouth). An end whose eye
+        does not is regenerated with the canonical cap there — the contact
+        the pushed band always gave is never lost."""
+        for g in gen:
+            part = g['part']
+            if g['system'].get('type') != 'chain' or \
+                    not any(i.get('junction_motifs') for i in g['rep'].get('per_run', [])):
+                continue
+            tips = [c for c in part.get('chords', []) if c.get('tip') is not None]
+            others = [pl for h in gen if h is not g for pl in h['polys']]
+            others += [list(rec['ends']) for rec in part.get('host_skins', [])]
+            T_ = float(g['rep'].get('envelope') or 10.0)
+            bad = [c for c in tips if not WS.contact_near(g['polys'], others, c['tip'], 1.5 * T_ + bead)]
+            if not bad:
+                continue
+            keep = [c['tip'] for c in tips if c not in bad]
+            polys, rep = WS.generate(part['rings'], g['system'], bead, contact, self._seam_hints(),
+                                     self.wall_system_reference, self._virtual_faces(), keep)
+            rep.pop('frames', None)
+            polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
+            rep.update({k: v for k, v in g['rep'].items() if k not in rep})
+            rep['junction_motif_fallbacks'] = len(bad)
+            g['polys'], g['rep'] = polys, rep
 
     def _split_wall_systems(self, N, rings, members, msid, keyof):
         """Split a mixed-system region by wall. Every ring edge belongs to the
@@ -3747,6 +3852,7 @@ class PrintLayer:
                             depth = t_face + (self._push_reach(hsid, hT, bead_w) + 0.5 * bead_w) / k_
                             push = [e + dv * depth, sp + dv * depth]
                             chords[-1]['pushed'] = True
+                            chords[-1]['tip'] = e.lerp(sp, 0.5) + dv * depth     # (the Chained Loop junction motif)
                         else:
                             # no host face across this mouth: a CORNER (two walls ending
                             # on each other — e.g. trimmed into an L), not a T. The end
@@ -3991,6 +4097,36 @@ class PrintLayer:
                     host['rep'].setdefault('junctions', []).append(dict(info, incoming=sid))
                     g['rep']['joined_into'] = host['rep'].get('system_id')
                     break
+
+    def _virtual_faces(self) -> list:
+        """[(face point at s0, face point at s1, unit normal at s0, unit
+        normal at s1, alpha)] of the cut_transitions: points of the processed
+        source centre line where a cut of that width would put its faces."""
+        out = []
+        for t in self.cut_transitions or []:
+            src = next((p for p in self.source_paths if p.id == t.get('source_path_id')), None)
+            if src is None:
+                continue
+            pts = _processed_source_pts(src, self._corner_r(src))
+            ring = list(pts) + ([pts[0]] if src.closed else [])
+            if len(ring) < 2:
+                continue
+            cum = [0.0]
+            for a, b in zip(ring, ring[1:]):
+                cum.append(cum[-1] + a.dist(b))
+            L = cum[-1]
+
+            def at(sv):
+                sv = sv % L if src.closed else max(0.0, min(L, sv))
+                k = max(0, min(len(ring) - 2, next((i for i in range(len(cum) - 1) if cum[i + 1] >= sv), len(cum) - 2)))
+                a, b = ring[k], ring[k + 1]
+                seg = max(1e-12, cum[k + 1] - cum[k])
+                d = Vec2((b.x - a.x) / seg, (b.y - a.y) / seg)
+                return a.lerp(b, (sv - cum[k]) / seg), Vec2(-d.y, d.x)
+            c, w = float(t.get('center_s', 0.0)), float(t.get('width', 0.0))
+            (pa, na), (pb, nb) = at(c - w / 2), at(c + w / 2)
+            out.append((pa, pb, na, nb, float(t.get('alpha', 0.0))))
+        return out
 
     def _seam_hints(self) -> list:
         """Positions of the user's route origins (Move Start): wall systems that
@@ -4299,6 +4435,8 @@ class PrintLayer:
                 spec, src = None, 'system'
             elif lsys is not None and lsys.thickness is not None:
                 spec = lsys.envelope()            # the WALL SYSTEM owns the envelope
+                if getattr(p, 'align_override', None):
+                    spec = WallSpec(spec.thickness, p.align_override, spec.print_reference, spec.system)
                 src = 'system'
             else:
                 spec, src = p.wall, ('path' if p.wall is not None else None)
@@ -4402,6 +4540,26 @@ class PrintLayer:
                 self._wire_attached.append((bid, E))
                 self._mouths.append((bid, H1, H2))
         return out
+
+    def resolved_trims(self) -> dict:
+        """{trim id: status info (+ a, b, pa, pb of the section it removes)}
+        — the layer's trims resolved on its AUTHORED geometry (the same steps
+        1–1c as _build_effective: relations, insets, processed sources, end
+        snaps, sections)."""
+        import network as N
+        import trim as TR
+        by_id = {p.id: p for p in self.source_paths}
+        for rel in self.wall_relations:
+            rel.apply(by_id)
+        self._resolve_insets()
+        processed, order = {}, []
+        for p in self.source_paths:
+            if not p.visible or (isinstance(p, InsetPath) and len(p.points) < 3):
+                continue
+            processed[p.id] = _processed_source_pts(p, self._corner_r(p))
+            order.append(p)
+        self._snap_source_ends(order, processed, N.SNAP_TOL)
+        return TR.resolve(self.trims, TR.sections(order, processed), set(processed))[1]
 
     def _snap_source_ends(self, sources, processed, tol) -> set:
         """Move open source ends lying within tol (but not exactly on)
@@ -4886,6 +5044,7 @@ class PrintLayer:
                 join_group=getattr(path, 'join_group', None),
                 join_points=getattr(path, 'join_points', None),
             ))
+        _snap_strand_ends(strands, RVec2)
         return RoutingLayer(z_height=0.0, strands=strands, label=self.label)
 
     def to_dict(self) -> dict:
@@ -4976,11 +5135,232 @@ def _clip_to_rings(polylines, rings) -> list:
     return [p for p in out if len(p) >= 2]
 
 
+def _join_cut_ends(pieces, ref, rings, bead) -> tuple:
+    """LOCAL CUT JOIN (PrintLayer.lattice_join): the reference strands that
+    an end wall of this design cuts (piece ends that are not ends of the
+    reference polylines) are paired with their NEIGHBOUR ALONG THE BOUNDARY
+    RING (the end wall between them — flat or rounded: an arc of many short
+    segments) and each pair's tails are bent smoothly to meet at one point
+    on it: the ring vertex nearest the middle of the stretch between them (an
+    even node: the lineage-jamb meeting, done locally). Only the last
+    `reach` (≈ the wall thickness, ≥ 2 beads) of each tail moves, so the
+    lattice stays the reference everywhere else. Returns (pieces, report
+    {'pairs', 'odd'}); ends that cannot be paired (an odd count on a ring, or
+    no neighbour within an end-wall length) are left as clipped and counted
+    in 'odd' (the caller's closure check decides)."""
+    import wall_lattice as _WL
+    ends0 = [q for poly in ref for q in (poly[0], poly[-1])]
+    thick = _WL._thickness([r for r in rings if len(r) >= 3]) or 1.0
+
+    def original(q):
+        return any(q.dist(e) < 1e-6 for e in ends0)
+    cums = []
+    for r in rings:
+        c = [0.0]
+        for i in range(len(r)):
+            c.append(c[-1] + r[i].dist(r[(i + 1) % len(r)]))
+        cums.append(c)
+
+    def locate(q):
+        """(ring index, arc position) of a point on a ring, or None."""
+        best = None
+        for ri, r in enumerate(rings):
+            n = len(r)
+            for i in range(n):
+                a, b = r[i], r[(i + 1) % n]
+                d = _seg_dist_pt(q, a, b)
+                if best is None or d < best[0]:
+                    L = a.dist(b)
+                    t = 0.0 if L < 1e-12 else ((q.x - a.x) * (b.x - a.x) + (q.y - a.y) * (b.y - a.y)) / (L * L)
+                    best = (d, ri, cums[ri][i] + max(0.0, min(1.0, t)) * L)
+        return None if best is None or best[0] > 1e-6 else (best[1], best[2])
+    by_ring: dict = {}
+    for i, poly in enumerate(pieces):
+        for end in (0, -1):
+            q = poly[end]
+            if original(q):
+                continue
+            loc = locate(q)
+            if loc is not None:
+                by_ring.setdefault(loc[0], []).append((loc[1], i, end))
+    out = [list(p) for p in pieces]
+    rep = {'pairs': 0, 'odd': 0}
+    reach = max(thick, 2.0 * bead, 1.0)
+    for ri, ends in by_ring.items():
+        Lr = cums[ri][-1]
+        ends.sort()
+        n = len(ends)
+        if n % 2:
+            rep['odd'] += 1
+            continue
+        gap = lambda j: (ends[(j + 1) % n][0] - ends[j][0]) % Lr     # ring distance end j → j+1
+        # pair neighbours: the alternative (offset 0 or 1) with the shorter total gap
+        offs = min((0, 1), key=lambda o: sum(gap(j) for j in range(o, o + n, 2)))
+        for j in range(offs, offs + n, 2):
+            e1, e2 = ends[j % n], ends[(j + 1) % n]
+            g = gap(j % n)
+            if g > 2.5 * thick:
+                rep['odd'] += 1
+                continue
+            mid = (e1[0] + 0.5 * g) % Lr
+            r = rings[ri]
+            # the ring vertex nearest the middle of the stretch, within it
+            cand = [k for k in range(len(r)) if ((cums[ri][k] - e1[0]) % Lr) <= g + 1e-9]
+            if cand:
+                k = min(cand, key=lambda k: min(abs(cums[ri][k] - mid), Lr - abs(cums[ri][k] - mid)))
+                m = r[k]
+            else:
+                q1, q2 = pieces[e1[1]][e1[2]], pieces[e2[1]][e2[2]]
+                m = Vec2((q1.x + q2.x) / 2, (q1.y + q2.y) / 2)
+            for (_, i, end) in (e1, e2):
+                q = pieces[i][end]
+                out[i] = _bend_tail(out[i], end, Vec2(m.x - q.x, m.y - q.y), reach, m)
+            rep['pairs'] += 1
+    return out, rep
+
+
+def _bend_virtual(pieces, faces, rings, bead) -> list:
+    """CROSS-Z TRANSITION of the local cut join: the strands that WOULD be
+    cut at a virtual opening's faces (the face line across the wall at each
+    face point) are paired along that line as _join_cut_ends pairs them,
+    and moved toward the pair's meeting point by alpha — around the crossing,
+    fading over the same reach — without cutting anything."""
+    import wall_lattice as _WL
+    thick = _WL._thickness([r for r in rings if len(r) >= 3]) or 1.0
+    reach = max(thick, 2.0 * bead, 1.0)
+    out = [list(p) for p in pieces]
+    for (pa, pb, na, nb, alpha) in faces:
+        if alpha <= 0:
+            continue
+        for P, n in ((pa, na), (pb, nb)):
+            A = Vec2(P.x - n.x * thick, P.y - n.y * thick)
+            B = Vec2(P.x + n.x * thick, P.y + n.y * thick)
+            hits = []                                   # (position along the face line, piece, segment, t)
+            for i, poly in enumerate(out):
+                for j in range(len(poly) - 1):
+                    h_ = _seg_intersect_param(poly[j], poly[j + 1], A, B)
+                    if h_ is not None:
+                        hits.append((h_[1], i, j, h_[0]))
+            hits.sort()
+            if len(hits) % 2:
+                continue
+            bumps = []
+            for e1, e2 in zip(hits[::2], hits[1::2]):
+                q1 = out[e1[1]][e1[2]].lerp(out[e1[1]][e1[2] + 1], e1[3])
+                q2 = out[e2[1]][e2[2]].lerp(out[e2[1]][e2[2] + 1], e2[3])
+                m = Vec2((q1.x + q2.x) / 2, (q1.y + q2.y) / 2)
+                for (_, i, j, t), q in ((e1, q1), (e2, q2)):
+                    bumps.append((i, j, t, Vec2(alpha * (m.x - q.x), alpha * (m.y - q.y))))
+            # (applied from the highest segment index down: an applied bump
+            # inserts points, the lower indices stay valid)
+            for i, j, t, d in sorted(bumps, key=lambda b_: (b_[0], b_[1], b_[2]), reverse=True):
+                out[i] = _bump(out[i], j, t, d, reach)
+    return out
+
+
+def _bump(poly, j, t, delta, reach) -> list:
+    """The polyline with the point at segment j, parameter t moved by delta,
+    the move fading smoothly to nothing `reach` away along it, both ways
+    (the point is inserted; only the moved stretch is resampled ≤ 0.5 in)."""
+    if math.hypot(delta.x, delta.y) < 1e-9:
+        return poly
+    c = poly[j].lerp(poly[j + 1], t)
+    pts = list(poly[:j + 1]) + [c] + list(poly[j + 1:])
+    cum = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        cum.append(cum[-1] + a.dist(b))
+    sc = cum[j + 1]
+    dense, s_ = [pts[0]], [0.0]
+    for k in range(len(pts) - 1):
+        a, b = pts[k], pts[k + 1]
+        L = cum[k + 1] - cum[k]
+        if cum[k + 1] < sc - reach or cum[k] > sc + reach:
+            n = 1
+        else:
+            n = max(1, int(math.ceil(L / 0.5)))
+        for u in range(1, n + 1):
+            dense.append(a.lerp(b, u / n))
+            s_.append(cum[k] + L * u / n)
+    res = []
+    for q, sv in zip(dense, s_):
+        u = max(0.0, 1.0 - abs(sv - sc) / reach)
+        w = u * u * (3 - 2 * u)
+        res.append(Vec2(q.x + w * delta.x, q.y + w * delta.y) if w > 0 else q)
+    return res
+
+
+def _bend_tail(poly, end, delta, reach, target=None) -> list:
+    """The polyline with its `end` (0 / -1) moved by delta, the move fading
+    smoothly (smoothstep) to nothing `reach` back along it; the tail is
+    resampled (≤ 0.5 in) so straight stitches bend smoothly."""
+    if math.hypot(delta.x, delta.y) < 1e-9:
+        return poly
+    P = list(poly) if end == -1 else list(reversed(poly))
+    # never past half the piece: its other end (a reference end, a seam,
+    # another cut end) stays exactly where it is
+    reach = min(reach, 0.5 * sum(P[j].dist(P[j + 1]) for j in range(len(P) - 1)))
+    if reach <= 1e-9:
+        return poly
+    # densify the last `reach` of arc length
+    acc, dense = 0.0, [P[-1]]
+    for j in range(len(P) - 1, 0, -1):
+        a, b = P[j], P[j - 1]
+        L = a.dist(b)
+        if acc >= reach:
+            dense.append(b)
+            continue
+        n = max(1, int(math.ceil(L / 0.5)))
+        for t in range(1, n + 1):
+            dense.append(a.lerp(b, t / n))
+        acc += L
+    dense.reverse()                       # back in forward order, end last
+    s, out = 0.0, [None] * len(dense)
+    for j in range(len(dense) - 1, -1, -1):
+        if j < len(dense) - 1:
+            s += dense[j].dist(dense[j + 1])
+        u = max(0.0, 1.0 - s / reach)
+        w = u * u * (3 - 2 * u)
+        out[j] = Vec2(dense[j].x + w * delta.x, dense[j].y + w * delta.y)
+    out[-1] = Vec2(P[-1].x + delta.x, P[-1].y + delta.y) if target is None else target
+    return out if end == -1 else list(reversed(out))
+
+
 def _seg_dist_pt(q, a, b) -> float:
     dx, dy = b.x - a.x, b.y - a.y
     L2 = dx * dx + dy * dy
     t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((q.x - a.x) * dx + (q.y - a.y) * dy) / L2))
     return math.hypot(q.x - a.x - t * dx, q.y - a.y - t * dy)
+
+
+# Strand END POINTS that coincide within this tolerance are made identical:
+# the router keys graph nodes by exact coordinates, so float noise (a ring
+# closing at 2e-5 in from its start after a cut, two pieces meeting at a
+# rounded point) made a closed loop an "open" path whose two ends were paired
+# by a 0.00002 in TRAVEL — an extrusion break for nothing (2026-10-09).
+END_SNAP = 1e-3
+
+
+def _snap_strand_ends(strands, V):
+    reps = {}                                  # grid cell → representative points
+
+    def snap(p):
+        cx, cy = int(p.x // END_SNAP), int(p.y // END_SNAP)
+        for i in (cx - 1, cx, cx + 1):
+            for j in (cy - 1, cy, cy + 1):
+                for q in reps.get((i, j), ()):
+                    if abs(q.x - p.x) <= END_SNAP and abs(q.y - p.y) <= END_SNAP:
+                        return q
+        reps.setdefault((cx, cy), []).append(p)
+        return p
+    for st in strands:
+        if st.closed or len(st.points) < 2:
+            continue
+        a = snap(st.points[0])
+        b = snap(st.points[-1])
+        if a is not st.points[0] or b is not st.points[-1]:
+            st.points = [a] + list(st.points[1:-1]) + [b]
+        if st.points[0] != st.points[-1] and st.points[0].dist(st.points[-1]) <= END_SNAP and len(st.points) > 2:
+            st.points[-1] = st.points[0]             # (its own ends: a closed loop)
 
 
 def resolve_route_origins(strands, origins) -> tuple[list, list]:

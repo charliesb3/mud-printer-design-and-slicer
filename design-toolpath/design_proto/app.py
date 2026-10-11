@@ -9,7 +9,11 @@ Serves the design canvas UI and exposes a stateless API:
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
+import hashlib
+import json
+import threading
 import traceback
+from collections import OrderedDict
 from flask import Flask, jsonify, request, send_from_directory
 
 from model import (
@@ -22,6 +26,7 @@ from model import (
 )
 from material import MaterialSpec
 import infill as infill_mod
+import resolve_cancel
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 
@@ -57,6 +62,9 @@ def _wall(d):
 def _deserialise_path(d: dict):
     p = _deserialise_path_geom(d)
     p.wall = _wall(d)
+    # (Assembly profile variants: a ring cut open keeps its ring's wall SIDE —
+    # 'left' / 'right' of its own direction — inside its Wall System)
+    p.align_override = d.get('align_override') or None
     return p
 
 
@@ -155,6 +163,9 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             label=od.get('label', ''),
         ))
 
+    # Assembly-profile cross-Z transitions (virtual openings; absent → none)
+    layer.cut_transitions = [dict(t) for t in data.get('cut_transitions') or []]
+
     # Trims: suppressed sections of source paths (absent → none)
     for td in data.get('trims', []) or []:
         layer.trims.append(Trim(
@@ -162,7 +173,8 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             start=[str(x) for x in td.get('start') or []],
             end=[str(x) for x in td.get('end') or []],
             inside={str(k): bool(v) for k, v in (td.get('inside') or {}).items()},
-            u_mid=float(td.get('u_mid', 0.5) or 0.0)))
+            u_mid=float(td.get('u_mid', 0.5) or 0.0),
+            pinned=list(td['pinned']) if td.get('pinned') else None))
 
     # Wall-network region overrides (paint bucket); absent → none
     for rd in data.get('region_overrides', []) or []:
@@ -285,19 +297,56 @@ def _apply_lineage(layer, data):
     layer.lattice_lineage = lib.lattice_lineage(active.id) or None
 
 
+# GEOMETRY CACHE (2026-10-09): the resolved geometry of the last few request
+# BODIES (sha1 of the exact bytes). The Designer sends the same payload to
+# /api/effective_paths (geometry first, drawn at once) and then /api/route
+# (the toolpath): the route reuses that geometry instead of resolving it
+# again. Keyed by content only, so any edit misses; entries are never
+# mutated (read-only paths / meta).
+_GEOM_CACHE: OrderedDict = OrderedDict()
+_GEOM_CACHE_MAX = 3
+_geom_lock = threading.Lock()
+
+
+def _effective_cached(data):
+    """(layer, paths, meta) of a request body, geometry from the cache when
+    the very same body was resolved recently."""
+    key = hashlib.sha1(request.get_data()).hexdigest()
+    layer = _deserialise_layer(data)
+    with _geom_lock:
+        hit = _GEOM_CACHE.get(key)
+        if hit is not None:
+            _GEOM_CACHE.move_to_end(key)
+    if hit is not None:
+        return layer, hit[0], hit[1]
+    _apply_lineage(layer, data)
+    paths, meta = layer._build_effective()
+    resolve_cancel.check()
+    with _geom_lock:
+        _GEOM_CACHE[key] = (paths, meta)
+        while len(_GEOM_CACHE) > _GEOM_CACHE_MAX:
+            _GEOM_CACHE.popitem(last=False)
+    return layer, paths, meta
+
+
+def _superseded_response():
+    return jsonify({'superseded': True}), 409
+
+
 @app.route('/api/effective_paths', methods=['POST'])
 def api_effective_paths():
     try:
-        data = request.get_json(force=True)
-        layer = _deserialise_layer(data)
-        _apply_lineage(layer, data)
-        paths, meta = layer._build_effective()
-        return jsonify({
-            'paths': [p.to_dict() for p in paths],
-            'network': meta['network'],
-            'printable': layer.printable_centerlines(paths, meta),
-            'material': layer.material.to_dict(),
-        })
+        with resolve_cancel.request_scope(request.headers):
+            data = request.get_json(force=True)
+            layer, paths, meta = _effective_cached(data)
+            return jsonify({
+                'paths': [p.to_dict() for p in paths],
+                'network': meta['network'],
+                'printable': layer.printable_centerlines(paths, meta),
+                'material': layer.material.to_dict(),
+            })
+    except resolve_cancel.Superseded:
+        return _superseded_response()
     except Exception:
         return jsonify({'error': traceback.format_exc()}), 400
 
@@ -322,83 +371,97 @@ def api_migrate_wall_systems():
 @app.route('/api/route', methods=['POST'])
 def api_route():
     try:
-        data = request.get_json(force=True)
-        layer = _deserialise_layer(data)
-        _apply_lineage(layer, data)
-
-        # Build routing layer (effective geometry computed once)
-        paths, meta = layer._build_effective()
-        routing_layer = layer.to_routing_layer(paths, meta)
-
-        # Import routing engine from toolpath_proto
-        proto_dir = os.path.join(os.path.dirname(__file__),
-                                 '..', 'toolpath_proto')
-        if proto_dir not in sys.path:
-            sys.path.insert(0, proto_dir)
-
-        from graph import (route_layer, compute_metrics, graph_info,
-                           label_passes, route_ends, build_graph, closure_report)
-
-        # Apply traversal constraints
-        c = layer.constraints
-        start = None
-        if c.start_path_id and c.start_t is not None:
-            src = next((p for p in layer.source_paths
-                        if p.id == c.start_path_id), None)
-            if src:
-                pt = src.point_at(c.start_t)
-                from geometry import Vec2 as RVec2
-                start = RVec2(pt.x, pt.y)
-
-        physical = layer.material.physical
-        from model import resolve_route_origins
-        origin_pts, origin_rep = resolve_route_origins(routing_layer.strands,
-                                                       layer.route_origins)
-        moves = route_layer(
-            routing_layer,
-            start=start,
-            component_order=c.component_order,
-            allow_retrace=not physical,     # physical beads: never retrace
-            origins=origin_pts,
-        )
-
-        # Reverse direction: reverse move order and swap each move's start/end
-        if c.reverse_direction and moves:
-            from geometry import PrintMove as _PM
-            moves = [
-                _PM(kind=m.kind, strand_id=m.strand_id, seg_idx=m.seg_idx,
-                    start=m.end, end=m.start)
-                for m in reversed(moves)
-            ]
-            moves = label_passes(moves)   # first pass prints, later passes retrace
-
-        metrics = compute_metrics(moves)
-        ends = route_ends(moves)
-        ginfo = graph_info(routing_layer)
-
-        return jsonify({
-            'layer': {
-                'id': layer.id,
-                'label': layer.label,
-                'paths': [p.to_dict() for p in paths],
-            },
-            'network': meta['network'],
-            'printable': [{'id': s.id, 'pts': [[q.x, q.y] for q in s.points],
-                           'closed': bool(s.closed)} for s in routing_layer.strands],
-            'material': layer.material.to_dict(),
-            'moves': [m.to_dict() for m in moves],
-            'metrics': metrics,
-            # physical rules: can every connected component print as ONE
-            # closed extrusion (start = end, no travel, no retrace)?
-            'closure': dict(closure_report(build_graph(routing_layer)), physical=physical),
-            'origins': origin_rep,
-            'graph': ginfo,
-            # For a future layer planner: closed → next layer starts here;
-            # open → next layer can run this route reversed (end → start).
-            'route_ends': ends.to_dict() if ends else None,
-        })
+        with resolve_cancel.request_scope(request.headers):
+            return _route_response()
+    except resolve_cancel.Superseded:
+        return _superseded_response()
     except Exception:
         return jsonify({'error': traceback.format_exc()}), 400
+
+
+def _route_response():
+    """The /api/route result (inside the request's resolve scope)."""
+    data = request.get_json(force=True)
+    # Build routing layer (effective geometry computed once — or reused
+    # from the geometry request the Designer sent just before)
+    layer, paths, meta = _effective_cached(data)
+    routing_layer = layer.to_routing_layer(paths, meta)
+
+    # Import routing engine from toolpath_proto
+    proto_dir = os.path.join(os.path.dirname(__file__),
+                             '..', 'toolpath_proto')
+    if proto_dir not in sys.path:
+        sys.path.insert(0, proto_dir)
+
+    import graph as _graph
+    _graph.CHECKPOINT = resolve_cancel.check      # (no-op without a resolve token)
+    from graph import (route_layer, compute_metrics, graph_info,
+                       label_passes, route_ends, build_graph, closure_report)
+
+    # Apply traversal constraints
+    c = layer.constraints
+    start = None
+    if c.start_path_id and c.start_t is not None:
+        src = next((p for p in layer.source_paths
+                    if p.id == c.start_path_id), None)
+        if src:
+            pt = src.point_at(c.start_t)
+            from geometry import Vec2 as RVec2
+            start = RVec2(pt.x, pt.y)
+
+    physical = layer.material.physical
+    from model import resolve_route_origins
+    origin_pts, origin_rep = resolve_route_origins(routing_layer.strands,
+                                                   layer.route_origins)
+    # the routing graph, built ONCE for the route, its summary and the
+    # closure report (none of them modifies it)
+    G = build_graph(routing_layer)
+    moves = route_layer(
+        routing_layer,
+        start=start,
+        component_order=c.component_order,
+        allow_retrace=not physical,     # physical beads: never retrace
+        origins=origin_pts,
+        G=G,
+    )
+
+    # Reverse direction: reverse move order and swap each move's start/end
+    if c.reverse_direction and moves:
+        from geometry import PrintMove as _PM
+        moves = [
+            _PM(kind=m.kind, strand_id=m.strand_id, seg_idx=m.seg_idx,
+                start=m.end, end=m.start)
+            for m in reversed(moves)
+        ]
+        moves = label_passes(moves)   # first pass prints, later passes retrace
+
+    resolve_cancel.check()
+    metrics = compute_metrics(moves)
+    ends = route_ends(moves)
+    ginfo = graph_info(routing_layer, G)
+    resolve_cancel.check()
+
+    return jsonify({
+        'layer': {
+            'id': layer.id,
+            'label': layer.label,
+            'paths': [p.to_dict() for p in paths],
+        },
+        'network': meta['network'],
+        'printable': [{'id': s.id, 'pts': [[q.x, q.y] for q in s.points],
+                       'closed': bool(s.closed)} for s in routing_layer.strands],
+        'material': layer.material.to_dict(),
+        'moves': [m.to_dict() for m in moves],
+        'metrics': metrics,
+        # physical rules: can every connected component print as ONE
+        # closed extrusion (start = end, no travel, no retrace)?
+        'closure': dict(closure_report(G), physical=physical),
+        'origins': origin_rep,
+        'graph': ginfo,
+        # For a future layer planner: closed → next layer starts here;
+        # open → next layer can run this route reversed (end → start).
+        'route_ends': ends.to_dict() if ends else None,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +517,43 @@ def api_layer_design_delta():
                         'designs': [x.to_dict() for x in lib.designs.values()]})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+
+
+# PROJECT FILE (whole-project Save / Open, project_file.py): the page posts
+# its authoring state; the server validates it and returns the file object
+# (the browser downloads it). Open: the page posts the file text; the server
+# parses, MIGRATES to the current schema and validates it completely, and
+# returns the project + the open design's resolved document. Stateless —
+# no server-side project store.
+def _ordered_json(obj, status=200):
+    """A JSON response keeping the documents' own key order (jsonify sorts
+    keys): a project file reads like the records the editors hold."""
+    return app.response_class(json.dumps(obj, ensure_ascii=False), status=status, mimetype='application/json')
+
+
+@app.route('/api/project/save', methods=['POST'])
+def api_project_save():
+    import project_file as PF
+    try:
+        data = request.get_json(force=True)
+        f = PF.save((data or {}).get('project'), check_document=_deserialise_layer)
+        return _ordered_json({'file': f, 'filename': PF.filename(f['project'].get('name', ''))})
+    except PF.ProjectFileError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:                     # (never a half-written file)
+        return jsonify({'error': f'The project could not be saved: {type(e).__name__}: {e}'}), 400
+
+
+@app.route('/api/project/open', methods=['POST'])
+def api_project_open():
+    import project_file as PF
+    try:
+        text = request.get_data()
+        return _ordered_json(PF.load(text, check_document=_deserialise_layer))
+    except PF.ProjectFileError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:                     # (nothing is loaded: the page keeps its project)
+        return jsonify({'error': f'The project could not be opened: {type(e).__name__}: {e}'}), 400
 
 
 # The LAYER ASSEMBLY workspace: a separate subsystem (design-toolpath/

@@ -39,22 +39,38 @@ class LayerSource(Protocol):
     walls connecting differently moved hosts and resolves junctions /
     openings / lattice — design_proto/semantic_transform.py). The Assembly
     only names source ids and similarities; it never moves resolved beads
-    of a grouped layer itself."""
+    of a grouped layer itself.
+    With `cuts` (ASSEMBLY PROFILES, profiles.py: a list of {'op': 'opening'
+    | 'extent', 'source', 'edge', …}) the Designer first applies those
+    source-level cuts to the design document (ordinary openings, shortened
+    straight walls), then the transforms, then resolves as usual.
+    walls(design): the design's STRAIGHT walls a profile can target
+    ([WallTarget-like dicts]; optional — a source without it has none)."""
     def design_ids(self) -> list: ...
     def info(self, design_id: str) -> DesignInfo: ...
-    def geometry(self, design_id: str, transforms: Optional[dict] = None) -> LayerGeometry: ...
+    def geometry(self, design_id: str, transforms: Optional[dict] = None,
+                 cuts: Optional[list] = None) -> LayerGeometry: ...
 
 
 class StaticSource:
     """An in-memory LayerSource (tests, demos): {id: (DesignInfo, LayerGeometry)}.
     It has no architecture to resolve, so `transforms` moves each tagged
     vertex by its source's similarity — a TEST DOUBLE only (the real
-    adapter resolves semantically)."""
+    adapter resolves semantically). It cannot apply profile `cuts` (no
+    architecture): it records them (`cut_calls`) and returns the design's
+    geometry; `walls` are given to it explicitly."""
 
-
-    def __init__(self, designs: dict):
+    def __init__(self, designs: dict, walls: Optional[dict] = None):
         self._d = designs
+        self._walls = walls or {}
         self.calls = 0
+        self.cut_calls = []
+
+    def walls(self, design_id):
+        return list(self._walls.get(design_id) or [])
+
+    def sources(self, design_id):
+        return list((getattr(self, '_sources', None) or {}).get(design_id) or [])
 
     def design_ids(self):
         return list(self._d)
@@ -62,8 +78,10 @@ class StaticSource:
     def info(self, design_id):
         return self._d[design_id][0]
 
-    def geometry(self, design_id, transforms=None):
+    def geometry(self, design_id, transforms=None, cuts=None):
         self.calls += 1
+        if cuts:
+            self.cut_calls.append((design_id, cuts))
         g = self._d[design_id][1]
         if not transforms:
             return g
@@ -94,10 +112,40 @@ def stack_geometry(resolved, source) -> dict:
     (what support analysis and the preview consume)."""
     out = {}
     if hasattr(source, 'prefetch'):
-        source.prefetch([(i.design_id, i.transforms()) for i in resolved.instances if i.semantic])
+        source.prefetch([variant_request(i) for i in resolved.instances if i.is_variant])
     for i in resolved.instances:
-        for key, tf in ((i.design_id, None), (i.geometry_key, i.transforms() if i.semantic else None)):
-            if key not in out:
-                g = source.geometry(i.design_id, tf) if tf else source.geometry(i.design_id)
-                out[key] = (g.polylines, g.bead_width)
+        if i.design_id not in out:
+            g = source.geometry(i.design_id)
+            out[i.design_id] = (g.polylines, g.bead_width)
+        if i.is_variant and i.geometry_key not in out:
+            g = layer_geometry(source, i)
+            out[i.geometry_key] = (g.polylines, g.bead_width)
     return out
+
+
+def variant_request(inst) -> tuple:
+    """(design id, transforms, cuts) of a layer printing a variant."""
+    return (inst.design_id, inst.transforms(), inst.cut_spec())
+
+
+def layer_geometry(source, inst):
+    """The geometry a layer prints: its design, or its VARIANT (transform
+    groups → semantic transforms; profiles → cuts)."""
+    if not inst.is_variant:
+        return source.geometry(inst.design_id)
+    if inst.cuts:
+        return source.geometry(inst.design_id, inst.transforms() or None, inst.cut_spec())
+    return source.geometry(inst.design_id, inst.transforms())
+
+
+def toolpath_graph():
+    """(toolpath_proto.graph, toolpath_proto.geometry): the layer router the
+    print plan falls back on for a LayerSource without its own `route`."""
+    import os
+    import sys
+    tp = os.path.join(os.path.dirname(__file__), '..', 'toolpath_proto')
+    if tp not in sys.path:
+        sys.path.insert(0, tp)
+    import graph
+    import geometry
+    return graph, geometry

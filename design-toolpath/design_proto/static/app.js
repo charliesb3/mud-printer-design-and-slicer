@@ -67,6 +67,8 @@ const layer = {
   return_paths: true,        // "Infill repair": repair of the wide-region field fallback
   prefer_closed: true,       // prefer a closed (start = end) layer route
 };
+// the document of a fresh page — NEW PROJECT's empty Base design (never mutated)
+const _PRISTINE_LAYER = JSON.stringify(layer);
 
 let infillPatterns = {};     // name → { parameters } from /api/infill_patterns
 let selectedJunction = null; // { key, x, y } of the selected network junction
@@ -465,18 +467,25 @@ function drawHandle(wx, wy, shape) {
 function repaint() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawGrid();
+  // while a geometry edit is resolving, the previous result is drawn DIMMED
+  // (immediate acknowledgement: what is shown is not yet the new value)
+  const stale = _geomPending;
+  if (stale) { ctx.save(); ctx.globalAlpha = STALE_ALPHA; }
   drawBeads();
   if (!showBeads && !(showToolpath && routeResult)) drawPrintableLines();
+  if (stale) ctx.restore();
   drawEffectivePaths();
   drawOpenings();
   drawJunctions();
   drawTrimHover();
   if (showToolpath && routeResult) {
+    if (stale) { ctx.save(); ctx.globalAlpha = STALE_ALPHA; }
     if (playbackPos > 0.0 || playbackPlaying) {
       drawToolpathWithPlayback(routeResult.moves);
     } else {
       drawToolpath(routeResult.moves);
     }
+    if (stale) ctx.restore();
   }
   if (showDimensions) drawDimensions();
   if (tool === 'draw' && drawPts.length > 0) drawInProgress();
@@ -486,6 +495,8 @@ function repaint() {
   drawHighlight();
   drawSnapHint();
 }
+
+const STALE_ALPHA = 0.4;
 
 function drawGrid() {
   const step = 40;
@@ -2726,6 +2737,14 @@ function _cornerR(path) {
   return (typeof layer !== 'undefined' && layer.corner_radius) ? layer.corner_radius : 0;
 }
 
+// A document from a project file (or resolved from one) carries no cached
+// sample points for parametric paths (project_file.py): compute the missing
+// ones. Never re-applied to existing points (a drawn path's points are its shape).
+function _ensurePathPoints(doc) {
+  for (const p of (doc && doc.source_paths) || [])
+    if (!p.points && p.type !== 'InsetPath') _computePrimitivePoints(p);
+}
+
 function _computePrimitivePoints(path) {
   if (path.type === 'LinePath') {
     path.points = [path.start, path.end];
@@ -2945,7 +2964,7 @@ function updatePropPanel() {
   if (path.type === 'ExplicitPath' || !path.type) _addCornerRRow(panel, path);
   if (path.type === 'InsetPath') _addInsetChildRows(panel, path);
   else if (!_isDriven(path)) _addTransformRows(panel, path);
-  _addWallRows(panel, path);                // PRIMARY: Wall Thickness + Alignment
+  _addWallRows(panel, path);                // which Wall System builds it (identity; edited in its panel)
   _addAdvancedGeometryRows(panel, path);    // special relationships / CAD operations
   _addTrimRows(panel, path);                // non-destructive trims of its sections
 
@@ -3041,23 +3060,149 @@ const WALL_SYSTEMS = {
   interleaved: { label: 'Interleaved Waves', params: [
     { name: 'pattern', label: 'Waveform', options: ['wave', 'zigzag'], default: 'wave' },
     { name: 'paths', label: 'Number of Paths', default: 3, min: 1, max: 12, int: true, unit: '' },
-    { name: 'period', label: 'Period', default: 30, min: 2 },
-    { name: 'depth', label: 'Depth', default: 0, min: 0, hint: '0 = the full envelope' }] },
+    { name: 'period', label: 'Period', default: 30, min: 2 }] },   // (full depth: the Wall Thickness)
   linked: { label: 'Linked Waves', params: [
     { name: 'pattern', label: 'Waveform', options: ['wave', 'zigzag'], default: 'wave' },
     { name: 'paths', label: 'Number of Paths', default: 3, min: 2, max: 12, int: true, unit: '' },
-    { name: 'period', label: 'Period', default: 24, min: 2 },
-    { name: 'amplitude', label: 'Amplitude', default: 0, min: 0,
-      hint: '0 = automatic: neighbours just meet at their extrema; more = deeper interlock' }] },
+    { name: 'period', label: 'Period', default: 24, min: 2 }] },   // (neighbours meet at their extrema)
   chain: { label: 'Chained Loop', params: [
-    { name: 'pitch', label: 'Pitch', default: 0, min: 0,
-      hint: 'Upper loop → lower loop; 0 = 1.2 × Wall Thickness (any value down to 0.1 in)' },
-    { name: 'loop_depth', label: 'Loop Depth', default: 0, min: 0, hint: '0 = the full envelope' },
-    { name: 'loop_width', label: 'Loop Width', default: 0, min: 0, hint: '0 = 0.8 × Pitch' },
-    { name: 'neck', label: 'Neck', default: 0, min: 0, max: 0.9, unit: '',
-      hint: 'Where each loop crosses itself, as a share of Loop Depth (0 = 0.12: loops fill their half of the wall)' },
-    { name: 'phase', label: 'Phase', default: 0, min: 0, max: 0.99, unit: '', hint: 'Fraction of a period (0.5 = start with a lower loop)' }] },
+    { name: 'pitch', label: 'Pitch', default: 0, min: 0, step: 0.5,
+      hint: 'Upper loop → lower loop (fitted to whole loops per wall run). 0 = auto: 1.2 × Wall Thickness; any value down to 0.1 in' },
+    { name: 'loop_depth', label: 'Loop Depth', default: 0, min: 0, step: 0.25,
+      hint: 'How far each loop reaches from the centre line; at most the envelope (Wall Thickness − bead) / 2. 0 = auto: the full envelope' },
+    { name: 'loop_width', label: 'Loop Width', default: 0, min: 0, step: 0.5,
+      hint: 'Length of each loop along the wall: 0.15–1.6 × Pitch (wider would touch the next loop on its side). 0 = auto: 0.8 × Pitch' },
+    { name: 'neck', label: 'Neck', default: 0, min: 0, max: 0.9, step: 0.01, unit: '',
+      hint: 'Height of the loop\'s self-crossing, as a share of Loop Depth; its possible range depends on Loop Width ÷ Pitch. 0 = auto: 0.12' },
+    { name: 'phase', label: 'Phase', default: 0, min: 0, max: 0.99, step: 0.05, unit: '', hint: 'Fraction of a period (0.5 = start with a lower loop)' }] },
 };
+
+// CHAINED LOOP PARAMETER MODEL (2026-10-09; mirrors wall_systems.chain_shape).
+// With pitch p (a = p / π) the loop curve is x(u) = a·u + w·sin 2u,
+// y(u) = D·sgn(sin u)·|sin u|^q:
+//   Pitch p       — independent (whole loops per run: the generator fits it)
+//   Loop Width W  — DEPENDS on p: 0.15 p ≤ W ≤ 1.6 p (sets w)
+//   Neck N        — DEPENDS on W / p: the natural neck n0 = cos v* (v*: the
+//                   self-crossing, w·sin 2v = a·v) is moved by the profile
+//                   exponent q ∈ [0.35, 3] → N ∈ [n0³, n0^0.35] ∩ [0.05, 0.9]
+//   Loop Depth D  — bounded by the envelope H = (Wall Thickness − bead) / 2
+//   Phase         — independent
+// 0 = auto (1.2 × Wall Thickness / 0.8 p / the full envelope / 0.12). The
+// panel shows the EFFECTIVE value of every control (auto resolved), so the
+// spinner steps from what is generated (never from 0 to a 1 in pitch). An
+// edit is resolved LAST-EDITED-WINS: the edited value is authoritative and
+// any stored value it makes unreachable is moved to the nearest valid one —
+// Pitch / Wall Thickness → Loop Width, Neck, Loop Depth; Loop Width → Pitch
+// (outside 0.15–1.6 p), Neck; Neck → Loop Width (outside its reachable range);
+// Loop Depth → clamped to the envelope (the Wall Thickness owns it).
+const CHAIN = { PITCH_MIN: 0.1, PITCH_AUTO: 1.2, WIDTH_AUTO: 0.8, WIDTH_MIN: 0.15, WIDTH_MAX: 1.6,
+                NECK_AUTO: 0.12, NECK_LO: 0.05, NECK_HI: 0.9, Q_MIN: 0.35, Q_MAX: 3.0 };
+function _chainNeckV(a, w) {               // wall_systems._neck_v
+  if (2 * w <= a) return null;
+  let lo = 1e-6, hi = 0.5 * Math.PI;
+  for (let i = 0; i < 60; i++) {
+    const m = 0.5 * (lo + hi);
+    if (w * Math.sin(2 * m) - a * m > 0) lo = m; else hi = m;
+  }
+  return 0.5 * (lo + hi);
+}
+function _chainLoopWidth(a, w) {          // wall_systems._loop_width
+  const v = _chainNeckV(a, w);
+  if (v == null) return 0;
+  let mn = Infinity, mx = -Infinity;
+  for (let k = 0; k <= 48; k++) {
+    const u = 0.5 * Math.PI - v + 2 * v * k / 48, x = a * u + w * Math.sin(2 * u);
+    mn = Math.min(mn, x); mx = Math.max(mx, x);
+  }
+  return mx - mn;
+}
+const _chainN0Memo = new Map();
+function _chainN0(r) {                     // natural neck / depth at Loop Width = r × Pitch
+  r = Math.max(CHAIN.WIDTH_MIN, Math.min(CHAIN.WIDTH_MAX, r));
+  const key = r.toFixed(5);
+  if (_chainN0Memo.has(key)) return _chainN0Memo.get(key);
+  const a = 1 / Math.PI;                   // (pitch 1: the shape is scale-free)
+  let lo = 0.51 * a, hi = 12 * a;
+  for (let i = 0; i < 50; i++) { const m = 0.5 * (lo + hi); if (_chainLoopWidth(a, m) < r) lo = m; else hi = m; }
+  const v = _chainNeckV(a, 0.5 * (lo + hi));
+  const n0 = v == null ? 0 : Math.cos(v);
+  _chainN0Memo.set(key, n0);
+  return n0;
+}
+function _chainNeckRange(r) {              // reachable Neck at Loop Width = r × Pitch
+  const n0 = _chainN0(r);
+  if (!(n0 > 1e-6 && n0 < 1 - 1e-6)) return [CHAIN.NECK_AUTO, CHAIN.NECK_AUTO];
+  return [Math.max(CHAIN.NECK_LO, n0 ** CHAIN.Q_MAX), Math.min(CHAIN.NECK_HI, n0 ** CHAIN.Q_MIN)];
+}
+function _chainRatioForN0(n0) {            // r with _chainN0(r) = n0 (n0 falls as r grows)
+  let lo = CHAIN.WIDTH_MIN, hi = CHAIN.WIDTH_MAX;
+  if (n0 >= _chainN0(lo)) return lo;
+  if (n0 <= _chainN0(hi)) return hi;
+  for (let i = 0; i < 40; i++) { const m = 0.5 * (lo + hi); if (_chainN0(m) > n0) lo = m; else hi = m; }
+  return 0.5 * (lo + hi);
+}
+// the effective (generated) values of a chain system's parameters
+function _chainEffective(params, thickness, bead) {
+  const p = params || {};
+  const T = thickness > 0 ? thickness : 10;
+  const P = p.pitch > 0 ? Math.max(CHAIN.PITCH_MIN, p.pitch) : CHAIN.PITCH_AUTO * T;
+  const W = Math.max(CHAIN.WIDTH_MIN * P, Math.min(CHAIN.WIDTH_MAX * P, p.loop_width > 0 ? p.loop_width : CHAIN.WIDTH_AUTO * P));
+  const [nlo, nhi] = _chainNeckRange(W / P);
+  const N = Math.max(nlo, Math.min(nhi, Math.max(CHAIN.NECK_LO, Math.min(CHAIN.NECK_HI, p.neck > 0 ? p.neck : CHAIN.NECK_AUTO))));
+  const H = Math.max(0, 0.5 * (T - (bead > 0 ? bead : 0)));
+  const D = p.loop_depth > 0 ? Math.min(p.loop_depth, H) : H;
+  return { pitch: P, loop_width: W, neck: N, loop_depth: D, phase: ((p.phase || 0) % 1 + 1) % 1, envelope: H,
+           neck_range: [nlo, nhi],
+           auto: { pitch: !(p.pitch > 0), loop_width: !(p.loop_width > 0), neck: !(p.neck > 0), loop_depth: !(p.loop_depth > 0) } };
+}
+// LAST-EDITED-WINS: `edited` (a parameter name, or 'thickness') was just set
+// in `params`. Returns { params, changed: [other names moved], notes }.
+function _chainResolve(params, edited, thickness, bead) {
+  const p = { ...params };
+  const changed = [], notes = [];
+  const r3 = x => Math.round(x * 1000) / 1000;
+  const set = (k, v, why) => { if (p[k] !== v) { p[k] = v; if (k !== edited) changed.push(k); if (why) notes.push(why); } };
+  if (p.pitch > 0 && p.pitch < CHAIN.PITCH_MIN) set('pitch', CHAIN.PITCH_MIN);
+  if (p.neck > CHAIN.NECK_HI) set('neck', CHAIN.NECK_HI);
+  let e = _chainEffective(p, thickness, bead);
+  // Loop Width ↔ Pitch
+  if (p.loop_width > 0) {
+    const W = p.loop_width;
+    if (edited === 'loop_width') {
+      if (W > CHAIN.WIDTH_MAX * e.pitch)
+        set('pitch', Math.ceil(W / CHAIN.WIDTH_MAX * 1000) / 1000, `Pitch raised to ${(W / CHAIN.WIDTH_MAX).toFixed(2)} in (Loop Width ≤ 1.6 × Pitch)`);
+      else if (W < CHAIN.WIDTH_MIN * e.pitch) {
+        const P = Math.max(CHAIN.PITCH_MIN, Math.floor(W / CHAIN.WIDTH_MIN * 1000) / 1000);
+        set('pitch', P, `Pitch reduced to ${P.toFixed(2)} in (Loop Width ≥ 0.15 × Pitch)`);
+        if (W < CHAIN.WIDTH_MIN * P) set('loop_width', r3(CHAIN.WIDTH_MIN * P));
+      }
+    } else if (W > CHAIN.WIDTH_MAX * e.pitch || W < CHAIN.WIDTH_MIN * e.pitch) {
+      set('loop_width', r3(Math.max(CHAIN.WIDTH_MIN * e.pitch, Math.min(CHAIN.WIDTH_MAX * e.pitch, W))),
+          'Loop Width kept within 0.15–1.6 × Pitch');
+    }
+    e = _chainEffective(p, thickness, bead);
+  }
+  // Neck ↔ Loop Width / Pitch
+  if (edited === 'neck' && p.neck > 0) {
+    const all = [CHAIN.NECK_LO, _chainNeckRange(CHAIN.WIDTH_MIN)[1]];       // reachable at any width
+    const N = Math.max(all[0], Math.min(all[1], p.neck));
+    if (N !== p.neck) set('neck', r3(N));
+    const [lo, hi] = _chainNeckRange(e.loop_width / e.pitch);
+    if (N > hi + 1e-4 || N < lo - 1e-4) {
+      const r = _chainRatioForN0(N > hi ? N ** (1 / CHAIN.Q_MIN) : N ** (1 / CHAIN.Q_MAX));
+      set('loop_width', r3(r * e.pitch), `Loop Width ${N > hi ? 'narrowed' : 'widened'} to ${(r * e.pitch).toFixed(2)} in for Neck ${N.toFixed(2)}`);
+      e = _chainEffective(p, thickness, bead);
+    }
+  } else if (p.neck > 0) {
+    const [lo, hi] = _chainNeckRange(e.loop_width / e.pitch);
+    if (p.neck > hi + 1e-4 || p.neck < lo - 1e-4)
+      set('neck', r3(Math.max(lo, Math.min(hi, p.neck))), 'Neck moved into the range this Loop Width allows');
+  }
+  // Loop Depth ≤ the envelope (owned by the Wall Thickness)
+  if (p.loop_depth > 0 && p.loop_depth > e.envelope + 1e-9 && e.envelope > 0)
+    set('loop_depth', r3(e.envelope), `Loop Depth limited to the envelope (${e.envelope.toFixed(2)} in)`);
+  return { params: p, changed, notes };
+}
 function _wallSystemType(wall) {          // (legacy wall.system)
   const t = wall && wall.system && wall.system.type;
   return WALL_SYSTEMS[t] && t !== 'skin_web' ? t : 'skin_web';
@@ -3164,9 +3309,10 @@ function _legacyWalls() {
 async function _maybeMigrateWallSystems() {
   if (_wsMigrating || !_legacyWalls()) return;
   _wsMigrating = true;
+  const ep = _projectEpoch;
   try {
     const res = await _post('/api/migrate_wall_systems', buildPayload());
-    if (!res || !res.migrated || !_legacyWalls()) return;
+    if (!res || !res.migrated || !_legacyWalls() || ep !== _projectEpoch) return;   // (another project opened)
     layer.wall_systems = res.wall_systems.map(w => ({ ...w, params: { ...(w.params || {}) },
       members: [...(w.members || [])], web: { pattern: 'none', params: {}, variation_index: 0, ...(w.web || {}) } }));
     for (const f of layer.infills || []) if (res.owners[f.id]) f.owner = res.owners[f.id];
@@ -3208,15 +3354,60 @@ function _fillWallSystemReport(d, r) {
   } else {
     d.textContent = 'Minimum effective thickness: —';
   }
+  // Chained Loop: what was generated, and a warning before it gets slow
+  const ch = reps.map(w => w.chain).filter(Boolean);
+  if (ch.length) {
+    const loops = ch.reduce((a, c) => a + c.loops, 0), pts = ch.reduce((a, c) => a + c.points, 0);
+    const lo = Math.min(...ch.map(c => c.pitch_min ?? Infinity)), hi = Math.max(...ch.map(c => c.pitch_max ?? 0));
+    const pr = !isFinite(lo) ? '' : (hi - lo < 0.005 ? `${lo.toFixed(2)} in` : `${lo.toFixed(2)}–${hi.toFixed(2)} in`);
+    d.textContent += ` · Generated: ${Math.round(loops)} loops${pr ? `, pitch ${pr} (whole loops per run)` : ''}, ${pts} points`;
+    if (ch.some(c => c.dense)) {
+      d.style.color = 'var(--warn)';
+      d.textContent += ` · Loops closer than one bead (${_beadWidth().toFixed(2)} in) overlap when printed.`;
+    }
+    if (pts > CHAIN_POINTS_WARN) {
+      d.style.color = 'var(--warn)';
+      d.textContent += ' · A very dense chain: the toolpath takes several seconds to resolve (the geometry shows first).';
+    }
+  }
 }
+const CHAIN_POINTS_WARN = 40000;
 function _wallSystemReport(id) { return _wsReports({ id })[0] || null; }
 
 // construction parameters (Interleaved / Linked / Chained Loop)
 function _addWallSystemParams(panel, s) {
-  // a PARAMETER edit only regenerates the geometry (coalesced requests); the
-  // panel is not rebuilt — the input keeps focus and the readout updates in
-  // place when the result arrives
-  const onParam = () => { routeResult = null; scheduleRefresh(); repaint(); };
+  // a PARAMETER edit only regenerates the geometry (coalesced requests; a
+  // superseded resolve in flight is cancelled); the panel is not rebuilt —
+  // the input keeps focus and the readout updates in place when the result
+  // arrives
+  const onParam = () => {
+    routeResult = null;
+    _geomPending = true;                       // immediate feedback: the request is on its way
+    setStatus(`Updating ${_wsLabel(s)}…`);
+    scheduleRefresh({ supersede: true }); repaint();
+  };
+  const chain = s.type === 'chain';
+  const inputs = {};
+  // Chained Loop: every field shows the EFFECTIVE value (auto resolved)
+  const shown = () => chain ? _chainEffective(s.params, s.thickness ?? 10, _beadWidth()) : null;
+  const showValue = (prm, eff) => {
+    if (!eff || !(prm.name in eff.auto || prm.name === 'phase')) return s.params[prm.name] ?? prm.default;
+    return eff[prm.name];
+  };
+  const unitOf = (prm, eff) => {
+    const u = prm.unit ?? 'in';
+    return eff && eff.auto[prm.name] ? (u ? `${u} · auto` : 'auto') : u;
+  };
+  const refresh = (names, eff) => {            // dependent fields moved by an edit
+    for (const k of names) {
+      const el = inputs[k];
+      const prm = WALL_SYSTEMS[s.type].params.find(x => x.name === k);
+      if (!el || !prm) continue;
+      el.input.value = +(+showValue(prm, eff)).toFixed(3);
+      if (el.unit) el.unit.textContent = unitOf(prm, eff);
+    }
+  };
+  const eff0 = shown();
   for (const prm of WALL_SYSTEMS[s.type].params) {
     if (prm.options) {
       addPropRowSelectTo(panel, prm.label, s.params[prm.name] ?? prm.default, prm.options, v => {
@@ -3224,13 +3415,40 @@ function _addWallSystemParams(panel, s) {
       }, { wave: 'Wave', zigzag: 'Zigzag' });
       continue;
     }
-    addPropRowNumTo(panel, prm.label, s.params[prm.name] ?? prm.default, v => {
+    inputs[prm.name] = addPropRowNumTo(panel, prm.label, showValue(prm, eff0), (v, committed) => {
       let x = Math.max(prm.min ?? 0, Math.min(prm.max ?? 1e9, v));
       if (prm.int) x = Math.round(x);
+      if (chain) {
+        const cur = s.params[prm.name] ?? prm.default;
+        if (cur === x) return;                   // (the same value again: blur after a live apply)
+        if (!(cur > 0) && x > 0 && Math.abs(x - eff0Of(prm.name)) < 1e-9) return;   // (the auto value retyped)
+        const res = _chainResolve({ ...s.params, [prm.name]: x }, prm.name, s.thickness ?? 10, _beadWidth());
+        s.params = res.params;
+        const eff = shown();
+        // every OTHER field shows its generated value (moved values, and auto
+        // values that follow the edit, e.g. auto Loop Width = 0.8 × Pitch)
+        refresh(Object.keys(inputs).filter(k => k !== prm.name), eff);
+        if (committed) refresh([prm.name], eff);   // (the edited field itself: not while typing)
+        onParam();
+        if (res.notes.length) setStatus(`Updating ${_wsLabel(s)}… ${res.notes.join(' · ')}`);
+        return;
+      }
+      if (s.params[prm.name] === x) return;     // (the same value again: blur after a live apply)
       s.params[prm.name] = x; onParam();
-    }, prm.unit ?? 'in');
+    }, unitOf(prm, eff0), { live: true, step: prm.step });
     if (prm.hint) _addNote(panel, prm.hint);
   }
+  function eff0Of(name) { const e = shown(); return e ? e[name] : NaN; }
+}
+
+// a Wall Thickness edit of a Chained Loop system: the thickness wins — the
+// auto pitch follows it and any stored value it makes unreachable moves
+// (Loop Depth past the new envelope, Loop Width / Neck for the new pitch)
+function _chainOnThickness(s) {
+  if (!s || s.type !== 'chain') return [];
+  const res = _chainResolve(s.params || {}, 'thickness', s.thickness ?? 10, _beadWidth());
+  s.params = res.params;
+  return res.notes;
 }
 
 // SKIN + WEB: the web lattice (formerly the Wall Infill panel) — edits go to
@@ -3384,7 +3602,14 @@ function updateWallSystemSection() {
                     'path prints as separated outbound + return lanes (Material / Bead: Return-lane overlap).');
   } else {
     addPropRowNumTo(panel, 'Wall Thickness', cur.thickness ?? 10, v => {
-      cur.thickness = Math.max(0.5, v); routeResult = null; scheduleRefresh(); repaint();
+      cur.thickness = Math.max(0.5, v);
+      const notes = _chainOnThickness(cur);      // (Chained Loop: dependent values follow)
+      routeResult = null; scheduleRefresh({ supersede: cur.type === 'chain' }); repaint();
+      if (cur.type === 'chain') {
+        _geomPending = true;
+        setStatus(`Updating ${_wsLabel(cur)}…${notes.length ? ' ' + notes.join(' · ') : ''}`);
+        if (!_isTyping()) rebuild();             // (the effective values shown follow the thickness)
+      }
     });
     const alignOpts = ['Default', 'Centered', 'Inside', 'Outside'];
     addPropRowSelect(panel, 'Wall Alignment', !cur.align || cur.align === 'auto' ? 'Default' : _alignLabel(cur.align, true),
@@ -3419,41 +3644,35 @@ function updateWallSystemSection() {
   });
 }
 
-// Path Properties: which Wall System builds this path (construction lives
-// in the Wall System panel)
+// Path Properties: WHICH Wall System builds this path — identity only.
+// Membership and construction are edited in the Wall System panel (no
+// duplicated editing UI here); "Edit" opens the path's system there.
 function _addWallRows(panel, path) {
   _wsReportEls = _wsReportEls.filter(r => r.owner !== 'path');
-  _addSubTitle(panel, 'Wall System');
-  const refresh = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint(); };
-  const all = layer.wall_systems || [];
   const s = _wsOf(path.id);
-  const NONE = 'none';
-  addPropRowSelectTo(panel, 'Wall System', s ? s.id : NONE, [NONE, ...all.map(x => x.id)], v => {
-    const t = all.find(x => x.id === v) || null;
-    _wsSetMember(path.id, t);
-    if (t) wallSystemPick = t.id;
-    _syncSystemWebs();
-    refresh();
-  }, { [NONE]: 'None (single bead)', ...Object.fromEntries(all.map(x => [x.id, _wsLabel(x)])) });
-  if (s && s.type === 'single') {
-    _addNote(panel, 'Single / Out-and-Back Wall: one bead (with Physical rules, separated outbound + return lanes).');
-  } else if (s && s.thickness != null) {
-    _addNote(panel, `${s.thickness} in wall · ${s.align && s.align !== 'auto' ? _alignLabel(s.align, path.closed) : _alignLabel('auto', path.closed)}` +
-                    ` · ${WALL_SYSTEMS[s.type].label} — set in the Wall System panel.`);
-    if (s.type !== 'skin_web') {
-      const d = document.createElement('div');
-      d.className = 'path-type wall-system-report';
-      _wsReportEls.push({ el: d, id: path.id, owner: 'path' });
-      _fillWallSystemReport(d, path.id);
-      panel.appendChild(d);
-    }
-  } else if (_legacyWalls() && _effectiveWall(path).wall) {
-    _addNote(panel, `${_effectiveWall(path).wall.thickness} in wall (older design) — being converted to a Wall System.`);
-  } else {
-    _addNote(panel, 'A single bead (with Physical rules, an out-and-back pair when open). ' +
-                    'Add it to a Wall System to make it a wall.');
-    _addButton(panel, '+ New Wall System with this path', () => { _wsNew([path.id]); _syncSystemWebs(); refresh(); });
+  const row = document.createElement('div');
+  row.className = 'prop-row';
+  row.id = 'path-wallsys-row';
+  const lab = document.createElement('span');
+  lab.className = 'prop-label';
+  lab.textContent = 'Wall System';
+  const val = document.createElement('span');
+  val.className = 'path-type';
+  val.style.flex = '1';
+  val.textContent = s ? `${_wsLabel(s)} · ${WALL_SYSTEMS[s.type] ? WALL_SYSTEMS[s.type].label : s.type}` +
+                      (s.type !== 'single' && s.thickness != null ? ` · ${s.thickness} in` : '')
+    : (_legacyWalls() && _effectiveWall(path).wall ? `${_effectiveWall(path).wall.thickness} in wall (older design)`
+                                                   : 'None (single bead)');
+  row.append(lab, val);
+  if (s) {
+    const ed = document.createElement('button');
+    ed.className = 'mini-btn';
+    ed.textContent = 'Edit';
+    ed.title = 'Open this Wall System in the Wall System panel';
+    ed.onclick = () => { wallSystemPick = s.id; updateWallSystemSection(); };
+    row.appendChild(ed);
   }
+  panel.appendChild(row);
 }
 
 // (legacy) Network Wall of a network — read only by the migration / old designs
@@ -3998,19 +4217,36 @@ function addInfill() {
 }
 
 // Helpers for building treatment panels
-function addPropRowNumTo(panel, label, value, onChange, unit = 'in') {
+// opts.live: also apply a TYPED value once typing pauses (a number input's
+// `change` fires only on Enter / blur — the value seemed to do nothing, then
+// landed with the next click); spinner clicks still apply at once
+const LIVE_INPUT_MS = 450;
+// onChange(value, committed): committed = Enter / blur / spinner (false for a
+// live apply while typing). Returns { input, unit } (to update in place).
+function addPropRowNumTo(panel, label, value, onChange, unit = 'in', opts = {}) {
   const row = document.createElement('div'); row.className = 'prop-row';
   const lbl = document.createElement('span'); lbl.className = 'prop-label'; lbl.textContent = label;
   const input = document.createElement('input');
   input.type = 'number'; input.className = 'prop-input';
-  input.value = typeof value === 'number' ? +value.toFixed(2) : value;
-  input.onchange = () => onChange(+input.value);
+  if (opts.step) input.step = opts.step;
+  input.value = typeof value === 'number' ? +value.toFixed(opts.step && opts.step < 0.1 ? 3 : 2) : value;
+  input.onchange = () => { clearTimeout(input._live); onChange(+input.value, true); };
+  if (opts.live) {
+    input.oninput = () => {
+      clearTimeout(input._live);
+      input._live = setTimeout(() => {
+        if (input.value !== '' && isFinite(+input.value)) onChange(+input.value, false);
+      }, LIVE_INPUT_MS);
+    };
+  }
   row.append(lbl, input);
+  let unitEl = null;
   if (unit) {
-    const unitEl = document.createElement('span'); unitEl.className = 'prop-unit'; unitEl.textContent = unit;
+    unitEl = document.createElement('span'); unitEl.className = 'prop-unit'; unitEl.textContent = unit;
     row.append(unitEl);
   }
   panel.appendChild(row);
+  return { input, unit: unitEl };
 }
 
 function addPropRowSelectTo(panel, label, value, options, onChange, labels = null) {
@@ -4042,17 +4278,51 @@ function _anyWallSystem() {
 // collapse into ONE follow-up request with the latest state (a slow resolve
 // never queues a backlog of stale ones).
 let _reqBusy = false, _reqNext = null;
-async function _coalesced(fn) {
-  if (_reqBusy) { _reqNext = fn; return; }
+let _geomPending = false;      // a geometry edit awaits its result (status line; stale drawing dimmed)
+// a response is STALE when a newer request is already queued: it is dropped
+// (never drawn after the newer edit) — the queued one shows the latest state
+function _superseded() { return !!_reqNext; }
+function _geomSettled() {
+  if (_geomPending && !_reqNext) { _geomPending = false; setStatus('Updated.'); }
+}
+// SUPERSEDED RESOLVES (2026-10-09): every resolve request carries this page's
+// channel + an increasing sequence number; the server stops an older request
+// of the channel as soon as a newer one begins (resolve_cancel.py) and
+// answers 409 {superseded}. A parameter edit (supersede) also ABORTS the
+// request in flight, so its follow-up starts at once instead of waiting for
+// a result nobody will see.
+const _resolveChannel = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let _resolveSeq = 0;
+let _inflight = null;          // AbortController of the resolve request in flight
+function _resolveFetch(url, body) {
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  _inflight = ctl;
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Resolve-Channel': _resolveChannel,
+               'X-Resolve-Seq': String(++_resolveSeq) },
+    body, ...(ctl ? { signal: ctl.signal } : {}),
+  });
+}
+function _isAbort(e) { return !!e && e.name === 'AbortError'; }
+async function _coalesced(fn, supersede = false) {
+  if (_reqBusy) {
+    _reqNext = fn;
+    if (supersede && _inflight) _inflight.abort();      // (its follow-up starts at once)
+    return;
+  }
   _reqBusy = true;
   try { await fn(); } finally {
     _reqBusy = false;
+    _inflight = null;
     if (_reqNext) { const f = _reqNext; _reqNext = null; _coalesced(f); }
   }
 }
 
 let _histRestoring = false;    // Undo / Redo: the restored state is already consistent
-function scheduleRefresh() {
+let _refreshSupersede = false;  // the pending refresh supersedes a resolve in flight
+function scheduleRefresh(opts = {}) {
+  if (opts.supersede) _refreshSupersede = true;
   _syncRelations();
   if (!_histRestoring) _syncSystemWebs();      // (networkInfo is still the undone state's)
   _maybeMigrateWallSystems();
@@ -4067,9 +4337,10 @@ function scheduleRefresh() {
     return;
   }
   const ws = _anyWallSystem();
+  const fire = fn => () => { const sup = _refreshSupersede; _refreshSupersede = false; _coalesced(fn, sup); };
   if (showToolpath) {
     // Auto-route: also updates derivedPaths
-    _refreshTimer = setTimeout(() => _coalesced(runRoute), ws ? 300 : 200);
+    _refreshTimer = setTimeout(fire(runRoute), ws ? 300 : 200);
   } else {
     // ≥ 2 paths may form a wall network (junction markers, trimmed faces)
     const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0 ||
@@ -4077,7 +4348,7 @@ function scheduleRefresh() {
                        (layer.openings || []).length > 0 || (layer.trims || []).length > 0 ||
                        layer.source_paths.length > 1 || ws;
     if (hasDerived || showBeads) {           // beads need the resolved printable set
-      _refreshTimer = setTimeout(() => _coalesced(fetchEffectivePaths), ws ? 250 : 120);
+      _refreshTimer = setTimeout(fire(fetchEffectivePaths), ws ? 250 : 120);
     } else {
       derivedPaths = [];
       repaint();
@@ -4093,27 +4364,32 @@ async function fetchEffectivePaths() {
   }
   try {
     const sent = _histState();
-    const res = await fetch('/api/effective_paths', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPayload()),
-    });
-    const data = await res.json();
-    if (data.paths) {
-      const sourceIds = new Set(layer.source_paths.map(p => p.id));
-      derivedPaths = data.paths.filter(p => !sourceIds.has(p.id));
-      networkInfo = data.network || null;
-      printable = data.printable || [];
-      _netState = sent;
-      _applyDerivedSources();
-      updatePathList();
-      updateInfillList();
-      _afterNetworkUpdate();
-    }
+    await _fetchGeometry(JSON.stringify(buildPayload()), sent);
   } catch (e) {
-    console.warn('fetchEffectivePaths failed', e);
+    if (!_isAbort(e)) console.warn('fetchEffectivePaths failed', e);
   }
   repaint();
+}
+
+// /api/effective_paths → the geometry state; false when superseded / failed
+async function _fetchGeometry(body, sent) {
+  const ep = _projectEpoch;
+  const res = await _resolveFetch('/api/effective_paths', body);
+  const data = await res.json();
+  if (_superseded() || data.superseded || ep !== _projectEpoch) return false;   // (or another project was opened)
+  if (!data.paths) return false;
+  const sourceIds = new Set(layer.source_paths.map(p => p.id));
+  derivedPaths = data.paths.filter(p => !sourceIds.has(p.id));
+  networkInfo = data.network || null;
+  printable = data.printable || [];
+  _netState = sent;
+  _applyDerivedSources();
+  updatePathList();
+  updateInfillList();
+  _afterNetworkUpdate();
+  _geomSettled();
+  _fitOpened();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -4128,15 +4404,22 @@ async function runRoute() {
     repaint();
     return;
   }
-  setStatus('Routing…');
+  if (!_geomPending) setStatus('Routing…');
+  const ep = _projectEpoch;                // (another project opened meanwhile: drop the result)
   try {
     const sent = _histState();
-    const res = await fetch('/api/route', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPayload()),
-    });
+    const body = JSON.stringify(buildPayload());
+    // GEOMETRY FIRST (Wall Systems, toolpath cleared by the edit): the
+    // resolved geometry is drawn as soon as it exists; the route follows
+    // (the server reuses that geometry for the same payload)
+    if (routeResult === null && _anyWallSystem()) {
+      const ok = await _fetchGeometry(body, sent);
+      if (_superseded() || ep !== _projectEpoch) return;
+      if (ok) { repaint(); setStatus('Routing…'); }
+    }
+    const res = await _resolveFetch('/api/route', body);
     const data = await res.json();
+    if (_superseded() || data.superseded || ep !== _projectEpoch) return;
     if (data.error) {
       setStatus('Routing error — see console.');
       console.error(data.error);
@@ -4154,11 +4437,13 @@ async function runRoute() {
     _afterNetworkUpdate();
     _setupPlayback(data.moves);
     _showTransport(true);
+    _fitOpened();
+    _geomPending = false;                      // (the metrics line replaces "Updating…")
     updateMetrics(data);
     document.getElementById('metrics-section').style.display = '';
     repaint();
   } catch (e) {
-    setStatus('Routing failed: ' + e.message);
+    if (!_isAbort(e)) setStatus('Routing failed: ' + e.message);
   }
 }
 
@@ -4358,7 +4643,7 @@ function drawBeads() {
     b.stroke();
   }
   ctx.save();
-  ctx.globalAlpha = BEAD_ALPHA;    // opaque: overlaps never darken (one union)
+  ctx.globalAlpha = BEAD_ALPHA * (_geomPending ? STALE_ALPHA : 1);    // opaque: overlaps never darken (one union)
   ctx.drawImage(_beadCanvas, 0, 0);
   ctx.restore();
 }
@@ -4741,6 +5026,8 @@ function deletePath(id) {
   repaint();
 }
 
+// CLEAR ALL (toolbar "Clear Design"): empties the Layer Design being edited —
+// nothing else of the project (New Project resets everything)
 function clearAll() {
   layer.source_paths = [];
   layer.offset_treatments = [];
@@ -4806,6 +5093,9 @@ function clearAll() {
   document.getElementById('metrics-section').style.display = 'none';
   historyCheckpoint();          // Clear All is undoable
   repaint();
+  // its scope (the toolbar button reads "Clear Design"): ONE Layer Design
+  setStatus(`Cleared the Layer Design "${_designName(project.active)}" (undoable). Other designs and the ` +
+            'Assembly are unchanged — New Project starts over.');
 }
 
 function setStatus(msg) {
@@ -5620,7 +5910,7 @@ function newId() { return 'p' + (_idCounter++); }
 
 // ---------------------------------------------------------------------------
 // WORKSPACES + PROJECT LAYER DESIGNS
-// One application, two workspaces: [Designer] [Assembly]. Switching is a
+// One application, three workspaces: [Designer] [Assembly] [Print Simulation]. Switching is a
 // view change; neither workspace's state is touched.
 // The project's LAYER DESIGNS (design_proto/layer_design.py): Base is a full
 // Designer document; a derived design stores only its delta from its
@@ -5628,14 +5918,17 @@ function newId() { return 'p' + (_idCounter++); }
 // resolved document is `layer`); leaving a derived design stores its delta
 // (computed Designer-side against the LIVE parent), so inheritance stays
 // live and nothing is copied. Each design keeps its own undo history.
-// Not persisted across page reloads (neither is the Designer).
+// Persisted with the whole project in a project file (PROJECT FILE below).
 // ---------------------------------------------------------------------------
 let currentWorkspace = 'designer';
 const _workspaceHooks = {};       // name → onShow()
+const _workspaceHideHooks = {};   // name → onHide() (leaving it: e.g. stop playback, drop background work)
 
 function setWorkspace(name) {
+  const prev = currentWorkspace;
   currentWorkspace = name;
-  for (const w of ['designer', 'assembly']) {
+  if (prev !== name && _workspaceHideHooks[prev]) _workspaceHideHooks[prev]();
+  for (const w of ['designer', 'assembly', 'simulation']) {
     const el = document.getElementById('ws-' + w);
     if (el) el.style.display = w === name ? '' : 'none';
     const tab = document.getElementById('ws-tab-' + w);
@@ -5652,6 +5945,7 @@ const project = {
   baseDoc: null,            // Base's document while another design is edited
   deltas: {},               // derived id → { patch, settings }
   hist: {},                 // design id → its undo history
+  name: '',                 // the project's name (project file)
 };
 let _designCounter = 1;
 
@@ -5731,6 +6025,7 @@ async function editDesign(id) {
   project.active = id;
   for (const k of Object.keys(layer)) delete layer[k];
   Object.assign(layer, JSON.parse(JSON.stringify(doc)));
+  _ensurePathPoints(layer);
   const h = project.hist[id] || { undo: [], redo: [], current: null, bytes: 0 };
   Object.assign(_hist, h);
   selectedId = null; selectedOpeningId = null; selectedJunction = null;
@@ -5782,12 +6077,212 @@ function renderDesignTabs() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// PROJECT FILE — whole-project Save / Open (design_proto/project_file.py)
+// A project file (.muddesign, JSON) holds the AUTHORING state of both
+// workspaces: every Layer Design in the form the Layer Design library
+// exchanges (Base = its full Designer document, derived designs = their live
+// delta), the design open in the Designer, the record / design id counters,
+// and the Assembly state (window.AssemblyProject). Everything derived —
+// resolved geometry, networks, toolpaths, the stack, support findings — and
+// every undo history, selection and view is regenerated / reset. The server
+// validates (and on Open migrates old schemas) before anything is replaced:
+// a file that cannot be opened leaves the current project untouched; one
+// that can REPLACES it completely (nothing merges with what was open).
+// ---------------------------------------------------------------------------
+const PROJECT_FILE_EXT = '.muddesign';
+let _projectEpoch = 0;          // bumped by Open: a response for the previous project is dropped
+let _fitAfterOpen = false;      // frame the opened project once its geometry arrives
+
+async function projectState() {
+  await syncActiveDesign();                // the open derived design's edits → its delta
+  return {
+    name: project.name || '',
+    designer: { designs: _designsPayload(), active_design: project.active,
+                id_counter: _idCounter, design_counter: _designCounter },
+    assembly: window.AssemblyProject ? window.AssemblyProject.exportState() : null,
+  };
+}
+
+function _projectMessage(title, msg) {
+  setStatus(`${title}: ${msg}`);
+  if (typeof alert === 'function') alert(`${title}\n\n${msg}`);
+}
+
+function _downloadText(name, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function saveProject() {
+  if (!project.name && typeof prompt === 'function') {
+    const n = prompt('Project name', 'Untitled project');
+    if (n === null) return null;                       // cancelled
+    project.name = (n || '').trim();
+  }
+  let res;
+  try {
+    setStatus('Saving project…');
+    res = await _post('/api/project/save', { project: await projectState() });
+  } catch (e) {
+    _projectMessage('The project was not saved', e.message);
+    return null;
+  }
+  // (identifier + version first: the file says what it is at a glance)
+  const f = res.file;
+  const ordered = { format: f.format, schema_version: f.schema_version, saved_at: f.saved_at,
+                    generator: f.generator, project: f.project };
+  _downloadText(res.filename, JSON.stringify(ordered, null, 1) + '\n');
+  setStatus(`Saved project ${res.file.project.name ? '"' + res.file.project.name + '" ' : ''}as ${res.filename}.`);
+  return res;
+}
+
+function openProjectDialog() {
+  const inp = document.getElementById('project-file-input');
+  if (!inp) return;
+  inp.value = '';                                      // (choosing the same file again still opens it)
+  inp.click();
+}
+
+async function openProjectFile(file) {
+  if (!file) return false;
+  return openProjectText(await file.text(), file.name);
+}
+
+function _projectHasContent() {
+  return layer.source_paths.length > 0 || project.designs.length > 1;
+}
+
+async function openProjectText(text, fileName) {
+  if (_projectHasContent() && typeof confirm === 'function' &&
+      !confirm('Opening a project replaces the current project. Unsaved changes will be lost. Continue?'))
+    return false;
+  let res;
+  try {
+    setStatus('Opening project…');
+    const r = await fetch('/api/project/open', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: text });
+    res = await r.json();
+  } catch (e) {
+    res = { error: e.message };
+  }
+  if (!res || res.error || !res.project) {
+    _projectMessage('The project could not be opened', (res && res.error) || 'no response');
+    return false;                                      // the current project is untouched
+  }
+  applyProject(res, fileName);
+  return true;
+}
+
+// REPLACE the whole project with an opened (validated, migrated) one
+function applyProject(res, fileName) {
+  const P = res.project, D = P.designer;
+  const clone = o => JSON.parse(JSON.stringify(o));
+  // drop everything of the previous project still pending or in flight
+  _projectEpoch++;
+  clearTimeout(_refreshTimer);
+  _reqNext = null;
+  if (_inflight) _inflight.abort();
+  // the Layer Designs
+  const root = D.designs.find(d => d.parent == null);
+  project.designs = D.designs.map(d => ({ id: d.id, name: d.name, parent: d.parent == null ? null : d.parent }));
+  project.deltas = {};
+  for (const d of D.designs)
+    if (d.parent != null) project.deltas[d.id] = { patch: clone(d.patch || {}), settings: clone(d.settings || {}) };
+  project.baseDoc = clone(root.document);
+  _ensurePathPoints(project.baseDoc);
+  project.active = D.active_design;
+  project.hist = {};
+  project.name = P.name || (fileName || '').replace(/\.[^.]*$/, '');
+  _idCounter = D.id_counter;
+  _designCounter = D.design_counter;
+  const doc = project.active === root.id ? root.document : res.active_document;
+  for (const k of Object.keys(layer)) delete layer[k];
+  Object.assign(layer, clone(doc));
+  _ensurePathPoints(layer);
+  // derived results, interaction and view-derived state: reset
+  selectedId = null; selectedOpeningId = null; selectedJunction = null; wallSystemPick = null;
+  snapHint = null; drawPts = []; highlightPathId = null; trimHover = null;
+  dragging = null; bodyDragging = null; rotateDrag = null; openingDrag = null; originDrag = null;
+  routeResult = null; networkInfo = null; derivedPaths = []; printable = []; _netState = null;
+  _geomPending = false;
+  if (_playbackAF) { cancelAnimationFrame(_playbackAF); _playbackAF = null; }
+  playbackPlaying = false; playbackPos = 0.0; _routeCumDists = null; _routeTotalDist = 0.0;
+  _showTransport(false);
+  _updatePlayBtn();
+  const ms = document.getElementById('metrics-section');
+  if (ms) ms.style.display = 'none';
+  // a new project has no undo into the previous one
+  _hist.undo = []; _hist.redo = []; _hist.bytes = 0;
+  _hist.current = { state: _histState(), sel: null };
+  _syncLayerControls();
+  updatePathList(); updatePropPanel(); updateOffsetList(); updateInfillList(); updateHint();
+  renderDesignTabs();
+  updateUndoButtons();
+  if (window.AssemblyProject && P.assembly) window.AssemblyProject.importState(P.assembly);
+  if (window.SimulationProject) window.SimulationProject.reset();     // the old plan / playback / selection go
+  _fitAfterOpen = true;
+  _histRestoring = true;                   // (the opened state is consistent as saved)
+  try { scheduleRefresh({ supersede: true }); } finally { _histRestoring = false; }
+  repaint();
+  const warn = (res.warnings || []).join(' ');
+  setStatus(`Opened project${project.name ? ' "' + project.name + '"' : ''}: ` +
+            `${project.designs.length} Layer Design${project.designs.length === 1 ? '' : 's'}, ` +
+            `editing ${_designName(project.active)}.` + (warn ? ' ' + warn : ''));
+}
+
+// NEW PROJECT (2026-10-09): REPLACE the whole project with a clean one —
+// exactly what a fresh page holds: one empty Base design (its document, the
+// Wall Systems / sources / material of a new page), the default Assembly
+// (sections, transforms, profiles, headers, overrides, speeds), no plan, no
+// simulation, no selections, every history and derived cache dropped. It
+// goes through applyProject, the same replacement path as Open (pending
+// work of the old project aborted, late responses dropped). Separate from
+// Clear All ("Clear Design"), which empties only the Layer Design being edited. Nothing is
+// written anywhere: saved .muddesign files are untouched.
+function _projectModified() {
+  return _projectHasContent() || !!project.name ||
+         (window.AssemblyProject && !window.AssemblyProject.isPristine()) ||
+         JSON.stringify(layer.material || null) !== JSON.stringify(JSON.parse(_PRISTINE_LAYER).material || null);
+}
+
+function newProject() {
+  if (_projectModified() && typeof confirm === 'function' &&
+      !confirm('Start a new project?\n\nEvery Layer Design and the whole Assembly of the current project will be ' +
+               'discarded. Unsaved changes will be lost (saved .muddesign files are not affected).'))
+    return false;
+  applyProject({ project: {
+    name: '',
+    designer: { designs: [{ id: 'base', name: 'Base', parent: null, document: JSON.parse(_PRISTINE_LAYER) }],
+                active_design: 'base', id_counter: 1, design_counter: 1 },
+    assembly: window.AssemblyProject ? window.AssemblyProject.pristine() : null } }, '');
+  _fitAfterOpen = false;
+  viewReset();
+  if (currentWorkspace !== 'designer') setWorkspace('designer');
+  setStatus('New project — an empty Base design.');
+  return true;
+}
+
+function _fitOpened() {
+  if (!_fitAfterOpen) return;
+  _fitAfterOpen = false;
+  viewFit();
+}
+
 // The narrow interface the Assembly workspace uses (static/assembly.js).
 window.Designer = {
   listDesigns: () => project.designs.map(d => ({ ...d, active: d.id === project.active })),
+  saveProject, openProjectDialog, newProject,
   designsForBackend, createDerivedDesign, editDesign, renameDesign, setWorkspace,
   beadWidth: projectBeadWidth, setBeadWidth: setProjectBeadWidth,   // ONE project material value
   onWorkspaceShow: (name, fn) => { _workspaceHooks[name] = fn; },
+  onWorkspaceHide: (name, fn) => { _workspaceHideHooks[name] = fn; },
 };
 
 // ---------------------------------------------------------------------------
