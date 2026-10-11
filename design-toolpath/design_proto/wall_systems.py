@@ -1527,10 +1527,13 @@ def _chain_path_ref(st, sp, T, H0, env, ref):
     K = 48                                             # samples per half loop (π)
     # (a RING reference: two turns of its chain, so a piece lying across the
     # ring's seam is covered continuously)
-    if f['cycle']:
+    if f['cycle'] or f.get('stack'):
         # a RING reference: the curve over exactly the parameter range that
         # covers this piece's reference range (± a loop) — any position,
-        # across the ring's seam, continuous (u on the reference's loop grid)
+        # across the ring's seam, continuous (u on the reference's loop grid).
+        # A STACK reference (M3) likewise: a run reaching past the reference's
+        # ends continues its loops (same pitch, same phase) instead of
+        # stretching one lead to the cap
         r0, r1 = sorted((fwd(st.lo), fwd(st.hi)))
         u_of = lambda sr: ((sr - c['lo']) / c['k'] + c['xmin']) / a
         j0 = math.floor((u_of(r0) - c['u0']) / math.pi) - 1
@@ -2179,6 +2182,7 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
     strips = [_Strip(geo, r, bead, thick, env) for r in runs]
     polys, infos, Ts, frames = [], [], [], []
     refs = [f for f in (phase_ref or []) if f.get('type') == sp['type'] and f.get('key') == _sp_key(sp)]
+    self_ref = any(f.get('stack_self') for f in phase_ref or [])   # (M3: this layer IS the stack reference)
     for st in strips:
         _cancel_check()
         if st.hi - st.lo < 0.5 * bead:
@@ -2187,22 +2191,55 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
         T = ws_[len(ws_) // 2]                       # the run's true (median) thickness
         Ts.append(T)
         H0 = max(0.0, 0.5 * T - 0.5 * bead)
-        ref = _ref_map(st, refs, thick) if refs and sp['type'] in ('interleaved', 'linked', 'chain') else None
+        phased = sp['type'] in ('interleaved', 'linked', 'chain')
+        ref = _ref_map(st, refs, thick) if refs and phased else None
         p = None
+        chain_vc = _virtual_cuts(st, transitions, thick) if transitions and sp['type'] == 'chain' else []
+        held = None
+        if chain_vc and ref is not None and ref[0].get('stack'):
+            # a CROSS-Z TRANSITION on this run: the reference curve has no
+            # pre-deformation (_chain_path_ref) — the chain keeps its own fit
+            # with the transition (the previous generator), said so
+            ref, held = None, ('a cross-Z transition next to an Assembly opening: the chain is pre-deformed '
+                               'by its own fit (the reference curve carries no transition)')
         if sp['type'] == 'chain':
             if ref is not None:
                 p, info = _chain_path_ref(st, sp, T, H0, env, ref)
             if p is None:
-                vc = _virtual_cuts(st, transitions, thick) if transitions else []
-                p, info = _chain_path(st, sp, T, H0, env, vc, junction_ends)
+                p, info = _chain_path(st, sp, T, H0, env, chain_vc, junction_ends)
                 info['phase_ref'] = False        # (no reference could be used: own fit)
         else:
             vc = _virtual_cuts(st, transitions, thick) if transitions and sp['type'] in ('interleaved', 'linked') else []
             p, info = _wave_paths(st, sp, H0, env, ref, vc)
         info['phase_ref'] = ref is not None and info.get('phase_ref', True)
+        # WHICH GENERATOR drew this run (M3, never silent): 'stack' — the
+        # family's STACK reference (layer_design.stack_reference: one pattern
+        # for every layer of the stack); 'layer-ref' — the same layer's uncut
+        # pattern (a cut variant, the previous pipeline); 'layer' — fitted on
+        # its own (the previous per-layer generator), with the reason
+        if phased:
+            if info['phase_ref']:
+                info['generator'] = 'stack' if ref[0].get('stack') else 'layer-ref'
+            elif self_ref and not held:
+                info['generator'] = 'stack'               # (the reference's own fit)
+            else:
+                info['generator'] = 'layer'
+                stack_refs = [f for f in refs if f.get('stack')]
+                info['generator_reason'] = held or (
+                    'a closed Chained Loop ring is fitted whole (its own loop count; identical ring geometry '
+                    'gives the identical chain) — the stack reference applies to its open pieces'
+                    if ref is not None and sp['type'] == 'chain' and st.run.cycle else
+                    'the stack reference could not be applied to this run' if ref is not None else
+                    'no run of the stack reference lies on this run (the architecture differs from the '
+                    'family reference here)' if stack_refs else
+                    'no stack reference for this Wall System (parameters differ from the family root, '
+                    'or previous generator selected)')
         polys += [_simplify(pl) for pl in p if len(pl) >= 2]
         infos.append(info)
-        frames.append(_frame(st, sp, info))
+        fr = _frame(st, sp, info)
+        if info['phase_ref']:
+            fr['derived'] = True                 # (drawn from a reference: its own fit is not what printed)
+        frames.append(fr)
     worst = min_effective_thickness(strips, polys, bead, thick)
     env = sorted(Ts) or [thick]
     rep = {'system': sp['type'], 'label': LABELS[sp['type']], 'params': sp,
@@ -2219,6 +2256,9 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
            'closable': not (sp['type'] in ('interleaved', 'linked', 'parallel') and sp['paths'] % 2 and
                             any(not st.run.cycle and 'E' in (st.run.a[0], st.run.b[0]) for st in strips)),
            'phase_ref_runs': sum(1 for i in infos if i.get('phase_ref')),
+           'generators': {g: sum(1 for i in infos if i.get('generator') == g)
+                          for g in ('stack', 'layer-ref', 'layer') if any(i.get('generator') == g for i in infos)},
+           'generator_reasons': sorted({i['generator_reason'] for i in infos if i.get('generator_reason')}),
            'frames': frames}
     if sp['type'] == 'chain':
         # COMPLEXITY of the chain (the Designer warns before it gets slow): the
@@ -2301,9 +2341,17 @@ def _ref_map(st, refs, thick):
     judged = [k for k, z in enumerate(zs) if not ((free_lo and z < st.lo + thick) or (free_hi and z > st.hi - thick))]
     if len(judged) < 2:
         judged = list(range(len(zs)))
+    judged0 = judged
     for f in refs:
         cen, fss, L = f['centre'], f['ss'], f['L']
         segs = list(range(len(cen) - 1)) + ([len(cen) - 1] if f['cycle'] else [])
+        # a STACK reference (M3) may cover only PART of the run: a band that
+        # reaches further on this layer (a junction moved, a wall extended)
+        # draws the reference where it lies on it and continues it beyond —
+        # a contiguous block of at least half the judged samples, the
+        # samples off the reference only at the run's ends
+        partial = bool(f.get('stack'))
+        judged = judged0
         sr, ok, sign_votes = [], True, 0
         for (m, u, _) in pts:
             best = None
@@ -2316,20 +2364,41 @@ def _ref_map(st, refs, thick):
                 if best is None or d < best[0]:
                     s1 = fss[i + 1] if i + 1 < len(fss) else L
                     best = (d, fss[i] + t * (s1 - fss[i]), i)
-            if best is None or (best[0] > 0.25 * thick and len(sr) in judged):
-                ok = False
-                break
+            if best is None or (best[0] > 0.25 * thick and (len(sr) in judged or partial)):
+                if not partial:
+                    ok = False
+                    break
+                sr.append(None)
+                continue
             sr.append(best[1])
             ua = f['across'][best[2]]
             sign_votes += 1 if u.x * ua[0] + u.y * ua[1] >= 0 else -1
         if not ok:
             continue
+        if partial:
+            on = [k for k in judged if sr[k] is not None]
+            if len(on) < 2 or len(on) < 0.5 * len(judged) or on != list(range(on[0], on[-1] + 1)):
+                continue
+            if len(on) < len(judged):
+                judged = on
+                lo_k, hi_k = on[0], on[-1]
+                sr = [x if lo_k <= k <= hi_k else None for k, x in enumerate(sr)]
+        if any(x is None for x in sr):
+            # (beyond the covered block: extrapolated later from its β)
+            keep = [k for k, x in enumerate(sr) if x is not None]
+        else:
+            keep = None
         if f['cycle']:                               # unwrap across the reference seam
-            for k in range(1, len(sr)):
-                while sr[k] - sr[k - 1] > 0.5 * L:
-                    sr[k] -= L
-                while sr[k] - sr[k - 1] < -0.5 * L:
-                    sr[k] += L
+            prev = None
+            for k in range(len(sr)):
+                if sr[k] is None:
+                    continue
+                if prev is not None:
+                    while sr[k] - sr[prev] > 0.5 * L:
+                        sr[k] -= L
+                    while sr[k] - sr[prev] < -0.5 * L:
+                        sr[k] += L
+                prev = k
         jr = [sr[k] for k in judged]
         d = [b - a for a, b in zip(jr, jr[1:])]
         if not d or not (all(x > 0 for x in d) or all(x < 0 for x in d)):
@@ -2347,8 +2416,11 @@ def _ref_map(st, refs, thick):
         # axes round a corner slightly differently). Samples within a
         # thickness of a free end (frames askew near a cap) take the nearest
         # interior β; then a running median (3).
-        bs = [r - sg * z for z, r in zip(zs, sr)]
+        bs = [None if r is None else r - sg * z for z, r in zip(zs, sr)]
         inner = [k for k, z in enumerate(zs) if st.lo + thick <= z <= st.hi - thick]
+        if keep is not None:
+            # (partial cover: β only from the covered block; held flat beyond)
+            inner = [k for k in inner if bs[k] is not None] or keep
         if inner:
             for k in range(len(bs)):
                 if k not in inner:

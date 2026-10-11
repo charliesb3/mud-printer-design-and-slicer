@@ -36,6 +36,14 @@ def _pool():
     return _POOL
 
 
+def lattice_mode() -> str:
+    """The generator of print preparation's generated Wall Systems (M3):
+    'stack' (default — the stack-aware reference, layer_design.stack_reference)
+    | 'layer' (the previous per-layer generator, kept as the reference /
+    fallback: WALL_LATTICE_MODE=layer)."""
+    return 'layer' if os.environ.get('WALL_LATTICE_MODE', 'stack').strip().lower() == 'layer' else 'stack'
+
+
 def _geometry_of(built):
     from source_attribution import attribute
     import time
@@ -47,7 +55,9 @@ def _geometry_of(built):
     # (the Wall System reports — route closability per generated band — for
     # the Wall Systems workspace's continuity inspection, M2)
     ws_rep = [{'system_id': w.get('system_id'), 'sources': list(w.get('sources') or []),
-               'closable': w.get('closable'), 'status': w.get('status')}
+               'closable': w.get('closable'), 'status': w.get('status'),
+               'type': w.get('system'), 'generators': w.get('generators') or {},
+               'generator_reasons': w.get('generator_reasons') or []}
               for w in built.network.get('wall_systems') or []]
     return (polys, mat.get('bead_width'),
             {'lattice': built.network.get('lattice'), 'trims': built.network.get('trims'),
@@ -64,8 +74,9 @@ def _variant_worker(designs_json, design_id, transforms, cuts=None):
     if lib is None:
         _WORKER_LIBS.clear()
         spec = json.loads(designs_json)
-        if isinstance(spec, dict):              # designs + the project's Wall Systems
-            lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False))
+        if isinstance(spec, dict):              # designs [+ the project's Wall Systems] [+ M3 mode]
+            lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False),
+                                spec.get('stack_lattice', False))
         else:
             lib = DesignLibrary(spec)
         _WORKER_LIBS[designs_json] = lib
@@ -134,7 +145,7 @@ class DesignerSource:
         from layer_design import DesignLibrary
         if wall_systems is None and grouped(designs):
             wall_systems = []
-        return DesignerSource(DesignLibrary(designs, wall_systems))
+        return DesignerSource(DesignLibrary(designs, wall_systems, stack_lattice=lattice_mode() == 'stack'))
 
     def design_ids(self):
         return list(self.lib.designs)
@@ -317,10 +328,13 @@ class DesignerSource:
         project's Wall Systems when it composes Wall Groups])."""
         import json
         designs = [x.to_dict() for x in self.lib.designs.values()]
+        stack = bool(getattr(self.lib, 'stack_lattice', False))
         if not getattr(self.lib, '_compose', False):
-            return json.dumps(designs, sort_keys=True)
-        return json.dumps({'designs': designs, 'wall_systems': self.lib.wall_systems, 'arch': self.lib.arch},
-                          sort_keys=True)
+            if not stack:
+                return json.dumps(designs, sort_keys=True)
+            return json.dumps({'designs': designs, 'wall_systems': None, 'stack_lattice': True}, sort_keys=True)
+        return json.dumps({'designs': designs, 'wall_systems': self.lib.wall_systems, 'arch': self.lib.arch,
+                           **({'stack_lattice': True} if stack else {})}, sort_keys=True)
 
     def envelope(self, design_id, transforms=None, cuts=None):
         """The ARCHITECTURAL ENVELOPE of a layer (deferred print paths,

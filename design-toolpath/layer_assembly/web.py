@@ -116,8 +116,11 @@ def _source(designs, envelope=False, wall_systems=None):
     adapter of Assembly EDITING (envelopes from the shared architecture
     library; its own caches, guarded by _ENV_LOCK)."""
     from .designer_source import DesignerSource
+    from .designer_source import lattice_mode
     dkey = json.dumps(designs, sort_keys=True)
     key = dkey if wall_systems is None else json.dumps([designs, wall_systems], sort_keys=True)
+    if not envelope and lattice_mode() != 'stack':
+        key += '|lattice:' + lattice_mode()     # (M3: an adapter per generator)
     reg = _ENV_SOURCES if envelope else _SOURCES
     if key in reg:
         reg.move_to_end(key)
@@ -583,7 +586,11 @@ def generation_key(data) -> str:
     asm = dict(data['assembly'])
     asm.pop('print_speeds', None)
     asm.pop('machine', None)
-    return json.dumps([asm, data.get('designs'), data.get('wall_systems')], sort_keys=True)
+    from .designer_source import lattice_mode
+    key = [asm, data.get('designs'), data.get('wall_systems')]
+    if lattice_mode() != 'stack':                # (M3: the previous generator's geometry is another generation)
+        key.append(lattice_mode())
+    return json.dumps(key, sort_keys=True)
 
 
 def _generated_current(data) -> bool:
@@ -727,10 +734,21 @@ def _inspection(st, geo, rep):
         if cat is None:
             cat = 'lattice' if role in _LATTICE_ROLES else 'construction'
         out.append({'id': f.id, 'category': cat, 'role': role, 'architectural': link})
-    cont = {}
+    cont, gens = {}, {}
     for i in res.instances:
         g = layer_geometry(src, i)
         for w in g.diagnostics.get('wall_systems') or []:
+            # WHICH GENERATOR drew each phased Wall System (M3): run counts,
+            # and every reason the stack reference was not used, with layers
+            if w.get('generators'):
+                e = gens.setdefault(w.get('system_id'), {'system': w.get('system_id'), 'type': w.get('type'),
+                                                         'runs': {}, 'reasons': {}})
+                for k, v in w['generators'].items():
+                    e['runs'][k] = e['runs'].get(k, 0) + v
+                for r in w.get('generator_reasons') or []:
+                    ls = e['reasons'].setdefault(r, [])
+                    if i.index not in ls:
+                        ls.append(i.index)
             if w.get('closable') is False or w.get('status') == 'mixed':
                 why = ('odd number of paths: the route cannot close at its wall ends / openings'
                        if w.get('closable') is False else
@@ -739,8 +757,11 @@ def _inspection(st, geo, rep):
                                                                 'sources': w.get('sources') or [], 'layers': []})
                 c['layers'].append(i.index)
     counts = {k: sum(1 for x in out if x['category'] == k) for k in FINDING_CATEGORIES}
+    from .designer_source import lattice_mode
     return {'findings': out, 'continuity': list(cont.values()), 'architectural': arch, 'counts': counts,
-            'openings': _construction_checks(st)}
+            'openings': _construction_checks(st), 'lattice_mode': lattice_mode(),
+            'generators': [dict(e, reasons=[{'reason': r, 'layers': ls} for r, ls in e['reasons'].items()])
+                           for e in gens.values()]}
 
 
 def _construction_checks(st):

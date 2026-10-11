@@ -318,7 +318,7 @@ class DesignLibrary:
     """The set of Layer Designs of one project, resolved on demand.
     Resolution and builds are cached; any edit invalidates the cache."""
 
-    def __init__(self, designs=(), wall_systems=None, arch=False):
+    def __init__(self, designs=(), wall_systems=None, arch=False, stack_lattice=False):
         """wall_systems: the PROJECT's Wall Systems (wall_groups.py) — given
         (a list), Wall Group documents are composed into the build format
         with them; `arch`: composed as ARCHITECTURE only (envelopes). Neither:
@@ -328,6 +328,11 @@ class DesignLibrary:
         self._cache, self._tbuilds = {}, OrderedDict()
         self.wall_systems = list(wall_systems or [])
         self.arch = bool(arch)
+        # M3 STACK-AWARE LATTICE (print preparation, layer_assembly): every
+        # build of a design family draws its generated Wall Systems from ONE
+        # stack reference (stack_reference); False: the previous per-layer
+        # generator (kept as the reference / fallback)
+        self.stack_lattice = bool(stack_lattice)
         self._compose = wall_systems is not None or self.arch
         for d in designs:
             self.add(d if isinstance(d, LayerDesign) else LayerDesign.from_dict(d))
@@ -732,6 +737,7 @@ class DesignLibrary:
             # phase, lanes, loop stations) and solve only their new ends
             layer.wall_system_reference = self.build(design_id, inherit_lattice, transforms,
                                                      _unopened(cuts)).ws_frames or None
+        layer.wall_system_reference = self._ws_reference(design_id, transforms, layer.wall_system_reference)
         t0 = _t.perf_counter()
         joined = self._cut_join(design_id, transforms, cuts, doc) if cuts and inherit_lattice else None
         if joined is not None:
@@ -778,6 +784,70 @@ class DesignLibrary:
             paths, meta = layer._build_effective()
         tm['resolve_walls_lattice'] = _t.perf_counter() - t0
         return self._finish(design_id, doc, trep, layer, paths, meta, tm, key, tkey)
+
+    # -- M3: the STACK reference of generated Wall Systems ------------------------
+    def root_of(self, design_id: str) -> str:
+        d = self.get(design_id)
+        while d.parent is not None:
+            d = self.get(d.parent)
+        return d.id
+
+    def stack_reference(self, design_id: str) -> list:
+        """The STACK REFERENCE (M3) of a design family's generated Wall
+        Systems: the frames (wall_systems._frame — centre line, spans,
+        periods, phase anchors, corner choices, loop stations) of the family
+        ROOT's ARCHITECTURE with every Designer opening removed — no cut, no
+        transform — then the design's own (same, for a derived design). Solved ONCE per family and shared by every layer of the
+        stack: a run of any layer (another section's derived design, a
+        Designer or Assembly opening, a taper, a planar cut, a placement
+        transform) that lies on a reference run draws the reference period,
+        phase, lanes and stations and solves only its own NEW ends (the
+        existing PHASE REFERENCE mapping, wall_systems._ref_map) — so a local
+        change never re-fits the wall elsewhere and the pattern stacks.
+        Built up to the Wall Systems only (frames_only: no lattice, routing).
+        Frames flagged `stack`."""
+        root = self.root_of(design_id)
+        out = self._stack_frames(root)
+        if design_id != root:
+            # (then the design's OWN unopened architecture: a Wall System this
+            # design gives other parameters — or a run its architecture
+            # changes — has one pattern for every layer of the design)
+            out = out + self._stack_frames(design_id)
+        return out
+
+    def _stack_frames(self, design_id: str) -> list:
+        """The Wall System frames of a design's architecture without its
+        Designer openings, untransformed, uncut (cached until an edit)."""
+        key = ('stack_frames', design_id)
+        if key in self._cache:
+            return self._cache[key]
+        from app import _deserialise_layer
+        doc0 = self.document(design_id)
+        ops = [{'op': 'unopen', 'opening': o.get('id'), 'profile': 'stack'} for o in doc0.get('openings') or []]
+        doc, _ = self.transformed(design_id, None, ops or None)
+        layer = _deserialise_layer(doc)
+        layer.frames_only = True
+        layer._build_effective()
+        out = [dict(f, stack=True, stack_design=design_id)
+               for f in getattr(layer, '_ws_frames', None) or [] if not f.get('derived')]
+        self._cache[key] = out
+        return out
+
+    def _ws_reference(self, design_id, transforms, own):
+        """The phase reference a build passes to its generated Wall Systems:
+        the STACK reference first (M3, stack_lattice; layers WITHOUT semantic
+        transforms — a transformed group's walls lie elsewhere in design
+        coordinates: previous generator, reported), then the layer's own
+        uncut frames (the previous pipeline: a cut variant keeps its uncut
+        layer's pattern where the stack reference does not apply)."""
+        own = [f for f in own or [] if not f.get('derived')]
+        if not self.stack_lattice or _transforms_active(transforms):
+            return own or None
+        if own == [] and self.get(design_id).parent is None and not self.document(design_id).get('openings'):
+            # (the root's plain layer IS its reference: fitted directly — the
+            # same fit — and attributed to the stack generator)
+            return [{'stack_self': True}]
+        return (self.stack_reference(design_id) + own) or None
 
     def envelope(self, design_id: str, transforms=None, cuts=None):
         """The ARCHITECTURAL ENVELOPE of a design or of its variant (the same
@@ -849,7 +919,8 @@ class DesignLibrary:
         layer = _deserialise_layer(doc)
         layer.lattice_reference = src
         layer.lattice_join = True
-        layer.wall_system_reference = self.build(design_id, True, transforms, base_cuts).ws_frames or None
+        layer.wall_system_reference = self._ws_reference(
+            design_id, transforms, self.build(design_id, True, transforms, base_cuts).ws_frames or None)
         paths, meta = layer._build_effective()
         if self._open_ends(layer, paths, meta):
             return None

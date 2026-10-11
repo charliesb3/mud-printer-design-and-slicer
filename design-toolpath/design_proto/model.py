@@ -2494,6 +2494,10 @@ class PrintLayer:
     # material rings exactly as a full build resolves them — before Wall
     # Systems, the wall lattice, region infill and routing (envelope.py).
     envelope_only: bool = False
+    # STACK LATTICE REFERENCE (M3, layer_design.stack_reference): stop right
+    # after the Wall Systems — only their frames are wanted, no lattice /
+    # infill / routing
+    frames_only: bool = False
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -3135,7 +3139,7 @@ class PrintLayer:
             for k, ids in enumerate(n for n in source_nets if len(n) > 1)]
         meta = {'cls': cls_of, 'pts': pts_of, 'network': network,
                 'regions': regions}
-        if self.envelope_only:
+        if self.envelope_only or self.frames_only:
             # the ARCHITECTURAL ENVELOPE: `regions` are the very material
             # rings Wall Systems / the lattice would fill (envelope.py)
             meta['processed'] = processed

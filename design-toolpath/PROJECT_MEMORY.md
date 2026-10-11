@@ -1401,6 +1401,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 
 ## Last Updated
 
+2026-10-11 — M3 (Designer modules): `layer_design.DesignLibrary(stack_lattice=…)`, `stack_reference` / `_stack_frames` / `_ws_reference` (print preparation only — the Designer's own builds keep `stack_lattice` False); `model.PrintLayer.frames_only` (stop after the Wall Systems); `wall_systems.generate` reports `generator` / `generator_reason` per phased run and `generators` per band, `_ref_map` partial cover for stack frames, `_chain_path_ref` continues the loops past a stack reference's ends, chain transitions keep their own fit. Details: `layer_assembly/PROJECT_MEMORY.md` → "M3 STACK-AWARE LATTICE GENERATION".
+
 2026-10-11 — `DesignerSource.walls / openings` read the ARCHITECTURE composition for Wall Group designs (no construction minimum); `profile_cuts.straight_walls` unchanged (its `min_length` is still used for the Wall Systems construction check). Checkpoint commit of the M0–M2 deferred-toolpath work.
 
 2026-10-11 — Designer default display = the WALL ENVELOPE again (each wall at its architectural thickness, its source line dashed; a wall without thickness = its single centreline), supersedes the earlier same-day "shapes by default". `_geometry_of` diagnostics carry the Wall System reports (`wall_systems`: closable / status) for the Wall Systems workspace's continuity inspection. Assembly-side record: `layer_assembly/PROJECT_MEMORY.md` → "M2 PRINTABILITY INSPECTION".

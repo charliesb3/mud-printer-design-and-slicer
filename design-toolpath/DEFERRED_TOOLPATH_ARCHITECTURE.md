@@ -2,7 +2,7 @@
 
 Status: assessment 2026-10-11. **M0 + M1 IMPLEMENTED 2026-10-11 (uncommitted, pending manual
 review)** — see "Implementation status" at the end; M2 partly (bead-level findings shown in the
-Simulation); M3–M5 not started (station / lattice-reference machinery unchanged).
+Simulation); M3 done 2026-10-11 (see "M3 done"); M4–M5 not started.
 Context: `PROJECT_OVERVIEW.md`, `PROJECT_MEMORY.md`, `layer_assembly/PROJECT_MEMORY.md`.
 
 ## Question
@@ -327,3 +327,14 @@ The Assembly validates openings and places layers from the architecture only (en
 pier / overhang rules); construction minimums are checked after generation in the Wall Systems
 inspection. This closes the last backwards dependency of the Assembly on Wall Systems found in manual
 testing. M3 not started.
+
+## M3 done (2026-10-11; manually tested)
+
+Phased Wall Systems (Interleaved, Linked, Chained Loop) are drawn from one stack reference per design
+family (root architecture without Designer openings, then the design's own), mapped wall-relatively onto
+every layer (partial cover where a band reaches further; chain loops continued). Every run reports its
+generator; the previous per-layer generator remains (`WALL_LATTICE_MODE=layer`). Not yet on the stack
+reference: Skin + Web (lineage scaffold + station ops, so `_station_reference` stays), transform-group
+layers, Chained Loop rings / cross-Z transitions, junction territories. Those are M4; code retirement is M5.
+Benchmark: coherence improved where sections / openings changed the fit, findings unchanged (53),
+generation +1.9 % time, +1 % memory.

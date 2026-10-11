@@ -634,6 +634,19 @@ function _wsysRenderStatus() {
       status.appendChild(_el('div', 'asm-calc', `${wsys.gen.layers.length} layers · ${S.built || 0} built · ` +
         `${(wsys.gen.support.findings || []).length} bead-level findings` +
         (wsys.gen.ms ? ` · ${(wsys.gen.ms / 1000).toFixed(1)} s` : '')));
+      // WHICH GENERATOR drew the phased constructions (M3) — never silent
+      const I = wsys.gen.inspection || {};
+      const NAMES = { stack: 'stack-aware', 'layer-ref': 'per-layer (uncut reference)', layer: 'per-layer fit' };
+      if (I.lattice_mode === 'layer')
+        status.appendChild(_el('div', 'asm-diff', 'Lattice: the PREVIOUS per-layer generator (WALL_LATTICE_MODE=layer).'));
+      for (const G of I.generators || []) {
+        const sy = (wsys.gen.systems || {})[G.system];
+        const parts = Object.entries(G.runs).map(([k, n]) => `${NAMES[k] || k} ${n}`).join(' · ');
+        status.appendChild(_el('div', 'asm-calc', `${sy ? sy.name : G.system}: ${parts}`));
+        for (const R of G.reasons || [])
+          status.appendChild(_el('div', 'asm-calc', `  ↳ ${R.reason} (layers ${R.layers.length > 4 ?
+            R.layers[0] + 1 + '–' + (R.layers[R.layers.length - 1] + 1) + ` (${R.layers.length})` : R.layers.map(x => x + 1).join(', ')})`));
+      }
     }
     if (wsys.error) status.appendChild(_el('div', 'asm-diff', wsys.error));
   }
