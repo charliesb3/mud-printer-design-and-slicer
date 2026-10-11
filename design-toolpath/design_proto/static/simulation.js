@@ -21,8 +21,18 @@
 // LAYER INSPECTION: a selected layer drawn alone from above (its full
 // toolpath: ordered runs, start / end points, direction arrows, travel), its
 // own time range on the timeline.
-// The plan is re-requested when the Designer / Assembly state changed since
-// it was built (a speed change only re-times it: 'times').
+// WALL SYSTEMS WORKSPACE (2026-10-11): the geometry is generated there
+// ("Generate Wall Systems"); the plan is made only when the user presses
+// "Plan Print", and only from the CURRENT generated geometry (else: back to
+// the Wall Systems workspace). (Earlier the same day: "Generate Print Paths"
+// did both — Wall Systems, lattice,
+// routing and the bead-level support check of every layer: the existing
+// full pipeline, /api/assembly/print_plan). Assembly editing works on
+// architectural envelopes and never plans. When the Designer / Assembly state
+// changes afterwards the prepared paths are OUTDATED: still shown, but
+// labelled so (banner + canvas) until they are generated again. A speed /
+// frame-time change only re-times the same plan ('times'); a lift-setting
+// change made here re-plans when the paths were current.
 // ===========================================================================
 const SIM_PALETTE = ['#4a9eff', '#ff9f43', '#2ecc71', '#e056fd', '#f9ca24', '#ff6b6b', '#48dbfb'];
 const SIM_RUN_COLORS = ['#4a9eff', '#2ecc71', '#f9ca24', '#e056fd', '#48dbfb', '#ff9f43', '#a29bfe', '#55efc4'];
@@ -32,6 +42,7 @@ const SIM_LOD_VERTICES = 120000;      // while dragging: draw at most about this
 
 const sim = {
   data: null, key: null, speedsKey: null, loading: false, error: null, paramError: null, reqGen: 0, inflight: null,
+  currentKey: null,                // the CURRENT design state's plan key (outdated = data for another key)
   N: 0, V: 0,                      // items, vertices
   t: 0, playing: false, rate: 60, lastTs: null, raf: null,   // (1× = real machine time; 60× by default)
   mode: '3d',                      // '3d' | 'top' (layer inspection)
@@ -379,12 +390,19 @@ function simDraw() {
   const D = sim.data;
   if (!D || !D.N) {
     g.fillStyle = '#777'; g.font = '12px monospace';
-    g.fillText(sim.loading ? 'Planning the print…' : (sim.error || 'Nothing to print yet — add a section in Assembly.'), 20, 30);
+    g.fillText(sim.loading ? 'Planning the print… (the Assembly stays editable)' :
+      (sim.error || (D ? 'Nothing to print yet — add a section in Assembly.'
+                       : (sim.wsBlocked ? 'Generate the Wall Systems first (Wall Systems workspace).'
+                                        : 'No print plan yet — press "Plan Print".'))), 20, 30);
     return;
   }
   const loc = simLocate(sim.t);
   if (sim.mode === 'top') _simDrawTop(g, W, H, loc);
   else _simDraw3D(g, W, H, loc);
+  if (simOutdated()) {                       // never shown as if it were the current design
+    g.fillStyle = 'rgba(255,159,67,0.92)'; g.font = 'bold 13px monospace';
+    g.fillText('OUTDATED — the design changed after these print paths were generated', 16, H - 18);
+  }
   sim.stats.framesDrawn++;
   sim.stats.lastFrameMs = typeof performance !== 'undefined' ? performance.now() - t0p : 0;
 }
@@ -701,9 +719,10 @@ async function simSetFrameTime(min) {        // estimated minutes per frame repo
 // change is a new plan key → the whole plan is planned again (the lift / island
 // schedule depends on it); speeds and frame time only re-time the same plan
 async function simSetMachine(field, v) {
+  const wasCurrent = !!sim.data && !simOutdated();
   _simParam(() => asmSetMachine(field, v)); // validates (lift height ≤ max Z travel), undoable
   simRenderPanels();                         // (the field / its error / the lift boundaries at once)
-  return simRefresh();
+  return simRefresh({ generate: wasCurrent });   // (print preparation settings: re-plan current paths)
 }
 
 // ---- the plan: fetched when the project changed -------------------------------------
@@ -721,9 +740,17 @@ async function _simKeys() {
   const designs = await window.Designer.designsForBackend();
   const st = JSON.parse(JSON.stringify(asm.state));
   const assembly = JSON.parse(JSON.stringify(asm.state));
+  const wall_systems = JSON.parse(JSON.stringify(window.Designer.wallSystems ? window.Designer.wallSystems() : []));
   const speeds = st.print_speeds || {};
   delete st.print_speeds;
-  return { designs, assembly, key: JSON.stringify([st, designs]), speedsKey: JSON.stringify(speeds) };
+  return { designs, assembly, wall_systems, key: JSON.stringify([st, designs, wall_systems]),
+           speedsKey: JSON.stringify(speeds) };
+}
+
+// WALL SYSTEMS GENERATION (2026-10-11): the plan consumes the CURRENT generated
+// Wall System geometry only (the Wall Systems workspace) — never generated here
+function _simWallSystemsStatus() {
+  return window.WallSystemsProject ? window.WallSystemsProject.status() : 'current';
 }
 
 async function _simPost(body) {
@@ -731,6 +758,7 @@ async function _simPost(body) {
                                                        body: JSON.stringify(body) });
   const data = await res.json();
   if (data && data.cancelled) { const e = new Error('cancelled'); e.cancelled = true; throw e; }
+  if (data && data.outdated) { const e = new Error(data.error); e.outdated = true; throw e; }
   if (data && data.error) throw new Error(data.error);
   return data;
 }
@@ -763,19 +791,56 @@ function _simRestorePlace(P) {
   sim.t = Math.max(0, Math.min(D.total, a + (b - a) * P.f));
 }
 
+// is the shown plan for ANOTHER design state than the current one?
+function simOutdated() {
+  return !!sim.data && sim.currentKey !== null && sim.key !== sim.currentKey;
+}
+
+// the page's current design state (Assembly edits / Open / the Designer):
+// the prepared paths may now be outdated — nothing is planned
+function simNoteState(assembly, designs) {
+  const st = JSON.parse(JSON.stringify(assembly));
+  delete st.print_speeds;
+  const ws = JSON.parse(JSON.stringify(window.Designer.wallSystems ? window.Designer.wallSystems() : []));
+  sim.currentKey = JSON.stringify([st, designs, ws]);
+  if (window.WallSystemsProject) window.WallSystemsProject.noteState();
+}
+
+// PLANNING: the user's explicit "Plan Print" (from the CURRENT generated Wall Systems)
+function simGenerate() {
+  sim.playing = false;
+  return simRefresh({ generate: true });
+}
+
+// opts.generate: PLAN (print preparation) when the paths are missing or
+// outdated; without it only re-TIME a current plan (speeds) — never plan
 async function simRefresh(opts) {
   const rebuild = !!(opts && opts.rebuild);
+  const generate = rebuild || !!(opts && opts.generate);
   const gen = ++sim.reqGen;
   let K;
   try { K = await _simKeys(); }
   catch (e) { if (gen === sim.reqGen) { sim.error = e.message; simRenderPanels(); simDraw(); } return; }
   if (gen !== sim.reqGen) return;                                    // a newer refresh took over
+  sim.currentKey = K.key;
   if (!rebuild && sim.data && K.key === sim.key && K.speedsKey === sim.speedsKey) {   // up to date
-    if (sim.inflight) { _simCancelInflight(); simRenderPanels(); simDraw(); }
+    if (sim.inflight && sim.inflight.key !== K.key) { _simCancelInflight(); }
+    simRenderPanels(); simDraw();
     return;
   }
   const I = sim.inflight;
   if (!rebuild && I && I.key === K.key && I.speedsKey === K.speedsKey) return I.promise;   // already asked
+  if (!generate && !(sim.data && K.key === sim.key)) {               // (missing / outdated: wait for the user)
+    simRenderPanels(); simDraw();
+    return;
+  }
+  const kindNow = !rebuild && sim.data && K.key === sim.key ? 'times' : 'stream';
+  if (kindNow === 'stream' && window.WallSystemsProject) {
+    await window.WallSystemsProject.noteState();
+    if (gen !== sim.reqGen) return;
+    sim.wsBlocked = _simWallSystemsStatus() === 'current' ? null : _simWallSystemsStatus();
+    if (sim.wsBlocked) { simRenderPanels(); simDraw(); return; }   // → generate in the Wall Systems workspace
+  }
   if (I) sim.inflight = null;                    // superseded (the server drops it: a newer job)
   const kind = !rebuild && sim.data && K.key === sim.key ? 'times' : 'stream';
   const R = { key: K.key, speedsKey: K.speedsKey, job: 'sim-' + (++_simJobSeq) + '-' + Date.now(), kind };
@@ -784,7 +849,8 @@ async function simRefresh(opts) {
   R.promise = (async () => {
     let retry = false;
     try {
-      const body = { assembly: K.assembly, designs: K.designs, job: R.job, ...(rebuild ? { rebuild: true } : {}) };
+      const body = { assembly: K.assembly, designs: K.designs, wall_systems: K.wall_systems, require_generated: true,
+                     job: R.job, ...(rebuild ? { rebuild: true } : {}) };
       let r = await _simPost({ ...body, detail: kind });
       if (sim.inflight !== R) return;            // obsolete: never overwrite a newer state
       if (kind === 'times' && !simApplyTimes(r.t0, r.dt)) {      // (not the plan we hold: fetch it whole)
@@ -803,12 +869,16 @@ async function simRefresh(opts) {
       sim.error = null;
     } catch (e) {
       if (sim.inflight !== R) return;
-      if (e.cancelled) retry = _simVisible();     // preempted by an Assembly request: ask again
-      else sim.error = 'Print plan failed: ' + e.message;
+      if (e.cancelled) retry = true;              // preempted (a full-geometry request): ask again
+      else if (e.outdated) sim.wsBlocked = 'outdated';
+      else sim.error = 'Print planning failed: ' + e.message;
     } finally {
-      if (sim.inflight === R) { sim.inflight = null; sim.loading = false; simRenderPanels(); simDraw(); }
+      if (sim.inflight === R) {
+        sim.inflight = null; sim.loading = false; simRenderPanels(); simDraw();
+        if (typeof _asmStructureHead === 'function') _asmStructureHead();   // (the Assembly's final-check line)
+      }
     }
-    if (retry) await new Promise(ok => setTimeout(ok, 150)).then(() => (_simVisible() ? simRefresh(opts) : null));
+    if (retry) await new Promise(ok => setTimeout(ok, 150)).then(() => simRefresh(opts));
   })();
   return R.promise;
 }
@@ -828,23 +898,26 @@ function simReset() {
   sim.raf = null;
   _simCancelInflight();
   sim.reqGen++;
-  Object.assign(sim, { data: null, key: null, speedsKey: null, error: null, paramError: null, N: 0, V: 0, t: 0, mode: '3d',
+  Object.assign(sim, { data: null, key: null, speedsKey: null, error: null, paramError: null, wsBlocked: null, N: 0, V: 0, t: 0, mode: '3d',
                        selLayer: 0, selRun: null, selSection: null, selLift: null, selStage: null, open: {}, cache: null,
                        drag: null, scrubbing: false });
   sim.view = { yaw: -Math.PI / 4, pitch: 0.55, zoom: 1, px: 0, py: 0 };
+  sim.currentKey = null;
   simRenderPanels(); simDraw();
   if (typeof currentWorkspace !== 'undefined' && currentWorkspace === 'simulation') return simRefresh();
 }
 
+// showing the Simulation: the prepared paths as they are (current / outdated
+// / none) — a current plan is re-timed for new speeds; nothing is planned
 function simShow() { simRenderPanels(); simDraw(); return simRefresh(); }
 
-// leaving the Simulation: playback stops (no frames while hidden) and a plan
-// still being built is abandoned — it can never hold up Assembly editing
+// leaving the Simulation: playback stops (no frames while hidden). A print
+// preparation in progress CONTINUES (it never holds up Assembly editing:
+// envelope requests neither wait for it nor cancel it)
 function simHide() {
   sim.playing = false; sim.drag = null; sim.scrubbing = false;
   if (sim.raf !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(sim.raf);
   sim.raf = null;
-  if (sim.inflight) _simCancelInflight();
 }
 
 // ---- panels ------------------------------------------------------------------------
@@ -874,10 +947,44 @@ function simRenderPanels() {
   const status = el('sim-status');
   if (status) {
     _simClear(status);
-    if (sim.loading) status.appendChild(_el('div', 'asm-kv-row', 'Planning the print…'));
+    if (sim.wsBlocked && !sim.loading) {
+      const w = _el('div', 'asm-diff sim-ws-blocked',
+        sim.wsBlocked === 'generating' ? 'The Wall Systems are being generated — plan the print when they are CURRENT.'
+          : `The Wall Systems are ${sim.wsBlocked === 'outdated' ? 'OUTDATED' : 'NOT GENERATED'} for the current design. ` +
+            'Generate them in the Wall Systems workspace — the print is planned from that geometry.');
+      status.appendChild(w);
+      const go = _el('button', 'tool-btn', 'Go to Wall Systems →');
+      go.onclick = () => setWorkspace('wallsystems');
+      status.appendChild(go);
+    }
+    if (sim.loading) status.appendChild(_el('div', 'asm-kv-row',
+      'Planning the print from the generated Wall Systems (routing, lifts, islands, times)… the Assembly stays editable'));
     if (sim.error) status.appendChild(_el('div', 'asm-diff', sim.error));
+    if (!D && !sim.loading && !sim.error && !sim.wsBlocked)
+      status.appendChild(_el('div', 'asm-kv-row', 'No print plan yet. Plan it from the current generated Wall Systems.'));
+    if (D && simOutdated())
+      status.appendChild(_el('div', 'asm-diff sim-outdated',
+        'OUTDATED — the Designer, Assembly or Wall Systems changed after this plan was made; it does not show the current design. Generate the Wall Systems again (Wall Systems workspace), then plan.'));
     if (D) status.appendChild(_el('div', 'asm-calc',
-      `${D.res.plan.layers.length} layers · ${D.res.estimate.runs} runs · the authoritative print plan`));
+      `${D.res.plan.layers.length} layers · ${D.res.estimate.runs} runs · the authoritative print plan` +
+      (simOutdated() ? ' (outdated)' : '')));
+    const S = D && D.res.support;
+    if (S) {                                  // the FINAL bead-level check of these print paths
+      const open = S.findings.filter(f => f.status === 'needs_header' || f.status === 'insufficient_support');
+      status.appendChild(_el('div', open.length ? 'asm-diff' : 'asm-kv-row',
+        `Bead-level support (final): ${open.length ? `${open.length} open finding${open.length === 1 ? '' : 's'} — ` +
+          `${S.needs_header} header needed · ${S.insufficient_support} insufficient` : 'every layer supported'}` +
+        (simOutdated() ? ' (outdated)' : '')));
+      for (const f of open.slice(0, 12))
+        status.appendChild(_el('div', 'asm-calc',
+          `layer ${f.layer + 1} · ${f.kind === 'bridge' ? 'HEADER NEEDED' : 'INSUFFICIENT SUPPORT'} · ${Math.round(f.span * 10) / 10} in`));
+      if (open.length > 12) status.appendChild(_el('div', 'asm-calc', `… ${open.length - 12} more`));
+    }
+  }
+  const gb = el('sim-generate');
+  if (gb) {
+    gb.textContent = sim.loading ? 'Planning…' : (D && simOutdated() ? 'Plan Print Again' : 'Plan Print');
+    gb.disabled = !!sim.loading;
   }
   const play = el('sim-play');
   if (play) play.textContent = sim.playing ? '⏸' : '▶';
@@ -1129,4 +1236,4 @@ if (window.Designer) {
   window.Designer.onWorkspaceShow('simulation', () => simShow());
   if (window.Designer.onWorkspaceHide) window.Designer.onWorkspaceHide('simulation', () => simHide());
 }
-window.SimulationProject = { reset: simReset };
+window.SimulationProject = { reset: simReset, noteState: simNoteState };

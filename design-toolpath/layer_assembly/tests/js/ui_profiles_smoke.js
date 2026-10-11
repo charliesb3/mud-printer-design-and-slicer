@@ -56,6 +56,7 @@ let src = fs.readFileSync(path.join(STATIC, 'app.js'), 'utf8');
 src = src.replace(/\ninit\(\);\s*$/, '\n') + '\ncanvas.width = 800; canvas.height = 800;\n';
 src += '\n' + fs.readFileSync(path.join(STATIC, 'opening_shape.js'), 'utf8');
 src += '\n' + fs.readFileSync(path.join(STATIC, 'assembly.js'), 'utf8');
+src += '\n' + fs.readFileSync(path.join(STATIC, 'wallsystems.js'), 'utf8');
 // The test body is a real function, re-evaluated INSIDE the eval scope (so it
 // sees app.js / assembly.js globals) — template strings stay ordinary.
 async function run() {
@@ -63,23 +64,25 @@ async function run() {
   const el = id => document.getElementById(id);
   const undoN = () => asm.hist.undo.length;
   const rep = id => (asm.resolved.profiles || []).find(r => r.id === id);
-  // layers with a real cut (an opening / a shortened wall; 'station' ops cut nothing)
-  const cutLayers = () => asm.resolved.instances.filter(i => /"(opening|extent)"/.test(i.geometry_key || '')).length;
+  // layers with a real cut (an opening / a shortened wall; 'station' ops cut nothing) — from the
+  // FULL print key (`print_key`; the page draws envelopes: geometry_key = the envelope key)
+  const cutLayers = () => asm.resolved.instances.filter(i => /"(opening|extent)"/.test(i.print_key || i.geometry_key || '')).length;
   const headers = () => (asm.resolved.support.findings || []).filter(f => f.status === 'needs_header').length;
 
   // ---- a Base design: a hollow rectangle room + a free-standing straight Parallel wall ----
   addPrimitive('RectanglePath');                       // (140,140) 120 x 120
   const R = layer.source_paths[0];
-  _wsSetType(_wsNew([R.id]), 'hollow');
+  _wgNew([R.id]);                                      // (no Wall System: Hollow)
   addPrimitive('LinePath');
   const Ln = layer.source_paths[1];
   Ln.start = [140, 330]; Ln.end = [260, 330]; _computePrimitivePoints(Ln);
-  _wsSetType(_wsNew([Ln.id]), 'parallel');            // 4 walls (even: closes at the ends)
+  wsysNew('parallel', { groups: [_wgNew([Ln.id]).id] });   // a project Wall System: 4 walls (even: closes at the ends)
   layer.material.physical = true;
   historyCheckpoint();
   const designerBefore = JSON.stringify(layer);
 
   setWorkspace('assembly');
+  asm.state.max_overhang = 1.5;                        // (these cases were written for the former 1.5 in default)
   asm.state.sections = [{ design_id: 'base', height: 72 }];
   await asmResolve();
   check(asm.resolved.total_layers === 48 && !asm.error, 'Base 72 in → 48 layers');
@@ -105,8 +108,9 @@ async function run() {
   check(r && r.valid && r.layers.length > 0 && cutLayers() === r.layers.length,
         `default opening is self-supporting and cuts ${r && r.layers.length} layers`);
   check(headers() === 0, 'no HEADER NEEDED for the valid self-supporting opening');
-  const vk = Object.keys(asm.variants).filter(k => k.includes('|cut:'));
-  check(vk.length > 0 && vk.every(k => (asm.variants[k].polylines || []).length > 0), 'its per-layer cut variants are fetched and drawn');
+  const vk = Object.keys(asm.variants).filter(k => k.includes('|env|'));
+  check(vk.length > 0 && vk.every(k => asm.variants[k].envelope && (asm.variants[k].polylines || []).length > 0),
+        'its per-layer cut variants are fetched (as ARCHITECTURAL ENVELOPES) and drawn');
   check(JSON.stringify(layer) === designerBefore, 'the Designer document is untouched by the profile');
 
   // precision: Z in whole layers, positions in sensible steps
@@ -117,16 +121,19 @@ async function run() {
   const flat = n => [n, ...(n.children || []).flatMap(flat)];
   const inputs = flat(el('asm-profiles')).filter(n => n.dataset && typeof n.dataset.field === 'string');
   const inp = f => inputs.find(n => n.dataset.field === f);
-  check(inp('position').step === '1' && inp('z_bottom').step === String(lh) && inp('height').step === String(lh),
-        'Position steps 1 in; Bottom Z and Height step one layer');
+  check(inp('position').step === '1' && inp('z_bottom').step === String(lh) && inp('upper_height').step === String(lh) &&
+        inp('bottom_depth').step === String(lh) && !inp('height'),
+        'Position steps 1 in; Bottom Z, Upper height and Lower depth step one layer; no separate Height (it is calculated)');
+  check(P.upper === 'pointed' && P.lower === 'pointed' && !P.middle && P.upper_height === P.bottom_depth && !('shape' in P),
+        'a new opening is the angular diamond CONFIGURATION (no Diamond / Arch type)');
   check(flat(el('asm-profiles')).some(n => n.textContent === 'Elevation' && n.title && /elevation/.test(n.title)),
         'the card has a labelled "Elevation" button (no cryptic ⊥)');
   await asmProfileSet(P.id, 'z_bottom', 7.3);
   check(asm.state.profiles[0].z_bottom === 7.5, `Bottom Z snaps to the layer height (7.3 → ${asm.state.profiles[0].z_bottom})`);
   await asmProfileSet(P.id, 'position', 61.0312345);
   check(asm.state.profiles[0].position === 61, 'typed positions keep no micro-inch precision (1/16 in)');
-  await asmProfileSet(P.id, 'height', 47);
-  check(isLayer(asm.state.profiles[0].height), 'Height snaps to whole layers');
+  await asmProfileSet(P.id, 'upper_height', 22.6);
+  check(isLayer(asm.state.profiles[0].upper_height) && isLayer(asm.state.profiles[0].height), 'Upper height snaps to whole layers');
   await asmUndo(); await asmUndo(); await asmUndo();
   P = asm.state.profiles[0];
   check(P.position === 60 && rep(P.id).valid, 'undo restores the edited fields');
@@ -142,13 +149,13 @@ async function run() {
   await asmProfileSet(P.id, 'width', 60);
   P = asm.state.profiles[0];
   r = rep(P.id);
-  check(P.width === 60 && P.height > 48 && P.driver === 'width' && r.valid && r.worst_step <= h0 + 1e-9,
-        `a wider opening keeps its width; its height rose to the first printable one (${P.height} in)`);
-  await asmProfileSet(P.id, 'height', 30);
+  check(P.width === 60 && P.upper_height > 24 && P.height > 48 && P.driver === 'width' && r.valid && r.worst_step <= h0 + 1e-9,
+        `a wider opening keeps its width; its upper height rose to the first printable one (${P.upper_height} in)`);
+  await asmProfileSet(P.id, 'upper_height', 15);
   P = asm.state.profiles[0];
   r = rep(P.id);
-  check(P.height === 30 && P.width < 60 && P.driver === 'height' && r.valid && r.worst_step <= h0 + 1e-9,
-        `a lower opening keeps its height; its width shrank to the widest printable one (${P.width} in)`);
+  check(P.upper_height === 15 && P.width < 60 && P.driver === 'upper_height' && r.valid && r.worst_step <= h0 + 1e-9,
+        `a lower upper keeps its height; the width shrank to the widest printable one (${P.width} in)`);
   check(asm.profNote && asm.profNote.id === P.id && /Width 60 → /.test(asm.profNote.text), `the dependent change is said on the card (${asm.profNote && asm.profNote.text})`);
   check(headers() === 0, 'it never turns into a header request');
   await asmUndo(); await asmUndo();
@@ -207,10 +214,16 @@ async function run() {
     const ux = (t.b[0] - t.a[0]) / t.length, uy = (t.b[1] - t.a[1]) / t.length;
     const along = q => (q[0] - t.a[0]) * ux + (q[1] - t.a[1]) * uy;
     const across = q => Math.abs((q[0] - t.a[0]) * uy - (q[1] - t.a[1]) * ux);
-    const inHole = polys => polys.flatMap(p => p.pts).filter(q => across(q) < 6 &&
+    // (points every ½ in along each polyline: an envelope's straight wall
+    // face has vertices at its ends only)
+    const dense = p => { const P_ = p.closed ? [...p.pts, p.pts[0]] : p.pts, out = [];
+      for (let k = 0; k + 1 < P_.length; k++) { const [a, b_] = [P_[k], P_[k + 1]], n = Math.max(1, Math.ceil(Math.hypot(b_[0] - a[0], b_[1] - a[1]) / 0.5));
+        for (let j = 0; j <= n; j++) out.push([a[0] + (b_[0] - a[0]) * j / n, a[1] + (b_[1] - a[1]) * j / n]); }
+      return out; };
+    const inHole = polys => polys.flatMap(dense).filter(q => across(q) < 6 &&
       Math.abs(along(q) - P.position) < widest.width / 2 - 2);
     const layer = asmStack()[widest.layer];
-    check(inst.geometry_key.includes('opening') && asm.variants[inst.geometry_key] &&
+    check((inst.print_key || inst.geometry_key).includes('opening') && asm.variants[inst.geometry_key] &&
           layer.polylines === asm.variants[inst.geometry_key].polylines,
           'the preview draws the layer\'s CUT VARIANT (the geometry fetched with its cut spec)');
     check(inHole(layer.polylines).length === 0 && inHole(asm.geometry.base.polylines).length > 0,
@@ -421,7 +434,7 @@ async function run() {
     const cutL = rep(PL.id).layers.find(L => !L.removed_all);
     const inst = asm.resolved.instances[cutL.layer];
     const layer = asmStack()[cutL.layer];
-    check(inst.geometry_key.includes('plane') && layer.polylines === asm.variants[inst.geometry_key].polylines &&
+    check((inst.print_key || inst.geometry_key).includes('plane') && layer.polylines === asm.variants[inst.geometry_key].polylines &&
           JSON.stringify(layer.polylines) !== JSON.stringify(asm.geometry.base.polylines),
           'the preview draws that layer\'s CUT VARIANT (fetched with its plane cut)');
     const zAbove = layer.polylines.flatMap(pl => pl.pts).filter(q => _asmPlaneZ(PL, ...q) < cutL.z - 12);
@@ -482,7 +495,7 @@ async function run() {
     P2 = _asmProfile(P2.id);
     check(rep(PL.id).valid && rep(P2.id).valid && asm.state.profiles.filter(q => q.kind === 'plane').length >= 2,
           'a second planar cut on the same wall: both valid, each with its own selection');
-    const both = asm.resolved.instances.find(i => (i.geometry_key.match(/"plane"/g) || []).length === 2);
+    const both = asm.resolved.instances.find(i => ((i.print_key || i.geometry_key).match(/"plane"/g) || []).length === 2);
     check(!!both, 'some layers carry BOTH plane cuts (composed subtractively by the Designer)');
     await asmProfileDelete(P2.id);
     check(rep(PL.id).valid && !asm.state.profiles.some(q => q.id === P2.id), 'deleting one plane leaves the other');
@@ -536,9 +549,9 @@ async function run() {
   const ua = undoN();
   await asmProfileCreate('opening', R.id + '#2');
   const A = asm.state.profiles[asm.state.profiles.length - 1];
-  await asmProfileSet(A.id, 'shape', 'arch');
-  check(A.shape === 'arch' && A.upper === 'pointed' && A.lower === 'flat' && A.middle === true && A.upper_height > 0 && !('closure' in A),
-        'Shape → Arch: its angular style on a flat sill, the rest of its height a middle (no closure parameter)');
+  await asmProfileSet(A.id, 'lower', 'flat'); await asmProfileSet(A.id, 'middle', true);
+  check(!('shape' in A) && A.upper === 'pointed' && A.lower === 'flat' && A.middle === true && A.upper_height > 0 && !('closure' in A),
+        'Lower → Flat + Middle on: an arch-like configuration of the same opening (no closure parameter)');
   await asmProfileSet(A.id, 'width', 12); await asmProfileSet(A.id, 'upper_height', 9); await asmProfileSet(A.id, 'middle_height', 12);
   await asmProfileSet(A.id, 'position', 20); await asmProfileSet(A.id, 'z_bottom', 6);
   await asmProfileSet(A.id, 'array.arrangement', 'grid');
@@ -550,7 +563,7 @@ async function run() {
   const xs = [...new Set(ra.members.map(m => m.position))].sort((a, b) => a - b);
   check(xs.join() === '20,50,80', 'columns one width + the CLEAR spacing apart (12 + 18)');
   const k0 = ra.layers.find(L => L.width === 12).layer;
-  const ops = JSON.parse(asm.resolved.instances[k0].geometry_key.split('|cut:')[1]).filter(c => c[0] === 'opening');
+  const ops = JSON.parse((asm.resolved.instances[k0].print_key || asm.resolved.instances[k0].geometry_key).split('|cut:')[1]).filter(c => c[0] === 'opening');
   check(ops.length === 3 && ops.every(c => c[5] === A.id), 'one cut per clone in its layer, all named by the ONE profile');
   _asmRenderProfiles();
   const flat2 = n => [n, ...(n.children || []).flatMap(flat2)];
@@ -597,7 +610,7 @@ async function run() {
   check(undoN() === uc + 1 && C.source_opening.id === 'door' && rc.valid && rc.conversion.width === 30 &&
         rc.conversion.rect_bottom === 36 && rc.conversion.rect_top === 60, 'one undo step: an Assembly profile over the door (width / clear height kept)');
   check(lint().length === 0 && headers() === 0, 'the converted door needs no header: its resolved closure is supported');
-  check(!asm.resolved.instances.slice(24, 40).some(i => /"opening"/.test(i.geometry_key || '')), 'the door\'s own layers are not cut a second time');
+  check(!asm.resolved.instances.slice(24, 40).some(i => /"opening"/.test(i.print_key || i.geometry_key || '')), 'the door\'s own layers are not cut a second time');
   check(project.deltas[d1].patch.openings.door.width === 30, 'the Designer opening itself is unchanged');
   await asmUndo();
   check(asm.state.profiles.length === 0 && lint().length === 1, 'removing the conversion restores the header finding');
@@ -624,21 +637,31 @@ async function run() {
     return Math.abs(g.upper_height - G.U) < 1e-3 && Math.abs(g.lower_depth - G.d) < 1e-3 &&
            Math.abs(g.middle - G.m) < 1e-3 && Math.abs(g.height - G.H) < 1e-3;
   };
-  const combos = [['diamond', 'pointed', 'pointed', null], ['diamond', 'curve', 'curve', null]];
+  const combos = [];
   for (const up of ['pointed', 'curve', 'header']) for (const lo of ['flat', 'pointed', 'arc', 'round']) for (const mid of [true, false])
-    if (!(up === 'header' && lo === 'flat' && !mid)) combos.push(['arch', up, lo, mid]);
-  for (const [shape, up, lo, mid] of combos) {
-    await asmProfileSet(S.id, 'shape', shape); await asmProfileSet(S.id, 'upper', up);
-    if (shape === 'arch') { await asmProfileSet(S.id, 'lower', lo); await asmProfileSet(S.id, 'middle', mid); }
+    if (!(up === 'header' && lo === 'flat' && !mid)) combos.push([up, lo, mid]);
+  for (const [up, lo, mid] of combos) {
+    await asmProfileSet(S.id, 'upper', up); await asmProfileSet(S.id, 'lower', lo); await asmProfileSet(S.id, 'middle', mid);
     S = _asmProfile(S.id);
     const rr = rep(S.id);
-    check(S.shape === shape && S.upper === up && S.lower === lo && rr.valid && rr.worst_step <= hh() + 1e-9 && same(S.id) && geomSame(S.id),
-          `${shape} · ${up}${shape === 'arch' ? ` upper · ${mid ? 'middle · ' : ''}${lo} lower` : ''}: printable (${S.width} × ${S.height} in), preview = result`);
+    check(S.upper === up && S.lower === lo && !!S.middle === mid && rr.valid && rr.worst_step <= hh() + 1e-9 && same(S.id) && geomSame(S.id),
+          `${up} upper · ${mid ? 'middle · ' : ''}${lo} lower: printable (${S.width} × ${S.height} in), preview = result`);
   }
   _asmRenderProfiles();
   const fl6 = n => [n, ...(n.children || []).flatMap(fl6)];
-  const shapeOpts = fl6(el('asm-profiles')).filter(n => n.value === 'diamond' || n.value === 'arch' || n.value === 'lens').map(n => n.value);
-  check(shapeOpts.includes('diamond') && shapeOpts.includes('arch') && !shapeOpts.includes('lens'), 'Type offers Diamond and Arch only (no Lens)');
+  const typeOpts = fl6(el('asm-profiles')).filter(n => ['diamond', 'arch', 'lens'].includes(n.value));
+  check(typeOpts.length === 0 && !fl6(el('asm-profiles')).some(n => n.textContent === 'Type' || n.textContent === 'Profile'),
+        'no Diamond / Arch selector: Upper, Middle and Lower only');
+  // both diamonds are CONFIGURATIONS (named on the card)
+  for (const [up, lo, name] of [['pointed', 'pointed', 'angular diamond'], ['curve', 'arc', 'curved diamond']]) {
+    await asmProfileSet(S.id, 'middle', false); await asmProfileSet(S.id, 'upper', up); await asmProfileSet(S.id, 'lower', lo);
+    await asmProfileSet(S.id, 'upper_height', 24); await asmProfileSet(S.id, 'bottom_depth', 24);
+    S = _asmProfile(S.id);
+    _asmRenderProfiles();
+    const lab = fl6(el('asm-profiles')).find(n => n.className === 'asm-calc asm-config');
+    check(S.upper_height === S.bottom_depth && rep(S.id).valid && same(S.id) && lab && lab.textContent.includes(name),
+          `${up} upper + ${lo} lower + no middle, equal heights = ${lab && lab.textContent}`);
+  }
   {
     const heads = fl6(el('asm-profiles')).filter(n => n.className === 'asm-subhead').map(n => n.textContent);
     check(['Shape', 'Position', 'Dimensions', 'Array'].every(h => heads.includes(h)), `the card is organised under SHAPE / POSITION / DIMENSIONS / ARRAY (${heads.join(', ')})`);
@@ -656,7 +679,7 @@ async function run() {
   S = _asmProfile(S.id);
   {
     const G = _asmOpeningGeom(S), O = window.OpeningShape, e = 1e-4;
-    const w = t => O.widthAt(t, G.W, G.d, G.m, G.U, 'arch', S.upper, S.lower);
+    const w = t => O.widthAt(t, G.W, G.d, G.m, G.U, S.upper, S.lower);
     const a = (G.d * G.d - G.W * G.W / 4) / G.W;
     check(G.d > G.W / 2 && Math.abs((w(e) / 2) / e - G.d / a) < 1e-2 * (G.d / a) && (G.W - w(G.d - e)) / e < 0.1 &&
           rep(S.id).valid && same(S.id),
@@ -683,7 +706,7 @@ async function run() {
   S = _asmProfile(S.id);
   {
     const G = _asmOpeningGeom(S), O = window.OpeningShape;
-    const w = t => O.widthAt(t, G.W, G.d, G.m, G.U, 'arch', S.upper, S.lower);
+    const w = t => O.widthAt(t, G.W, G.d, G.m, G.U, S.upper, S.lower);
     check(w(0.01 * G.d) > 0.13 * G.W && Math.abs(w(G.d * 0.999) - G.W) < 0.05 * G.W && w(0.5 * G.d) > 0.86 * G.W,
           'the Rounded lower profile is a genuine smooth curve (a half ellipse)');
     const e = 1e-3;
@@ -713,17 +736,19 @@ async function run() {
     check(S.width === W0 + 10 && S.upper_height > U1 && Math.abs(S.height - H1 - (S.upper_height - U1)) < 1e-6 && rep(S.id).valid && same(S.id),
           `Width ${W0 + 10}: the upper height follows (${U1} → ${S.upper_height} in), the middle and lower unchanged`);
   }
-  // DIAMOND: height edit narrows, width edit raises
-  await asmProfileSet(S.id, 'shape', 'diamond');
-  await asmProfileSet(S.id, 'height', 24);
+  // the ANGULAR DIAMOND configuration: upper height narrows, width raises the upper
+  await asmProfileSet(S.id, 'middle', false); await asmProfileSet(S.id, 'upper', 'pointed'); await asmProfileSet(S.id, 'lower', 'pointed');
+  await asmProfileSet(S.id, 'bottom_depth', 12); await asmProfileSet(S.id, 'upper_height', 12);
   S = _asmProfile(S.id);
-  check(S.height === 24 && rep(S.id).valid && same(S.id) && S.driver === 'height', `Height 24: the width follows (${S.width} in), preview = result`);
+  check(S.upper_height === 12 && S.height === 24 && rep(S.id).valid && same(S.id) && S.driver === 'upper_height',
+        `Upper height 12: the width follows (${S.width} in), preview = result`);
   const wH = S.width;
   await asmProfileSet(S.id, 'width', wH + 12);
   S = _asmProfile(S.id);
-  check(S.width === wH + 12 && S.height > 24 && rep(S.id).valid && same(S.id), `Width ${wH + 12}: the height follows (${S.height} in)`);
-  // DRAG the side handle: the height follows live, during the drag
-  await asmProfileSet(S.id, 'shape', 'diamond'); await asmProfileSet(S.id, 'width', 24); await asmProfileSet(S.id, 'height', 30);
+  check(S.width === wH + 12 && S.upper_height > 12 && S.bottom_depth === 12 && rep(S.id).valid && same(S.id),
+        `Width ${wH + 12}: the upper height follows (${S.upper_height} in), the lower unchanged`);
+  // DRAG the side handle: the upper height follows live, during the drag
+  await asmProfileSet(S.id, 'width', 24); await asmProfileSet(S.id, 'upper_height', 15);
   asmProfileElevation(S.id); asmDrawPreview();
   S = _asmProfile(S.id);
   {
@@ -750,11 +775,11 @@ async function run() {
   }
   // MAXIMUM OVERHANG / LAYER HEIGHT: dependent dimensions recalculated (the driver wins)
   {
-    await asmProfileSet(S.id, 'height', 36);
+    await asmProfileSet(S.id, 'upper_height', 18);
     const W0 = _asmProfile(S.id).width, u = undoN();
     await asmSetMaxOverhang(hh() / 2);
     S = _asmProfile(S.id);
-    check(S.height === 36 && S.width < W0 && rep(S.id).valid && same(S.id) && undoN() === u + 1,
+    check(S.upper_height === 18 && S.width < W0 && rep(S.id).valid && same(S.id) && undoN() === u + 1,
           `half the overhang: height kept (last edited), width ${W0} → ${S.width} in, one undo step`);
     await asmUndo();
     S = _asmProfile(S.id);
@@ -793,7 +818,7 @@ async function run() {
   // a DOOR at ground level: flat lower, middle, a self-supporting upper
   {
     await asmProfileSet(S.id, 'array.arrangement', 'single');
-    await asmProfileSet(S.id, 'shape', 'arch'); await asmProfileSet(S.id, 'lower', 'flat'); await asmProfileSet(S.id, 'upper', 'pointed');
+    await asmProfileSet(S.id, 'lower', 'flat'); await asmProfileSet(S.id, 'upper', 'pointed');
     await asmProfileSet(S.id, 'z_bottom', 0); await asmProfileSet(S.id, 'width', 30); await asmProfileSet(S.id, 'position', 60);
     await asmProfileSet(S.id, 'middle', true); await asmProfileSet(S.id, 'middle_height', 60);
     S = _asmProfile(S.id);
@@ -868,19 +893,87 @@ async function run() {
     const oldArch = { kind: 'opening', id: 'p8', wall: { source: R.id, edge: 0 }, position: 60, z_bottom: 6, height: 30,
                       width: 12, shape: 'arch', label: '', upper: 'pointed', lower: 'curve', bottom_depth: 6, upper_height: 12,
                       middle: true, middle_height: 12 };
-    window.AssemblyProject.importState({ state: { ...ex.state, profiles: [...ex.state.profiles, lens, oldArch], profile_counter: 9 },
+    // a saved DIAMOND of an odd number of layers (17: its widest point mid-layer)
+    const oldDiamond = { kind: 'opening', id: 'p10', wall: { source: R.id, edge: 1 }, position: 60, z_bottom: 6, height: 25.5,
+                         width: 12, shape: 'diamond', label: '', upper: 'pointed', lower: 'pointed', driver: 'height' };
+    window.AssemblyProject.importState({ state: { ...ex.state, profiles: [...ex.state.profiles, lens, oldArch, oldDiamond], profile_counter: 10 },
                                          header_counter: ex.header_counter });
     await asmResolve();
     const L9 = _asmProfile('p9'), S2 = _asmProfile(S.id);
-    check(L9.shape === 'diamond' && L9.upper === 'curve' && L9.lower === 'curve' && L9.width === 4 &&
-          rep('p9').valid && same('p9') && asm.profNote && /Lens → Diamond \(curved\)/.test(asm.profNote.text),
+    check(!('shape' in L9) && L9.upper === 'curve' && L9.lower === 'arc' && !L9.middle && L9.width === 4 &&
+          rep('p9').valid && same('p9') && asm.profNote && /Lens → curved upper \+ curved lower/.test(asm.profNote.text),
           `an older Lens opens as the curved Diamond, made printable — said once (${asm.profNote && asm.profNote.text})`);
+    const P7 = _asmProfile('p10'), O7 = window.OpeningShape;
+    const g7 = t => O7.widthAt(t, 12, P7.bottom_depth, 0, P7.upper_height, P7.upper, P7.lower);
+    check(!('shape' in P7) && P7.upper === 'pointed' && P7.lower === 'pointed' && !P7.middle && P7.upper_height === 12.75 &&
+          P7.bottom_depth === 12.75 && P7.height === 25.5 && P7.width === 12 && P7.driver === 'upper_height' &&
+          [0.75, 6.75, 12.75, 18.75, 24.75].every(t => Math.abs(g7(t) - 12 * (1 - Math.abs(2 * t / 25.5 - 1))) < 1e-9) &&
+          rep('p10').valid && same('p10') && !/P\d+: Diamond/.test(asm.profNote.text),
+          `a saved Diamond opens as the identical angular configuration (odd layer count kept, nothing to report)`);
     const P8 = _asmProfile('p8');
     check(P8.lower === 'round' && P8.bottom_depth === 6 && P8.height === 30 && rep('p8').valid && same('p8') &&
           /Curved bottom → Rounded/.test(asm.profNote.text),
           'an opening saved with the former Curved lower opens as Rounded, same geometry — said once');
     check(JSON.stringify(S2) === JSON.stringify(ex.state.profiles.find(p => p.id === S.id)) && rep(S.id).valid,
           'a saved opening re-opens unchanged (Save / Open round trip)');
+  }
+
+  // ---- 7. OPENING ALIGNMENT: ONE global setting under Assembly Transform (2026-10-10) ----
+  {
+    asm.state.sections = [{ design_id: 'base', height: 120, transform: { profile: 'linear', shift: [0.2, 0], scale_in: 0 } }];
+    asm.state.profiles = asm.state.profiles.filter(p => p.id === S.id);
+    setWorkspace('designer');
+    layer.openings = (layer.openings || []).concat([{ id: 'dw', type: 'opening', source_path_id: R.id, center_s: 60, width: 20,
+                                                      end_treatment: 'inherit', z_min: null, z_max: null, label: 'Designer window' }]);
+    historyCheckpoint();
+    setWorkspace('assembly');
+    await asmResolve();
+    await asmProfileSet(S.id, 'upper', 'pointed'); await asmProfileSet(S.id, 'z_bottom', 12);
+    S = _asmProfile(S.id);
+    const worldAt = L => { const T = asm.resolved.instances[L.layer].transform; return Math.round((T.scale * L.at + T.tx) * 1e3) / 1e3; };
+    check(!asm.state.opening_alignment && rep(S.id).valid && new Set(rep(S.id).layers.map(worldAt)).size > 5,
+          'Follow Wall by default: under a sideways shift the self-supporting opening leans (moves in world)');
+    asmProfileEdit(S.id);
+    _asmRenderProfiles(); asmRender();
+    const fl7 = n => [n, ...(n.children || []).flatMap(fl7)];
+    check(!fl7(el('asm-profiles')).some(n => n.dataset && n.dataset.field === 'alignment') &&
+          !fl7(el('asm-profiles')).some(n => n.dataset && n.dataset.section === 'designer-openings'),
+          'no per-opening alignment controls in Profiles');
+    const gsel = fl7(el('asm-assembly-tf')).find(n => n.dataset && n.dataset.field === 'opening_alignment');
+    check(gsel && gsel.value === 'follow', 'ONE Opening Alignment control under Assembly Transform (Follow Wall)');
+    const u = undoN();
+    await asmSetOpeningAlignment('plumb');
+    S = _asmProfile(S.id);
+    const al = (asm.resolved.alignments || []).find(a => a.opening === 'dw');
+    const moves = asm.resolved.instances.filter(i => /"move"/.test(i.print_key || i.geometry_key || '')).length;
+    check(asm.state.opening_alignment === 'plumb' && undoN() === u + 1 && rep(S.id).valid &&
+          new Set(rep(S.id).layers.map(worldAt)).size === 1 && same(S.id),
+          'Vertical / Plumb: the self-supporting opening is cut at ONE world position on every layer; preview = result; one undo step');
+    check(al && al.valid && al.members.length === 1 && moves > 10,
+          `…and the Designer window too (re-placed on ${moves} layers) — one setting for every opening`);
+    await asmUndo();
+    check(!asm.state.opening_alignment && new Set(rep(S.id).layers.map(worldAt)).size > 5 &&
+          !asm.resolved.instances.some(i => /"move"/.test(i.geometry_key || '')), 'undo → Follow Wall for all');
+    await asmRedo();
+    check(asm.state.opening_alignment === 'plumb' && new Set(rep(S.id).layers.map(worldAt)).size === 1, 'redo → plumb');
+    const ex = window.AssemblyProject.exportState();
+    window.AssemblyProject.importState(JSON.parse(JSON.stringify(ex)));
+    await asmResolve();
+    check(asm.state.opening_alignment === 'plumb' && new Set(rep(S.id).layers.map(worldAt)).size === 1,
+          'Save / Open keeps the global alignment');
+    // MIGRATION of the short-lived per-opening form
+    const legacy = JSON.parse(JSON.stringify(ex));
+    delete legacy.state.opening_alignment;
+    legacy.state.opening_alignment = { dw: 'plumb' };
+    legacy.state.profiles.forEach(p => { p.alignment = 'plumb'; });
+    window.AssemblyProject.importState(legacy);
+    await asmResolve();
+    check(asm.state.opening_alignment === 'plumb' && !asm.state.profiles.some(p => 'alignment' in p),
+          'an older per-opening project (everything plumb) opens as global Vertical / Plumb');
+    legacy.state.profiles.forEach(p => { delete p.alignment; });
+    window.AssemblyProject.importState(legacy);
+    await asmResolve();
+    check(!asm.state.opening_alignment, 'mixed (a following Assembly opening) → Follow Wall');
   }
 
 }

@@ -193,8 +193,10 @@ def test_array_round_trips_and_older_dicts_are_unchanged():
            'height': 48, 'width': 24, 'shape': 'lens', 'label': ''}
     q = profile_from_dict(old)                       # a saved LENS → the Curved Diamond (2026-10-10)
     assert q.array is None and q.source_opening is None
-    assert q.to_dict() == {**old, 'position': 60.0, 'z_bottom': 6.0, 'height': 48.0, 'width': 24.0,
-                           'shape': 'diamond', 'upper': 'curve', 'lower': 'curve'}
+    exp = {k: v for k, v in old.items() if k != 'shape'}
+    assert q.to_dict() == {**exp, 'position': 60.0, 'z_bottom': 6.0, 'height': 48.0, 'width': 24.0,
+                           'upper': 'curve', 'lower': 'arc', 'bottom_depth': 24.0, 'upper_height': 24.0,
+                           'middle': False, 'middle_height': None}
     assert profile_from_dict(q.to_dict()) == q
     with pytest.raises(ProfileError):
         profile_from_dict({**old, 'array': {'arrangement': 'spiral'}})
@@ -202,6 +204,10 @@ def test_array_round_trips_and_older_dicts_are_unchanged():
         profile_from_dict({**old, 'array': {'arrangement': 'grid', 'cols': 0}})
     with pytest.raises(ProfileError):
         profile_from_dict({**old, 'shape': 'arch', 'lower': 'gothic'})
+    with pytest.raises(ProfileError):
+        profile_from_dict({**exp, 'upper': 'pointed', 'lower': 'flat', 'middle': True, 'middle_height': 10,
+                           'upper_height': 10, 'source_opening': {'id': 'o', 'z_ref': 1}, 'upper_x': 0,
+                           'header': None} | {'upper': 'header'})
 
 
 def test_cut_spec_of_an_array_round_trips_with_one_station_per_column():

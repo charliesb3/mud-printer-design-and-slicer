@@ -1,8 +1,12 @@
-// UI smoke test for the WALL SYSTEM panel (its own Designer sidebar): explicit
-// user-authored groups of Design paths owning thickness / alignment /
-// construction / parameters / the Skin + Web web; at most one system per
-// path; members need not touch; path Properties membership row; webs
-// materialised as owned infill records; legacy migration; undo / payload.
+// UI smoke test for the Designer's WALL GROUPS panel (2026-10-11; formerly the
+// Wall System panel): explicit user-authored groups of paths owning Wall
+// Thickness / Wall Alignment / the print reference — the ARCHITECTURE; no
+// construction, web or parameter controls (those are the project's Wall
+// Systems, edited in the Wall Systems workspace: layer_assembly/tests/js/
+// ui_wallsystems_smoke.js); at most one group per path; members need not
+// touch; path Properties identity row; the Designer resolves ENVELOPES only
+// (payload `envelope`, no route); an older document's Wall Systems are
+// split into groups + project Wall Systems; legacy migration; undo / payload.
 // Run via tests/test_wall_systems.py (or: node tests/js/ui_wall_system_smoke.js).
 const fs = require('fs');
 const path = require('path');
@@ -34,174 +38,140 @@ global.document = {
     querySelector: () => ({ disabled: false }), set lastChild(v) {}, get lastChild() { return this.children[this.children.length - 1]; } }),
   addEventListener() {}, body: {}, activeElement: null,
 };
-global.window = { addEventListener() {}, devicePixelRatio: 1 };
+global.window = { addEventListener() {}, devicePixelRatio: 1 };     // (the Designer's default: envelopes)
 global.requestAnimationFrame = () => 0; global.cancelAnimationFrame = () => {};
 global.fetch = async () => ({ json: async () => ([]) });
 let src = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'app.js'), 'utf8');
 src = src.replace(/\ninit\(\);\s*$/, '\n') + '\ncanvas.width = 800; canvas.height = 800;\n';
 eval(src + `
-;(function run() {
+;(async function run() {
   const check = (c, m) => { if (!c) throw new Error('FAIL: ' + m); console.log('ok  ' + m); };
   const all = (el, out = []) => { for (const c of el.children || []) { out.push(c); all(c, out); } return out; };
   const btn = (p, re) => all(p).find(c => typeof c.textContent === 'string' && re.test(c.textContent) && c.onclick);
   const row = (p, label) => all(p).find(r => r.children && r.children[0] && r.children[0].textContent === label);
   const text = p => all(p).map(c => (typeof c.textContent === 'string' ? c.textContent : '')).join(' | ');
+  check(_designerEnvelope() && showToolpath === false, 'the Designer resolves envelopes only (no toolpath)');
+  // DISPLAY (2026-10-11 correction): the SHAPES as single lines by default; Wall
+  // Envelope optional — rings + faces of thick walls, never single-bead lanes
+  _syncDesignerMode();                                  // (what init() does on the page)
+  check(designerDisplay().mode === 'envelope' && document.getElementById('btn-envelope').textContent === 'Wall Envelope ON',
+        'default display: the WALL ENVELOPE (each wall at its architectural thickness)');
+  toggleEnvelope(false);
+  envelopeLines = [{ role: 'ring', pts: [[0, 0], [10, 0], [10, 10]], closed: true, src: ['x', 'x', 'x'] },
+                   { role: 'bead', cls: 'face', single: false, pts: [[0, 0], [1, 1]], src: ['y', 'y'] },
+                   { role: 'bead', cls: 'face', single: true, pts: [[0, 2], [1, 3]], src: ['z', 'z'] },
+                   { role: 'bead', cls: 'wire', single: true, pts: [[0, 4], [1, 5]], src: ['w', 'w'] }];
+  let D0 = designerDisplay();
+  check(D0.rings === 0 && D0.faces === 0 && D0.printable === 0 && !D0.toolpath,
+        'shapes display: no envelope, no printable lines, no toolpath');
+  toggleEnvelope();
+  D0 = designerDisplay();
+  check(D0.mode === 'envelope' && D0.rings === 1 && D0.faces === 1 && document.getElementById('btn-envelope').textContent === 'Wall Envelope ON',
+        'Wall Envelope: inner / outer boundaries (rings, faces of thick walls) — single-bead lanes left out');
+  toggleEnvelope(false);
+  check(designerDisplay().mode === 'shapes', 'Wall Envelope off: every shape as one line');
+  toggleEnvelope(true);
+  envelopeLines = null;
   addPrimitive('RectanglePath');
   addPrimitive('RectanglePath');
   addPrimitive('LinePath');
   const [A, B, Ln] = layer.source_paths;
-  const list = document.getElementById('wallsys-list');
-  const sysPanel = document.getElementById('wallsys-props');
+  const list = document.getElementById('wallgrp-list');
+  const gPanel = document.getElementById('wallgrp-props');
   const pathPanel = document.getElementById('path-props');
-  const panels = () => { for (const el of [list, sysPanel, pathPanel]) el.children.length = 0; updatePropPanel(); };
+  const panels = () => { for (const el of [list, gPanel, pathPanel]) el.children.length = 0; updatePropPanel(); };
   selectedId = A.id;
   panels();
-  check(/No Wall System \\(single bead\\)/.test(text(list)), 'Wall System panel: every path starts as a single bead');
-  check(/None \\(single bead\\)/.test(text(row(pathPanel, 'Wall System'))) && !all(pathPanel).some(n => n.tagName === 'SELECT' &&
-        all(row(pathPanel, 'Wall System')).includes(n)), 'path Properties: Wall System = None (single bead), identity only');
+  check(/No Wall Group \\(single bead/.test(text(list)), 'Wall Groups panel: every path starts as a single bead');
+  check(/None \\(single bead\\)/.test(text(row(pathPanel, 'Wall Group'))), 'path Properties: Wall Group = None (single bead), identity only');
   historyCheckpoint();
-  btn(list, /New Wall System with/).onclick();
-  const S = layer.wall_systems[0];
-  check(S && S.type === 'skin_web' && S.thickness === 10 && S.members.join() === A.id && S.web.pattern === 'zigzag',
-        'New Wall System: Skin + Web, 10 in, zigzag web, the selected path a member');
-  check(layer.infills.some(f => f.owner === S.id && f.path_id === A.id && f.pattern === 'zigzag'),
-        'the web is materialised as an OWNED infill record');
+  btn(list, /New Wall Group with/).onclick();
+  const G = layer.wall_groups[0];
+  check(G && G.thickness === 10 && G.align === 'auto' && G.members.join() === A.id && !('type' in G) && !('web' in G),
+        'New Wall Group: 10 in, default alignment, the selected path a member — no construction in it');
+  check(!(layer.infills || []).some(f => f.owner), 'no construction records in the document (no owned webs)');
   panels();
-  check(row(sysPanel, 'Construction').children[1].children.map(o => o.textContent).join('|') ===
-        'Single / Out-and-Back Wall|Hollow / Skins Only|Skin + Web|Parallel Walls|Interleaved Waves|Linked Waves|Chained Loop',
-        'Construction offers the seven constructions');
-  const kids = sysPanel.children.map(c => c.textContent);
-  check(kids.indexOf('Members') >= 0 && kids.indexOf('Members') < kids.indexOf('Construction'),
-        'Members come first in the Wall System panel');
-  check(all(sysPanel).filter(c => c.className === 'prop-row wallsys-member').map(r => r.children[0].textContent).join() === A.label,
-        "the member list shows ONLY this system paths");
-  check(!all(sysPanel).some(c => c.children && c.children[1] && c.children[1].type === 'checkbox' &&
-                                 c.children[0].textContent === B.label), 'no all-path checkbox list');
-  check(!!row(sysPanel, 'Name') && !!row(sysPanel, 'Wall Thickness') && !!row(sysPanel, 'Wall Alignment'),
-        'the system owns Name, Wall Thickness and Wall Alignment');
-  check(row(sysPanel, 'Web').children[1].children.map(o => o.value).join() === 'zigzag,wave',
-        'Skin + Web: Web = Zigzag / Wave (+ Adaptive Truss from the backend pattern list) — no "None"');
-  row(sysPanel, 'Name').children[1].value = 'Outer'; row(sysPanel, 'Name').children[1].onchange();
-  check(S.name === 'Outer', 'renamed');
+  check(!row(gPanel, 'Construction') && !row(gPanel, 'Web') && !row(gPanel, 'Pitch') && !row(gPanel, 'Number of Walls'),
+        'no construction-type or lattice controls in the Designer');
+  const kids = gPanel.children.map(c => c.textContent);
+  check(kids.indexOf('Members') >= 0 && kids.indexOf('Members') < kids.indexOf('Envelope'), 'Members come first');
+  check(all(gPanel).filter(c => c.className === 'prop-row wallgrp-member').map(r => r.children[0].textContent).join() === A.label,
+        'the member list shows ONLY the paths of this group (compact)');
+  check(!!row(gPanel, 'Name') && !!row(gPanel, 'Wall Thickness') && !!row(gPanel, 'Wall Alignment'),
+        'the group owns Name, Wall Thickness and Wall Alignment');
+  row(gPanel, 'Name').children[1].value = 'Outer'; row(gPanel, 'Name').children[1].onchange();
+  check(G.name === 'Outer', 'renamed');
   panels();
-  row(sysPanel, 'Wall Thickness').children[1].value = '12'; row(sysPanel, 'Wall Thickness').children[1].onchange();
-  check(S.thickness === 12 && _effectiveWall(A).wall.thickness === 12 && !A.wall, 'Wall Thickness lives on the system');
-  const ts = row(sysPanel, 'Target Spacing');
-  const before = sysPanel.children.length, firstRow = sysPanel.children[0];
-  ts.children[1].value = '16'; ts.children[1].onchange();
-  check(S.web.params.spacing === 16 && layer.infills.find(f => f.owner === S.id).params.spacing === 16,
-        'web parameter edited on the system, synced into its owned record');
-  check(sysPanel.children.length === before && sysPanel.children[0] === firstRow,
-        'a parameter edit does not rebuild the panel (input keeps focus)');
-  infillPatterns = { zigzag: { kind: 'wall', parameters: [{ name: 'spacing', label: 'Target Spacing', default: 20 }] },
-                     wave: { kind: 'wall', parameters: [{ name: 'spacing', label: 'Target Spacing', default: 20 }] },
-                     truss: { kind: 'wall', parameters: [{ name: 'angle', label: 'Brace Angle', default: 45 }] } };
+  row(gPanel, 'Wall Thickness').children[1].value = '12'; row(gPanel, 'Wall Thickness').children[1].onchange();
+  check(G.thickness === 12 && _effectiveWall(A).wall.thickness === 12 && !A.wall, 'Wall Thickness lives on the group');
   panels();
-  const web = row(sysPanel, 'Web').children[1];
-  web.value = 'truss'; web.onchange();
+  const al = row(gPanel, 'Wall Alignment').children[1];
+  al.value = 'Centered'; al.onchange();
   panels();
-  check(S.web.pattern === 'truss' && S.web.params.seed === 0 && !!row(sysPanel, 'Brace Angle'),
-        'Adaptive Truss web with its parameters');
-  btn(sysPanel, /^Regenerate$/).onclick();
-  check(S.web.params.seed === 1 && layer.infills.find(f => f.owner === S.id).params.seed === 1,
-        'Regenerate: next truss solution, synced');
-  panels();
-  const c1 = row(sysPanel, 'Construction').children[1];
-  c1.value = 'hollow'; c1.onchange();
-  panels();
-  check(S.type === 'hollow' && /skins only/.test(text(sysPanel)) && !row(sysPanel, 'Web') &&
-        layer.infills.some(f => f.owner === S.id), 'Hollow / Skins Only: no web (the owned record kept for its lineage)');
-  const c2 = row(sysPanel, 'Construction').children[1];
-  c2.value = 'skin_web'; c2.onchange();
-  panels();
-  // members: explicit, need not touch; at most one system per path
-  const add = row(sysPanel, 'Add path…').children[1];
+  check(G.align === 'center' && !!row(gPanel, 'Print reference line'), 'Wall Alignment; Centered offers the print reference line');
+  // members: explicit, need not touch; at most one group per path
+  const add = row(gPanel, 'Add path…').children[1];
   check(add.children.map(o => o.value).join() === ['__add', B.id, Ln.id].join(), 'Add path… lists the other paths');
   add.value = B.id; add.onchange();
-  check(S.members.join() === [A.id, B.id].join(), 'Add path… adds it (no contact needed)');
+  check(G.members.join() === [A.id, B.id].join(), 'Add path… adds it (no contact needed)');
+  btn(list, /^\\+ New Wall Group$/).onclick();
+  const G2 = layer.wall_groups[1];
   panels();
-  row(sysPanel, 'Web').children[1].value = 'wave'; row(sysPanel, 'Web').children[1].onchange();
-  check(layer.infills.filter(f => f.owner === S.id && f.pattern === 'wave').length === 2,
-        'one owned web record per connected group of members');
-  btn(list, /^\\+ New Wall System$/).onclick();
-  const S2 = layer.wall_systems[1];
-  panels();
-  const add2 = row(sysPanel, 'Add path…').children[1];
+  const add2 = row(gPanel, 'Add path…').children[1];
   check(/\\(from Outer\\)/.test(add2.children.find(o => o.value === A.id).textContent),
-        'Add path… says when a path comes from another system');
+        'Add path… says when a path comes from another group');
   add2.value = A.id; add2.onchange();
-  check(S2.members.join() === A.id && S.members.join() === B.id, 'moving a path between systems (one system per path)');
+  check(G2.members.join() === A.id && G.members.join() === B.id, 'moving a path between groups (one group per path)');
   panels();
-  const xb = all(sysPanel).find(c => c.className === 'remove-btn');
-  xb.onclick();
-  check(S2.members.length === 0, 'the compact × removes a member');
+  all(gPanel).find(c => c.className === 'remove-btn').onclick();
+  check(G2.members.length === 0, 'the compact × removes a member');
   add2.value = A.id; add2.onchange();
+  // path Properties + list badge
+  selectedId = B.id;
   panels();
-  const cons = row(sysPanel, 'Construction').children[1];
-  cons.value = 'chain'; cons.onchange();
-  panels();
-  check(S2.type === 'chain' && !!row(sysPanel, 'Pitch') && !!row(sysPanel, 'Loop Depth') && !!row(sysPanel, 'Neck') &&
-        !row(sysPanel, 'Web') && /Minimum effective thickness/.test(text(sysPanel)),
-        'Chained Loop: its parameters + Minimum Effective Thickness, no web');
-  {
-    // a Chained Loop value applies with immediate "Updating…" feedback; the blur that
-    // follows a live (typed) apply does not apply the same value again (2026-10-08)
-    const pin = row(sysPanel, 'Pitch').children[1];
-    check(typeof pin.oninput === 'function', 'construction numbers apply live while typing (debounced)');
-    pin.value = '14'; pin.onchange();
-    check(S2.params.pitch === 14 && /Updating/.test(document.getElementById('status-bar').textContent),
-          'a Pitch edit applies with immediate "Updating…" feedback');
-    const n1 = _hist.undo.length;
-    pin.onchange();
-    check(_hist.undo.length === n1, 'the same value again (the blur after a live apply) applies nothing');
-  }
-  // (Interleaved Depth / Linked Amplitude removed: the Wall Thickness owns the envelope)
-  for (const [t, gone] of [['interleaved', 'Depth'], ['linked', 'Amplitude']]) {
-    const cx = row(sysPanel, 'Construction').children[1];
-    cx.value = t; cx.onchange();
-    panels();
-    check(S2.type === t && !row(sysPanel, gone) && !!row(sysPanel, 'Period') && !(gone.toLowerCase() in S2.params),
-          WALL_SYSTEMS[t].label + ': no ' + gone + ' control (the Wall Thickness is the envelope)');
-  }
-  const c3 = row(sysPanel, 'Construction').children[1];
-  c3.value = 'parallel'; c3.onchange();
-  panels();
-  check(S2.type === 'parallel' && S2.params.walls === 4 && !!row(sysPanel, 'Number of Walls'), 'Parallel Walls: Number of Walls');
-  const c4 = row(sysPanel, 'Construction').children[1];
-  c4.value = 'single'; c4.onchange();
-  panels();
-  check(S2.type === 'single' && !row(sysPanel, 'Wall Thickness') && /outbound \\+ return lanes/.test(text(sysPanel)) &&
-        _effectiveWall(layer.source_paths.find(p => p.id === A.id)).wall === null,
-        'Single / Out-and-Back: no Wall Thickness needed (the bead / return-lane rules)');
-  const c5 = row(sysPanel, 'Construction').children[1];
-  c5.value = 'chain'; c5.onchange();
-  // path Properties: membership row
-  selectedId = Ln.id;
-  panels();
-  check(!/\\(in /.test(text(row(pathPanel, 'Wall System'))) && /None/.test(text(row(pathPanel, 'Wall System'))),
-        'path Properties: identity row for a path in no system');
-  _wsSetMember(Ln.id, S); _syncSystemWebs();
-  panels();
-  check(_wsOf(Ln.id) === S && text(row(pathPanel, 'Wall System')).includes(_wsLabel(S)),
-        'path Properties name the system that builds the path (membership is edited in the Wall System panel)');
+  check(text(row(pathPanel, 'Wall Group')).includes('Outer · 12 in'), 'path Properties name the group and its thickness');
   updatePathList();
-  check(all(document.getElementById('path-list')).some(c => c.className === 'path-type wallsys-badge' &&
-                                                           /Outer/.test(c.textContent)), 'path list badge names the system');
-  // payload / undo
+  check(all(document.getElementById('path-list')).some(c => c.className === 'path-type wallgrp-badge' &&
+                                                           /Outer/.test(c.textContent)), 'path list badge names the group');
+  // no ROUTE (and no lattice) is requested by ordinary Designer editing: every
+  // resolve is an envelope request
+  {
+    const urls = [], bodies = [];
+    const f0 = global.fetch;
+    global.fetch = async (url, opts) => { urls.push(String(url)); bodies.push(opts && opts.body); return { json: async () => ({ superseded: true }) }; };
+    for (const t of [11, 12]) { G.thickness = t; scheduleRefresh({ supersede: true }); await new Promise(r => setTimeout(r, 200)); }
+    global.fetch = f0;
+    check(urls.length > 0 && !urls.some(u => u.includes('/api/route')) && bodies.every(b => JSON.parse(b).envelope === true),
+          'ordinary Designer editing requests envelopes only — never a route or lattice');
+    G.thickness = 12;
+  }
+  // payload: the ARCHITECTURE only
   const pl = buildPayload();
-  check(pl.wall_systems.length === 2 && pl.wall_systems[0].thickness === 12 && pl.wall_systems[0].name === 'Outer' &&
-        pl.wall_systems[0].web.pattern === 'wave', 'payload carries the Wall Systems');
+  check(pl.wall_groups.length === 2 && pl.wall_groups[0].thickness === 12 && pl.wall_groups[0].name === 'Outer' &&
+        pl.envelope === true && !('wall_systems' in pl) && !('project_wall_systems' in pl),
+        'payload: the Wall Groups + envelope (no Wall Systems, no construction)');
   check(undo() && redo(), 'undo / redo');
-  // the Infill list no longer shows wall webs
-  const il = document.getElementById('infill-list'); il.children.length = 0; updateInfillList();
-  check(il.children.length === 0, 'owned webs are not in the Infill list');
-  // deleting a system releases its paths and drops its webs
-  wallSystemPick = layer.wall_systems[0].id; panels();
-  btn(sysPanel, /^Delete /).onclick();
-  check(layer.wall_systems.length === 1 && !layer.infills.some(f => f.owner === S.id), 'Delete: paths released, webs dropped');
-  // LEGACY MIGRATION (backend groups the effective walls; not an undo step)
-  layer.wall_systems = []; layer.infills = [];
-  const A0 = layer.source_paths[0];                 // (undo / redo rebuilt the layer objects)
+  // deleting a group releases its paths
+  wallGroupPick = layer.wall_groups[1].id; panels();
+  btn(gPanel, /^Delete /).onclick();
+  check(layer.wall_groups.length === 1 && !_wgOf(layer.source_paths[0].id), 'Delete: paths released');
+  // AN OLDER DOCUMENT's Wall Systems: split into groups + project Wall Systems (ids kept)
+  layer.wall_groups = [];
+  const A0 = layer.source_paths[0];
+  layer.wall_systems = [{ id: 'WS7', name: 'Rooms', type: 'interleaved', thickness: 9, align: 'inside', print_reference: false,
+                          params: { paths: 4 }, members: [A0.id], web: {} }];
+  project.wall_systems = [];
+  historyCheckpoint();
+  const depth0 = _hist.undo.length;
+  scheduleRefresh();
+  check(!layer.wall_systems && layer.wall_groups.length === 1 && layer.wall_groups[0].id === 'WS7' &&
+        layer.wall_groups[0].thickness === 9 && layer.wall_groups[0].align === 'inside' &&
+        project.wall_systems.length === 1 && project.wall_systems[0].type === 'interleaved' &&
+        project.wall_systems[0].groups.join() === 'WS7' && project.wall_systems[0].params.paths === 4,
+        'an older document: its Wall System → a Wall Group (envelope) + a project Wall System (construction), ids kept');
+  check(_hist.undo.length <= depth0 + 1, 'the split is no edit of its own');
+  // LEGACY MIGRATION (path walls → backend Wall Systems → groups + project systems; not an undo step)
+  layer.wall_groups = []; project.wall_systems = []; layer.infills = [];
   A0.wall = { thickness: 8, align: 'inside' };
   layer.infills.push({ id: 'old-infill', path_id: A0.id, kind: 'wall', pattern: 'zigzag', params: { spacing: 20 } });
   historyCheckpoint();
@@ -212,9 +182,12 @@ eval(src + `
                      print_reference: false, params: {}, members: [A0.id],
                      web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } }] } : []) });
   _maybeMigrateWallSystems().then(() => {
-    check(!A0.wall && layer.wall_systems[0].members.join() === A0.id && layer.infills[0].owner === 'WS1' &&
-          layer.infills[0].id === 'old-infill', 'migration: path wall → Wall System, wall infill → owned web (same id)');
-    check(_hist.undo.length === undoDepth, 'migration is not an undo step');
+    scheduleRefresh();
+    check(!A0.wall && layer.wall_groups[0].members.join() === A0.id && layer.wall_groups[0].thickness === 8 &&
+          layer.infills[0].owner === 'WS1' && layer.infills[0].id === 'old-infill' &&
+          project.wall_systems.some(s => s.id === 'WS1' && s.type === 'skin_web' && s.web.pattern === 'zigzag'),
+          'migration: path wall → Wall Group + project Wall System (skin + web), wall infill → owned web (same id)');
+    check(_hist.undo.length <= undoDepth + 1, 'migration is not an edit of its own');
     // REQUEST COALESCING: edits during a resolve collapse into one follow-up
     let calls = 0, release;
     const slow = () => { calls++; return new Promise(r => { release = r; }); };
@@ -232,7 +205,7 @@ eval(src + `
       check(got.length === 0, 'typing: nothing applied while still typing');
       setTimeout(() => {
         check(got.join() === '14', 'a typed value applies ONCE when typing pauses (no Enter / blur needed)');
-        console.log('UI WALL SYSTEM SMOKE PASSED');
+        console.log('UI WALL GROUP SMOKE PASSED');
       }, LIVE_INPUT_MS + 60);
     }, 0);
   });

@@ -433,7 +433,8 @@ def derived_junctions(doc, tdoc) -> list:
 
 
 def spec_key(transforms) -> str:
-    """A stable key for a transforms spec (rounded)."""
-    items = sorted((s, round(t[0], 12), round(t[1], 9), round(t[2], 9))
+    """A stable key for a transforms spec (rounded; ints and floats alike —
+    a spec sent back by the page has been through JavaScript)."""
+    items = sorted((s, round(float(t[0]), 12), round(float(t[1]), 9), round(float(t[2]), 9))
                    for s, t in (transforms or {}).items() if not _is_identity(tuple(t)))
     return json.dumps(items)

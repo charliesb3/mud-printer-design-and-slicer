@@ -9,6 +9,20 @@ import math
 import pytest
 
 from layer_assembly.model import Assembly, Section, SectionTransform, Footprint, resolve
+
+
+# (written for the 1.5 in default Maximum Overhang — since 2026-10-11 the
+# default is 1 in: these cases state the 1.5 in they were designed with)
+_Assembly = Assembly
+
+
+def Assembly(*a, **k):          # noqa: F811
+    if len(a) < 9:
+        k.setdefault('max_overhang', 1.5)
+    return _Assembly(*a, **k)
+
+
+Assembly.from_dict = _Assembly.from_dict
 from layer_assembly.objects import Header, SupportOverride, object_from_dict, point_in_rect
 from layer_assembly.support import analyse_support
 

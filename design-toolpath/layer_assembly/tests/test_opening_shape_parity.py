@@ -21,29 +21,29 @@ SCRIPT = os.path.join(os.path.dirname(__file__), 'js', 'opening_shape_cases.js')
 
 def _cases():
     rnd = random.Random(20261010)
-    shapes = [('diamond', u, u) for u in O.UPPERS['diamond']] + \
-             [('arch', u, l) for u in O.UPPERS['arch'] for l in O.LOWERS['arch']]
+    combos = [(u, l) for u in O.UPPERS for l in O.LOWERS]
     arrays = [None, {'arrangement': 'grid', 'cols': 2, 'rows': 2, 'h_spacing': 9, 'v_spacing': 3},
               {'arrangement': 'diagonal_up', 'count': 3, 'h_spacing': 4, 'v_spacing': -6},
               {'arrangement': 'staggered', 'cols': 3, 'rows': 2, 'h_spacing': 7.5, 'v_spacing': 1.3, 'stagger': None}]
     out = []
-    for i in range(160):
-        shape, up, lo = shapes[i % len(shapes)]
+    for i in range(176):
+        up, lo = combos[i % len(combos)]
         lh = rnd.choice([0.5, 1.0, 1.25, 1.5, 1.75])
         h = rnd.choice([0.25, 0.5, 1.0, 1.5])
         bead = rnd.choice([1.0, 2.0, 3.0])
-        s = {'shape': shape, 'upper': up, 'lower': lo, 'width': rnd.choice([6, 12, 18.5, 24, 36, 48]),
-             'height': lh * rnd.randint(4, 40), 'z_bottom': lh * rnd.randint(0, 6) + (0.3 if i % 17 == 0 else 0.0),
-             'array': arrays[i % len(arrays)], 'driver': rnd.choice([None, 'width', 'height', 'upper_height'])}
-        if shape == 'arch':
-            s.update({'bottom_depth': rnd.choice([3.0, 8.5, 12.0, 30.0]) if lo != 'flat' else None,
-                      'upper_height': rnd.choice([4.0, 10.0, 30.0, 52.5]),
-                      'middle': rnd.choice([True, False]), 'middle_height': rnd.choice([0.0, 12.0, 37.5])})
-            O.sync(s)
-        edited = rnd.choice(['width', 'height' if shape == 'diamond' else 'upper_height', 'overhang', 'upper',
-                             'middle_height', 'lower'])
+        s = {'upper': up, 'lower': lo, 'width': rnd.choice([6, 12, 18.5, 24, 36, 48]),
+             'z_bottom': lh * rnd.randint(0, 6) + (0.3 if i % 17 == 0 else 0.0),
+             'bottom_depth': rnd.choice([3.0, 8.5, 12.0, 30.0]) if lo != 'flat' else None,
+             'upper_height': rnd.choice([4.0, 10.0, 30.0, 52.5]), 'middle': rnd.choice([True, False]),
+             'middle_height': rnd.choice([0.0, 12.0, 37.5]),
+             'array': arrays[i % len(arrays)], 'driver': rnd.choice([None, 'width', 'upper_height'])}
+        O.sync(s)
+        edited = rnd.choice(['width', 'upper_height', 'overhang', 'upper', 'middle_height', 'lower'])
         out.append([s, edited, lh, h, bead])
-    # older projects
+    # older projects: diamonds, a Lens, arches (closure-based, ellipse, the former 'curve' lower)
+    for st, W, Hh in (('pointed', 20, 37.5), ('curve', 12, 36), ('pointed', 30, 24)):
+        out.append([{'shape': 'diamond', 'upper': st, 'lower': st, 'width': W, 'height': Hh, 'z_bottom': 6,
+                     'array': None, 'driver': 'height'}, 'load', 1.5, 1.5, 3.0])
     out.append([{'shape': 'lens', 'width': 24, 'height': 56, 'z_bottom': 6, 'array': None}, 'load', 1.5, 1.5, 3.0])
     out.append([{'shape': 'arch', 'lower': 'ellipse', 'upper': 'curve', 'width': 20, 'height': 50, 'z_bottom': 0,
                  'array': None}, 'load', 1.5, 1.5, 3.0])
@@ -51,9 +51,7 @@ def _cases():
                  'closure': 20.0, 'array': None}, 'load', 1.5, 1.5, 3.0])
     out.append([{'shape': 'arch', 'lower': 'curve', 'upper': 'pointed', 'width': 20, 'height': 50, 'z_bottom': 0,
                  'bottom_depth': 7.5, 'upper_height': 30, 'middle': True, 'middle_height': 12.5, 'array': None},
-                'load', 1.5, 1.5, 3.0])                      # the former Curved (half-ellipse) lower
-    out.append([{'shape': 'diamond', 'upper': 'pointed', 'lower': 'curve', 'bottom_depth': 7.0, 'width': 24,
-                 'height': 40, 'z_bottom': 3, 'array': None}, 'load', 1.25, 1.0, 3.0])
+                'load', 1.5, 1.5, 3.0])
     return out
 
 
@@ -67,7 +65,8 @@ def test_ui_and_backend_constrain_identically():
     for (s, edited, lh, h, bead), j in zip(cases, js):
         q, info = O.constrain(s, edited, lh, h, bead)
         tag = (s, edited, lh, h, bead)
-        for k in ('shape', 'upper', 'lower', 'driver', 'middle'):
+        assert 'shape' not in q and 'shape' not in j['q'], tag
+        for k in ('upper', 'lower', 'driver', 'middle'):
             assert q.get(k) == j['q'].get(k), (k, tag)
         for k in ('width', 'height', 'upper_height', 'middle_height', 'bottom_depth'):
             assert close(q.get(k), j['q'].get(k)), (k, q.get(k), j['q'].get(k), tag)
@@ -76,8 +75,8 @@ def test_ui_and_backend_constrain_identically():
         ev = O.evaluate(q, lh, h, bead)
         assert ev['ok'] == j['ev']['ok'] and all(close(ev[k], j['ev'][k]) for k in ('d', 'm', 'U', 'H', 'worst')), tag
         if ev['ok']:
-            ws = O.layer_widths(q['z_bottom'], q['width'], ev['d'], ev['m'], ev['U'], q['shape'], q['upper'],
-                                q['lower'], lh, O.wmin(bead, h))
+            ws = O.layer_widths(q['z_bottom'], q['width'], ev['d'], ev['m'], ev['U'], q['upper'], q['lower'], lh,
+                                O.wmin(bead, h))
             assert [k for k, _ in ws] == [k for k, _ in j['ws']], tag
             assert all(abs(a - b) < 1e-9 for (_, a), (_, b) in zip(ws, j['ws'])), tag
         lim = O.limits(s, lh, h, bead)

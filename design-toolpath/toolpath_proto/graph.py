@@ -660,7 +660,11 @@ def route_layer(
     # same geometry on many layers — are copied once; routing never modifies them)
     raw_comps = G.graph.get('_route_comps')
     if raw_comps is None:
-        raw_comps = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+        cs = list(nx.connected_components(G))
+        # (one component — the print planner routes each physical piece on
+        # its own — IS the graph: its copy would iterate identically, and
+        # routing never modifies a component)
+        raw_comps = [G] if len(cs) == 1 else [G.subgraph(c).copy() for c in cs]
         G.graph['_route_comps'] = raw_comps
     strands = {s.id: s for s in layer.strands}
     origin_nodes = [_pt(o) for o in (origins or [])]

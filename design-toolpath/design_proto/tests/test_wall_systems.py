@@ -233,7 +233,7 @@ def test_ui_wall_system_smoke():
     script = os.path.join(os.path.dirname(__file__), 'js', 'ui_wall_system_smoke.js')
     proc = subprocess.run(['node', script], capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert 'UI WALL SYSTEM SMOKE PASSED' in proc.stdout
+    assert 'UI WALL GROUP SMOKE PASSED' in proc.stdout
 
 
 # --- correction pass (2026-10-07): corners, chain ∞∞∞ --------------------------------------

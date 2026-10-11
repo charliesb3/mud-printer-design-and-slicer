@@ -18,6 +18,20 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 from layer_assembly.designer_source import DesignerSource
 from layer_assembly.model import Assembly, Section, SectionTransform, TransformCenter, Footprint, resolve
+
+
+# (written for the 1.5 in default Maximum Overhang — since 2026-10-11 the
+# default is 1 in: these cases state the 1.5 in they were designed with)
+_Assembly = Assembly
+
+
+def Assembly(*a, **k):          # noqa: F811
+    if len(a) < 9:
+        k.setdefault('max_overhang', 1.5)
+    return _Assembly(*a, **k)
+
+
+Assembly.from_dict = _Assembly.from_dict
 from layer_assembly.profiles import OpeningProfile, WallRef, WallTarget, taper, apply_profiles
 from layer_assembly import opening_shape as OS
 from layer_assembly.source import stack_geometry, bbox_of
@@ -370,10 +384,12 @@ def test_printed_diamond_closure_obeys_maximum_overhang(system, params, lh, zb, 
     hole; a closed layer's edge is the opening's centre)."""
     src = DesignerSource.from_designs(designs(line_doc(system, params, length=160.0)))
     # (too steep as typed: the UI's constraints keep the width and raise the
-    # height — 2026-10-10 — and the PRINTED result of that shape is checked)
+    # UPPER height — 2026-10-10 — and the PRINTED result of that shape is checked)
     s, _ = OS.constrain({'shape': 'diamond', 'upper': 'pointed', 'lower': 'pointed', 'width': width, 'height': height,
                          'z_bottom': zb, 'array': None}, 'width', lh, 1.5, 3.0)
-    a = Assembly(lh, [Section('A', 72)], profiles=[OpeningProfile('P', WallRef('L'), 80, zb, s['height'], width)])
+    a = Assembly(lh, [Section('A', 72)], profiles=[OpeningProfile(
+        'P', WallRef('L'), 80, zb, s['height'], width, upper=s['upper'], lower=s['lower'], middle=s['middle'],
+        middle_height=s['middle_height'], upper_height=s['upper_height'], bottom_depth=s['bottom_depth'])])
     res, rep, geo = stack(src, a)
     assert rep[0].valid, rep[0].errors
     h = a.max_overhang
@@ -472,7 +488,7 @@ def test_invalid_profile_leaves_the_wall_solid():
     steep = Assembly(1.5, [Section('A', 72)], profiles=[OpeningProfile('P', WallRef('L'), 60, 6, 24, 36)])
     res, rep, geo = stack(src, steep)
     assert not rep[0].valid and 'not self-supporting' in rep[0].errors[0] and set(geo) == {'A'}
-    assert rep[0].hint['min_height'] > 24 and rep[0].hint['max_width'] < 36
+    assert rep[0].hint['field'] == 'upper_height' and rep[0].hint['min_height'] > 12 and rep[0].hint['max_width'] < 36
     assert not [f for f in analyse_support(res, geo, steep).findings if f.status == 'needs_header']
 
 
@@ -515,7 +531,7 @@ def test_opening_layers_are_real_separated_capped_pieces(system, params):
     from app import app
     c = app.test_client()
     ds = designs(line_doc(system, params))
-    body = {'assembly': {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 72}],
+    body = {'assembly': {'layer_height': 1.5, 'max_overhang': 1.5, 'sections': [{'design_id': 'A', 'height': 72}],
                          'profiles': [OpeningProfile('P', WallRef('L'), 60, 6, 48, 24).to_dict()]},
             'design_ids': ['A'], 'designs': ds}
     out = c.post('/api/assembly/resolve', json=body).get_json()
@@ -805,7 +821,7 @@ def test_resolve_endpoint_reports_profiles_and_cut_variants():
     ds = designs(line_doc('parallel', {'walls': 4}))
     prof = [OpeningProfile('P', WallRef('L'), 60, 6, 48, 18, 'lens').to_dict(),
             taper('T', WallRef('L'), 'start', 120, 60, 90, 72).to_dict()]
-    body = {'assembly': {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 72}], 'profiles': prof},
+    body = {'assembly': {'layer_height': 1.5, 'max_overhang': 1.5, 'sections': [{'design_id': 'A', 'height': 72}], 'profiles': prof},
             'design_ids': ['A'], 'designs': ds}
     out = c.post('/api/assembly/resolve', json=body).get_json()
     assert 'error' not in out, out

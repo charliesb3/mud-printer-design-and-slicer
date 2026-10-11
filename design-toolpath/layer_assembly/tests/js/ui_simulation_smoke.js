@@ -47,7 +47,7 @@ const calls = [];
 // fetchHook(url, body): may delay a request (await) or answer it itself (return a fake response)
 let fetchHook = null;
 global.fetch = async (url, opts) => { let body = {}; try { body = JSON.parse(opts.body) || {}; } catch (e) {}
-  calls.push({ url, detail: body.detail || null, job: body.job, rebuild: !!body.rebuild });
+  calls.push({ url, detail: body.detail || null, job: body.job, rebuild: !!body.rebuild, envelope: !!body.envelope });
   if (fetchHook) { const r = await fetchHook(url, body); if (r) return r; }
   return realFetch(BASE + url, opts); };
 global.console.warn = () => {};
@@ -61,6 +61,7 @@ let src = fs.readFileSync(path.join(STATIC, 'app.js'), 'utf8');
 src = src.replace(/\ninit\(\);\s*$/, '\n') + '\ncanvas.width = 800; canvas.height = 800;\n';
 src += '\n' + fs.readFileSync(path.join(STATIC, 'opening_shape.js'), 'utf8');
 src += '\n' + fs.readFileSync(path.join(STATIC, 'assembly.js'), 'utf8');
+src += '\n' + fs.readFileSync(path.join(STATIC, 'wallsystems.js'), 'utf8');
 src += '\n' + fs.readFileSync(path.join(STATIC, 'simulation.js'), 'utf8');
 eval(src + `
 function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex((k, i) => k === SIM_KIND.TRANSITION && D.z1[i] > D.z0[i]); }
@@ -97,7 +98,7 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   // ---- a project: a Hollow rectangle (Wall System) + a separate circle (another run: travel); Base + a derived design ----
   addPrimitive('RectanglePath');
   const R = layer.source_paths[0];
-  _wsSetType(_wsNew([R.id]), 'hollow');
+  _wgNew([R.id]);                                      // a 10 in Wall Group (Hollow)
   addPrimitive('CirclePath');
   const Cp = layer.source_paths[1]; Cp.cx = 420; Cp.cy = 200; _computePrimitivePoints(Cp);
   layer.material.physical = true;
@@ -112,8 +113,24 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   check(currentWorkspace === 'simulation' && el('ws-simulation').style.display === '' && el('ws-assembly').style.display === 'none',
         'Print Simulation shown, the other workspaces hidden');
   await simShow();
+  check(!sim.data && plans() === 0 && /No print plan yet/.test(txt('sim-status')) &&
+        el('sim-generate').textContent === 'Plan Print' && html.includes('id="sim-generate"'),
+        'showing the Simulation plans nothing — "Plan Print" is offered');
+  await simGenerate();
+  check(!sim.data && plans() === 0 && sim.wsBlocked === 'not_generated' && /NOT GENERATED/.test(txt('sim-status')) &&
+        /Go to Wall Systems/.test(txt('sim-status')),
+        'WALL SYSTEMS: the print is planned only from generated Wall Systems — NOT GENERATED sends the user to that workspace');
+  check(html.indexOf('ws-tab-wallsystems') > html.indexOf('ws-tab-assembly') &&
+        html.indexOf('ws-tab-wallsystems') < html.indexOf('ws-tab-simulation'),
+        'workspace order: Designer → Assembly → Wall Systems → Print Simulation');
+  await wsysGenerate();
+  check(wsysStatus() === 'current' && wsys.gen.layers.length === 7, 'Generate Wall Systems: every layer generated (CURRENT)');
+  await simGenerate();
   const D = sim.data;
-  check(D && plans('stream') === 1, 'the plan is fetched once as the compact stream (/api/assembly/print_plan)');
+  check(D && plans('stream') === 1 && !sim.wsBlocked,
+        'Plan Print: the plan of the CURRENT generated geometry, fetched once as the compact stream (/api/assembly/print_plan)');
+  check(D.res.support && D.res.support.level === 'bead' && /Bead-level support [(]final[)]/.test(txt('sim-status')) && !simOutdated(),
+        'the FINAL bead-level support check comes with the prepared print paths (current)');
   check(D.res.plan.layers.length === 7 && D.res.sections.length === 2 && D.res.plan.layers[6].design_id === d1,
         '7 layers in 2 sections (Base, the derived design) — the resolved stack');
   check(Math.abs(D.total - D.res.estimate.total_time) < 1e-3, 'the playback clock ends at the planner estimate (same timing rule)');
@@ -208,8 +225,8 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   check(/Layer 3/.test(lay) && /printing/.test(lay) && /travel/.test(lay) && /Estimated/.test(lay) &&
         El.runs.length === D.res.plan.layers[2].runs && El.runs.length >= 2 && Math.abs(El.total_time - (lb - la)) < 1e-3 && /printed in 3 passes: A, B, C/.test(lay), 'layer info: distances, passes per island, duration = the layer\\'s clock');
   const runsTxt = txt('sim-runs');
-  check(/Run 1/.test(runsTxt) && /Run 2/.test(runsTxt) && /Rect 1/.test(runsTxt) && /Circle 1/.test(runsTxt) && /Wall System 1/.test(runsTxt),
-        'per-run durations with their SOURCE paths and Wall System');
+  check(/Run 1/.test(runsTxt) && /Run 2/.test(runsTxt) && /Rect 1/.test(runsTxt) && /Circle 1/.test(runsTxt) && /Wall Group 1/.test(runsTxt),
+        'per-run durations with their SOURCE paths and wall construction (a group with no Wall System: its own, Hollow)');
   simStepLayer(1);
   check(sim.selLayer === 3 && sim.mode === 'top', 'next layer');
   simStepLayer(-1); simStepLayer(-1);
@@ -251,6 +268,9 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   await asmUndo();
   check(asm.state.machine.max_z_travel !== 5 && asm.state.machine.lift_height === 6, 'lift settings are Assembly undo steps');
   await simShow();
+  check(simOutdated() && /OUTDATED/.test(txt('sim-status')) && el('sim-generate').textContent === 'Plan Print Again',
+        'an Assembly undo leaves the prepared paths OUTDATED — labelled, never re-planned behind the user');
+  await wsysGenerate(); await simGenerate();
   const D2 = sim.data, F = D2.frames;
   check(D2.res.plan.lifts.length === 2 && F.length === 1 && D2.res.plan.lifts[1].first_layer === 4 &&
         Array.from(D2.lift).slice(F[0] + 1).every(l => l === 1) && Array.from(D2.layer).slice(F[0] + 1).every(L => L >= 4),
@@ -282,17 +302,29 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   check(plans('times') === nt0 + 1 && plans('stream') === n0 && Math.abs(sim.data.total - sim.data.res.estimate.total_time) < 1e-3 &&
         asm.state.print_speeds.print === 4, 'a speed edit re-times the same plan (no re-routing)');
   setWorkspace('assembly');
+  const nr = calls.filter(c => c.url === '/api/assembly/resolve').length;
   await asmSetLayerHeight(1.0);
+  check(calls.filter(c => c.url === '/api/assembly/resolve').slice(nr).every(c => c.envelope) && plans('stream') === n0 &&
+        asm.resolved.geometry === 'envelope' && asm.resolved.support.level === 'envelope',
+        'Assembly editing resolves ARCHITECTURAL ENVELOPES (preliminary support) — no print plan');
+  check(/Architectural support [(]preliminary[)]/.test(txt('asm-support-summary')) && /Bead-level support [(]outdated print paths[)]/.test(txt('asm-support-summary')),
+        'the Assembly says its support is preliminary and that the prepared paths are outdated');
   setWorkspace('simulation');
   await simShow();
-  check(plans('stream') === n0 + 1 && sim.data.res.plan.layers.length === 11, 'an Assembly change (layer height) → a new plan (11 layers)');
+  check(plans('stream') === n0 && simOutdated() && sim.data.res.plan.layers.length === 7 && /OUTDATED/.test(txt('sim-status')),
+        'an Assembly change (layer height) → the shown paths are OUTDATED (labelled), nothing planned');
+  await wsysGenerate(); await simGenerate();
+  check(plans('stream') === n0 + 1 && sim.data.res.plan.layers.length === 11 && !simOutdated(),
+        'Generate Wall Systems + Plan Print → the new plan (11 layers), current');
   setWorkspace('designer');
   await editDesign('base');
   addPrimitive('LinePath'); historyCheckpoint();
   setWorkspace('simulation');
   await simShow();
+  check(plans('stream') === n0 + 1 && simOutdated(), 'a Designer change → outdated, nothing planned');
+  await wsysGenerate(); await simGenerate();
   check(plans('stream') === n0 + 2 && Array.from(sim.data.source).some(i => i >= 0 && sim.data.strings[i] === layer.source_paths[2].id),
-        'a Designer change (a new wall) → a new plan that prints it');
+        'regenerated: a new plan that prints the new wall');
 
   // ---- RELIABILITY (2026-10-09): the plan lifecycle never sticks, never shows a stale plan ----
   const sleep = ms => new Promise(r => realSetTimeout(r, ms));
@@ -305,11 +337,12 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   // a superseded answer never overwrites the newer one
   let g = gateNext();
   await asmSetLayerHeight(2.0);
-  const pA = simRefresh();
+  await wsysGenerate();
+  const pA = simGenerate();
   await g.sent;
-  check(sim.loading && sim.data.res.plan.layers.length === 11, 'while a new plan is built the last one stays shown ("Planning…")');
+  check(sim.loading && sim.data.res.plan.layers.length === 11, 'while a new plan is built the last one stays shown ("Generating…")');
   await asmSetLayerHeight(1.5);
-  await simRefresh();
+  await wsysGenerate(); await simGenerate();
   check(sim.data.res.plan.layers.length === 7 && !sim.loading, 'a newer change plans at once (7 layers)');
   g.open(); await pA;
   check(sim.data.res.plan.layers.length === 7 && !sim.loading && sim.key === (await _simKeys()).key,
@@ -317,7 +350,8 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   // back to the state already shown while a request is in flight: dropped, not left "Planning…"
   g = gateNext();
   await asmSetLayerHeight(2.0);
-  const pB = simRefresh();
+  await wsysGenerate();
+  const pB = simGenerate();
   await g.sent;
   const c0 = cancels();
   await asmSetLayerHeight(1.5);
@@ -326,35 +360,46 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
         'returning to the shown state: the in-flight plan is cancelled, the status clears');
   g.open(); await pB;
   check(sim.data.res.plan.layers.length === 7 && !sim.loading, '… and its late answer changes nothing');
-  // leaving the Simulation: playback stops, the background plan is cancelled, Assembly editing is free
+  // leaving the Simulation: playback stops; a PRINT PREPARATION in progress
+  // continues in the background while the Assembly is edited
   simTogglePlay();
   check(sim.playing, 'playing');
   setWorkspace('assembly');
   check(!sim.playing, 'leaving the Simulation stops playback (no frames while hidden)');
-  g = gateNext();
   await asmSetLayerHeight(2.0);
-  setWorkspace('simulation');                      // (the show hook asks for the plan)
+  const ns0 = plans('stream');
+  setWorkspace('simulation');
+  await simShow();
+  check(plans('stream') === ns0 && simOutdated(), 'showing the Simulation after an edit plans nothing (outdated)');
+  await wsysGenerate();
+  g = gateNext();
+  const pC = simGenerate();
   await g.sent;
   const c1 = cancels();
   setWorkspace('assembly');
-  check(!sim.loading && cancels() === c1 + 1, 'leaving while planning cancels the job on the server; no stuck state');
+  check(sim.loading && cancels() === c1, 'leaving while generating does NOT cancel the print preparation');
   const t0r = Date.now();
   await asmSetLayerHeight(1.0);
-  check(asm.resolved && asm.resolved.instances.length === 11 && Date.now() - t0r < 20000, 'Assembly edits resolve normally meanwhile');
-  g.open(); await sleep(50);
+  check(asm.resolved && asm.resolved.instances.length === 11 && Date.now() - t0r < 20000 && sim.loading,
+        'Assembly edits resolve (envelopes) while the preparation runs');
+  g.open(); await pC;
+  check(!sim.loading && sim.data.res.plan.layers.length === 5 && simOutdated(),
+        'the preparation finishes in the background; made for the earlier state, it is shown OUTDATED');
   setWorkspace('simulation');
   await simShow();
-  check(sim.data.res.plan.layers.length === 11 && !sim.loading, 'reopened: rebuilt automatically for the current Assembly');
-  // a plan cancelled by the server (an Assembly request preempted it) while shown: asked again
+  check(simOutdated() && sim.data.res.plan.layers.length === 5, 'reopened: still the outdated paths, labelled');
+  await wsysGenerate(); await simGenerate();
+  check(sim.data.res.plan.layers.length === 11 && !sim.loading && !simOutdated(), 'regenerated for the current Assembly');
+  // a plan cancelled by the server (a full-geometry request preempted it): asked again
   await asmSetLayerHeight(1.5);
   let fakeCancel = true;
   fetchHook = (url, body) => (url === '/api/assembly/print_plan' && body.detail === 'stream' && fakeCancel)
     ? (fakeCancel = false, { json: async () => ({ error: 'print plan cancelled', cancelled: true }) }) : null;
   const ns = plans('stream');
-  await simRefresh();
+  await wsysGenerate(); await simGenerate();
   fetchHook = null;
   check(plans('stream') === ns + 2 && sim.data.res.plan.layers.length === 7 && !sim.loading && !sim.error,
-        'a server-cancelled plan is requested again while the Simulation is shown');
+        'a server-cancelled print preparation is requested again');
   // REBUILD: plans again from scratch, keeps camera / mode / layer / playhead
   simSelectLayer(3); simTopView();
   const [ra3, rb3] = simLayerRange(3);
@@ -393,7 +438,7 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   const saves = calls.filter(c => c.url.startsWith('/api/project/')).length;
   setWorkspace('simulation');
   check(newProject() === true && asked === 2, 'confirmed');
-  check(layer.source_paths.length === 0 && layer.wall_systems.length === 0 && layer.openings.length === 0 &&
+  check(layer.source_paths.length === 0 && !(layer.wall_groups || []).length && !project.wall_systems.length && layer.openings.length === 0 &&
         project.designs.length === 1 && project.active === 'base' && !project.name &&
         JSON.stringify(layer.material) === JSON.stringify(JSON.parse(_PRISTINE_LAYER).material),
         'a clean empty Base design (no derived designs, Wall Systems, sources; default material)');

@@ -2,9 +2,14 @@
 // values shown (auto resolved, so spinners step from the generated value),
 // each control edited alone, LAST-EDITED-WINS for the dependent controls
 // (Pitch ↔ Loop Width ↔ Neck, Loop Depth ≤ the envelope, Wall Thickness),
-// edit sequences, rapid edits (one follow-up, the in-flight resolve aborted),
-// stale-response prevention, geometry first then the route (same payload,
-// increasing resolve sequence numbers).
+// edit sequences. Since 2026-10-11 the parameter rows live in the Wall
+// Systems workspace (`_addWallSystemParams(panel, s, {onParam, thickness})`:
+// the thickness is the Wall Group's, an edit generates nothing — see
+// layer_assembly/tests/js/ui_wallsystems_smoke.js). The request part now
+// drives a Wall Group THICKNESS edit in the Designer's full preview: rapid
+// edits (one follow-up, the in-flight resolve aborted), stale-response
+// prevention, geometry first then the route (same payload, increasing resolve
+// sequence numbers).
 // Run via tests/test_chain_params.py (or: node tests/js/ui_chain_params_smoke.js).
 const fs = require('fs');
 const path = require('path');
@@ -36,7 +41,7 @@ global.document = {
     querySelector: () => ({ disabled: false }), set lastChild(v) {}, get lastChild() { return this.children[this.children.length - 1]; } }),
   addEventListener() {}, body: {}, activeElement: null,
 };
-global.window = { addEventListener() {}, devicePixelRatio: 1 };
+global.window = { DESIGNER_PRINT_PREVIEW: true, addEventListener() {}, devicePixelRatio: 1 };
 global.requestAnimationFrame = () => 0; global.cancelAnimationFrame = () => {};
 global.fetch = async () => ({ json: async () => ([]) });
 let src = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'app.js'), 'utf8');
@@ -50,12 +55,12 @@ eval(src + `
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   addPrimitive('RectanglePath');
   const A = layer.source_paths[0];
-  const S = { id: 'WS1', name: 'Loops', type: 'chain', thickness: 10, align: 'center', params: {}, members: [A.id],
+  // (a project Wall System; its Wall Group gives the 10 in thickness)
+  const S = { id: 'S1', name: 'Loops', type: 'chain', thickness: 10, params: {}, members: [], groups: [],
               web: { pattern: 'none', params: {} } };
-  layer.wall_systems = [S];
   layer.material = { ...(layer.material || {}), bead_width: 3 };
-  const panel = document.getElementById('wallsys-props');
-  const show = () => { panel.children.length = 0; _addWallSystemParams(panel, S); };
+  const panel = document.getElementById('wsys-props');
+  const show = () => { panel.children.length = 0; _addWallSystemParams(panel, S, { onParam: () => {}, thickness: S.thickness }); };
   const inp = l => row(panel, l).children[1];
   const unit = l => row(panel, l).children[2].textContent;
   const val = l => +inp(l).value;
@@ -132,7 +137,12 @@ eval(src + `
           WALL_SYSTEMS.chain.params.every(q => near(val(q.label), +(+(q.name === 'phase' ? e2.phase : e2[q.name])).toFixed(3), 2e-3)),
           'sequence ' + l + ' = ' + v + ': stored values consistent, every field shows the generated value');
   }
-  // --- requests: rapid edits, abort, stale drop, geometry first --------------------------------
+  // --- requests (Designer full preview): a Wall Group THICKNESS edit ------------------------
+  const G = _wgNew([A.id], 10);
+  project.wall_systems = [{ ...S, groups: [G.id] }];
+  updateWallGroupSection();
+  const gpanel = document.getElementById('wallgrp-props');
+  const thick = v => { const r = row(gpanel, 'Wall Thickness').children[1]; r.value = String(v); r.onchange(); };
   const calls = [];
   let pending = [];
   global.fetch = (url, opts) => new Promise((res, rej) => {
@@ -146,29 +156,27 @@ eval(src + `
                       metrics: { print_runs: 1, travel_moves: 0, travel_distance: 0, pct_printing: 100, print_distance: 1, retrace_distance: 0 },
                       closure: { physical: true, closed: 1, components: 1, open: [] } };
   showToolpath = true; routeResult = { moves: [] };
-  edit('Pitch', 20);
-  check(routeResult === null && _geomPending && /Updating/.test(document.getElementById('status-bar').textContent),
-        'an edit is acknowledged at once (Updating…, the old toolpath cleared, the old geometry dimmed)');
+  thick(11);
+  check(routeResult === null && G.thickness === 11, 'a thickness edit clears the old toolpath at once');
   await sleep(330);
-  check(calls.length === 1 && calls[0].url === '/api/effective_paths', 'geometry first (Wall System, toolpath shown)');
-  // rapid edits while it resolves: the in-flight request is ABORTED, ONE follow-up
-  for (const v of [21, 22, 23, 24]) { edit('Pitch', v); await sleep(40); }
+  check(calls.length === 1 && calls[0].url === '/api/effective_paths', 'geometry first (walls, toolpath shown)');
+  check(JSON.parse(calls[0].body).project_wall_systems[0].type === 'chain' && !JSON.parse(calls[0].body).envelope,
+        'the full preview sends the project Wall Systems (the Designer itself shows envelopes)');
+  for (const v of [12, 13, 14, 15]) { thick(v); await sleep(40); }
   await sleep(330);
-  check(calls[0].aborted, 'a newer parameter edit aborts the resolve in flight');
-  check(calls.length === 2 && JSON.parse(calls[1].body).wall_systems[0].params.pitch === 24,
+  check(calls[0].aborted, 'a newer edit aborts the resolve in flight');
+  check(calls.length === 2 && JSON.parse(calls[1].body).wall_groups[0].thickness === 15,
         'rapid edits: ONE follow-up resolve, with the latest value');
   check(calls[1].seq > calls[0].seq && calls[1].ch === calls[0].ch, 'resolve requests carry the page channel and increasing sequence numbers');
   pending[1](geom); await sleep(10);
   check(calls.length === 3 && calls[2].url === '/api/route' && calls[2].body === calls[1].body,
         'then the route, with the identical payload (the server reuses the geometry)');
   check(!_geomPending, 'the new geometry is drawn undimmed while the route resolves');
-  // a stale response never lands: a newer edit queued while the route resolves
-  edit('Pitch', 25); await sleep(330);
+  thick(16); await sleep(330);
   check(calls[2].aborted && routeResult === null, 'the superseded route is aborted, never drawn');
   pending[3](geom); await sleep(10);
   pending[4]({ superseded: true }); await sleep(10);
   check(routeResult === null, 'a 409 "superseded" answer is ignored');
-  // without a parameter edit (non-supersede refresh) the in-flight request is NOT aborted
   calls.length = 0; pending = [];
   routeResult = { moves: [] };
   scheduleRefresh(); await sleep(330);

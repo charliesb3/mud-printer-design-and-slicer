@@ -1,75 +1,74 @@
 """
-SELF-SUPPORTING OPENING SHAPES and their DIMENSIONAL CONSTRAINTS
-(revised 2026-10-10, second pass: component Arch, vesica Diamond, Header).
+SELF-SUPPORTING OPENINGS — ONE configurable opening and its DIMENSIONAL
+CONSTRAINTS (revised 2026-10-10, third pass: the Diamond / Arch distinction
+removed — both diamonds are configurations of the one opening).
 
 Pure math, mirrored line for line by design_proto/static/opening_shape.js:
 the UI CONSTRAINS an opening while it is edited (the stored parameters are
 always the printable ones), profiles.py resolves and VALIDATES exactly the
 same numbers. tests/test_opening_shape_parity.py runs both implementations.
 
-SHAPES
-  diamond — width W, height H, ONE style (`upper`; `lower` mirrors it):
-            'pointed' (Angular: four straight sides, widest at H / 2) |
-            'curve'   (Curved: a vesica / mandorla — two circular arcs whose
-                       centres lie on the mid-height line, sharp top and
-                       bottom points). Its upper half is the closure.
-  arch    — three independent components, bottom to top:
-            LOWER  `lower` 'flat' | 'pointed' | 'arc' (UI "Curved": the
-                   lower half of a vesica — two circular arcs centred on
-                   its top line, vertical where they meet the sides, a
-                   SHARP bottom point; needs depth > W / 2) | 'round' (UI
-                   "Rounded": half ellipse,
-                   horizontal at the bottom, vertical at its top; depth
-                   W / 2 = a true semicircle), depth `bottom_depth`
-            MIDDLE optional rectangle: `middle` on / off, `middle_height`
-            UPPER  `upper` 'pointed' (two straight sides to a sharp point) |
-                   'curve' (Gothic: two circular arcs centred on the spring
-                   line — vertical where they meet the middle, sharp apex) |
-                   'header' (flat top carried by a physical HEADER: no
-                   closure, no overhang constraint), height `upper_height`
-            Total height H = lower depth + middle + upper height (derived;
-            stored in `height` for arrays / Z ranges).
+THE OPENING — three independent components, bottom to top:
+  LOWER  `lower`, depth `bottom_depth`:
+           'flat'    sill / a door at Z 0 (no depth)
+           'pointed' Angular: straight sides to a sharp bottom point
+           'arc'     Curved: two circular arcs centred on its top line —
+                     vertical where they meet the sides, a SHARP bottom
+                     point (the lower half of a vesica); only pointed when
+                     deeper than W / 2
+           'round'   Rounded: half ellipse, horizontal at the bottom
+                     (depth W / 2 = a true semicircle)
+  MIDDLE optional rectangle: `middle` on / off, `middle_height` (kept while off)
+  UPPER  `upper`, height `upper_height`:
+           'pointed' Angular: two straight sides to a sharp apex
+           'curve'   Curved: Gothic — two circular arcs centred on the spring
+                     line, vertical at the middle, sharp apex (U > W / 2)
+           'header'  flat top carried by a physical HEADER (profiles.py
+                     generates it): no closure, no overhang constraint
+  Total height H = lower depth + middle + upper height (derived; stored in
+  `height` for arrays / Z ranges).
+  Angular upper + Angular lower, no middle = the angular DIAMOND; Curved
+  upper + Curved lower of equal heights, no middle = the curved diamond
+  (vesica). Older Diamond / Lens / Arch openings are MIGRATED (`migrate`,
+  `fill`).
 
 LAYERS: one global layer height lh (model.py), layer k = [k·lh, (k+1)·lh]; a
 layer's cut is the shape's width at its MID-HEIGHT; a layer the shape crosses
 more narrowly than w_min is cut w_min wide (never dropped).
 
-Z DIMENSIONS (height, upper height, middle height, lower depth) are WHOLE
-LAYERS (the Assembly convention: Z values snap to the layer height — so with
-the bottom on a layer every boundary of the shape is one, the spring phase
-never changes and the components are independent: a middle / lower / bottom
-edit never changes what the upper needs; and the closing layer always
-starts on a boundary). Widths: 1/16 in.
+Z DIMENSIONS: the UI keeps what the user types / drags on WHOLE LAYERS (the
+Assembly convention — with the bottom on a layer every boundary of the shape
+is one, so a middle / lower / bottom edit never changes what the upper
+needs), and the searches below step whole layers; the solver itself never
+re-snaps stored values (a migrated diamond of an odd number of layers keeps
+its half-layer spring, i.e. its geometry). Widths: 1/16 in.
 
-PRINTABLE ⇔ the UPPER closure (diamond: its upper half) narrows each side by
-≤ h (Maximum overhang, ≤ the bead) from layer to layer, the final closure to
-a full layer included — on the ACTUAL layers of every opening (an array's
-distinct layer phases each). The lower profile only widens upward: not a
-closure.
+PRINTABLE ⇔ the UPPER narrows each side by ≤ h (Maximum overhang, ≤ the
+bead) from layer to layer, the final closure to a full layer included — on
+the ACTUAL layers of every opening (an array's distinct layer phases each).
+The lower profile only widens upward: not a closure.
 
 PRECEDENCE (`constrain`): the dimension edited LAST wins.
-  diamond height / arch upper height → keep it; W shrinks to the widest
-                                       printable width (1/16 in)
-  width                              → keep it; the height (diamond) / upper
-                                       height (arch) rises to the first
-                                       printable value (whole layers)
-  anything else (style, lower, middle, overhang, layer height, bead width,
-  array, load)                       → the profile's DRIVER (its last edited
-                                       of the two; default width) decides
-Nothing else changes (position, bottom Z, lower depth, middle, arrays). A
-conflict no dimension can resolve is REPORTED, never hidden.
+  upper height → keep it; W shrinks to the widest printable width (1/16 in)
+  width        → keep it; the upper height rises to the first printable
+                 value (whole layers); a Curved lower too shallow to stay
+                 pointed is deepened
+  anything else (profiles, middle, lower depth, overhang, layer height, bead
+  width, array, load) → the profile's DRIVER (its last edited of the two;
+  default width) decides
+Nothing else changes (position, bottom Z, middle, arrays). A conflict no
+dimension can resolve is REPORTED, never hidden.
 """
 from __future__ import annotations
 
 import math
 
 EPS = 1e-9
-Q = 16.0                       # dimensions: 1/16 in
+Q = 16.0                       # widths: 1/16 in
 MIN_OPENING_BEADS = 0.25       # the smallest cut (a sliver is cut this wide; ≤ 2 h)
 MAX_DIM = 4000.0               # search bound (in)
-SHAPES = ('diamond', 'arch')
-UPPERS = {'diamond': ('pointed', 'curve'), 'arch': ('pointed', 'curve', 'header')}
-LOWERS = {'diamond': ('pointed', 'curve'), 'arch': ('flat', 'pointed', 'arc', 'round')}
+UPPERS = ('pointed', 'curve', 'header')
+LOWERS = ('flat', 'pointed', 'arc', 'round')
 HEADER_DEFAULTS = {'bearing': 8.0, 'depth': None, 'thickness': 6.0}   # depth None: wall thickness + 1 bead
 
 
@@ -91,10 +90,8 @@ def zsnap(x, lh, least=0.0):
 
 
 def snap_z(s, lh):
-    """The shape's Z dimensions → whole layers (in place)."""
-    if s['shape'] == 'diamond':
-        s['height'] = zsnap(s.get('height') or 0.0, lh, lh)
-        return
+    """The opening's Z dimensions → whole layers (in place) — a layer-height
+    change (the UI), never the solver."""
     if s.get('upper_height') is not None and s['upper'] != 'header':
         s['upper_height'] = zsnap(s['upper_height'], lh, lh)
     if s.get('middle_height') is not None:
@@ -121,7 +118,7 @@ def upper_half(upper, W, U, u):
 
 
 def lower_half(lower, W, d, t):
-    """Half width of an arch's LOWER profile (depth d) at t above its bottom."""
+    """Half width of the LOWER profile (depth d) at t above its bottom."""
     if lower == 'flat' or d <= 0.0 or t >= d:
         return 0.5 * W
     if lower == 'arc':                        # the vesica's lower half: sharp bottom point
@@ -133,36 +130,39 @@ def lower_half(lower, W, d, t):
 
 
 def migrate(s):
-    """A shape dict of an older project → the current shapes (in place;
-    True = changed). Context-free; an older ARCH (closure-based) also needs
-    `fill` (its upper height = its closure, the rest of its height = middle).
-      Lens                  → Diamond, Curved
-      Diamond upper / lower → Diamond in its UPPER's style (the closure)
-      Arch lower semicircle → Rounded, depth W / 2; ellipse → Rounded, its depth
-      Arch lower 'curve'    → Rounded (the half ellipse was called Curved until
-                              the sharp-pointed Curved lower, 'arc', 2026-10-10)
-      Arch closure          → upper height (None: the minimum, see `fill`)"""
+    """A shape dict of an older project → the one opening (in place; True =
+    changed). Context-free; an older closure-based ARCH also needs `fill`.
+      Diamond (H, style)    → upper = lower = its style (Curved: upper 'curve'
+                              + lower 'arc'), no middle, upper height = lower
+                              depth = H / 2 — the identical shape
+      Lens                  → the curved diamond (the closest; the Lens's own
+                              cos / sine flanks no longer exist — since the
+                              2026-10-10 first pass)
+      Arch                  → its components; lower 'curve' (the half ellipse
+                              until the sharp Curved lower) / semicircle /
+                              ellipse → 'round'; `closure` → upper height
+      `shape` is dropped."""
     ch = False
-    if s.get('shape') == 'lens':
-        s['shape'], s['upper'], s['lower'] = 'diamond', 'curve', 'curve'
+    shape = s.get('shape')
+    if 'shape' in s:
+        del s['shape']
         ch = True
-    shape = s.get('shape') or 'diamond'
     if not s.get('upper'):
         s['upper'] = 'pointed'
         ch = True
-    if shape == 'diamond':
-        if s.get('lower') != s['upper'] and s['upper'] in LOWERS['diamond']:
-            s['lower'] = s['upper']
-            ch = True
-        for k in ('bottom_depth', 'closure', 'upper_height', 'middle_height'):
-            if s.get(k) is not None:
-                s[k] = None
-                ch = True
-        if s.get('middle'):
-            s['middle'] = False
-            ch = True
-        return ch
     W = float(s.get('width') or 0.0)
+    if shape in ('diamond', 'lens') or (shape is None and s.get('middle') is None and s.get('upper_height') is None
+                                        and s.get('upper') != 'header'):
+        H = float(s.get('height') or 0.0)
+        style = 'curve' if shape == 'lens' or s['upper'] == 'curve' else 'pointed'
+        s['upper'], s['lower'] = style, 'arc' if style == 'curve' else 'pointed'
+        s['bottom_depth'] = s['upper_height'] = _clean(0.5 * H)
+        s['middle'], s['middle_height'] = False, None
+        if 'closure' in s:
+            del s['closure']
+        if s.get('driver') == 'height':
+            s['driver'] = 'upper_height'
+        return True
     if s.get('lower') == 'curve':
         s['lower'], ch = 'round', True
     if s.get('lower') == 'semicircle':
@@ -185,18 +185,16 @@ def migrate(s):
     if s.get('closure') is not None:              # an older explicit closure = the upper height
         if s.get('upper_height') is None:
             s['upper_height'] = float(s['closure'])
-        s['closure'] = None
         ch = True
     if 'closure' in s:
         del s['closure']
+    if s.get('driver') == 'height':
+        s['driver'], ch = 'upper_height', True
     return ch
 
 
 def parts(s):
     """(d, m, U, H): lower depth, middle height, upper height, total."""
-    if s['shape'] == 'diamond':
-        H = float(s['height'])
-        return 0.5 * H, 0.0, 0.5 * H, H
     d = 0.0 if s['lower'] == 'flat' else max(0.0, float(s.get('bottom_depth') or 0.0))
     m = max(0.0, float(s.get('middle_height') or 0.0)) if s.get('middle') else 0.0
     U = 0.0 if s['upper'] == 'header' else max(0.0, float(s.get('upper_height') or 0.0))
@@ -204,13 +202,12 @@ def parts(s):
 
 
 def sync(s):
-    """An arch's stored total height = its components."""
-    if s['shape'] == 'arch':
-        s['height'] = _clean(parts(s)[3])
+    """The stored total height = the components."""
+    s['height'] = _clean(parts(s)[3])
 
 
-def width_at(t, W, d, m, U, shape, upper, lower):
-    """The shape's width at t inches above its bottom (continuous)."""
+def width_at(t, W, d, m, U, upper, lower):
+    """The opening's width at t inches above its bottom (continuous)."""
     H = d + m + U
     if t < 0.0 or t >= H:
         return 0.0
@@ -218,13 +215,11 @@ def width_at(t, W, d, m, U, shape, upper, lower):
     if t >= sp:
         return 2.0 * upper_half(upper, W, U, t - sp)
     if t < d:
-        if shape == 'diamond':                 # the mirror of its upper half
-            return 2.0 * upper_half(upper, W, d, d - t)
         return 2.0 * lower_half(lower, W, d, t)
     return W
 
 
-def layer_widths(zb, W, d, m, U, shape, upper, lower, lh, wm):
+def layer_widths(zb, W, d, m, U, upper, lower, lh, wm):
     """[(layer k, cut width)] of the layers whose mid-height lies in the opening."""
     H = d + m + U
     out = []
@@ -234,7 +229,7 @@ def layer_widths(zb, W, d, m, U, shape, upper, lower, lh, wm):
         if z >= zb + H:
             break
         if z >= zb:
-            w = width_at(z - zb, W, d, m, U, shape, upper, lower)
+            w = width_at(z - zb, W, d, m, U, upper, lower)
             out.append((k, 0.0 if w <= EPS else max(w, wm)))
         k += 1
     return out
@@ -304,16 +299,17 @@ def springs(s, lh, sp):
 
 def evaluate(s, lh, h, bead):
     """The resolved shape of a parameter set: {ok, reason, d, m, U, H,
-    worst}. reason: 'empty' (no width / height) | 'overhang' (the closure
-    steps more than h somewhere, or a curved closure too flat to be pointed)."""
+    worst}. reason: 'empty' (no width / height) | 'depth' (a Curved lower not
+    deeper than W / 2) | 'overhang' (the closure steps more than h somewhere,
+    or a curved closure too flat to be pointed)."""
     W = float(s['width'])
     d, m, U, H = parts(s)
     r = {'ok': False, 'reason': None, 'd': d, 'm': m, 'U': U, 'H': H, 'worst': 0.0}
     if W <= EPS or H <= EPS:
         r['reason'] = 'empty'
         return r
-    if s['shape'] == 'arch' and s['lower'] == 'arc' and d <= 0.5 * W + EPS:
-        r['reason'] = 'depth'                 # a curved (vesica) bottom is pointed only deeper than W / 2
+    if s['lower'] == 'arc' and d <= 0.5 * W + EPS:
+        r['reason'] = 'depth'
         return r
     if s['upper'] == 'header':
         r['ok'] = True
@@ -328,11 +324,6 @@ def evaluate(s, lh, h, bead):
     if not r['ok']:
         r['reason'] = 'overhang'
     return r
-
-
-def height_field(s):
-    """The dimension traded against the width: diamond 'height', arch 'upper_height'."""
-    return 'height' if s['shape'] == 'diamond' else 'upper_height'
 
 
 def _with(s, field, v):
@@ -360,13 +351,12 @@ def max_width(s, lh, h, bead, upto):
 
 
 def min_height(s, lh, h, bead, start):
-    """The smallest printable value ≥ start (whole layers) of the height
-    field (diamond height / arch upper height) at s's width; None if none."""
-    f = height_field(s)
+    """The smallest printable UPPER HEIGHT ≥ start (whole layers) at s's
+    width; None if none."""
     n0 = max(1, int(math.ceil(start / lh - 1e-6)))
 
     def ok(n):
-        return evaluate(_with(s, f, _clean(n * lh)), lh, h, bead)['ok']
+        return evaluate(_with(s, 'upper_height', _clean(n * lh)), lh, h, bead)['ok']
     if ok(n0):
         return _clean(n0 * lh)
     lo, step = n0, 1
@@ -387,29 +377,23 @@ def min_height(s, lh, h, bead, start):
 
 
 def fill(s, lh, h, bead):
-    """Complete an older ARCH (from `migrate`): its upper height = its old
-    closure, or the minimum printable one; the rest of its old total height
-    becomes the middle. In place; True = changed."""
-    if s['shape'] != 'arch' or s['upper'] == 'header':
-        if s['shape'] == 'arch' and s.get('middle') is None:
-            s['middle'] = (s.get('middle_height') or 0) > 0
-            return True
+    """Complete an older closure-based ARCH (from `migrate`: no `middle`):
+    its upper height = its old explicit closure, else the minimum printable
+    one (whole layers); the rest of its old total height becomes the middle
+    (exactly — its total is kept). In place; True = changed."""
+    if s.get('middle') is not None:
         return False
-    if s.get('middle') is not None and s.get('upper_height') is not None:
-        return False
-    if s.get('bottom_depth') is not None and s['lower'] != 'flat':
-        s['bottom_depth'] = zsnap(s['bottom_depth'], lh, lh)
+    if s['upper'] == 'header':
+        s['middle'] = (s.get('middle_height') or 0) > 0
+        return True
     d = parts(dict(s, middle=False, upper_height=0.0))[0]
     base = dict(s, middle=False, middle_height=0.0)
     umin = min_height(dict(base, upper_height=lh), lh, h, bead, lh) if float(s['width']) > EPS else None
     U = s.get('upper_height')
-    if U is not None:
-        U = zsnap(U, lh, lh)
     if U is None or (umin is not None and U < umin - 1e-9):
         U = umin if umin is not None else zsnap(0.5 * float(s['width']), lh, lh)
-    if s.get('middle') is None:
-        m = zsnap(max(0.0, float(s.get('height') or 0.0) - d - U), lh)
-        s['middle'], s['middle_height'] = m > 1e-6, m
+    m = _clean(max(0.0, float(s.get('height') or 0.0) - d - U))
+    s['middle'], s['middle_height'] = m > 1e-6, m
     s['upper_height'] = U
     sync(s)
     return True
@@ -417,28 +401,26 @@ def fill(s, lh, h, bead):
 
 def defaults(s):
     """Fields a current opening always has."""
-    s.setdefault('middle', None if s.get('shape') == 'arch' else False)
-    s.setdefault('middle_height', None)
-    s.setdefault('upper_height', None)
-    s.setdefault('bottom_depth', None)
+    s.setdefault('middle', None)
+    for k in ('middle_height', 'upper_height', 'bottom_depth'):
+        s.setdefault(k, None)
 
 
 def limits(s, lh, h, bead):
-    """The widest printable opening at this (upper) height, the lowest
-    printable (upper) height at this width — the hints of an error."""
+    """The widest printable opening at this upper height, the lowest
+    printable upper height at this width — the hints of an error."""
     t = dict(s)
     migrate(t)
     defaults(t)
     fill(t, lh, h, bead)
-    if t['upper'] == 'header' and t['shape'] == 'arch':
+    if t['upper'] == 'header':
         return {'max_width': None, 'min_height': None}
-    f = height_field(t)
-    hv = float(t.get(f) or 0.0)
+    hv = float(t.get('upper_height') or 0.0)
     cap = max(float(t['width']), 1.0) + 4.0 * hv * max(h, 1e-3) / lh
     return {'max_width': max_width(t, lh, h, bead, cap), 'min_height': min_height(t, lh, h, bead, lh)}
 
 
-DIMS = ('width', 'height', 'upper_height', 'bottom_depth')
+DIMS = ('width', 'upper_height', 'bottom_depth')
 
 
 def arc_min_depth(W, lh):
@@ -447,17 +429,17 @@ def arc_min_depth(W, lh):
 
 
 def fit_arc_depth(s, lh):
-    """A Curved lower too shallow to stay sharp-pointed → its minimum depth (in place)."""
-    if s['shape'] == 'arch' and s.get('lower') == 'arc':
-        dmin = arc_min_depth(float(s['width']), lh)
-        if s.get('bottom_depth') is None or float(s['bottom_depth']) < dmin - 1e-9:
-            s['bottom_depth'] = dmin
+    """A Curved lower not deeper than W / 2 (it would not be pointed) → the
+    first whole layer past W / 2 (in place). A deeper one is kept as it is."""
+    if s.get('lower') == 'arc':
+        if s.get('bottom_depth') is None or float(s['bottom_depth']) <= 0.5 * float(s['width']) + EPS:
+            s['bottom_depth'] = arc_min_depth(float(s['width']), lh)
             sync(s)
 
 
 def constrain(s, edited, lh, h, bead):
     """Make a parameter set printable, the dimension edited LAST winning (see
-    the module docstring). s: {shape, upper, lower, width, height, z_bottom,
+    the module docstring). s: {upper, lower, width, height, z_bottom,
     bottom_depth, middle, middle_height, upper_height, array, driver}.
     Returns (new dict, info) — info {'changed': {field: [before, after]},
     'conflict': message | None}."""
@@ -466,37 +448,37 @@ def constrain(s, edited, lh, h, bead):
     migrate(s)
     defaults(s)
     fill(s, lh, h, bead)
-    snap_z(s, lh)
-    fit_arc_depth(s, lh)
-    f = height_field(s)
-    if edited == 'width' or edited in ('height', 'upper_height'):
-        s['driver'] = 'width' if edited == 'width' else f
-    drv = s.get('driver')
-    drv = 'width' if drv not in ('height', 'upper_height') else f
+    sync(s)
+    if edited in ('width', 'upper_height'):
+        s['driver'] = edited
+    drv = 'upper_height' if s.get('driver') in ('upper_height', 'height') else 'width'
+    # the upper is solved first (a Curved lower's depth rule does not limit it:
+    # judged as an angular lower of the same depth), then the lower is deepened
+    p = dict(s, lower='pointed') if s['lower'] == 'arc' else s
     conflict = None
-    ev = evaluate(s, lh, h, bead)
+    ev = evaluate(p, lh, h, bead)
     if ev['reason'] == 'empty':
         conflict = 'the opening has no height: give it a lower profile, a middle or an upper height' \
             if float(s['width']) > EPS else 'the width must be > 0'
     elif not ev['ok']:
-        if drv == f:
-            w = max_width(s, lh, h, bead, float(s['width']))
+        if drv == 'upper_height':
+            w = max_width(p, lh, h, bead, float(s['width']))
             if w > 0:
                 s['width'] = w
             else:
-                conflict = f"no printable opening has this {'height' if f == 'height' else 'upper height'}"
+                conflict = 'no printable opening has this upper height'
         else:
-            v = min_height(s, lh, h, bead, float(s.get(f) or 0.0))
+            v = min_height(p, lh, h, bead, float(s.get('upper_height') or 0.0))
             if v is None:
-                conflict = f"no printable height for a {float(s['width']):g} in wide opening"
+                conflict = f"no printable upper height for a {float(s['width']):g} in wide opening"
             else:
-                s[f] = v
+                s['upper_height'] = v
         sync(s)
+    fit_arc_depth(s, lh)
     if conflict is None and not evaluate(s, lh, h, bead)['ok']:
         conflict = 'these dimensions cannot be made printable'
     changed = {k: [before[k], s.get(k)] for k in DIMS
-               if before[k] is not None and s.get(k) is not None and abs(float(before[k]) - float(s[k])) > 1e-9
-               and not (k == 'height' and s['shape'] == 'arch')}
+               if before[k] is not None and s.get(k) is not None and abs(float(before[k]) - float(s[k])) > 1e-9}
     return s, {'changed': changed, 'conflict': conflict}
 
 

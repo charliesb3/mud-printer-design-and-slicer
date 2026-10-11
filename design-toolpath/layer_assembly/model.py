@@ -98,7 +98,9 @@ class AssemblyError(ValueError):
     pass
 
 
-DEFAULT_MAX_OVERHANG = 1.5    # in: the support rule's input; min overlap = bead width − max overhang
+DEFAULT_MAX_OVERHANG = 1.0    # in: the support rule's input; min overlap = bead width − max overhang
+                              # (1.5 until 2026-10-11; project files of schema ≤ 2 keep 1.5 when
+                              # they stored none — project_file._v2_to_v3)
 
 
 # profile: section-local layer k of n → amount multiplier
@@ -226,6 +228,12 @@ class Assembly:
     # 'head_clearance'} in inches; {} = the defaults (18 / 18 / 1). The print
     # plan divides the stack into lifts of whole layers with these.
     machine: dict = field(default_factory=dict)
+    # OPENING ALIGNMENT (2026-10-10, ONE global setting): 'follow' (every
+    # opening follows the Assembly transforms — the default, older projects)
+    # | 'plumb' (every opening — Designer, Assembly, arrays, headers — stays
+    # vertical in world coordinates from its first active layer while the
+    # walls transform: profiles.plumb_track). Stored only when 'plumb'.
+    opening_alignment: str = 'follow'
 
     def to_dict(self) -> dict:
         return {'name': self.name, 'layer_height': self.layer_height,
@@ -240,7 +248,8 @@ class Assembly:
                 'max_overhang': self.max_overhang,
                 'profiles': [p.to_dict() for p in self.profiles],
                 'print_speeds': dict(self.print_speeds),
-                'machine': dict(self.machine)}
+                'machine': dict(self.machine),
+                **({'opening_alignment': 'plumb'} if self.opening_alignment == 'plumb' else {})}
 
     @staticmethod
     def from_dict(d: dict) -> 'Assembly':
@@ -257,7 +266,8 @@ class Assembly:
                         [TransformCenter.from_dict(c) for c in d.get('centers') or []],
                         _max_overhang(d.get('max_overhang')),
                         [profile_from_dict(p) for p in d.get('profiles') or []],
-                        _print_speeds(d.get('print_speeds')), _machine(d.get('machine')))
+                        _print_speeds(d.get('print_speeds')), _machine(d.get('machine')),
+                        _alignment(d.get('opening_alignment'), d.get('profiles') or []))
 
 
 def _print_speeds(v) -> dict:
@@ -274,6 +284,24 @@ def _print_speeds(v) -> dict:
             raise AssemblyError('the frame reposition time must be ≥ 0')
         out['frame'] = x
     return out
+
+
+def _alignment(v, profiles=()) -> str:
+    """The global OPENING ALIGNMENT ('follow' | 'plumb'). MIGRATION of the
+    short-lived per-opening form (same day): {Designer opening id: 'plumb'}
+    and Assembly opening profiles' `alignment` → 'plumb' when something was
+    plumb and NO Assembly opening explicitly followed the wall (the effective
+    alignment is kept), else 'follow' (mixed: cannot be preserved → the
+    default)."""
+    if v is None or isinstance(v, dict):
+        legacy = dict(v or {})
+        ops = [p for p in profiles if (p.get('kind') or 'opening') == 'opening' and not p.get('source_opening')]
+        any_plumb = any(a == 'plumb' for a in legacy.values()) or any(p.get('alignment') == 'plumb' for p in ops)
+        all_plumb = all(p.get('alignment') == 'plumb' for p in ops)
+        return 'plumb' if any_plumb and all_plumb else 'follow'
+    if v not in ('follow', 'plumb'):
+        raise AssemblyError(f'unknown opening alignment {v!r} (follow | plumb)')
+    return v
 
 
 def _machine(v) -> dict:

@@ -36,7 +36,7 @@ global.document = {
     querySelector: () => ({ disabled: false }), set lastChild(v) {}, get lastChild() { return this.children[this.children.length - 1]; } }),
   addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); }, body: {}, activeElement: null,
 };
-global.window = { addEventListener() {}, devicePixelRatio: 1 };
+global.window = { DESIGNER_PRINT_PREVIEW: true, addEventListener() {}, devicePixelRatio: 1 };
 global.requestAnimationFrame = () => 0; global.cancelAnimationFrame = () => {};
 global.fetch = async () => ({ json: async () => ([]) });
 global.console.warn = () => {};
@@ -52,10 +52,11 @@ eval(src + `
   const R = layer.source_paths[0];
   setTool('line'); onMouseDown(ev(100, 200)); onMouseDown(ev(300, 200)); setTool('edit');
   const L = layer.source_paths[1];
-  layer.wall_systems = [{ id: 'WS1', name: 'Walls', type: 'skin_web', thickness: 10, align: 'auto', params: {},
-                          print_reference: false, members: [R.id, L.id],
-                          web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } }];
-  const sysJSON = () => JSON.stringify(layer.wall_systems);
+  // (2026-10-11: walls are WALL GROUPS in the Designer — the Skin + Web web records
+  // are composed by the backend from the project's Wall Systems, not kept here)
+  layer.wall_groups = [{ id: 'WG1', name: 'Walls', thickness: 10, align: 'auto', print_reference: false,
+                         members: [R.id, L.id] }];
+  const sysJSON = () => JSON.stringify(layer.wall_groups);
   const sys0 = sysJSON();
 
   const sec = (id, source, start, end, inside, u, pts) =>
@@ -84,8 +85,8 @@ eval(src + `
     _afterNetworkUpdate();
   };
   scheduleRefresh(); respond(); respond();
-  const webs = () => (layer.infills || []).filter(f => f.owner === 'WS1');
-  check(webs().length === 1, 'one connected member group: one owned web record');
+  check(!(layer.infills || []).some(f => f.owner) && !layer.wall_systems,
+        'the Designer keeps no construction records (no owned web records, no Wall Systems)');
 
   setTool('trim');
   const steps = _hist.undo.length;
@@ -95,26 +96,25 @@ eval(src + `
     onMouseDown(ev(x, y)); respond();
   }
   check(layer.trims.length === 2 && _hist.undo.length === steps + 2, 'two trims after assignment: two undo steps');
-  check(sysJSON() === sys0, 'Wall System membership and settings unchanged by Trim');
+  check(sysJSON() === sys0, 'Wall Group membership and envelope unchanged by Trim');
 
   // the final remaining unwanted section can still be trimmed
   onMouseMove(ev(200, 203));
   check(trimHover && trimHover.u_mid === 0.5, 'the last section is still offered');
   onMouseDown(ev(200, 203));
   check(layer.trims.length === 3 && _hist.undo.length === steps + 3, 'third trim: ONE more undo step');
-  respond();                                           // the line is now detached: groups split
-  check(webs().length === 2, 'web records follow the split member groups');
-  check(_hist.undo.length === steps + 3, 'the web regrouping is not an undo step of its own');
+  respond();                                           // the line is now detached: networks split
+  check(_hist.undo.length === steps + 3, 'the network split is not an undo step of its own');
   check(sysJSON() === sys0, 'membership still unchanged');
 
   // ---- undo / redo stay coherent ----
   undo(); respond();
-  check(layer.trims.length === 2 && webs().length === 1, 'undo: the last trim and the old web grouping return');
+  check(layer.trims.length === 2 && sysJSON() === sys0, 'undo: the last trim returns, the group unchanged');
   check(canRedo(), 'the undone response does not clear Redo');
   undo(); respond(); undo(); respond();
-  check(layer.trims.length === 0 && webs().length === 1 && sysJSON() === sys0, 'undo to before the trims');
+  check(layer.trims.length === 0 && sysJSON() === sys0, 'undo to before the trims');
   redo(); respond(); redo(); respond(); redo(); respond();
-  check(layer.trims.length === 3 && webs().length === 2, 'redo all three trims');
+  check(layer.trims.length === 3 && sysJSON() === sys0, 'redo all three trims');
   check(!canRedo() && _hist.undo.length === steps + 3, 'history intact: no extra steps');
   check(L.type === 'LinePath' && R.type === 'RectanglePath', 'sources unchanged (non-destructive)');
   console.log('UI TRIM WALL SYSTEM SMOKE PASSED');

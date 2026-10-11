@@ -1,8 +1,8 @@
 """
-OPENING SHAPES + DIMENSIONAL CONSTRAINTS (layer_assembly/opening_shape.py,
-2026-10-10, second pass): Diamond (angular | curved vesica), Arch from three
-independent components (lower flat | angular | curved, optional middle,
-upper angular | curved Gothic | header); the dimension edited last wins;
+ONE OPENING + DIMENSIONAL CONSTRAINTS (layer_assembly/opening_shape.py,
+2026-10-10, third pass): three independent components (lower flat | angular
+| curved | rounded, optional middle, upper angular | curved Gothic |
+header) — both diamonds are configurations; the dimension edited last wins;
 every result is printable on the actual layers (each narrowing step ≤ h a
 side, the closure included) at any layer phase; migration of older shapes;
 generated headers. Pure — no Designer.
@@ -24,11 +24,15 @@ WALL = WallTarget('L', None, (0.0, 0.0), (240.0, 0.0), 240.0, 10.0, True, 'Wall'
 
 
 def D(style='pointed', width=24.0, height=48.0, zb=6.0, **kw):
-    return dict(shape='diamond', upper=style, lower=style, width=width, height=height, z_bottom=zb, array=None, **kw)
+    """A DIAMOND configuration: upper = lower style, no middle, equal halves."""
+    s = dict(upper=style, lower='arc' if style == 'curve' else 'pointed', width=width, upper_height=0.5 * height,
+             bottom_depth=0.5 * height, middle=False, middle_height=None, z_bottom=zb, array=None, height=0.0, **kw)
+    O.sync(s)
+    return s
 
 
 def A(upper='pointed', lower='flat', width=24.0, U=30.0, middle=True, mh=24.0, depth=None, zb=6.0, array=None, **kw):
-    s = dict(shape='arch', upper=upper, lower=lower, width=width, upper_height=U, middle=middle, middle_height=mh,
+    s = dict(upper=upper, lower=lower, width=width, upper_height=U, middle=middle, middle_height=mh,
              bottom_depth=None if lower == 'flat' else (depth if depth is not None else
                                                         (width if lower == 'arc' else 0.5 * width)),
              z_bottom=zb, array=array, height=0.0, **kw)
@@ -42,7 +46,7 @@ def ok(s, lh=LH, h=H, bead=BEAD):
 
 def widths(s, lh=LH, h=H, bead=BEAD):
     d, m, U, _ = O.parts(s)
-    return O.layer_widths(s['z_bottom'], s['width'], d, m, U, s['shape'], s['upper'], s['lower'], lh, O.wmin(bead, h))
+    return O.layer_widths(s['z_bottom'], s['width'], d, m, U, s['upper'], s['lower'], lh, O.wmin(bead, h))
 
 
 def closing_steps(s, lh=LH, h=H, bead=BEAD):
@@ -53,7 +57,7 @@ def closing_steps(s, lh=LH, h=H, bead=BEAD):
 
 def wd(s, t):
     d, m, U, _ = O.parts(s)
-    return O.width_at(t, s['width'], d, m, U, s['shape'], s['upper'], s['lower'])
+    return O.width_at(t, s['width'], d, m, U, s['upper'], s['lower'])
 
 
 # ---- geometry -------------------------------------------------------------------------------
@@ -198,12 +202,11 @@ def test_middle_lower_and_position_never_distort_the_upper(field, value):
     assert all(up(t, u) == pytest.approx(up(s, u)) for u in (1, 5, 10, 20))
 
 
-def test_z_dimensions_are_whole_layers_so_every_boundary_is_a_layer_boundary():
-    s, _ = O.constrain(A('curve', 'round', width=24, U=20.2, mh=13, depth=7.1, zb=6), 'width', LH, H, BEAD)
-    for k in ('upper_height', 'middle_height', 'bottom_depth', 'height'):
-        assert abs(s[k] / LH - round(s[k] / LH)) < 1e-9, k
-    t, _ = O.constrain(D('pointed', 24, 31.3), 'height', LH, H, BEAD)
-    assert t['height'] == 31.5
+def test_searches_step_whole_layers_and_the_solver_never_resnaps():
+    s, _ = O.constrain(A('curve', 'round', width=24, U=1.5, mh=13.5, depth=7.5, zb=6), 'width', LH, H, BEAD)
+    assert abs(s['upper_height'] / LH - round(s['upper_height'] / LH)) < 1e-9, 'a raised upper: whole layers'
+    t, info = O.constrain(D('pointed', 24, 37.5), 'upper_height', LH, H, BEAD)   # 25 layers: a half-layer spring
+    assert (t['upper_height'], t['bottom_depth'], t['height']) == (18.75, 18.75, 37.5) and not info['changed']
     # an older off-grid bottom (an old array spacing): judged on its ACTUAL layers
     u, _ = O.constrain(D('pointed', 30, 20, zb=6.4), 'width', LH, H, BEAD)
     assert ok(u) and max(closing_steps(u)) <= H + 1e-9
@@ -212,21 +215,25 @@ def test_z_dimensions_are_whole_layers_so_every_boundary_is_a_layer_boundary():
 # ---- precedence --------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('style', DIAMONDS)
-def test_diamond_height_edit_narrows_the_width(style):
-    s, info = O.constrain(D(style, 48, 30), 'height', LH, H, BEAD)
-    assert s['height'] == 30 and s['width'] < 48 and s['driver'] == 'height'
+def test_diamond_upper_height_edit_narrows_the_width(style):
+    s, info = O.constrain(D(style, 48, 30), 'upper_height', LH, H, BEAD)
+    assert s['upper_height'] == 15 and s['height'] == 30 and s['width'] < 48 and s['driver'] == 'upper_height'
     assert ok(s) and max(closing_steps(s)) <= H + 1e-9
     assert not ok(dict(s, width=s['width'] + 1 / 16)), 'the widest printable width (1/16 in)'
     assert info['changed'] == {'width': [48, s['width']]} and info['conflict'] is None
 
 
 @pytest.mark.parametrize('style', DIAMONDS)
-def test_diamond_width_edit_raises_the_height(style):
+def test_diamond_width_edit_raises_its_upper(style):
     s, info = O.constrain(D(style, 30, 18), 'width', LH, H, BEAD)
-    assert s['width'] == 30 and s['height'] > 18 and s['driver'] == 'width'
+    assert s['width'] == 30 and s['upper_height'] > 9 and s['driver'] == 'width'
     assert ok(s) and max(closing_steps(s)) <= H + 1e-9
-    assert not ok(dict(s, height=s['height'] - LH)), 'the lowest printable height (whole layers)'
-    assert list(info['changed']) == ['height']
+    assert not ok(dict(s, upper_height=s['upper_height'] - LH)), 'the lowest printable upper (whole layers)'
+    assert 'upper_height' in info['changed']
+    if style == 'pointed':
+        assert s['bottom_depth'] == 9 and list(info['changed']) == ['upper_height'], 'the lower is not the closure'
+    else:
+        assert s['bottom_depth'] > 15, 'a curved lower deepened to stay pointed (> W / 2)'
 
 
 @pytest.mark.parametrize('upper', ARCH_UPPERS)
@@ -273,14 +280,14 @@ def test_style_change_follows_the_driver(upper):
 
 @pytest.mark.parametrize('style', DIAMONDS)
 def test_maximum_overhang_and_layer_height_recalculate(style):
-    s, _ = O.constrain(D(style, 48, 30), 'height', LH, H, BEAD)
+    s, _ = O.constrain(D(style, 48, 30), 'upper_height', LH, H, BEAD)
     t, info = O.constrain(s, 'overhang', LH, 0.75, BEAD)
-    assert t['height'] == 30 and t['width'] < s['width'] and ok(t, h=0.75)
+    assert t['upper_height'] == 15 and t['width'] < s['width'] and ok(t, h=0.75)
     t, info = O.constrain(s, 'layer_height', 2.0, H, BEAD)
-    assert t['height'] == 30 and t['width'] < s['width'] and ok(t, lh=2.0)
+    assert t['upper_height'] == 15 and t['width'] < s['width'] and ok(t, lh=2.0)
     s, _ = O.constrain(D(style, 24, 10), 'width', LH, H, BEAD)
     t, _ = O.constrain(s, 'overhang', LH, 0.75, BEAD)
-    assert t['width'] == 24 and t['height'] > s['height'] and ok(t, h=0.75)
+    assert t['width'] == 24 and t['upper_height'] > s['upper_height'] and ok(t, h=0.75)
 
 
 def test_less_overhang_needs_a_proportionally_taller_upper():
@@ -298,7 +305,7 @@ def test_discrete_layer_overhang_compliance(lh, h, upper):
 
 
 def test_a_sliver_is_cut_at_the_smallest_cut_never_dropped():
-    s, _ = O.constrain(D('pointed', 24, 30), 'height', LH, H, BEAD)
+    s, _ = O.constrain(D('pointed', 24, 30), 'upper_height', LH, H, BEAD)
     ws = [w for _, w in widths(s)]
     assert min(ws) >= O.wmin(BEAD, H) - 1e-12 and all(w > 0 for w in ws)
 
@@ -330,7 +337,8 @@ def test_unprintable_is_a_reported_conflict():
 @pytest.mark.parametrize('lower', ['arc', 'round'])
 def test_arrays_with_either_curved_lower(lower):
     arr = {'arrangement': 'grid', 'cols': 3, 'rows': 2, 'h_spacing': 8, 'v_spacing': 3}
-    s, _ = O.constrain(A('pointed', lower, width=16, U=1, mh=6, depth=None, array=arr), 'width', LH, H, BEAD)
+    s, _ = O.constrain(A('pointed', lower, width=16, U=1, mh=6, depth=16.5 if lower == 'arc' else 7.5, array=arr),
+                       'width', LH, H, BEAD)                  # (Z dimensions in whole layers, as the UI keeps them)
     _, r = _resolve(_profile(s, position=20, array=OpeningArray('grid', cols=3, rows=2, h_spacing=8, v_spacing=3)))
     assert r.valid, r.errors
     seqs = {}
@@ -357,10 +365,12 @@ def test_array_members_share_the_master_and_its_constraints():
 
 def test_older_shapes_migrate():
     lens = {'shape': 'lens', 'width': 12, 'height': 36, 'z_bottom': 6}
-    assert O.migrate(lens) and (lens['shape'], lens['upper'], lens['lower']) == ('diamond', 'curve', 'curve')
+    assert O.migrate(lens) and 'shape' not in lens
+    assert (lens['upper'], lens['lower'], lens['middle'], lens['upper_height'], lens['bottom_depth']) == \
+        ('curve', 'arc', False, 18, 18)
     mixed = {'shape': 'diamond', 'upper': 'pointed', 'lower': 'curve', 'bottom_depth': 9, 'width': 12, 'height': 30}
     O.migrate(mixed)
-    assert (mixed['upper'], mixed['lower'], mixed['bottom_depth']) == ('pointed', 'pointed', None)
+    assert (mixed['upper'], mixed['lower'], mixed['bottom_depth'], mixed['upper_height']) == ('pointed', 'pointed', 15, 15)
     semi = {'shape': 'arch', 'upper': 'curve', 'lower': 'semicircle', 'width': 20, 'height': 50}
     O.migrate(semi)
     assert (semi['lower'], semi['bottom_depth']) == ('round', 10)
@@ -390,14 +400,15 @@ def test_older_arch_with_the_minimum_closure_keeps_its_total_height():
 def test_profile_dicts_round_trip_and_migrate():
     p = profile_from_dict({'kind': 'opening', 'id': 'p1', 'wall': {'source': 'L', 'edge': None}, 'position': 60,
                            'z_bottom': 6, 'height': 24, 'width': 12, 'shape': 'lens'})
-    assert (p.shape, p.upper, p.lower) == ('diamond', 'curve', 'curve')
-    q = OpeningProfile('p2', WallRef('L'), 60, 0, 0, 36, 'arch', upper='header', lower='flat', middle=True,
+    assert (p.shape, p.upper, p.lower, p.middle, p.upper_height) == ('', 'curve', 'arc', False, 12)
+    q = OpeningProfile('p2', WallRef('L'), 60, 0, 0, 36, upper='header', lower='flat', middle=True,
                        middle_height=84, upper_height=20, header={'bearing': 10, 'thickness': 8})
     d = q.to_dict()
     assert d['header'] == {'bearing': 10, 'thickness': 8} and d['upper_height'] == 20
     assert profile_from_dict(d) == q
+    assert 'shape' not in d
     with pytest.raises(ValueError):
-        profile_from_dict(dict(d, shape='diamond'))           # a diamond has no header upper
+        profile_from_dict(dict(d, lower='gothic'))
 
 
 # ---- resolution: the backend cuts exactly the constrained shape ---------------------------------
@@ -410,12 +421,12 @@ def _resolve(p, top=150):
 
 def _profile(s, **kw):
     return OpeningProfile('P', WallRef('L'), kw.pop('position', 120), s['z_bottom'], s['height'], s['width'],
-                          s['shape'], upper=s['upper'], lower=s['lower'], bottom_depth=s.get('bottom_depth'),
+                          '', upper=s['upper'], lower=s['lower'], bottom_depth=s.get('bottom_depth'),
                           upper_height=s.get('upper_height'), middle=s.get('middle'),
                           middle_height=s.get('middle_height'), driver=s.get('driver'), **kw)
 
 
-@pytest.mark.parametrize('s0,edit', [(D('pointed'), 'height'), (D('curve'), 'width'),
+@pytest.mark.parametrize('s0,edit', [(D('pointed'), 'upper_height'), (D('curve'), 'width'),
                                      (A('pointed', 'flat'), 'upper_height'), (A('curve', 'round'), 'width'), (A('pointed', 'arc'), 'width'),
                                      (A('pointed', 'pointed', middle=False), 'width'),
                                      (A('header', 'round', mh=30), 'width'), (A('header', 'arc', mh=30), 'width')])
@@ -505,3 +516,47 @@ def test_saved_former_curved_lower_opens_as_rounded_with_its_geometry():
         assert wd(s, t) == pytest.approx(24 * math.sqrt(1 - (1 - t / 7.5) ** 2))
     again = Assembly.from_dict(a.to_dict())
     assert again.profiles[0].to_dict()['lower'] == 'round' and again.profiles == a.profiles
+
+
+# ---- migration keeps the geometry of saved Diamond / Arch openings ----------------------------
+
+@pytest.mark.parametrize('H_', [48, 37.5, 25.5, 61.5])        # even and ODD numbers of layers
+def test_a_saved_angular_diamond_migrates_to_the_identical_shape(H_):
+    old = {'shape': 'diamond', 'upper': 'pointed', 'lower': 'pointed', 'width': 20, 'height': H_, 'z_bottom': 6,
+           'array': None}
+    s, info = O.constrain(old, 'load', LH, H, BEAD)
+    assert (s['upper'], s['lower'], s['middle'], s['height']) == ('pointed', 'pointed', False, H_)
+    for t in [H_ * k / 40 for k in range(41)]:                 # the classic diamond, point for point
+        assert wd(s, t) == pytest.approx(20 * (1 - abs(2 * t / H_ - 1)) if t < H_ else 0, abs=1e-9)
+
+
+@pytest.mark.parametrize('W_,H_', [(12, 36), (16, 49.5), (10, 30)])
+def test_a_saved_curved_diamond_migrates_to_the_identical_vesica(W_, H_):
+    old = {'shape': 'diamond', 'upper': 'curve', 'lower': 'curve', 'width': W_, 'height': H_, 'z_bottom': 6}
+    s, info = O.constrain(old, 'load', LH, H, BEAD)
+    assert (s['upper'], s['lower'], s['upper_height'], s['bottom_depth']) == ('curve', 'arc', H_ / 2, H_ / 2)
+    a = (H_ * H_ - W_ * W_) / (4 * W_)                        # the second-pass vesica formula
+    for t in (0.3, H_ / 5, H_ / 2 - 0.1, H_ / 2 + 2, H_ - 0.3):
+        assert math.hypot(wd(s, t) / 2 + a, t - H_ / 2) == pytest.approx(a + W_ / 2, abs=1e-9)
+    if ok(s):
+        assert not info['changed'], 'a printable saved diamond is not resized'
+
+
+def test_a_saved_component_arch_keeps_every_component():
+    old = {'shape': 'arch', 'upper': 'curve', 'lower': 'round', 'width': 24, 'height': 66, 'z_bottom': 6,
+           'bottom_depth': 12, 'upper_height': 36, 'middle': True, 'middle_height': 18, 'array': None,
+           'driver': 'width'}
+    s, info = O.constrain(old, 'load', LH, H, BEAD)
+    assert 'shape' not in s and {k: s[k] for k in ('upper', 'lower', 'bottom_depth', 'upper_height', 'middle',
+                                                     'middle_height', 'height')} == \
+        {'upper': 'curve', 'lower': 'round', 'bottom_depth': 12, 'upper_height': 36, 'middle': True,
+         'middle_height': 18, 'height': 66} and not info['changed']
+
+
+def test_configurations_reproduce_both_diamonds():
+    """Angular upper + Angular lower, no middle = the angular diamond;
+    Curved upper + Curved lower of equal heights, no middle = the vesica."""
+    for style, lower in (('pointed', 'pointed'), ('curve', 'arc')):
+        s = A(style, lower, width=12, U=18, middle=False, mh=99, depth=18)
+        v = D(style, 12, 36)
+        assert all(wd(s, t) == pytest.approx(wd(v, t), abs=1e-12) for t in (0.5, 9, 17.9, 18.1, 30, 35.5))

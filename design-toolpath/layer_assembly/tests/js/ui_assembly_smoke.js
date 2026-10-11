@@ -56,6 +56,7 @@ let src = fs.readFileSync(path.join(STATIC, 'app.js'), 'utf8');
 src = src.replace(/\ninit\(\);\s*$/, '\n') + '\ncanvas.width = 800; canvas.height = 800;\n';
 src += '\n' + fs.readFileSync(path.join(STATIC, 'opening_shape.js'), 'utf8');
 src += '\n' + fs.readFileSync(path.join(STATIC, 'assembly.js'), 'utf8');
+src += '\n' + fs.readFileSync(path.join(STATIC, 'wallsystems.js'), 'utf8');
 eval(src + `
 ;(async function run() {
   const check = (c, m) => { if (!c) throw new Error('FAIL: ' + m); console.log('ok  ' + m); };
@@ -65,7 +66,7 @@ eval(src + `
   // ---- a Base design in the Designer ----
   addPrimitive('RectanglePath');                       // (140,140) 120 x 120
   const R = layer.source_paths[0];
-  _wsSetType(_wsNew([R.id]), 'hollow');               // a 10 in wall: Hollow / Skins Only
+  _wgNew([R.id]);                                     // a 10 in Wall Group: no Wall System = Hollow (skins)
   layer.material.physical = true;
   historyCheckpoint();
   const designerBefore = JSON.stringify(layer);
@@ -307,11 +308,12 @@ eval(src + `
   // ---- physical support: Bead Width + MAXIMUM OVERHANG (min overlap derived) ----
   await asmSetSectionDesign(0, 'base');
   const gBefore = geoCalls(), nMo = asm.hist.undo.length;
-  check(asm.state.max_overhang === 1.5 && asm.state.min_overlap === undefined && el('asm-max-overhang').value === 1.5 &&
+  check(asm.state.max_overhang === 1.0 && asm.state.min_overlap === undefined && el('asm-max-overhang').value === 1.0 &&
         el('asm-bead-width').value === 3 && txtOf('asm-overlap-note').includes('Minimum overlap') &&
-        txtOf('asm-overlap-note').includes('1.50 in') &&
+        txtOf('asm-overlap-note').includes('2.00 in') &&
         el('asm-overlap-note').children.some(c => /bead width − maximum overhang/.test(c.title || '')),
-        'Physical support: Bead width 3, Maximum overhang 1.5 (editable), Minimum overlap 1.50 in (derived)');
+        'Physical support: Bead width 3, Maximum overhang 1 in by default (editable; 1.5 until 2026-10-11), Minimum overlap 2.00 in (derived)');
+  asm.state.max_overhang = 1.5; await asmResolve();     // (the steps below were written for the former 1.5 in default)
   await asmSetTransform(2, 'dx', 1.25);                 // the top section leans 1.25 in / layer
   check(SP().insufficient_support === 0, '1.25 in / layer lean with 1.5 in max overhang: supported');
   await asmSetMaxOverhang(1);
@@ -560,8 +562,8 @@ eval(src + `
   asm.headerCounter = 1;
   asm.state.overrides = [{ section: 0, layer: 3, x: 140, y: 140, note: '' }];
   asm.state.profiles = [{ kind: 'opening', id: 'p1', wall: { source: R.id, edge: 0 }, position: 60, z_bottom: 3,
-                          height: 24, width: 12, shape: 'diamond', label: '',
-                          upper: 'pointed', lower: 'pointed', bottom_depth: null, upper_height: null, middle: false,
+                          height: 24, width: 12, label: '',
+                          upper: 'pointed', lower: 'pointed', bottom_depth: 12, upper_height: 12, middle: false,
                           middle_height: null }];   // (the current form; older forms are migrated on Open)
   asm.state.profile_counter = 1;
   // the open design is DERIVED and has an edit not yet stored as its delta
@@ -574,7 +576,7 @@ eval(src + `
   _downloadText = (name, text) => { saved = { name, text }; };
   await saveProject();
   const F = JSON.parse(saved.text);
-  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 1 &&
+  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 3 &&
         saved.text.indexOf('"schema_version"') < saved.text.indexOf('"project"'),
         'Save Project downloads Smoke house.muddesign: format id + schema version first, human-readable JSON');
   const FD = F.project.designer;

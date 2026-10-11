@@ -2290,6 +2290,17 @@ def _ref_map(st, refs, thick):
     n = max(4, int(math.ceil((st.hi - st.lo) / 2.0)))
     zs = [st.lo + (st.hi - st.lo) * k / n for k in range(n + 1)]
     pts = [st.frame(z) for z in zs]
+    # samples within one thickness of a FREE end (an opening's cut face) are
+    # not judged: the run's frames there are askew — at a CORNER close to the
+    # cut they jump to the corner bisector, off the reference centre line —
+    # (2026-10-10 regression: an array's cut face near a corner rejected the
+    # whole remaining ring, which was then re-fitted on its own: phase lost
+    # all around the wall, remote support findings). The interior decides.
+    free_lo = not st.run.cycle and st.run.a[0] == 'E'
+    free_hi = not st.run.cycle and st.run.b[0] == 'E'
+    judged = [k for k, z in enumerate(zs) if not ((free_lo and z < st.lo + thick) or (free_hi and z > st.hi - thick))]
+    if len(judged) < 2:
+        judged = list(range(len(zs)))
     for f in refs:
         cen, fss, L = f['centre'], f['ss'], f['L']
         segs = list(range(len(cen) - 1)) + ([len(cen) - 1] if f['cycle'] else [])
@@ -2305,7 +2316,7 @@ def _ref_map(st, refs, thick):
                 if best is None or d < best[0]:
                     s1 = fss[i + 1] if i + 1 < len(fss) else L
                     best = (d, fss[i] + t * (s1 - fss[i]), i)
-            if best is None or best[0] > 0.25 * thick:
+            if best is None or (best[0] > 0.25 * thick and len(sr) in judged):
                 ok = False
                 break
             sr.append(best[1])
@@ -2319,10 +2330,12 @@ def _ref_map(st, refs, thick):
                     sr[k] -= L
                 while sr[k] - sr[k - 1] < -0.5 * L:
                     sr[k] += L
-        d = [b - a for a, b in zip(sr, sr[1:])]
+        jr = [sr[k] for k in judged]
+        d = [b - a for a, b in zip(jr, jr[1:])]
         if not d or not (all(x > 0 for x in d) or all(x < 0 for x in d)):
             continue
-        if abs(abs(sr[-1] - sr[0]) - (zs[-1] - zs[0])) > 0.05 * (zs[-1] - zs[0]) + 0.5:
+        z0, z1 = zs[judged[0]], zs[judged[-1]]
+        if abs(abs(jr[-1] - jr[0]) - (z1 - z0)) > 0.05 * (z1 - z0) + 0.5:
             continue                                 # not the same length along the wall
         # the SAME wall axis: s_ref = σ·s + β exactly (arc length is
         # preserved); β from the interior samples (the frames near a cap are

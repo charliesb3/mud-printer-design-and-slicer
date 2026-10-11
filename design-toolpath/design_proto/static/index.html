@@ -63,6 +63,31 @@
     .project-btns { display: flex; gap: 2px; margin-left: auto; }
     /* print simulation */
     .sidebar.sim-nav-col { width: 270px; }
+    .sidebar.wsys-col { width: 300px; }
+    .toolbar-note { font-size: 11px; color: #8aa; margin: 0 6px; white-space: nowrap; align-self: center; }
+    .sidebar.wsys-col .prop-row .prop-label { width: 96px; flex: none; }
+    .wsys-generate { font-weight: 600; padding: 6px 12px; }
+    .wsys-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-weight: 600; font-size: 10px; }
+    .wsys-badge.not_generated { background: #444; color: #ddd; }
+    .wsys-badge.current { background: #1f6f3f; color: #e8ffe8; }
+    .wsys-badge.outdated { background: #8a5a00; color: #fff3d6; }
+    .wsys-badge.generating { background: #1f4f8f; color: #e3efff; }
+    .wsys-sep { display: inline-block; width: 10px; }
+    #wsys-canvas-wrap { min-height: 0; }
+    #wsys-canvas { position: absolute; left: 0; top: 0; }
+    .wsys-inspect-col { display: flex; flex-direction: column; }
+    .wsys-inspect-col > .sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+    .wsys-nav { flex: none; padding: 6px 10px 8px; border-bottom: 1px solid #2a2a2a; background: #161616; }
+    .wsys-nav .prop-input { width: 64px; flex: none; }
+    .wsys-nav .wsys-slider { width: 100%; margin: 4px 0; }
+    .wsys-nav-btns { flex-wrap: wrap; gap: 4px; }
+    .wsys-nav-btns .tool-btn.active, .wsys-nav .tool-btn.active { background: #4a9eff; color: #fff; }
+    .wsys-find { cursor: pointer; padding: 2px 4px; border-radius: 3px; }
+    .wsys-find:hover { background: #22303f; }
+    .wsys-find.sel { background: #1c3a5a; color: #fff; }
+    .wsys-cat { font-size: 9px; padding: 0 4px; border-radius: 2px; margin-right: 4px; }
+    .wsys-cat.architectural { background: #6a3b8f; } .wsys-cat.lattice { background: #8a5a00; }
+    .wsys-cat.construction { background: #335; } .wsys-cat.continuity { background: #7a2b2b; }
     .sidebar.sim-time-col { width: 330px; }
     .sidebar.sim-nav-col .prop-row .prop-label { width: 96px; flex: none; white-space: nowrap; }
     .sidebar.sim-nav-col .sim-minor .prop-row .prop-label { width: auto; flex: 1; color: #999; font-size: 10px; white-space: nowrap; }
@@ -110,6 +135,16 @@
     #ws-assembly.asm-has-support .asm-support-box { display: block; }
     .asm-support-box > summary { cursor: pointer; }
     .asm-right-col { width: 270px; }
+    /* (2026-10-11) the right column never scrolls sideways: its rows wrap; it keeps
+       the preview's width by default and can be dragged wider (bottom-right grip) */
+    #asm-col-right { width: 230px; min-width: 230px; max-width: 440px; resize: horizontal; overflow: hidden; flex: 0 0 auto; }
+    #asm-col-right > .sidebar-scroll { overflow-x: hidden; overflow-y: auto; }
+    #asm-assembly-tf .asm-row, #asm-profiles .asm-row { flex-wrap: wrap; }
+    #asm-assembly-tf .mini-btn { white-space: normal; text-align: left; max-width: 100%; }
+    #asm-assembly-tf select.prop-input, #asm-assembly-tf input.prop-input { min-width: 0; max-width: 100%; }
+    #asm-assembly-tf .asm-center input.prop-input { flex: 1 1 44px; width: 44px; }
+    #asm-assembly-tf .asm-walls .asm-row .prop-label { flex: 1 1 80px; }
+    #asm-assembly-tf .asm-calc { overflow-wrap: anywhere; }
     .asm-right-sec { border-bottom: 1px solid #2a2a2a; }
     .asm-right-sec > summary { cursor: pointer; list-style: none; }
     .asm-right-sec > summary::before { content: '▾ '; color: #666; }
@@ -541,6 +576,7 @@
   <div class="ws-tabs" id="ws-tabs">
     <button class="ws-tab active" id="ws-tab-designer" onclick="setWorkspace('designer')">Designer</button>
     <button class="ws-tab" id="ws-tab-assembly" onclick="setWorkspace('assembly')">Assembly</button>
+    <button class="ws-tab" id="ws-tab-wallsystems" onclick="setWorkspace('wallsystems')">Wall Systems</button>
     <button class="ws-tab" id="ws-tab-simulation" onclick="setWorkspace('simulation')">Print Simulation</button>
   </div>
   <!-- the Layer Design being edited (shown once derived designs exist) -->
@@ -591,6 +627,8 @@
   <button class="tool-btn" id="btn-move-start" onclick="toggleMoveStart()"
           title="Move route starts / seams: start markers take every click (paths and openings are not edited)">Move Start</button>
   <button class="tool-btn" id="btn-beads"    onclick="toggleBeads()" title="Show the physical mud bead around every printable centerline (Material / Bead)">Beads</button>
+  <button class="tool-btn" id="btn-envelope" onclick="toggleEnvelope()" title="Show each wall's ARCHITECTURAL ENVELOPE — its inner and outer boundaries (Wall Groups: thickness + alignment). Off: the original shapes as single lines.">Wall Envelope</button>
+  <span class="toolbar-note" id="designer-mode-note" title="The Designer edits the architecture: each wall's envelope from its Wall Group. Printable constructions are generated in the Wall Systems workspace; print paths are planned in the Print Simulation.">Architecture · print paths: Wall Systems workspace</span>
   <div class="tool-sep"></div>
   <button class="tool-btn" id="btn-clear-all" onclick="clearAll()"
           title="Clear the Layer Design being edited: its paths, Wall Systems, openings, trims and routing (undoable). Other Layer Designs, the Assembly and the project are kept — to start over entirely use New Project.">Clear Design</button>
@@ -681,17 +719,18 @@
     </div>
   </div>
 
-  <!-- WALL SYSTEM — how the Design's paths are CONSTRUCTED (explicit groups) -->
+  <!-- WALL GROUPS — which paths are walls, their thickness + alignment (ARCHITECTURE;
+       the printable construction is chosen in the Wall Systems workspace) -->
   <div class="sidebar sidebar-left" id="sidebar-wallsys">
-    <div class="sidebar-head">Wall System</div>
+    <div class="sidebar-head">Wall Groups</div>
     <div class="sidebar-scroll">
-      <div id="wallsys-section">
-        <div class="section-title">Wall Systems</div>
-        <div class="path-list" id="wallsys-list"></div>
+      <div id="wallgrp-section">
+        <div class="section-title">Wall Groups</div>
+        <div class="path-list" id="wallgrp-list"></div>
       </div>
-      <div id="wallsys-edit-section" style="display:none">
-        <div class="section-title" id="wallsys-edit-title">Wall System</div>
-        <div class="prop-panel" id="wallsys-props"></div>
+      <div id="wallgrp-edit-section" style="display:none">
+        <div class="section-title" id="wallgrp-edit-title">Wall Group</div>
+        <div class="prop-panel" id="wallgrp-props"></div>
       </div>
     </div>
   </div>
@@ -915,12 +954,90 @@
 <div id="status-bar">Ready.</div>
 
 <!-- PRINT SIMULATION: the authoritative print plan (layer_assembly/print_plan.py) played back -->
+<!-- WALL SYSTEMS: the project's printable constructions, explicit generation and
+     layer-by-layer inspection of the generated wall geometry (wallsystems.js) -->
+<div class="workspace" id="ws-wallsystems" style="display:none">
+  <div class="main">
+    <div class="sidebar sidebar-left wsys-col">
+      <div class="sidebar-head">Wall Systems</div>
+      <div class="sidebar-scroll">
+        <div class="prop-row wsys-gen-row">
+          <button class="tool-btn active wsys-generate" id="wsys-generate" onclick="wsysGenerate()"
+                  title="Generate every layer's printable wall geometry (Wall Systems, lattice, caps, junctions) for the whole assembled building with the existing full-resolution pipeline, and run the bead-level support check. Editing stays responsive meanwhile.">Generate Wall Systems</button>
+          <button class="tool-btn" id="wsys-cancel" onclick="wsysCancel()" style="display:none">Cancel</button>
+        </div>
+        <div class="asm-kv" id="wsys-status"></div>
+        <div class="prop-row">
+          <button class="tool-btn" id="wsys-undo" onclick="wsysUndo()" title="Undo a Wall System edit">↶ Undo</button>
+          <button class="tool-btn" id="wsys-redo" onclick="wsysRedo()" title="Redo">↷ Redo</button>
+        </div>
+        <div class="section-title">Wall Systems</div>
+        <div class="path-list" id="wsys-list"></div>
+        <div id="wsys-edit-section" style="display:none">
+          <div class="section-title" id="wsys-edit-title">Wall System</div>
+          <div class="prop-panel" id="wsys-props"></div>
+        </div>
+      </div>
+    </div>
+    <div class="sim-center">
+      <div class="canvas-wrap sim-canvas-wrap" id="wsys-canvas-wrap">
+        <canvas id="wsys-canvas"></canvas>
+        <div class="canvas-hint" id="wsys-hint">Top View: drag to pan · wheel to zoom · 3D: drag to orbit · ← / → previous / next layer</div>
+      </div>
+    </div>
+    <!-- LAYER INSPECTION (like the Print Simulation's "Selected layer"): the
+         navigation is a fixed block at the top of the column — never scrolled or
+         clipped away; findings below it scroll -->
+    <div class="sidebar sim-time-col wsys-inspect-col">
+      <div class="sidebar-head">Layer inspection</div>
+      <div class="wsys-nav" id="wsys-nav">
+        <div class="prop-row sim-layer-nav">
+          <button class="tool-btn" id="wsys-prev" onclick="wsysStep(-1)" title="Previous layer (←)">◀</button>
+          <span class="prop-label">Layer</span>
+          <input type="number" class="prop-input" id="wsys-layer-input" min="1" step="1" onchange="wsysSelectLayer(this.value - 1)">
+          <span class="prop-unit" id="wsys-layer-count">/ 0</span>
+          <button class="tool-btn" id="wsys-next" onclick="wsysStep(1)" title="Next layer (→)">▶</button>
+        </div>
+        <input type="range" id="wsys-layer-slider" class="wsys-slider" min="0" max="0" step="1" value="0"
+               oninput="wsysSelectLayer(this.value)" title="Layer (through the assembled stack)">
+        <div class="prop-row wsys-nav-btns">
+          <button class="tool-btn" id="wsys-base-btn" onclick="wsysShowBase()" title="The Base design, from above">Base design</button>
+          <button class="tool-btn" id="wsys-top-btn" onclick="wsysTopView()" title="The selected layer from above">Top View</button>
+          <button class="tool-btn" id="wsys-orbit-btn" onclick="wsysOrbit()" title="Orbit the selected layer (and the one below) in 3D">3D orbit</button>
+        </div>
+        <div class="prop-row wsys-nav-btns">
+          <button class="tool-btn" id="wsys-show-env" onclick="wsysSetDisplay('envelope')" title="The architectural envelope (wall material)">Envelope</button>
+          <button class="tool-btn" id="wsys-show-gen" onclick="wsysSetDisplay('generated')" title="The generated printable geometry (Wall Systems, junctions, caps, openings)">Generated Paths</button>
+        </div>
+        <div class="asm-calc" id="wsys-layer-info"></div>
+      </div>
+      <div class="sidebar-scroll">
+        <div class="asm-kv" id="wsys-layer-detail"></div>
+        <div class="section-title">Support findings</div>
+        <div class="prop-row wsys-nav-btns" id="wsys-find-tabs">
+          <button class="tool-btn" id="wsys-find-final" onclick="wsysSetFindings('final')" title="FINAL bead-level findings of the generated geometry (authoritative)">Final · bead level</button>
+          <button class="tool-btn" id="wsys-find-pre" onclick="wsysSetFindings('preliminary')" title="PRELIMINARY architectural findings of the Assembly (wall envelopes)">Preliminary · architectural</button>
+        </div>
+        <div class="asm-kv" id="wsys-findings"></div>
+        <div class="section-title" id="wsys-support-head">This layer</div>
+        <div class="asm-kv" id="wsys-support"></div>
+        <div class="section-title">Legend</div>
+        <div class="asm-kv" id="wsys-legend"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="workspace" id="ws-simulation" style="display:none">
   <div class="main">
     <div class="sidebar sidebar-left sim-nav-col">
       <div class="sidebar-head">Print plan</div>
       <div class="sidebar-scroll">
         <div class="asm-kv" id="sim-status"></div>
+        <div class="prop-row">
+          <button class="tool-btn active" id="sim-generate" onclick="simGenerate()"
+                  title="Plan the print (routing, lifts, islands, time estimates) from the CURRENT generated Wall Systems — the geometry generated in the Wall Systems workspace; nothing is regenerated here.">Plan Print</button>
+        </div>
         <div class="prop-row">
           <button class="tool-btn" id="sim-rebuild" onclick="simRebuild()"
                   title="Plan the print again from the current Designer and Assembly (recovery: drops the cached plan and routes). Keeps the project, camera, layer and playhead.">↻ Rebuild Simulation</button>
@@ -1038,6 +1155,7 @@
 <script src="/static/app.js"></script>
 <script src="/static/opening_shape.js"></script>
 <script src="/static/assembly.js"></script>
+<script src="/static/wallsystems.js"></script>
 <script src="/static/simulation.js"></script>
 </body>
 </html>

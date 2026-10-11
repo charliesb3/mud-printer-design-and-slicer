@@ -45,6 +45,8 @@ class GroupModel:
     warnings: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)  # detected masses → their sources
     sources: dict = field(default_factory=dict)      # source id → label (designs involved)
+    by_tag: bool = False           # built from OTHER geometry (the architectural envelopes) than the one
+                                   # analysed: look a vertex's group up by its source tag (group_of)
 
     def groups_in(self, design_id) -> set:
         return {g for pl in self.vertex_groups.get(design_id, ()) for g in pl if g}

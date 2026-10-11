@@ -32,7 +32,7 @@ global.document = {
     querySelector: () => ({ disabled: false }), set lastChild(v) {}, get lastChild() { return this.children[this.children.length - 1]; } }),
   addEventListener() {}, body: {}, activeElement: null,
 };
-global.window = { addEventListener() {}, devicePixelRatio: 1 };
+global.window = { DESIGNER_PRINT_PREVIEW: true, addEventListener() {}, devicePixelRatio: 1 };
 global.requestAnimationFrame = () => 0; global.cancelAnimationFrame = () => {};
 global.fetch = async () => ({ json: async () => ([]) });
 global.console.warn = () => {};
@@ -167,23 +167,25 @@ eval(src + `
   selectedId = keepSel; rebuild();
   check(panelEl.children.some(c => (c.textContent || '').startsWith('Connected to')),
         'the path Properties show connectivity');
-  const wsRow = findRow('Wall System');
-  check(!!wsRow && wsRow.id === 'path-wallsys-row' && /None \\(single bead\\)/.test(wsRow.children[1].textContent) &&
+  // (2026-10-11: the Designer's WALL GROUPS own the envelope; constructions are the
+  // Wall Systems workspace's)
+  const wsRow = findRow('Wall Group');
+  check(!!wsRow && wsRow.id === 'path-wallgrp-row' && /None \\(single bead\\)/.test(wsRow.children[1].textContent) &&
         !wsRow.children.some(c => c.tagName === 'SELECT' || (c.children || []).some(k => k.tagName === 'SELECT')),
-        'path Properties: which Wall System builds it (identity only — no duplicated editing controls)');
+        'path Properties: which Wall Group gives it its envelope (identity only — no duplicated editing controls)');
   check(!findRow('Wall Thickness') && !findRow('Network Wall Thickness'), 'no wall thickness editor on the path');
-  check(!panelEl.children.some(c => /New Wall System/.test(c.textContent || '')),
-        'no Wall System creation in the path Properties (the Wall System panel owns it)');
-  const WS = _wsNew([R.id]);
+  check(!panelEl.children.some(c => /New Wall Group|New Wall System/.test(c.textContent || '')),
+        'no Wall Group creation in the path Properties (the Wall Groups panel owns it)');
+  const WS = _wgNew([R.id]);
   selectedId = R.id; rebuild();
-  const r2 = findRow('Wall System');
-  check(r2.children[1].textContent.includes(_wsLabel(WS)) && r2.children[2] && r2.children[2].textContent === 'Edit',
-        'a member shows its system with an Edit link');
-  wallSystemPick = null;
+  const r2 = findRow('Wall Group');
+  check(r2.children[1].textContent.includes(_wgLabel(WS)) && r2.children[2] && r2.children[2].textContent === 'Edit',
+        'a member shows its group with an Edit link');
+  wallGroupPick = null;
   r2.children[2].onclick();
-  check(wallSystemPick === WS.id, 'Edit opens that system in the Wall System panel');
-  check(_wsOf(P.id) === null, 'the touching path is NOT forced into it (membership is explicit)');
-  layer.wall_systems = []; layer.infills = layer.infills.filter(f => !f.owner);
+  check(wallGroupPick === WS.id, 'Edit opens that group in the Wall Groups panel');
+  check(_wgOf(P.id) === null, 'the touching path is NOT forced into it (membership is explicit)');
+  layer.wall_groups = [];
   // --- path picker: hover / arrow keys highlight the candidate path
   const pk = addPathPickerRow({ appendChild() {} }, 'Source', P.id, id => { picked = id; });
   let picked = null;

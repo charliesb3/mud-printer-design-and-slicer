@@ -254,6 +254,7 @@ def test_migration_steps_upgrade_older_files(client, monkeypatch):
     build runs 1 → 2 → 3 in order, each step on the previous result; the
     result is stamped with the current version and validated."""
     f = _file(client)
+    f['schema_version'] = 1            # (a layout of today stamped 1: the steps below are simulated)
     calls = []
 
     def v1_to_v2(d):
@@ -267,7 +268,7 @@ def test_migration_steps_upgrade_older_files(client, monkeypatch):
         d['project']['assembly']['state']['max_overhang'] = 1.0
         return d
     monkeypatch.setattr(PF, 'SCHEMA_VERSION', 3)
-    monkeypatch.setattr(PF, 'MIGRATIONS', {1: v1_to_v2, 2: v2_to_v3})
+    monkeypatch.setattr(PF, 'MIGRATIONS', {1: v1_to_v2, 2: v2_to_v3})   # (simulated steps)
     code, o = open_(client, json.dumps(f))
     assert code == 200, o
     assert calls == [1, 2] and o['migrated_from'] == 1 and o['schema_version'] == 3
@@ -280,6 +281,7 @@ def test_migration_steps_upgrade_older_files(client, monkeypatch):
 
 def test_missing_migration_step_is_refused(client, monkeypatch):
     f = _file(client)
+    f['schema_version'] = 1
     monkeypatch.setattr(PF, 'SCHEMA_VERSION', 2)
     monkeypatch.setattr(PF, 'MIGRATIONS', {})
     code, o = open_(client, json.dumps(f))
@@ -352,7 +354,7 @@ def test_save_refuses_an_invalid_project(client):
 def test_file_text_is_human_readable_json(client):
     _, r = save(client, project())
     text = PF.dumps(r['file'])
-    assert text.startswith('{\n "format": "mud-printer-project",\n "schema_version": 1,')
+    assert text.startswith('{\n "format": "mud-printer-project",\n "schema_version": 3,')
     assert json.loads(text) == r['file']
 
 

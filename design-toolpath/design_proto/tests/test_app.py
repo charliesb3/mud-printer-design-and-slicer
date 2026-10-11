@@ -103,8 +103,9 @@ class TestWorkspaceLayout:
         for i in design:
             assert p.where.get(i) == 'sidebar-design', f'{i} should be in the Design sidebar'
         # WALL SYSTEM: its own sidebar next to Design (construction, not geometry)
-        for i in ('wallsys-section', 'wallsys-list', 'wallsys-edit-section', 'wallsys-props'):
-            assert p.where.get(i) == 'sidebar-wallsys', f'{i} should be in the Wall System sidebar'
+        # (2026-10-11: the Designer's WALL GROUPS sidebar; constructions: the Wall Systems workspace)
+        for i in ('wallgrp-section', 'wallgrp-list', 'wallgrp-edit-section', 'wallgrp-props'):
+            assert p.where.get(i) == 'sidebar-wallsys', f'{i} should be in the Wall Groups sidebar'
         for i in prnt:
             assert p.where.get(i) == 'sidebar-print', f'{i} should be in the Print / Toolpath sidebar'
         for i in tools:

@@ -175,6 +175,28 @@ class SegIndex:
                         out[o] = d2
         return out
 
+    def within(self, p, r2, want, out, settle2):
+        """Lower `out[owner]` (d²) for the segments of owners in `want` near
+        p — only the owners still in `want`; an owner whose d² falls below
+        `settle2` is removed from `want` (its answer is decided)."""
+        c = self.cell
+        cx, cy = math.floor(p[0] / c), math.floor(p[1] / c)
+        span = int(math.ceil(math.sqrt(r2) / c))
+        grid, segs = self.grid, self.segs
+        for i in range(cx - span, cx + span + 1):
+            for j in range(cy - span, cy + span + 1):
+                for k in grid.get((i, j), ()):
+                    o, a, b = segs[k]
+                    if o not in want:
+                        continue
+                    d2 = _seg_dist2(p, a, b)
+                    if d2 < r2 and d2 < out.get(o, math.inf):
+                        out[o] = d2
+                        if d2 < settle2:
+                            want.discard(o)
+                            if not want:
+                                return
+
 
 class _UF:
     def __init__(self, n):
@@ -221,15 +243,38 @@ def layer_components(polylines, bead) -> list:
         for i, R in enumerate(rings):
             idx.add(i, R)
         step = max(min(bead / 4.0, 0.75), 1e-3)
+        # (exact narrowing, 2026-10-10 performance pass: a ring is only
+        # tested against the rings of OTHER groups whose bbox comes within r,
+        # with only its samples near those bboxes, and each such ring is
+        # settled by its first hit — the components are the closure of
+        # "closer than r somewhere", independent of the order unions happen)
+        boxes = []
+        for R in rings:
+            xs = [q[0] for q in R] or [0.0]
+            ys = [q[1] for q in R] or [0.0]
+            boxes.append((min(xs), min(ys), max(xs), max(ys)))
+        r2 = r * r
         for i, R in enumerate(rings):
             if groups == 1:
                 break
+            gi, bi = uf.find(i), boxes[i]
+            want = {j for j in range(n) if j != i and uf.find(j) != gi and _bbox_near(bi, boxes[j], r)}
+            if not want:
+                continue
+            near = [boxes[j] for j in want]
+            hit = {}
             for p in samples(R, step):
-                hit = idx.near_owners(p, r, skip=lambda o, i=i: uf.find(o) == uf.find(i))
-                for o in sorted(hit):
-                    groups -= uf.union(i, o)
-                if groups == 1:
+                x, y = p
+                for b in near:
+                    if b[0] - r <= x <= b[2] + r and b[1] - r <= y <= b[3] + r:
+                        break
+                else:
+                    continue
+                idx.within(p, r2, want, hit, r2)
+                if not want:
                     break
+            for o in sorted(hit):
+                groups -= uf.union(i, o)
     by = defaultdict(list)
     for i in range(n):
         by[uf.find(i)].append(i)
@@ -269,13 +314,32 @@ def _bbox_near(a, b, r):
     return not (a[2] + r < b[0] or b[2] + r < a[0] or a[3] + r < b[1] or b[3] + r < a[1])
 
 
-def _near(X: Piece, idx: SegIndex, r) -> dict:
-    """{owner: min distance} of the segments in `idx` within r of X."""
+def _near(X: Piece, idx: SegIndex, r, owners, settle=None) -> dict:
+    """{owner: distance} of the `owners` (Pieces of `idx`'s layer) within r
+    of X — exact for every test made of it: `< r`, and `< settle` (an owner
+    closer than `settle` stops being searched, so its value is then only
+    known to be < settle; without `settle`, the first hit under r decides).
+    Only X's samples within r of an owner's bbox are tried (the owner's
+    segments lie in its bbox: the others are ≥ r away), and the search
+    ends once every owner is decided (2026-10-10 performance pass: the
+    all-owners, all-samples scan was ~80 % of a cold print plan)."""
+    want = {Q.comp for Q in owners}
+    if not want:
+        return {}
+    boxes = [Q.bbox for Q in owners]
+    r2 = r * r
+    settle2 = r2 if settle is None else settle * settle
     out = {}
     for p in X.pts:
-        for o, d2 in idx.near_owners(p, r).items():
-            if d2 < out.get(o, math.inf):
-                out[o] = d2
+        x, y = p
+        for b in boxes:
+            if b[0] - r <= x <= b[2] + r and b[1] - r <= y <= b[3] + r:
+                break
+        else:
+            continue
+        idx.within(p, r2, want, out, settle2)
+        if not want:
+            break
     return {o: math.sqrt(d2) for o, d2 in out.items()}
 
 
@@ -326,7 +390,7 @@ def lift_graph(layer_pieces: dict, bead, clearance) -> LiftGraph:
                     up[Q.key].add(k)
             else:
                 cand = [Q for Q in layer_pieces[below] if _bbox_near(P.bbox, Q.bbox, r2)]
-                d = _near(P, index(below), r2) if cand else {}
+                d = _near(P, index(below), r2, cand, settle=r1) if cand else {}
                 for Q in layer_pieces[below]:
                     dist = d.get(Q.comp, math.inf)
                     if dist < r2:
@@ -344,7 +408,7 @@ def lift_graph(layer_pieces: dict, bead, clearance) -> LiftGraph:
                     others = [Q for Q in layer_pieces[Lm] if Q.key not in a and _bbox_near(P.bbox, Q.bbox, r2)]
                     if not others:
                         continue
-                    d = _near(P, index(Lm), r2)
+                    d = _near(P, index(Lm), r2, others)
                     for Q in others:
                         if d.get(Q.comp, math.inf) < r2:
                             preds[k].add(Q.key)

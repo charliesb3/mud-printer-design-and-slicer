@@ -37,6 +37,13 @@ exist, and no geometry is generated here:
   {'op': 'station', 'source', 'edge', 'at', 'profile'}
       → no document change: a LATTICE STATION of an Assembly opening
         (layer_design.DesignLibrary._station_reference uses it).
+  {'op': 'move', 'source', 'opening', 'point', 'width', 'profile'}
+      → the design's OWN opening `opening` re-placed for this layer: centred
+        at the foot of `point` (design coordinates) on the processed source
+        polyline — any wall, curved too — with clear width `width`. The
+        Assembly's VERTICAL (PLUMB) opening alignment (layer_assembly/
+        profiles._align_designer_openings): the same world position on every
+        layer of a transformed stack. Applied first (on the authored design).
 
 STRAIGHT WALLS (straight_walls): what a profile can target in V1 —
   LinePath (whole wall, taperable), an open ExplicitPath whose points are
@@ -179,6 +186,7 @@ def designer_openings(doc) -> list:
     edge from its start, clear width, label. Assembly openings ('asm-…') are
     not listed."""
     srcs = {d.get('id'): d for d in doc.get('source_paths') or []}
+    th = _thicknesses(doc)
     out = []
     for o in doc.get('openings') or []:
         oid, sid = o.get('id'), o.get('source_path_id')
@@ -186,10 +194,13 @@ def designer_openings(doc) -> list:
         if not oid or str(oid).startswith('asm-') or d is None:
             continue
         rec = {'id': oid, 'source': sid, 'width': float(o.get('width', 12.0)), 'label': o.get('label') or oid,
-               'center_s': float(o.get('center_s', 0.0))}
+               'center_s': float(o.get('center_s', 0.0)), 'thickness': float(th.get(sid, 0.0))}
         try:
             pts, closed = _processed(d, doc)
             q = _at_arc(pts, closed, rec['center_s'])
+            ring = list(pts) + ([pts[0]] if closed else [])
+            rec.update(xy=[q[0], q[1]], closed=bool(closed),
+                       length=sum(a.dist(b) for a, b in zip(ring, ring[1:])))   # (any wall: its centre point)
         except Exception:
             q = None
         if q is not None:
@@ -315,6 +326,24 @@ def apply_cuts(doc, cuts) -> tuple:
         # the contacts / closedness its signature names (a cut must never
         # bring back what Trim removed)
         _pin_trims(out)
+    gone = {str(c.get('opening')) for c in cuts if c.get('op') == 'unopen'}
+    if gone:                                     # (a plumb layer's lattice REFERENCE: those openings absent)
+        out['openings'] = [o for o in out.get('openings') or [] if str(o.get('id')) not in gone]
+        report += [{'profile': c.get('profile', ''), 'op': 'unopen', 'applied': True} for c in cuts
+                   if c.get('op') == 'unopen']
+    for c in [c for c in cuts if c.get('op') == 'move']:
+        # a PLUMB Designer opening: its own record re-placed for this layer
+        r = {'profile': c.get('profile', ''), 'op': 'move', 'source': c.get('source'), 'applied': False}
+        report.append(r)
+        o = next((o for o in out.get('openings') or [] if str(o.get('id')) == str(c.get('opening'))), None)
+        d = srcs.get(o.get('source_path_id')) if o is not None else None
+        if d is None:
+            r['why'] = 'the opening is not in this design'
+            continue
+        pts, closed = _processed(d, out)
+        sv, dist = _project_s(pts, closed, c['point'])
+        o['center_s'], o['width'] = sv, float(c['width'])
+        r.update(applied=True, center_s=sv, off=dist)
     for c in [c for c in cuts if c.get('op') == 'extent']:
         sid = c['source']
         r = {'profile': c.get('profile', ''), 'op': 'extent', 'source': sid, 'applied': False}
@@ -418,7 +447,9 @@ def selection(doc, c) -> list:
     members of `systems` − `exclude`."""
     ids = {d.get('id') for d in doc.get('source_paths') or [] if d.get('id')}
     out = set(c.get('sources') or []) & ids
-    for ws in doc.get('wall_systems') or []:
+    # `systems`: the selected WALL GROUPS (2026-10-11; a legacy document:
+    # its Wall Systems — migrated groups keep those ids)
+    for ws in (doc.get('wall_groups') or []) + (doc.get('wall_systems') or []):
         if ws.get('id') in set(c.get('systems') or []):
             out |= {str(m) for m in ws.get('members') or []} & ids
     return sorted(out - set(c.get('exclude') or []))
@@ -893,9 +924,10 @@ def source_list(doc) -> list:
     lattice: the design prints a Wall Infill lattice (only then do the cut's
     lattice STATIONS change anything — layer_design._cut_join)}."""
     sys_of = {}
-    for ws in doc.get('wall_systems') or []:
+    # (a Wall Group document: the WALL GROUP — what a planar cut selects)
+    for ws in doc.get('wall_groups') if 'wall_groups' in doc else (doc.get('wall_systems') or []):
         for m in ws.get('members') or []:
-            sys_of[str(m)] = (ws.get('id'), ws.get('name') or ws.get('id'))
+            sys_of.setdefault(str(m), (ws.get('id'), ws.get('name') or ws.get('id')))
     lattice = any((f.get('kind') or 'wall') == 'wall' for f in doc.get('infills') or [])
     out = []
     for d in doc.get('source_paths') or []:
@@ -934,6 +966,24 @@ def plane_probes(doc, c, width) -> list:
     return out
 
 
+def _num(o):
+    """Numbers as floats (booleans kept): a spec sent back by the page has
+    been through JavaScript, which writes 12.0 as 12."""
+    if isinstance(o, bool):
+        return o
+    if isinstance(o, int):
+        return float(o)
+    if isinstance(o, dict):
+        return {k: _num(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_num(v) for v in o]
+    return o
+
+
 def cut_key(cuts) -> str:
+    """A cache key of a cut spec — the same for the same numbers whether
+    they arrive as ints or floats (2026-10-10 performance pass: the page's
+    variant request, a JSON round trip of the resolve's spec, never matched
+    the variants the resolve had just built and rebuilt every one)."""
     import json
-    return json.dumps(sorted(json.dumps(c, sort_keys=True) for c in cuts or []))
+    return json.dumps(sorted(json.dumps(_num(c), sort_keys=True) for c in cuts or []))

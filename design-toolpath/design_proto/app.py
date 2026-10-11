@@ -288,7 +288,9 @@ def _apply_lineage(layer, data):
     if len(designs) < 2 or lin.get('id') is None:
         return
     from layer_design import DesignLibrary
-    lib = DesignLibrary(designs)
+    from wall_groups import is_grouped
+    grouped = any(is_grouped(d.get('document') or {}) or 'wall_groups' in (d.get('patch') or {}) for d in designs)
+    lib = DesignLibrary(designs, (data.get('project_wall_systems') or []) if grouped else None)
     active = lib.get(lin['id'])
     doc = lin.get('document')
     if doc is not None:                      # the live (unsaved) edit of the active design:
@@ -312,15 +314,32 @@ def _effective_cached(data):
     """(layer, paths, meta) of a request body, geometry from the cache when
     the very same body was resolved recently."""
     key = hashlib.sha1(request.get_data()).hexdigest()
-    layer = _deserialise_layer(data)
+    # WALL GROUP documents (2026-10-11): composed into the build format —
+    # with the project's Wall Systems (payload `wall_systems`), or as
+    # ARCHITECTURE only for the Designer's envelope view (`envelope`)
+    from wall_groups import compose, is_grouped
+    envelope = bool(data.get('envelope'))
+    bdata = data
+    if is_grouped(data):
+        did = (data.get('lineage') or {}).get('id')
+        # (the payload IS the document: the project's Wall Systems travel as
+        # `project_wall_systems`)
+        bdata = compose(data, did, None if envelope else (data.get('project_wall_systems') or []), arch=envelope)
+    layer = _deserialise_layer(bdata)
+    layer.envelope_only = envelope
     with _geom_lock:
         hit = _GEOM_CACHE.get(key)
         if hit is not None:
             _GEOM_CACHE.move_to_end(key)
     if hit is not None:
         return layer, hit[0], hit[1]
-    _apply_lineage(layer, data)
+    if not envelope:                         # (an envelope has no lattice)
+        _apply_lineage(layer, data)
     paths, meta = layer._build_effective()
+    if envelope:
+        from envelope import from_stage
+        meta = dict(meta, envelope=from_stage((data.get('lineage') or {}).get('id') or data.get('id', 'layer'),
+                                              bdata, {}, layer, paths, meta))
     resolve_cancel.check()
     with _geom_lock:
         _GEOM_CACHE[key] = (paths, meta)
@@ -339,6 +358,17 @@ def api_effective_paths():
         with resolve_cancel.request_scope(request.headers):
             data = request.get_json(force=True)
             layer, paths, meta = _effective_cached(data)
+            if data.get('envelope'):
+                # the Designer's ARCHITECTURAL view: wall envelopes (material
+                # rings + bare single beads, source-tagged) — no Wall System
+                # construction, lattice or route is generated
+                env = meta['envelope']
+                # (+ the SOURCE pieces of trimmed / opened sources: the
+                # single-line shapes view draws them, as before)
+                pieces = [p.to_dict() for p in paths
+                          if getattr(p, 'treatment_id', '') in ('opening_cut', 'network_src')]
+                return jsonify({'envelope': env.polylines(), 'network': meta['network'], 'printable': [],
+                                'paths': pieces, 'material': layer.material.to_dict()})
             return jsonify({
                 'paths': [p.to_dict() for p in paths],
                 'network': meta['network'],

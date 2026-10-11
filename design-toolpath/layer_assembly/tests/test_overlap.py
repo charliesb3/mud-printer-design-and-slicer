@@ -11,6 +11,20 @@ import math
 import pytest
 
 from layer_assembly.model import Assembly, Section, SectionTransform, Footprint, TransformCenter, resolve, AssemblyError
+
+
+# (written for the 1.5 in default Maximum Overhang — since 2026-10-11 the
+# default is 1 in: these cases state the 1.5 in they were designed with)
+_Assembly = Assembly
+
+
+def Assembly(*a, **k):          # noqa: F811
+    if len(a) < 9:
+        k.setdefault('max_overhang', 1.5)
+    return _Assembly(*a, **k)
+
+
+Assembly.from_dict = _Assembly.from_dict
 from layer_assembly.support import analyse_support
 from layer_assembly.groups import build_groups
 from layer_assembly.source import StaticSource, DesignInfo, LayerGeometry, stack_geometry
@@ -106,7 +120,7 @@ def test_validation_and_round_trip():
     a = Assembly(1.5, [Section('A', 3, '', SectionTransform('linear', (0, 0.5), 0))], max_overhang=0.0)
     rep = analyse_support(resolve(a), {'A': (LINE, W)}, a)
     assert rep.findings and math.isclose(rep.min_overlap, W)               # no overhang: overlap = w
-    assert Assembly.from_dict({'layer_height': 1.5, 'sections': []}).max_overhang == 1.5   # default
+    assert Assembly.from_dict({'layer_height': 1.5, 'sections': []}).max_overhang == 1.0   # default (1.5 until 2026-10-11)
     assert Assembly.from_dict(a.to_dict()).max_overhang == 0.0
 
 

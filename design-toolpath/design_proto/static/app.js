@@ -9,7 +9,20 @@ let drawPts = [];
 let selectedId = null;
 let _mousePosW = null;       // current mouse world-coords (for snap-to-first preview)
 
-let showToolpath = true;
+// DESIGNER = ARCHITECTURE (2026-10-11): ordinary editing resolves WALL
+// ENVELOPES only (Wall Groups: thickness + alignment) — no Wall System
+// construction, lattice or route (they belong to the Wall Systems workspace).
+// `window.DESIGNER_PRINT_PREVIEW = true` (development / the older test
+// fixtures) restores the full printable preview + routing of the Designer.
+function _designerEnvelope() { return !(typeof window !== 'undefined' && window.DESIGNER_PRINT_PREVIEW); }
+let showToolpath = !_designerEnvelope();
+let envelopeLines = null;    // the Designer's wall envelopes (/api/effective_paths `envelope`)
+// DISPLAY: the WALL ENVELOPE by default (2026-10-11, second correction — the
+// first correction showed single lines only): a thick wall shows its inner and
+// outer boundaries at its real thickness, its own source line as a thin dashed
+// reference; a wall without thickness shows its single centreline (never the
+// printed out-and-back lanes). "Wall Envelope" off = every shape as one line.
+let showEnvelope = true;
 let showArrows = true;
 let showDimensions = false;
 let showBeads = false;       // view: physical bead footprint (Material / Bead)
@@ -60,7 +73,8 @@ const layer = {
   junction_radius: 2,        // radius when junction_style === 'round'
   junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
   network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
-  wall_systems: [],          // [{ id, name, type, thickness, align, params, members, web }] (WALL_SYSTEMS)
+  wall_groups: [],           // [{ id, name, members, thickness, align, print_reference }] (ARCHITECTURE;
+                             //  the printable constructions are the PROJECT's Wall Systems)
   wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
   // MATERIAL / BEAD (physical deposit; see Bead section)
   material: { bead_width: 3.0, contact_overlap: 0.75, return_overlap: 0.75, physical: true },
@@ -472,7 +486,8 @@ function repaint() {
   const stale = _geomPending;
   if (stale) { ctx.save(); ctx.globalAlpha = STALE_ALPHA; }
   drawBeads();
-  if (!showBeads && !(showToolpath && routeResult)) drawPrintableLines();
+  if (!showBeads && !(showToolpath && routeResult) && !_designerEnvelope()) drawPrintableLines();
+  if (_designerEnvelope() && showEnvelope) drawEnvelope();
   if (stale) ctx.restore();
   drawEffectivePaths();
   drawOpenings();
@@ -592,6 +607,13 @@ function drawEffectivePaths() {
       continue;
     }
     if (trimmed.has(p.id) && p.id !== dragged) continue;   // pieces below
+    if (showEnvelope && _designerEnvelope() && envelopeLines && p.id !== selectedId && p.id !== dragged &&
+        _effectiveWall(p).wall) {
+      // a THICK wall in the envelope view: its faces are drawn (drawEnvelope);
+      // its own source line is the thin dashed design reference
+      drawPolyline(_pathCanvasPts(p), '#666', 1, true, p.closed);
+      continue;
+    }
     const isSel = p.id === selectedId;
     const color = isSel ? '#ffffff' : (ROLE_COLORS[p.role] || '#aaa');
     const width = isSel ? 2.5 : 1.8;
@@ -1907,11 +1929,6 @@ function _afterNetworkUpdate() {
   // owned web records are DERIVED bookkeeping of the edit that caused it — folded
   // into that undo step, never a step of their own (which would make Undo re-sync
   // against the response and clear Redo)
-  const clean = !!_hist.current && _histState() === _hist.current.state;
-  if (_syncSystemWebs()) {
-    if (clean) _hist.current.state = _histState();
-    scheduleRefresh();
-  }
   if (!_isTyping()) { updateNetworkSection(); updateWallSystemSection(); }
   // Wall Geometry: say when rounded junctions are limited by the geometry
   const lim = ((networkInfo && networkInfo.junctions) || []).filter(j => j.limited && !j.derived);
@@ -2839,14 +2856,14 @@ function updatePathList() {
       badge.title = `Connected wall network ${net.label}: ${net.names.join(', ')}`;
       item.appendChild(badge);
     }
-    const ws = _wsOf(p.id);
-    if (ws) {
+    const wg = _wgOf(p.id);
+    if (wg) {
       const b = document.createElement('div');
-      b.className = 'path-type wallsys-badge';
+      b.className = 'path-type wallgrp-badge';
       b.style.cssText = 'color:var(--accent);margin-left:6px;max-width:78px;overflow:hidden;' +
                         'text-overflow:ellipsis;white-space:nowrap';
-      b.textContent = `▣ ${_wsLabel(ws)}`;
-      b.title = `Wall System ${_wsLabel(ws)} (${WALL_SYSTEMS[ws.type] ? WALL_SYSTEMS[ws.type].label : ws.type})`;
+      b.textContent = `▣ ${_wgLabel(wg)}`;
+      b.title = `Wall Group ${_wgLabel(wg)} (${wg.thickness} in)`;
       item.appendChild(b);
     }
     el.appendChild(item);
@@ -2998,6 +3015,17 @@ function _alignLabel(align, closed) {
 // it overrides it — `{ thickness: 0 }` is the explicit single-bead override.
 function _effectiveWall(path) {
   const net = _networkOf()[path.id];
+  const grp = _wgOf(path.id);
+  if (grp) {
+    // the WALL GROUP owns the envelope (architecture)
+    return grp.thickness > 0
+      ? { wall: { thickness: grp.thickness, align: grp.align || 'auto', print_reference: !!grp.print_reference },
+          from: 'group', net, grp }
+      : { wall: null, from: 'group', net, grp };
+  }
+  if (path.envelope && path.envelope.thickness > 0)       // an ungrouped wall's OWN envelope
+    return { wall: { thickness: path.envelope.thickness, align: path.envelope.align || 'auto',
+                     print_reference: !!path.envelope.print_reference }, from: 'own', net };
   const sys = _wsOf(path.id);
   if (sys && sys.type === 'single') return { wall: null, from: 'system', net, sys };
   if (sys && sys.thickness != null) {
@@ -3375,21 +3403,24 @@ const CHAIN_POINTS_WARN = 40000;
 function _wallSystemReport(id) { return _wsReports({ id })[0] || null; }
 
 // construction parameters (Interleaved / Linked / Chained Loop)
-function _addWallSystemParams(panel, s) {
+function _addWallSystemParams(panel, s, opts = {}) {
   // a PARAMETER edit only regenerates the geometry (coalesced requests; a
   // superseded resolve in flight is cancelled); the panel is not rebuilt —
   // the input keeps focus and the readout updates in place when the result
-  // arrives
-  const onParam = () => {
+  // arrives. opts (the Wall Systems workspace): onParam (no geometry is
+  // generated there until "Generate Wall Systems"), thickness (the Wall
+  // Groups' architectural thickness the construction fills)
+  const onParam = opts.onParam || (() => {
     routeResult = null;
     _geomPending = true;                       // immediate feedback: the request is on its way
     setStatus(`Updating ${_wsLabel(s)}…`);
     scheduleRefresh({ supersede: true }); repaint();
-  };
+  });
+  const thick = () => (opts.thickness != null ? opts.thickness : (s.thickness ?? 10));
   const chain = s.type === 'chain';
   const inputs = {};
   // Chained Loop: every field shows the EFFECTIVE value (auto resolved)
-  const shown = () => chain ? _chainEffective(s.params, s.thickness ?? 10, _beadWidth()) : null;
+  const shown = () => chain ? _chainEffective(s.params, thick(), _beadWidth()) : null;
   const showValue = (prm, eff) => {
     if (!eff || !(prm.name in eff.auto || prm.name === 'phase')) return s.params[prm.name] ?? prm.default;
     return eff[prm.name];
@@ -3422,7 +3453,7 @@ function _addWallSystemParams(panel, s) {
         const cur = s.params[prm.name] ?? prm.default;
         if (cur === x) return;                   // (the same value again: blur after a live apply)
         if (!(cur > 0) && x > 0 && Math.abs(x - eff0Of(prm.name)) < 1e-9) return;   // (the auto value retyped)
-        const res = _chainResolve({ ...s.params, [prm.name]: x }, prm.name, s.thickness ?? 10, _beadWidth());
+        const res = _chainResolve({ ...s.params, [prm.name]: x }, prm.name, thick(), _beadWidth());
         s.params = res.params;
         const eff = shown();
         // every OTHER field shows its generated value (moved values, and auto
@@ -3430,7 +3461,7 @@ function _addWallSystemParams(panel, s) {
         refresh(Object.keys(inputs).filter(k => k !== prm.name), eff);
         if (committed) refresh([prm.name], eff);   // (the edited field itself: not while typing)
         onParam();
-        if (res.notes.length) setStatus(`Updating ${_wsLabel(s)}… ${res.notes.join(' · ')}`);
+        if (res.notes.length) setStatus(`${_wsLabel(s)}: ${res.notes.join(' · ')}`);
         return;
       }
       if (s.params[prm.name] === x) return;     // (the same value again: blur after a live apply)
@@ -3453,15 +3484,16 @@ function _chainOnThickness(s) {
 
 // SKIN + WEB: the web lattice (formerly the Wall Infill panel) — edits go to
 // the system's web and are synced into its owned infill records
-function _addWebRows(panel, s, rebuild) {
+function _addWebRows(panel, s, rebuild, opts = {}) {
   const web = s.web || (s.web = { pattern: 'none', params: {}, variation_index: 0 });
-  const onParam = () => { _syncSystemWebs(); routeResult = null; scheduleRefresh(); repaint(); };
+  const onParam = opts.onParam || (() => { _syncSystemWebs(); routeResult = null; scheduleRefresh(); repaint(); });
   addPropRowSelectTo(panel, 'Web', web.pattern, _patternsFor('wall'), v => {
     web.pattern = v;
     for (const prm of _paramsFor({ pattern: v, kind: 'wall' }))
       if (web.params[prm.name] == null) web.params[prm.name] = prm.default;
     if (v === 'truss' && web.params.seed == null) web.params.seed = 0;
-    _syncSystemWebs(); rebuild();
+    if (!opts.onParam) _syncSystemWebs();
+    rebuild();
   }, PATTERN_LABELS);
   for (const prm of _paramsFor({ pattern: web.pattern, kind: 'wall' })) {
     addPropRowNumTo(panel, prm.label, web.params[prm.name] ?? prm.default, v => {
@@ -3470,7 +3502,7 @@ function _addWebRows(panel, s, rebuild) {
     }, prm.unit ?? 'in');
   }
   // readouts of the materialised web (the first owned record)
-  const f = (layer.infills || []).find(x => x.owner === s.id);
+  const f = opts.onParam ? null : (layer.infills || []).find(x => x.owner === s.id);
   if (f) {
     const st = _infillStatus(f);
     if (st && !/already filled/.test(st)) { _addNote(panel, st); panel.lastChild.style.color = 'var(--warn)'; }
@@ -3497,7 +3529,7 @@ function _addWebRows(panel, s, rebuild) {
     btn.className = 'add-btn';
     btn.textContent = 'Regenerate';
     btn.title = 'Pick another valid lattice with the same parameters';
-    btn.onclick = () => { web.params.seed = (web.params.seed || 0) + 1; _syncSystemWebs(); rebuild(); };
+    btn.onclick = () => { web.params.seed = (web.params.seed || 0) + 1; if (!opts.onParam) _syncSystemWebs(); rebuild(); };
     row.append(lbl, btn);
     panel.appendChild(row);
     _addNote(panel, 'Pitch follows from Brace Angle and the local wall cavity (prototype defaults, not calibrated).');
@@ -3518,53 +3550,121 @@ function _addWebRows(panel, s, rebuild) {
   panel.appendChild(adv);
 }
 
-// WALL SYSTEM PANEL (its own Designer sidebar): the systems, then the picked
-// one's construction, web / parameters and members.
-let _wsLastSel = null;
-function updateWallSystemSection() {
-  const list = document.getElementById('wallsys-list');
-  const panel = document.getElementById('wallsys-props');
-  const edit = document.getElementById('wallsys-edit-section');
+// WALL GROUPS (2026-10-11; the Designer's architecture): an explicit group of
+// paths owning Wall Thickness, Wall Alignment and the print-reference line —
+// the ENVELOPE. Members need not touch; a path in no group is a single bead.
+// The printable CONSTRUCTION (Single / Hollow / Skin + Web / Parallel / waves /
+// Chained Loop + parameters) is the PROJECT's Wall Systems, assigned to walls or
+// whole groups in the Wall Systems workspace (wall_groups.py composes them).
+function _wgOf(pid) { return (layer.wall_groups || []).find(g => g.members.includes(pid)) || null; }
+function _wgLabel(g) { return g.name || g.id; }
+function _newWallGroupId() {
+  const taken = new Set((layer.wall_groups || []).map(g => g.id));
+  for (const d of (typeof project !== 'undefined' && project.wall_systems) || []) taken.add(d.id);
+  let k = 1;
+  while (taken.has(`WG${k}`)) k++;
+  return `WG${k}`;
+}
+function _wgSetMember(pid, g) {             // at most ONE group per path
+  for (const x of layer.wall_groups || []) x.members = x.members.filter(m => m !== pid);
+  if (g && !g.members.includes(pid)) g.members.push(pid);
+}
+let wallGroupPick = null;                    // the group shown in the Wall Groups panel
+function _wgNew(pids = [], thickness = 10) {
+  layer.wall_groups = layer.wall_groups || [];
+  let k = layer.wall_groups.length + 1;
+  while (layer.wall_groups.some(g => g.name === `Wall Group ${k}`)) k++;
+  const g = { id: _newWallGroupId(), name: `Wall Group ${k}`, members: [], thickness, align: 'auto',
+              print_reference: false };
+  layer.wall_groups.push(g);
+  for (const pid of pids) _wgSetMember(pid, g);
+  wallGroupPick = g.id;
+  return g;
+}
+
+// An older document (or fixture) still holding Wall Systems: split ONCE into
+// Wall Groups (members, thickness, alignment; ids kept) + project Wall Systems
+// (construction; same id, assigned to that group) — the backend's
+// wall_groups.split_document, 1:1 (not an undo step).
+function _adoptLegacyWallSystems() {
+  const legacy = layer.wall_systems;
+  if (!legacy || !legacy.length || (layer.wall_groups && layer.wall_groups.length)) {
+    if (legacy && !legacy.length) delete layer.wall_systems;
+    return false;
+  }
+  const clean = !!_hist.current && _histState() === _hist.current.state;
+  layer.wall_groups = legacy.map(w => {
+    const g = { id: w.id, name: w.name || w.id, members: [...(w.members || [])] };
+    for (const f of ['thickness', 'align', 'print_reference']) if (f in w) g[f] = w[f];
+    return g;
+  });
+  const P = typeof project !== 'undefined' ? project : null;
+  if (P) {
+    P.wall_systems = P.wall_systems || [];
+    for (const w of legacy) {
+      if (P.wall_systems.some(x => x.id === w.id)) continue;
+      const web = JSON.parse(JSON.stringify(w.web || {}));
+      const owned = (layer.infills || []).find(f => f.owner === w.id);
+      if (w.type === 'skin_web' && owned && web.pattern && web.pattern !== 'none')
+        Object.assign(web, { pattern: owned.pattern, params: JSON.parse(JSON.stringify(owned.params || {})) });
+      P.wall_systems.push({ id: w.id, name: w.name || w.id, type: w.type || 'skin_web',
+                            params: JSON.parse(JSON.stringify(w.params || {})), web, members: [], groups: [w.id],
+                            designs: null });
+    }
+  }
+  delete layer.wall_systems;
+  if (clean && _hist.current) _hist.current.state = _histState();
+  return true;
+}
+
+let _wgLastSel = null;
+function updateWallSystemSection() { return updateWallGroupSection(); }
+function updateWallGroupSection() {
+  const list = document.getElementById('wallgrp-list');
+  const panel = document.getElementById('wallgrp-props');
+  const edit = document.getElementById('wallgrp-edit-section');
   if (!list || !panel) return;
   list.innerHTML = ''; panel.innerHTML = '';
-  _wsReportEls = _wsReportEls.filter(r => r.owner !== 'sys');
-  const all = layer.wall_systems || (layer.wall_systems = []);
+  if (Array.isArray(list.children)) list.children.length = 0;
+  if (Array.isArray(panel.children)) panel.children.length = 0;
+  const all = layer.wall_groups || (layer.wall_groups = []);
   const rebuild = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint(); };
   const sel = selectedId && layer.source_paths.find(p => p.id === selectedId);
-  if (selectedId !== _wsLastSel) {          // selecting a path shows its system
-    _wsLastSel = selectedId;
-    const ss = sel && _wsOf(sel.id);
-    if (ss) wallSystemPick = ss.id;
+  if (selectedId !== _wgLastSel) {          // selecting a path shows its group
+    _wgLastSel = selectedId;
+    const gg = sel && _wgOf(sel.id);
+    if (gg) wallGroupPick = gg.id;
   }
-  const cur = all.find(s => s.id === wallSystemPick) || all[0] || null;
-  wallSystemPick = cur ? cur.id : null;
-  for (const s of all) {
+  const cur = all.find(g => g.id === wallGroupPick) || all[0] || null;
+  wallGroupPick = cur ? cur.id : null;
+  for (const g of all) {
     const item = document.createElement('div');
-    item.className = 'path-item wallsys-item' + (s === cur ? ' selected' : '');
-    item.onclick = () => { wallSystemPick = s.id; updateWallSystemSection(); };
+    item.className = 'path-item wallgrp-item' + (g === cur ? ' selected' : '');
+    item.onclick = () => { wallGroupPick = g.id; updateWallGroupSection(); };
     const label = document.createElement('div');
     label.className = 'path-label';
-    label.textContent = _wsLabel(s);
+    label.textContent = _wgLabel(g);
     const type = document.createElement('div');
     type.className = 'path-type';
-    type.textContent = `${WALL_SYSTEMS[s.type] ? WALL_SYSTEMS[s.type].label : s.type} · ${s.members.length}`;
+    type.textContent = `${g.thickness > 0 ? g.thickness + ' in' : 'single bead'} · ${g.members.length}`;
     item.append(label, type);
     list.appendChild(item);
   }
-  const loose = layer.source_paths.filter(p => !_wsOf(p.id)).map(p => _pathName(p.id));
-  if (loose.length) _addNote(list, `No Wall System (single bead): ${loose.join(', ')}`);
-  _addButton(list, sel && !_wsOf(sel.id) ? `+ New Wall System with ${_pathName(sel.id)}` : '+ New Wall System',
-             () => { _wsNew(sel && !_wsOf(sel.id) ? [sel.id] : []); rebuild(); });
+  const loose = layer.source_paths.filter(p => !_wgOf(p.id))
+    .map(p => _pathName(p.id) + (p.envelope && p.envelope.thickness > 0 ? ` (own ${p.envelope.thickness} in)` : ''));
+  if (loose.length) _addNote(list, `No Wall Group (single bead unless an own thickness is set in Wall Systems): ${loose.join(', ')}`);
+  _addButton(list, sel && !_wgOf(sel.id) ? `+ New Wall Group with ${_pathName(sel.id)}` : '+ New Wall Group',
+             () => { _wgNew(sel && !_wgOf(sel.id) ? [sel.id] : []); rebuild(); });
   if (!cur) { if (edit) edit.style.display = 'none'; return; }
   if (edit) edit.style.display = '';
-  const title = document.getElementById('wallsys-edit-title');
-  if (title) title.textContent = _wsLabel(cur);
-  // MEMBERS first: only this system's paths (compact ×), then Add path…
+  const title = document.getElementById('wallgrp-edit-title');
+  if (title) title.textContent = _wgLabel(cur);
+  // MEMBERS first: only this group's paths (compact ×), then Add path…
   _addSubTitle(panel, 'Members');
   if (!cur.members.length) _addNote(panel, 'No paths yet.');
   for (const pid of cur.members) {
     const r = document.createElement('div');
-    r.className = 'prop-row wallsys-member';
+    r.className = 'prop-row wallgrp-member';
     const nm = document.createElement('span');
     nm.className = 'prop-label';
     nm.style.cssText = 'flex:1;cursor:pointer';
@@ -3575,8 +3675,8 @@ function updateWallSystemSection() {
     const x = document.createElement('button');
     x.className = 'remove-btn';
     x.textContent = '×';
-    x.title = `Remove ${_pathName(pid)} from ${_wsLabel(cur)}`;
-    x.onclick = () => { _wsSetMember(pid, null); _syncSystemWebs(); rebuild(); };
+    x.title = `Remove ${_pathName(pid)} from ${_wgLabel(cur)}`;
+    x.onclick = () => { _wgSetMember(pid, null); rebuild(); };
     r.append(nm, x);
     panel.appendChild(r);
   }
@@ -3585,91 +3685,59 @@ function updateWallSystemSection() {
     const ADD = '__add';
     addPropRowSelectTo(panel, 'Add path…', ADD, [ADD, ...cand.map(p => p.id)], v => {
       if (v === ADD) return;
-      _wsSetMember(v, cur);                 // (moves it out of another system)
-      _syncSystemWebs(); rebuild();
+      _wgSetMember(v, cur);                 // (moves it out of another group)
+      rebuild();
     }, { [ADD]: '— choose a path —', ...Object.fromEntries(cand.map(p => {
-      const o = _wsOf(p.id);
-      return [p.id, _pathName(p.id) + (o ? ` (from ${_wsLabel(o)})` : '')];
+      const o = _wgOf(p.id);
+      return [p.id, _pathName(p.id) + (o ? ` (from ${_wgLabel(o)})` : '')];
     })) });
   }
-  _addSubTitle(panel, 'Construction');
+  _addSubTitle(panel, 'Envelope');
   addPropRowText(panel, 'Name', cur.name || '', v => { cur.name = v.trim() || cur.id; rebuild(); });
-  const types = Object.keys(WALL_SYSTEMS);
-  addPropRowSelectTo(panel, 'Construction', cur.type, types, v => { _wsSetType(cur, v); _syncSystemWebs(); rebuild(); },
-                     Object.fromEntries(types.map(k => [k, WALL_SYSTEMS[k].label])));
-  if (cur.type === 'single') {
-    _addNote(panel, 'The ordinary single-line wall: one bead along each path. With Physical rules an open ' +
-                    'path prints as separated outbound + return lanes (Material / Bead: Return-lane overlap).');
-  } else {
-    addPropRowNumTo(panel, 'Wall Thickness', cur.thickness ?? 10, v => {
-      cur.thickness = Math.max(0.5, v);
-      const notes = _chainOnThickness(cur);      // (Chained Loop: dependent values follow)
-      routeResult = null; scheduleRefresh({ supersede: cur.type === 'chain' }); repaint();
-      if (cur.type === 'chain') {
-        _geomPending = true;
-        setStatus(`Updating ${_wsLabel(cur)}…${notes.length ? ' ' + notes.join(' · ') : ''}`);
-        if (!_isTyping()) rebuild();             // (the effective values shown follow the thickness)
-      }
-    });
-    const alignOpts = ['Default', 'Centered', 'Inside', 'Outside'];
-    addPropRowSelect(panel, 'Wall Alignment', !cur.align || cur.align === 'auto' ? 'Default' : _alignLabel(cur.align, true),
-                     alignOpts, v => { cur.align = v === 'Default' ? 'auto' : ALIGN_UI[v]; rebuild(); });
-    _addNote(panel, 'Default: Centered on lines, Inside closed shapes.');
-    if (cur.align === 'center') {
-      addPropRowCheck(panel, 'Print reference line', !!cur.print_reference, v => { cur.print_reference = v; rebuild(); });
-    }
+  addPropRowNumTo(panel, 'Wall Thickness', cur.thickness ?? 10, v => {
+    cur.thickness = Math.max(0.5, v);
+    routeResult = null; scheduleRefresh({ supersede: true }); repaint();
+  });
+  const alignOpts = ['Default', 'Centered', 'Inside', 'Outside'];
+  addPropRowSelect(panel, 'Wall Alignment', !cur.align || cur.align === 'auto' ? 'Default' : _alignLabel(cur.align, true),
+                   alignOpts, v => { cur.align = v === 'Default' ? 'auto' : ALIGN_UI[v]; rebuild(); });
+  _addNote(panel, 'Default: Centered on lines, Inside closed shapes.');
+  if (cur.align === 'center') {
+    addPropRowCheck(panel, 'Print reference line', !!cur.print_reference, v => { cur.print_reference = v; rebuild(); });
   }
-  if (cur.type === 'single') {
-    // (no envelope parameters)
-  } else if (cur.type === 'hollow') {
-    _addNote(panel, 'The inner and outer skins only — no structural web between them.');
-  } else if (cur.type === 'skin_web') {
-    _addSubTitle(panel, 'Skin + Web');
-    _addWebRows(panel, cur, rebuild);
-  } else {
-    _addSubTitle(panel, WALL_SYSTEMS[cur.type].label);
-    _addWallSystemParams(panel, cur);
-    const d = document.createElement('div');
-    d.className = 'path-type wall-system-report';
-    _wsReportEls.push({ el: d, sys: cur.id, owner: 'sys' });
-    _fillWallSystemReport(d, { sys: cur.id });
-    panel.appendChild(d);
-    _addNote(panel, 'No separate skins: the paths fill the Wall Thickness envelope.');
-  }
-  _addNote(panel, 'Members need not touch. Connected walls still join geometrically (junctions); ' +
-                  'a path in no Wall System prints as a single bead.');
-  _addButton(panel, `Delete ${_wsLabel(cur)}`, () => {
-    layer.wall_systems = layer.wall_systems.filter(s => s !== cur);
-    wallSystemPick = null; _syncSystemWebs(); rebuild();
+  _addNote(panel, 'The Designer shows each wall’s envelope (its faces). How it prints — Single, Hollow, ' +
+                  'Skin + Web, Parallel, waves, Chained Loop — is chosen per wall or per group in the Wall Systems ' +
+                  'workspace (walls of one group may print differently).');
+  _addButton(panel, `Delete ${_wgLabel(cur)}`, () => {
+    layer.wall_groups = layer.wall_groups.filter(g => g !== cur);
+    wallGroupPick = null; rebuild();
   });
 }
 
-// Path Properties: WHICH Wall System builds this path — identity only.
-// Membership and construction are edited in the Wall System panel (no
-// duplicated editing UI here); "Edit" opens the path's system there.
+// Path Properties: WHICH Wall Group gives this path its envelope — identity
+// only (membership and envelope are edited in the Wall Groups panel).
 function _addWallRows(panel, path) {
-  _wsReportEls = _wsReportEls.filter(r => r.owner !== 'path');
-  const s = _wsOf(path.id);
+  const g = _wgOf(path.id);
   const row = document.createElement('div');
   row.className = 'prop-row';
-  row.id = 'path-wallsys-row';
+  row.id = 'path-wallgrp-row';
   const lab = document.createElement('span');
   lab.className = 'prop-label';
-  lab.textContent = 'Wall System';
+  lab.textContent = 'Wall Group';
   const val = document.createElement('span');
   val.className = 'path-type';
   val.style.flex = '1';
-  val.textContent = s ? `${_wsLabel(s)} · ${WALL_SYSTEMS[s.type] ? WALL_SYSTEMS[s.type].label : s.type}` +
-                      (s.type !== 'single' && s.thickness != null ? ` · ${s.thickness} in` : '')
-    : (_legacyWalls() && _effectiveWall(path).wall ? `${_effectiveWall(path).wall.thickness} in wall (older design)`
-                                                   : 'None (single bead)');
+  val.textContent = g ? `${_wgLabel(g)} · ${g.thickness} in`
+    : (path.envelope && path.envelope.thickness > 0 ? `None · own wall ${path.envelope.thickness} in (Wall Systems)`
+       : (_legacyWalls() && _effectiveWall(path).wall ? `${_effectiveWall(path).wall.thickness} in wall (older design)`
+                                                      : 'None (single bead)'));
   row.append(lab, val);
-  if (s) {
+  if (g) {
     const ed = document.createElement('button');
     ed.className = 'mini-btn';
     ed.textContent = 'Edit';
-    ed.title = 'Open this Wall System in the Wall System panel';
-    ed.onclick = () => { wallSystemPick = s.id; updateWallSystemSection(); };
+    ed.title = 'Open this Wall Group in the Wall Groups panel';
+    ed.onclick = () => { wallGroupPick = g.id; updateWallGroupSection(); };
     row.appendChild(ed);
   }
   panel.appendChild(row);
@@ -4269,7 +4337,9 @@ function addPropRowSelectTo(panel, label, value, options, onChange, labels = nul
 
 // Any wall (own or network) using a non-default Wall System?
 function _anyWallSystem() {
-  return (layer.wall_systems || []).some(s => s.type !== 'skin_web') ||
+  if (_designerEnvelope()) return false;     // (envelopes: no construction is resolved)
+  return (layer.wall_groups || []).length > 0 ||          // (full preview: the project's constructions)
+         (layer.wall_systems || []).some(s => s.type !== 'skin_web') ||
          layer.source_paths.some(p => p.wall && p.wall.thickness > 0 && _wallSystemType(p.wall) !== 'skin_web') ||
          (layer.network_walls || []).some(w => _wallSystemType(w) !== 'skin_web');
 }
@@ -4324,7 +4394,7 @@ let _refreshSupersede = false;  // the pending refresh supersedes a resolve in f
 function scheduleRefresh(opts = {}) {
   if (opts.supersede) _refreshSupersede = true;
   _syncRelations();
-  if (!_histRestoring) _syncSystemWebs();      // (networkInfo is still the undone state's)
+  _adoptLegacyWallSystems();                   // (an older document: → Wall Groups + project Wall Systems)
   _maybeMigrateWallSystems();
   historyCheckpoint();
   clearTimeout(_refreshTimer);
@@ -4333,7 +4403,13 @@ function scheduleRefresh(opts = {}) {
     networkInfo = null;
     routeResult = null;
     printable = [];
+    envelopeLines = null;
     repaint();
+    return;
+  }
+  if (_designerEnvelope()) {                   // ARCHITECTURE: the wall envelopes only
+    const fire0 = () => { const sup = _refreshSupersede; _refreshSupersede = false; _coalesced(fetchEffectivePaths, sup); };
+    _refreshTimer = setTimeout(fire0, 120);
     return;
   }
   const ws = _anyWallSystem();
@@ -4380,6 +4456,7 @@ async function _fetchGeometry(body, sent) {
   if (!data.paths) return false;
   const sourceIds = new Set(layer.source_paths.map(p => p.id));
   derivedPaths = data.paths.filter(p => !sourceIds.has(p.id));
+  envelopeLines = data.envelope || null;
   networkInfo = data.network || null;
   printable = data.printable || [];
   _netState = sent;
@@ -4473,8 +4550,15 @@ function buildPayload() {
     junction_radius: layer.junction_radius || 0,
     junction_overrides: (layer.junction_overrides || []).map(o => ({ ...o })),
     network_walls: (layer.network_walls || []).map(w => ({ ...w })),
-    wall_systems: (layer.wall_systems || []).map(w => ({ ...w, params: { ...(w.params || {}) },
-                                                          members: [...w.members], web: { ...(w.web || {}) } })),
+    // ARCHITECTURE: the Wall Groups; (an older document's own Wall Systems
+    // until adopted); the project's Wall Systems only for the full preview
+    wall_groups: (layer.wall_groups || []).map(g => ({ ...g, members: [...g.members] })),
+    ...((layer.wall_systems || []).length && !(layer.wall_groups || []).length
+      ? { wall_systems: layer.wall_systems.map(w => ({ ...w, params: { ...(w.params || {}) },
+                                                       members: [...w.members], web: { ...(w.web || {}) } })) }
+      : (_designerEnvelope() ? { envelope: true }
+                             : { project_wall_systems: JSON.parse(JSON.stringify(
+                                 (typeof project !== 'undefined' && project.wall_systems) || [])) })),
     wall_relations: (layer.wall_relations || []).map(w => ({ ...w })),
     return_paths: layer.return_paths !== false,
     prefer_closed: layer.prefer_closed !== false,
@@ -4615,6 +4699,48 @@ function _staleStrand(id) {
 }
 
 // Beads OFF, no toolpath shown: each printable centreline = ONE thin blue line
+// The Designer's ARCHITECTURE view: each wall's envelope — its material
+// filled faintly, its faces (ring boundaries) outlined; bare single beads as
+// lines. (No construction / lattice / route: Wall Systems workspace.)
+const ENVELOPE_FILL = 'rgba(74,158,255,0.13)', ENVELOPE_LINE = '#6fb1ff';
+// what the Designer draws (also the test hook): the SHAPES (each visible
+// source as one line) and — with Wall Envelope on — the envelope rings and the
+// faces of thick walls without an infill region (never single-bead lanes)
+function designerDisplay() {
+  const env = envelopeLines || [];
+  return { mode: showEnvelope ? 'envelope' : 'shapes',
+           shapes: layer.source_paths.filter(p => p.visible !== false).length,
+           rings: showEnvelope ? env.filter(p => p.role !== 'bead' && (p.pts || []).length >= 3).length : 0,
+           faces: showEnvelope ? env.filter(p => p.role === 'bead' && p.cls === 'face' && !p.single).length : 0,
+           printable: _designerEnvelope() ? 0 : printable.length, toolpath: !!(showToolpath && routeResult) };
+}
+
+function drawEnvelope() {
+  if (!envelopeLines || !envelopeLines.length) return;
+  const rings = envelopeLines.filter(p => p.role !== 'bead' && (p.pts || []).length >= 3);
+  ctx.save();
+  if (rings.length) {
+    ctx.beginPath();
+    for (const r of rings) {
+      const pts = r.pts.map(([x, y]) => worldToCanvas(x, y));
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+    }
+    ctx.fillStyle = ENVELOPE_FILL;
+    ctx.fill('evenodd');
+    ctx.strokeStyle = ENVELOPE_LINE;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+  ctx.restore();
+  // (the FACES of thick walls without an infill region; a single-bead wall's
+  // own printed lines / return lanes are construction, not envelope — its
+  // shape line is drawn as the design)
+  for (const b of envelopeLines.filter(p => p.role === 'bead' && p.cls === 'face' && !p.single))
+    drawPolyline(b.pts.map(([x, y]) => worldToCanvas(x, y)), ENVELOPE_LINE, 1.5, false, !!b.closed);
+}
+
 function drawPrintableLines() {
   for (const c of printable || []) {
     if ((c.pts || []).length < 2 || _staleStrand(c.id)) continue;
@@ -5013,7 +5139,7 @@ function deletePath(id) {
   }
   layer.network_walls = (layer.network_walls || []).filter(w => w.path_id);
   for (const s of layer.wall_systems || []) s.members = s.members.filter(m => m !== id);
-  _syncSystemWebs();
+  for (const g of layer.wall_groups || []) g.members = g.members.filter(m => m !== id);
   selectedId = null;
   selectedOpeningId = null;
   routeResult = null;
@@ -5040,7 +5166,8 @@ function clearAll() {
   layer.region_overrides = [];
   layer.infills = [];
   layer.network_walls = [];
-  layer.wall_systems = [];
+  delete layer.wall_systems;
+  layer.wall_groups = [];
   layer.wall_relations = [];
   layer.return_paths = true;
   layer.prefer_closed = true;
@@ -5910,7 +6037,7 @@ function newId() { return 'p' + (_idCounter++); }
 
 // ---------------------------------------------------------------------------
 // WORKSPACES + PROJECT LAYER DESIGNS
-// One application, three workspaces: [Designer] [Assembly] [Print Simulation]. Switching is a
+// One application, four workspaces: [Designer] [Assembly] [Wall Systems] [Print Simulation]. Switching is a
 // view change; neither workspace's state is touched.
 // The project's LAYER DESIGNS (design_proto/layer_design.py): Base is a full
 // Designer document; a derived design stores only its delta from its
@@ -5928,7 +6055,7 @@ function setWorkspace(name) {
   const prev = currentWorkspace;
   currentWorkspace = name;
   if (prev !== name && _workspaceHideHooks[prev]) _workspaceHideHooks[prev]();
-  for (const w of ['designer', 'assembly', 'simulation']) {
+  for (const w of ['designer', 'assembly', 'wallsystems', 'simulation']) {
     const el = document.getElementById('ws-' + w);
     if (el) el.style.display = w === name ? '' : 'none';
     const tab = document.getElementById('ws-tab-' + w);
@@ -5946,8 +6073,85 @@ const project = {
   deltas: {},               // derived id → { patch, settings }
   hist: {},                 // design id → its undo history
   name: '',                 // the project's name (project file)
+  wall_systems: [],         // the PROJECT's printable constructions (Wall Systems workspace; wall_groups.py)
 };
 let _designCounter = 1;
+
+// The project's walls for the Wall Systems workspace: every Wall Group of the
+// designs the page holds (Base + the design being edited; ids are shared by
+// inheritance) and their member walls, with their architectural envelope.
+// (2026-10-11 correction) EVERY architectural wall — each visible source path,
+// grouped or not — is listed; a wall's thickness is its group's, else its own
+// envelope (`path.envelope`), else 0 (a single bead).
+function _catalogDocs() {
+  const root = (project.designs.find(d => d.parent == null) || {}).id;
+  const baseDoc = project.active === root ? layer : project.baseDoc;
+  return baseDoc && baseDoc !== layer ? [baseDoc, layer] : [layer];
+}
+function wallCatalog() {
+  const groups = new Map(), walls = new Map();
+  for (const doc of _catalogDocs()) {
+    const byId = Object.fromEntries((doc.source_paths || []).map(p => [p.id, p]));
+    for (const g of doc.wall_groups || [])
+      groups.set(g.id, { id: g.id, name: g.name || g.id, thickness: g.thickness, align: g.align || 'auto',
+                         members: g.members.filter(m => byId[m]) });
+    for (const p of doc.source_paths || []) {
+      if (p.visible === false) continue;
+      const g = (doc.wall_groups || []).find(x => x.members.includes(p.id));
+      const env = p.envelope || null;
+      walls.set(p.id, { id: p.id, label: p.label || p.id, group: g ? g.id : null,
+                        thickness: g ? (g.thickness || 0) : ((env && env.thickness) || 0),
+                        align: g ? (g.align || 'auto') : ((env && env.align) || 'auto') });
+    }
+  }
+  return { groups: [...groups.values()], walls: [...walls.values()] };
+}
+
+// THICKNESS edited from the Wall Systems workspace: the AUTHORITATIVE
+// architectural value upstream — a grouped wall's Wall Group (shared by its
+// walls), an ungrouped wall's own envelope — in Base and in the design being
+// edited (so an inherited record keeps following Base: no delta).
+function setWallThickness(wallId, t) {
+  t = Math.max(0, +t || 0);
+  let changed = false;
+  for (const doc of _catalogDocs()) {
+    const g = (doc.wall_groups || []).find(x => x.members.includes(wallId));
+    if (g) {
+      const v = Math.max(0.5, t);
+      if (g.thickness !== v) { g.thickness = v; changed = true; }
+      continue;
+    }
+    const p = (doc.source_paths || []).find(x => x.id === wallId);
+    if (!p) continue;
+    if (t > 1e-9) {
+      const env = { align: 'auto', print_reference: false, ...(p.envelope || {}), thickness: t };
+      if (JSON.stringify(env) !== JSON.stringify(p.envelope || null)) { p.envelope = env; changed = true; }
+    } else if (p.envelope) { delete p.envelope; changed = true; }
+  }
+  if (changed) {
+    routeResult = null;
+    scheduleRefresh();                        // the Designer geometry (and its own undo step)
+    updatePropPanel(); updatePathList(); repaint();
+  }
+  return changed;
+}
+// the architecture a thickness edit touches (the workspace's undo snapshots)
+function archThickness() {
+  return _catalogDocs().map(doc => ({
+    groups: (doc.wall_groups || []).map(g => [g.id, g.thickness]),
+    envs: (doc.source_paths || []).filter(p => p.envelope).map(p => [p.id, p.envelope]) }));
+}
+function setArchThickness(snap) {
+  const docs = _catalogDocs();
+  snap.forEach((s, k) => {
+    const doc = docs[k];
+    if (!doc) return;
+    for (const [id, t] of s.groups) { const g = (doc.wall_groups || []).find(x => x.id === id); if (g) g.thickness = t; }
+    const envs = new Map(s.envs);
+    for (const p of doc.source_paths || []) { if (envs.has(p.id)) p.envelope = envs.get(p.id); else delete p.envelope; }
+  });
+  routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint();
+}
 
 async function _post(url, body) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -6101,6 +6305,7 @@ async function projectState() {
     designer: { designs: _designsPayload(), active_design: project.active,
                 id_counter: _idCounter, design_counter: _designCounter },
     assembly: window.AssemblyProject ? window.AssemblyProject.exportState() : null,
+    wall_systems: JSON.parse(JSON.stringify(project.wall_systems || [])),   // (printable construction)
   };
 }
 
@@ -6199,6 +6404,7 @@ function applyProject(res, fileName) {
   _ensurePathPoints(project.baseDoc);
   project.active = D.active_design;
   project.hist = {};
+  project.wall_systems = clone(P.wall_systems || []);      // the PROJECT's printable constructions
   project.name = P.name || (fileName || '').replace(/\.[^.]*$/, '');
   _idCounter = D.id_counter;
   _designCounter = D.design_counter;
@@ -6207,7 +6413,8 @@ function applyProject(res, fileName) {
   Object.assign(layer, clone(doc));
   _ensurePathPoints(layer);
   // derived results, interaction and view-derived state: reset
-  selectedId = null; selectedOpeningId = null; selectedJunction = null; wallSystemPick = null;
+  selectedId = null; selectedOpeningId = null; selectedJunction = null; wallSystemPick = null; wallGroupPick = null;
+  envelopeLines = null;
   snapHint = null; drawPts = []; highlightPathId = null; trimHover = null;
   dragging = null; bodyDragging = null; rotateDrag = null; openingDrag = null; originDrag = null;
   routeResult = null; networkInfo = null; derivedPaths = []; printable = []; _netState = null;
@@ -6226,6 +6433,7 @@ function applyProject(res, fileName) {
   renderDesignTabs();
   updateUndoButtons();
   if (window.AssemblyProject && P.assembly) window.AssemblyProject.importState(P.assembly);
+  if (window.WallSystemsProject) window.WallSystemsProject.reset();   // generation / history / selection go
   if (window.SimulationProject) window.SimulationProject.reset();     // the old plan / playback / selection go
   _fitAfterOpen = true;
   _histRestoring = true;                   // (the opened state is consistent as saved)
@@ -6247,7 +6455,7 @@ function applyProject(res, fileName) {
 // Clear All ("Clear Design"), which empties only the Layer Design being edited. Nothing is
 // written anywhere: saved .muddesign files are untouched.
 function _projectModified() {
-  return _projectHasContent() || !!project.name ||
+  return _projectHasContent() || !!project.name || (project.wall_systems || []).length > 0 ||
          (window.AssemblyProject && !window.AssemblyProject.isPristine()) ||
          JSON.stringify(layer.material || null) !== JSON.stringify(JSON.parse(_PRISTINE_LAYER).material || null);
 }
@@ -6261,7 +6469,7 @@ function newProject() {
     name: '',
     designer: { designs: [{ id: 'base', name: 'Base', parent: null, document: JSON.parse(_PRISTINE_LAYER) }],
                 active_design: 'base', id_counter: 1, design_counter: 1 },
-    assembly: window.AssemblyProject ? window.AssemblyProject.pristine() : null } }, '');
+    assembly: window.AssemblyProject ? window.AssemblyProject.pristine() : null, wall_systems: [] } }, '');
   _fitAfterOpen = false;
   viewReset();
   if (currentWorkspace !== 'designer') setWorkspace('designer');
@@ -6281,6 +6489,9 @@ window.Designer = {
   saveProject, openProjectDialog, newProject,
   designsForBackend, createDerivedDesign, editDesign, renameDesign, setWorkspace,
   beadWidth: projectBeadWidth, setBeadWidth: setProjectBeadWidth,   // ONE project material value
+  wallSystems: () => project.wall_systems || (project.wall_systems = []),   // the project's constructions
+  setWallSystems: list => { project.wall_systems = list; },
+  wallCatalog, setWallThickness, archThickness, setArchThickness,
   onWorkspaceShow: (name, fn) => { _workspaceHooks[name] = fn; },
   onWorkspaceHide: (name, fn) => { _workspaceHideHooks[name] = fn; },
 };
@@ -6289,8 +6500,34 @@ window.Designer = {
 // Init — blank canvas, auto-routes when first path is added
 // ---------------------------------------------------------------------------
 
+// Designer display: the shapes (single lines) ± the walls' inner / outer boundaries
+function toggleEnvelope(on) {
+  showEnvelope = on === undefined ? !showEnvelope : !!on;
+  _syncDesignerMode();
+  repaint();
+}
+
+// the Designer is ARCHITECTURE: the toolpath / bead / start controls belong to
+// the full preview only (Wall Systems workspace + Print Simulation otherwise)
+function _syncDesignerMode() {
+  const env = _designerEnvelope();
+  for (const id of ['btn-toolpath', 'btn-arrows', 'btn-move-start', 'btn-beads']) {
+    const b = document.getElementById(id);
+    if (b && b.style) b.style.display = env ? 'none' : '';
+  }
+  const eb = document.getElementById('btn-envelope');
+  if (eb) {
+    if (eb.style) eb.style.display = env ? '' : 'none';
+    if (eb.classList) eb.classList.toggle('toggle-on', showEnvelope);
+    eb.textContent = showEnvelope ? 'Wall Envelope ON' : 'Wall Envelope';
+  }
+  const note = document.getElementById('designer-mode-note');
+  if (note) note.style.display = env ? '' : 'none';
+}
+
 async function init() {
   resizeCanvas();
+  _syncDesignerMode();
 
   try {
     const res = await fetch('/api/infill_patterns');

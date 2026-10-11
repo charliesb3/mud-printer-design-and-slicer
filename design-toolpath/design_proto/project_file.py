@@ -5,7 +5,7 @@ AUTHORING state of the Design + Assembly application:
 
     {
       "format": "mud-printer-project",        # identifies the file kind
-      "schema_version": 1,                    # the layout below (migrations key on it)
+      "schema_version": 3,                    # the layout below (migrations key on it)
       "saved_at": "2026-10-09T12:00:00Z",     # informational
       "generator": "design_proto",            # informational
       "project": {
@@ -20,8 +20,10 @@ AUTHORING state of the Design + Assembly application:
           "state": {…},                            # the Assembly state (Assembly.from_dict
                                                    # accepts it; + the UI's id counters)
           "header_counter": 2
-        }
-      }
+        },
+        "wall_systems": [{id, name, type, params, web,        # schema 2: the printable
+                          members, groups, designs}]          # constructions (wall_groups.py);
+      }                                                       # the designs hold Wall GROUPS
     }
 
 What is stored are the AUTHORITATIVE EDITABLE INPUTS, in the forms the
@@ -56,7 +58,7 @@ import re
 from datetime import datetime, timezone
 
 FORMAT = 'mud-printer-project'
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 EXTENSION = '.muddesign'
 GENERATOR = 'design_proto'
 MAX_BYTES = 200 * 1024 * 1024          # (a sanity bound, far above real projects)
@@ -73,7 +75,42 @@ class ProjectFileError(ValueError):
 # receives a deep copy and returns the upgraded dict; `migrate` stamps the
 # new schema_version. Version 1 is the first released layout (2026-10-09):
 # there is no older project file yet.
-MIGRATIONS: dict = {}
+
+
+def _v1_to_v2(data: dict) -> dict:
+    """Schema 2 (2026-10-11): WALL GROUPS (architecture, in each Layer Design)
+    are separate from the project's WALL SYSTEMS (printable construction,
+    the Wall Systems workspace). Each design's Wall Systems are split
+    geometry-preservingly (wall_groups.split_designs): one Wall Group per old
+    system (members, thickness, alignment, print reference; the old id kept,
+    so Assembly references stay valid), one project Wall System per distinct
+    construction (old id kept; scoped to designs only where they differed);
+    derived designs are re-expressed as deltas of their split parents."""
+    from wall_groups import split_designs
+    proj = data.get('project') or {}
+    D = proj.get('designer') or {}
+    designs = D.get('designs')
+    if isinstance(designs, list) and designs:
+        new, systems = split_designs(designs)
+        D['designs'] = new
+        proj['wall_systems'] = systems
+    else:
+        proj.setdefault('wall_systems', [])
+    return data
+
+
+def _v2_to_v3(data: dict) -> dict:
+    """Schema 3 (2026-10-11): the DEFAULT Maximum Overhang became 1 in (was
+    1.5 in). A project that stored no value was designed and checked with
+    1.5 in: that value is made explicit, so it opens exactly as before
+    (explicitly saved values are untouched)."""
+    st = ((data.get('project') or {}).get('assembly') or {}).get('state')
+    if isinstance(st, dict) and st.get('max_overhang') is None:
+        st['max_overhang'] = 1.5
+    return data
+
+
+MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3}
 
 
 def migrate(data: dict) -> tuple[dict, int]:
@@ -184,12 +221,32 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
         docs = {did: lib.document(did) for did in ids}
     except (LayerDesignError, KeyError, TypeError, ValueError, AttributeError) as e:
         raise ProjectFileError(f'The Layer Designs cannot be resolved: {e}')
+    # ---- the project's WALL SYSTEMS (printable construction; schema 2) ------------
+    from wall_groups import TYPES, compose
+    systems = P.get('wall_systems', [])
+    _need(isinstance(systems, list), 'The project file is damaged: "wall_systems" must be a list.')
+    seen = set()
+    for w in systems:
+        _need(isinstance(w, dict) and isinstance(w.get('id'), str) and w['id'],
+              'The project file is damaged: a Wall System has no id.')
+        _need(w['id'] not in seen, f'The project file is damaged: two Wall Systems share the id {w["id"]!r}.')
+        seen.add(w['id'])
+        _need(w.get('type') in TYPES, f'Wall System {w["id"]!r}: unknown construction {w.get("type")!r}.')
+        for f in ('members', 'groups'):
+            _need(isinstance(w.get(f, []), list), f'Wall System {w["id"]!r}: its {f} are damaged.')
+        _need(w.get('designs') is None or isinstance(w.get('designs'), list),
+              f'Wall System {w["id"]!r}: its design scope is damaged.')
+        _need(isinstance(w.get('params', {}), dict) and isinstance(w.get('web', {}), dict),
+              f'Wall System {w["id"]!r}: its parameters are damaged.')
+    P['wall_systems'] = systems
     for did, doc in docs.items():
         _need(isinstance(doc.get('source_paths', []), list),
               f'Layer Design {did!r}: its paths are damaged.')
+        _need(isinstance(doc.get('wall_groups', []), list),
+              f'Layer Design {did!r}: its Wall Groups are damaged.')
         if check_document is not None:
             try:
-                check_document(doc)
+                check_document(compose(doc, did, systems))
             except Exception as e:                      # (any failure of the Designer's reader)
                 raise ProjectFileError(f'Layer Design {_label(designs, did)} cannot be read: '
                                        f'{type(e).__name__}: {e}')

@@ -53,7 +53,7 @@ def test_a_legacy_lens_resolves_as_a_curved_diamond():
     two arcs, sharp top and bottom) — the closest current shape (both were
     curved, pointed top and bottom); the UI re-constrains it on Open."""
     p = OpeningProfile('P', WallRef('L'), 60, 6, 54, 18, 'lens')
-    assert (p.shape, p.upper, p.lower) == ('diamond', 'curve', 'curve')
+    assert (p.upper, p.lower, p.middle, p.upper_height, p.bottom_depth) == ('curve', 'arc', False, 27, 27)
     _, rep = _run([p])
     ws = [L['width'] for L in rep[0].layers]
     k = ws.index(max(ws))
@@ -80,8 +80,9 @@ def test_too_steep_a_diamond_is_reported_never_resized():
     r = rep[0]
     assert not r.valid and 'not self-supporting' in r.errors[0]
     assert not any(c[0] == 'opening' for i in res.instances for c in i.cuts)
-    assert r.hint['min_height'] == 36 and r.hint['max_width'] == 30
-    for H_, W_ in ((r.hint['min_height'], 36), (30, r.hint['max_width'])):
+    # (hints: the UPPER height at this width / the width at this upper height)
+    assert r.hint['field'] == 'upper_height' and r.hint['min_height'] == 18 and r.hint['max_width'] == 30
+    for H_, W_ in ((2 * r.hint['min_height'], 36), (30, r.hint['max_width'])):
         ok = _run([OpeningProfile('P', WallRef('L'), 60, 6, H_, W_, 'diamond')])[1][0]
         assert ok.valid and ok.worst_step <= H + 1e-9
 
@@ -91,7 +92,7 @@ def test_validity_follows_maximum_overhang_and_layer_height():
     assert _run([p], h=1.5)[1][0].valid                                 # 1.5 in a side: as drawn
     for kw in ({'h': 1.0}, {'lh': 2.0, 'h': 1.5}, {'h': 0.25}):
         r = _run([p], **kw)[1][0]
-        assert not r.valid and r.hint['min_height'] > 30 and r.hint['max_width'] < 30, kw
+        assert not r.valid and r.hint['min_height'] > 15 and r.hint['max_width'] < 30, kw
 
 
 def test_opening_must_fit_the_wall():
@@ -230,7 +231,8 @@ def test_cut_spec_round_trip_and_bad_input():
     assert cuts_from_dicts(cuts_to_dicts(c)) == c and cuts_to_dicts(c)[0]['edge'] == 1
     with pytest.raises(ProfileError):
         profile_from_dict({'kind': 'opening', 'id': 'x', 'wall': {'source': 'L'}, 'position': 1,
-                           'height': 10, 'width': 5, 'shape': 'circle'})
+                           'height': 10, 'width': 5, 'upper': 'circle', 'lower': 'flat', 'middle': True,
+                           'middle_height': 10})
     with pytest.raises(ProfileError):
         profile_from_dict({'kind': 'boolean', 'id': 'x'})
 

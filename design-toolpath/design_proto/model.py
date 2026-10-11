@@ -2489,6 +2489,11 @@ class PrintLayer:
     # Wall Systems / the referenced lattice are pre-deformed by alpha toward
     # the end motif such a cut would have (_virtual_faces).
     cut_transitions: list = field(default_factory=list)
+    # ARCHITECTURAL ENVELOPE ONLY (deferred print paths, 2026-10-11): stop
+    # after the wall networks — walls, trims, openings, junctions and the
+    # material rings exactly as a full build resolves them — before Wall
+    # Systems, the wall lattice, region infill and routing (envelope.py).
+    envelope_only: bool = False
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -3106,7 +3111,7 @@ class PrintLayer:
         self._ws_frames = []                 # generated Wall System frames (the PHASE REFERENCE of cut variants)
         network['wall_system_membership'] = dict(getattr(self, '_wall_system_of', {}) or {})
         network['source_walls'] = dict(getattr(self, '_source_walls', {}) or {})
-        if getattr(self, '_wall_systems', None):
+        if getattr(self, '_wall_systems', None) and not self.envelope_only:
             result, jobs = self._apply_wall_systems(N, result, cls_of, regions, jobs, network)
         network['reference_only'] = sorted(ref_only)
         network['return_lanes'] = sorted(getattr(self, '_return_lanes', ()))
@@ -3130,6 +3135,11 @@ class PrintLayer:
             for k, ids in enumerate(n for n in source_nets if len(n) > 1)]
         meta = {'cls': cls_of, 'pts': pts_of, 'network': network,
                 'regions': regions}
+        if self.envelope_only:
+            # the ARCHITECTURAL ENVELOPE: `regions` are the very material
+            # rings Wall Systems / the lattice would fill (envelope.py)
+            meta['processed'] = processed
+            return result, meta
         # 10) Region infill. WALL regions: route-aware stitching motifs
         # (wall_lattice.plan), continuous by construction. Regions too wide
         # to be a wall fall back to the structural FIELD (infill.py web,

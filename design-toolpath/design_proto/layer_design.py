@@ -154,7 +154,8 @@ def _track_map(doc0, transforms):
 KEYED = {
     'source_paths': 'id', 'offset_treatments': 'id', 'lattice_instances': 'id',
     'openings': 'id', 'trims': 'id', 'region_overrides': 'id', 'infills': 'id',
-    'network_walls': 'id', 'wall_systems': 'id', 'wall_relations': 'id', 'junction_overrides': 'key',
+    'network_walls': 'id', 'wall_systems': 'id', 'wall_groups': 'id', 'wall_relations': 'id',
+    'junction_overrides': 'key',
     'route_origins': 'strand',
 }
 MERGED_SETTINGS = ('material', 'constraints')
@@ -299,15 +300,35 @@ class BuiltLayer:
     ws_frames: list = field(default_factory=list)        # generated Wall System frames (cut-variant phase reference)
     routing: dict = field(default_factory=dict)          # how the Designer routes `printable` (layer_route.py)
     timing: dict = field(default_factory=dict)           # seconds per build stage (instrumentation)
+    envelope_rings: list = field(default_factory=list)   # the material rings its Wall Systems / lattice
+                                                         # filled (= DesignLibrary.envelope's rings)
+
+
+def _unopened(cuts):
+    """The REFERENCE for a layer that re-places its own Designer openings
+    (Assembly plumb alignment, cut op 'move'): the same design with those
+    openings removed ('unopen'); None when nothing moves."""
+    moves = [c for c in cuts or [] if c.get('op') == 'move']
+    if not moves:
+        return None
+    return [{'op': 'unopen', 'opening': c.get('opening'), 'profile': c.get('profile', '')} for c in moves]
 
 
 class DesignLibrary:
     """The set of Layer Designs of one project, resolved on demand.
     Resolution and builds are cached; any edit invalidates the cache."""
 
-    def __init__(self, designs=()):
+    def __init__(self, designs=(), wall_systems=None, arch=False):
+        """wall_systems: the PROJECT's Wall Systems (wall_groups.py) — given
+        (a list), Wall Group documents are composed into the build format
+        with them; `arch`: composed as ARCHITECTURE only (envelopes). Neither:
+        documents are served as authored (the Designer's editing endpoints,
+        legacy documents)."""
         self.designs: dict[str, LayerDesign] = {}
         self._cache, self._tbuilds = {}, OrderedDict()
+        self.wall_systems = list(wall_systems or [])
+        self.arch = bool(arch)
+        self._compose = wall_systems is not None or self.arch
         for d in designs:
             self.add(d if isinstance(d, LayerDesign) else LayerDesign.from_dict(d))
 
@@ -346,9 +367,9 @@ class DesignLibrary:
         if d.parent is None:
             self.edit(design_id, document=document)
             return {}
-        patch, settings = derive_delta(self.document(d.parent), document)
+        patch, settings = derive_delta(self.raw_document(d.parent), document)
         moved: dict = {}
-        inherited = {r.get('id') for r in self.document(d.parent).get('infills') or []}
+        inherited = {r.get('id') for r in self.raw_document(d.parent).get('infills') or []}
         for rid, ch in list((patch.get('infills') or {}).items()):
             if rid not in inherited or not isinstance(ch, dict):
                 continue
@@ -369,7 +390,7 @@ class DesignLibrary:
         definition lives there): walk up while the parent has it."""
         g = design_id
         while self.get(g).parent is not None and any(
-                r.get('id') == inf_id for r in self.document(self.get(g).parent).get('infills') or []):
+                r.get('id') == inf_id for r in self.raw_document(self.get(g).parent).get('infills') or []):
             g = self.get(g).parent
         return g
 
@@ -436,17 +457,31 @@ class DesignLibrary:
                     raise LayerDesignError(f'{did!r} derives from unknown {cur!r}')
                 cur = d.parent
 
-    def document(self, design_id: str) -> dict:
-        """The resolved Designer document of a design (inheritance applied)."""
-        key = ('doc', design_id)
+    def raw_document(self, design_id: str) -> dict:
+        """The resolved Designer document of a design (inheritance applied),
+        as authored (Wall Groups not composed)."""
+        key = ('raw', design_id)
         if key not in self._cache:
             d = self.get(design_id)
             if d.parent is None:
                 doc = copy.deepcopy(d.document)
             else:
-                parent = self.document(d.parent)
+                parent = self.raw_document(d.parent)
                 doc = apply_derivation(parent, _without_lattice_overrides(parent, d.patch), d.settings)
             self._cache[key] = doc
+        return copy.deepcopy(self._cache[key])
+
+    def document(self, design_id: str) -> dict:
+        """The resolved document a build uses: the authored one, or — in a
+        composing library — its Wall Groups composed with the project's
+        Wall Systems (or as architecture only) into the build format
+        (wall_groups.compose)."""
+        if not self._compose:
+            return self.raw_document(design_id)
+        key = ('doc', design_id)
+        if key not in self._cache:
+            from wall_groups import compose
+            self._cache[key] = compose(self.raw_document(design_id), design_id, self.wall_systems, self.arch)
         return copy.deepcopy(self._cache[key])
 
     # -- lattice families (one shared scaffold per family) ----------------------
@@ -692,10 +727,11 @@ class DesignLibrary:
         doc, trep = self.transformed(design_id, transforms, cuts)
         tm['semantic_transform'] = _t.perf_counter() - t0
         layer = _deserialise_layer(doc)
-        if any(c.get('op') in ('opening', 'extent', 'plane') for c in cuts or []):
+        if any(c.get('op') in ('opening', 'extent', 'plane', 'move') for c in cuts or []):
             # generated Wall Systems keep the UNCUT layer's pattern (period,
             # phase, lanes, loop stations) and solve only their new ends
-            layer.wall_system_reference = self.build(design_id, inherit_lattice, transforms).ws_frames or None
+            layer.wall_system_reference = self.build(design_id, inherit_lattice, transforms,
+                                                     _unopened(cuts)).ws_frames or None
         t0 = _t.perf_counter()
         joined = self._cut_join(design_id, transforms, cuts, doc) if cuts and inherit_lattice else None
         if joined is not None:
@@ -743,6 +779,37 @@ class DesignLibrary:
         tm['resolve_walls_lattice'] = _t.perf_counter() - t0
         return self._finish(design_id, doc, trep, layer, paths, meta, tm, key, tkey)
 
+    def envelope(self, design_id: str, transforms=None, cuts=None):
+        """The ARCHITECTURAL ENVELOPE of a design or of its variant (the same
+        `transforms` / `cuts` as build): the document resolved exactly as
+        build() resolves it (cuts, then the semantic transform), built up to
+        the wall networks only — no Wall Systems, lattice, scaffold, station
+        reference, closure verdict or routing (envelope.py). Lattice-only cut
+        ops (stations, transitions) are ignored: they change no architecture.
+        Cached per (design, transform spec, architectural cut key) until the
+        library is edited."""
+        import semantic_transform as ST
+        from envelope import architectural_cuts, from_stage
+        cuts = architectural_cuts(cuts)
+        key = (design_id, ST.spec_key(transforms) if transforms else '[]', _cut_key(cuts))
+        env = getattr(self, '_env', None)
+        if env is None or env[0] is not self._cache:          # (a library edit replaces _cache)
+            env = self._env = (self._cache, OrderedDict())
+        hit = env[1].get(key)
+        if hit is not None:
+            env[1].move_to_end(key)
+            return hit
+        from app import _deserialise_layer
+        doc, trep = self.transformed(design_id, transforms, cuts)
+        layer = _deserialise_layer(doc)
+        layer.envelope_only = True
+        result, meta = layer._build_effective()
+        out = from_stage(design_id, doc, trep, layer, result, meta)
+        env[1][key] = out
+        while len(env[1]) > 1024:
+            env[1].popitem(last=False)
+        return out
+
     def _cut_join(self, design_id, transforms, cuts, doc):
         """(layer, paths, meta) of an ASSEMBLY PROFILE cut variant printing
         the REFERENCE lattice of the same layer without the cuts, clipped to
@@ -761,13 +828,17 @@ class DesignLibrary:
         stack), the station reference (_station_reference): every layer of
         the stack prints the same one, so the layers stack."""
         walls = {f.get('id') for f in doc.get('infills') or [] if (f.get('kind') or 'wall') == 'wall'}
-        if not walls:
-            return None
+        if not walls or all(c.get('op') == 'unopen' for c in cuts or []):
+            return None                     # (a design with Designer openings REMOVED: planned as a layer)
+        # a layer whose OWN Designer openings are re-placed (plumb alignment:
+        # 'move') clips the reference of the same design WITHOUT those
+        # openings — the authored hole is not left behind in the lattice
+        base_cuts = _unopened(cuts)
         stations = [c for c in cuts or [] if c.get('op') == 'station']
         if stations:
-            src = self._station_reference(design_id, transforms, stations)
+            src = self._station_reference(design_id, transforms, stations, base_cuts)
         else:
-            src = self.build(design_id, True, transforms).lattice_source or {}
+            src = self.build(design_id, True, transforms, base_cuts).lattice_source or {}
         # (a web cloned onto a sibling piece of a cut ring — `<id>~p<k>` —
         # clips the same reference lattice as the web it was cloned from)
         src = {w: src.get(w, src.get(w.split('~p')[0])) for w in walls}
@@ -778,13 +849,13 @@ class DesignLibrary:
         layer = _deserialise_layer(doc)
         layer.lattice_reference = src
         layer.lattice_join = True
-        layer.wall_system_reference = self.build(design_id, True, transforms).ws_frames or None
+        layer.wall_system_reference = self.build(design_id, True, transforms, base_cuts).ws_frames or None
         paths, meta = layer._build_effective()
         if self._open_ends(layer, paths, meta):
             return None
         return layer, paths, meta
 
-    def _station_reference(self, design_id, transforms, stations) -> dict:
+    def _station_reference(self, design_id, transforms, stations, base_cuts=None) -> dict:
         """{infill id: polylines} — the reference lattice of a design for a
         stack in which Assembly openings cut its walls (STATION ops: source,
         edge, at). A run printed by ONE pass (a ring with no junction, a run
@@ -800,13 +871,14 @@ class DesignLibrary:
         plan (counts / sides kept where possible)."""
         import profile_cuts as PC
         import semantic_transform as ST
-        key = ('stations', design_id, ST.spec_key(transforms) if transforms else '[]', PC.cut_key(stations))
+        key = ('stations', design_id, ST.spec_key(transforms) if transforms else '[]', PC.cut_key(stations),
+               PC.cut_key(base_cuts or []))
         if key in self._cache:
             return self._cache[key]
-        base = self.build(design_id, True, transforms)
+        base = self.build(design_id, True, transforms, base_cuts)
         ref0 = dict(base.lattice_source or {})
         out = ref0
-        doc0 = self.transformed(design_id, transforms)[0]
+        doc0 = self.transformed(design_id, transforms, base_cuts)[0]
         probes = []
         for c in stations:
             if c.get('plane') is not None:            # a PLANAR cut's first cut: probes at its removed stretches
@@ -816,7 +888,7 @@ class DesignLibrary:
                                    width=PROBE_WIDTH, profile='probe'))
         bad = False
         for pr in probes:
-            pdoc = self.transformed(design_id, transforms, [pr])[0]
+            pdoc = self.transformed(design_id, transforms, list(base_cuts or []) + [pr])[0]
             from app import _deserialise_layer
             lay = _deserialise_layer(pdoc)
             lay.lattice_reference = ref0
@@ -826,7 +898,7 @@ class DesignLibrary:
                 bad = True
                 break
         if bad and ref0:
-            pdoc = self.transformed(design_id, transforms, probes)[0]
+            pdoc = self.transformed(design_id, transforms, list(base_cuts or []) + probes)[0]
             extra = self._caps(pdoc) - self._caps(doc0)
             sc = self.scaffold(design_id, transforms)
             out = {}
@@ -877,7 +949,8 @@ class DesignLibrary:
         printable, routing = layer_route.describe(layer, paths, meta, doc, strand_sources)
         built = BuiltLayer(design_id, doc, printable,
                            lattice, meta['network'], source, strand_sources, trep,
-                           ws_frames=list(getattr(layer, '_ws_frames', None) or []), routing=routing)
+                           ws_frames=list(getattr(layer, '_ws_frames', None) or []), routing=routing,
+                           envelope_rings=meta.get('regions') or [])
         tm['printable'] = _t.perf_counter() - t0
         built.timing = {k: round(v, 4) for k, v in tm.items()}
         if tkey != '[]':

@@ -560,8 +560,14 @@ def build_plan(resolved, source, start=None, cancelled=None, lift_settings=None)
             raise PlanCancelled('print plan cancelled')
     check()
     if hasattr(source, 'prefetch'):
+        import inspect
         from .source import variant_request
-        source.prefetch([variant_request(i) for i in insts if i.is_variant])
+        reqs = [variant_request(i) for i in insts if i.is_variant]
+        if cancelled is not None and 'cancelled' in inspect.signature(source.prefetch).parameters:
+            source.prefetch(reqs, cancelled=cancelled)    # (stops starting builds once cancelled)
+        else:
+            source.prefetch(reqs)
+        check()
     try:
         bounds = lift_bounds([(i.z_bottom, i.z_top) for i in insts], settings)
     except ValueError as e:
@@ -569,6 +575,8 @@ def build_plan(resolved, source, start=None, cancelled=None, lift_settings=None)
     comp_cache = {}
     geo = {}
     for inst in insts:
+        if inst.index % 8 == 0:
+            check()
         g = layer_geometry(source, inst)
         pl = inst.transform
         bead = float(getattr(g, 'bead_width', None) or 3.0)

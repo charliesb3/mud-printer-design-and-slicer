@@ -93,20 +93,20 @@ from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from . import opening_shape as OS
+from .model import InstanceTransform
 
 MIN_OPENING_BEADS = 0.25      # the smallest cut: a layer the shape crosses more narrowly is cut this wide
                               # (never dropped — the first / closing step stays ≤ ½ of it)
 MIN_RETAINED_BEADS = 1.0      # a wall shorter than one bead is absent at that layer (and shorter than the
                               # Designer's printable minimum for its construction: WallTarget.min_length)
 JAMB_BEADS = 1.0              # solid wall kept beside an opening: half the wall thickness + 1 bead
-# SHAPES (revised 2026-10-10, second pass — opening_shape.py): Diamond (one
-# style: angular | curved vesica) | Arch (LOWER flat | angular | curved,
-# optional MIDDLE, UPPER angular | curved Gothic | HEADER). Lens, mixed-style
-# diamonds and closure-based arches are MIGRATED on load (opening_shape.migrate
-# / fill).
-SHAPES = OS.SHAPES
+# ONE OPENING (revised 2026-10-10, third pass — opening_shape.py): LOWER flat |
+# angular | curved | rounded, optional MIDDLE, UPPER angular | curved Gothic |
+# HEADER. Diamond / Lens / Arch openings of older projects are MIGRATED on load
+# (opening_shape.migrate / fill) to the identical configuration.
 UPPERS = ('pointed', 'curve', 'header')
 LOWERS = ('flat', 'pointed', 'arc', 'round')
+ALIGNMENTS = ('follow', 'plumb')     # OPENING ALIGNMENT — ONE global Assembly setting (Assembly.opening_alignment)
 ARRANGEMENTS = ('single', 'horizontal', 'vertical', 'diagonal_up', 'diagonal_down', 'grid', 'staggered')
 MAX_MEMBERS = 400             # openings of one array
 MIN_PIER_BEADS = 2.0          # solid wall left between two openings of a layer (and the construction's
@@ -225,52 +225,57 @@ class OpeningArray:
 
 @dataclass(frozen=True)
 class OpeningProfile:
-    """A through-wall opening: self-supporting (a closing upper profile) or,
-    for an Arch with the HEADER upper, flat-topped and carried by a physical
-    header the Assembly generates for it (`header` = its settings). Its
+    """A through-wall opening — lower profile, optional middle, upper profile
+    (opening_shape.py): self-supporting (a closing upper profile) or, with
+    the HEADER upper, flat-topped and carried by a physical header the
+    Assembly generates for it (`header` = its settings). Its
     parameters are the PRINTABLE shape (the UI constrains them while editing
     — opening_shape.constrain); resolution validates them, never alters them."""
     id: str
     wall: WallRef
     position: float                    # centre, inches along the wall from its start
     z_bottom: float
-    height: float                      # TOTAL (an arch: lower depth + middle + upper height)
+    height: float                      # TOTAL = lower depth + middle + upper height (derived)
     width: float                       # maximum (clear) width
-    shape: str = 'diamond'             # 'diamond' | 'arch' ('lens' is migrated)
+    shape: Optional[str] = None        # OLDER INPUT ONLY ('diamond' | 'lens' | 'arch'; None with no
+                                       # components = a diamond): migrated, '' after construction
     label: str = ''
     kind: str = 'opening'
-    upper: str = 'pointed'             # diamond: its style 'pointed' | 'curve'; arch: + 'header'
-    lower: str = ''                    # diamond: = upper; arch: 'flat' | 'pointed' | 'arc' (Curved,
-                                       # sharp vesica half) | 'round' (Rounded; was 'curve')
-    bottom_depth: Optional[float] = None    # arch: the lower profile's depth
+    upper: str = 'pointed'             # 'pointed' (Angular) | 'curve' (Curved, Gothic) | 'header'
+    lower: str = ''                    # 'flat' | 'pointed' (Angular) | 'arc' (Curved, sharp vesica
+                                       # half) | 'round' (Rounded half ellipse; stored 'curve' before)
+    bottom_depth: Optional[float] = None    # the lower profile's depth
     array: Optional[OpeningArray] = None    # ONE parametric array of identical clones
     # CONVERSION of a Designer opening (2026-10-09): {'id': opening id, 'z_ref': a Z
     # inside it}. Its rectangle (position, clear width, the layers that have it) is
     # the DESIGNER's — never cut again here; this profile adds only the closure
-    # above it (shape 'arch', its z_bottom / height / width / position are
+    # above it (lower flat, its z_bottom / height / width / position are
     # display copies, re-read from the Designer at every resolve)
     source_opening: Optional[dict] = None
-    driver: Optional[str] = None            # the dimension edited last ('width' | 'height' | 'upper_height')
-    upper_height: Optional[float] = None    # arch: the upper profile's height (None: an older arch → the
+    driver: Optional[str] = None            # the dimension edited last ('width' | 'upper_height')
+    upper_height: Optional[float] = None    # the upper profile's height (None: an older arch → the
                                             # minimum printable one, opening_shape.fill)
-    middle: Optional[bool] = None           # arch: the rectangular middle on / off (None: older arch)
-    middle_height: Optional[float] = None   # arch: kept while the middle is off
+    middle: Optional[bool] = None           # the rectangular middle on / off (None: older input)
+    middle_height: Optional[float] = None   # kept while the middle is off
     header: Optional[dict] = None           # HEADER settings {bearing, depth, thickness} (kept while
                                             # another upper is chosen, so switching back restores them)
 
     def __post_init__(self):
         d = self.shape_dict()
-        OS.migrate(d)                       # Lens / mixed diamonds / older arches → the current shapes
+        if self.shape is not None:
+            d['shape'] = self.shape         # ('' = already the one opening: never re-migrated as a diamond)
+        OS.migrate(d)                       # Diamond / Lens / older arches → the one opening
         OS.defaults(d)
-        if d['shape'] == 'arch' and d['middle'] is not None and (d['upper_height'] is not None or d['upper'] == 'header'):
+        if d['middle'] is not None and (d['upper_height'] is not None or d['upper'] == 'header'):
             OS.sync(d)                      # the total height IS its components
-        for k in ('shape', 'upper', 'lower', 'bottom_depth', 'upper_height', 'middle', 'middle_height', 'height'):
+        object.__setattr__(self, 'shape', '')
+        for k in ('upper', 'lower', 'bottom_depth', 'upper_height', 'middle', 'middle_height', 'height', 'driver'):
             if d.get(k) != getattr(self, k):
                 object.__setattr__(self, k, d.get(k))
 
     def shape_dict(self) -> dict:
         """The parameters opening_shape works on."""
-        return {'shape': self.shape, 'upper': self.upper, 'lower': self.lower, 'width': self.width,
+        return {'upper': self.upper, 'lower': self.lower, 'width': self.width,
                 'height': self.height, 'z_bottom': self.z_bottom, 'bottom_depth': self.bottom_depth,
                 'upper_height': self.upper_height, 'middle': self.middle, 'middle_height': self.middle_height,
                 'array': self.array.to_dict() if self.array else None, 'driver': self.driver}
@@ -292,7 +297,7 @@ class OpeningProfile:
     def width_at(self, z: float) -> float:
         """The continuous shape's width at Z."""
         d, m, U, H = OS.parts(self.shape_dict())
-        return OS.width_at(z - self.z_bottom, self.width, d, m, U, self.shape, self.upper, self.lower)
+        return OS.width_at(z - self.z_bottom, self.width, d, m, U, self.upper, self.lower)
 
     @property
     def z_top(self) -> float:
@@ -309,10 +314,10 @@ class OpeningProfile:
     def to_dict(self) -> dict:
         d = {'kind': 'opening', 'id': self.id, 'wall': self.wall.to_dict(), 'position': self.position,
              'z_bottom': self.z_bottom, 'height': self.height, 'width': self.width,
-             'shape': self.shape, 'label': self.label, 'upper': self.upper, 'lower': self.lower}
-        if self.shape == 'arch':
-            d.update({'bottom_depth': self.bottom_depth, 'upper_height': self.upper_height,
-                      'middle': self.middle, 'middle_height': self.middle_height})
+             'label': self.label, 'upper': self.upper, 'lower': self.lower, 'bottom_depth': self.bottom_depth,
+             'upper_height': self.upper_height, 'middle': self.middle, 'middle_height': self.middle_height}
+        if self.middle is None:
+            d['shape'] = 'arch'             # an older closure-based arch not completed yet (opening_shape.fill)
         if self.header:
             d['header'] = dict(self.header)
         if self.array is not None:
@@ -332,29 +337,27 @@ class OpeningProfile:
         hd = d.get('header')
         p = OpeningProfile(str(d['id']), WallRef.from_dict(d['wall']), float(d['position']),
                            float(d.get('z_bottom', 0.0)), float(d['height']), float(d['width']),
-                           d.get('shape') or 'diamond', d.get('label', '') or '',
+                           d.pop('shape', '') if d.get('middle') is None else '', d.get('label', '') or '',
                            upper=d.get('upper') or 'pointed', lower=d.get('lower') or '',
                            bottom_depth=f('bottom_depth'),
                            array=OpeningArray.from_dict(d['array']) if d.get('array') else None,
                            source_opening={'id': str(src['id']), 'z_ref': float(src.get('z_ref', 0.0))} if src else None,
-                           driver=d.get('driver') if d.get('driver') in ('width', 'height', 'upper_height') else None,
+                           driver=d.get('driver') if d.get('driver') in ('width', 'upper_height') else None,
                            upper_height=f('upper_height'),
                            middle=None if d.get('middle') is None else bool(d['middle']),
                            middle_height=f('middle_height'),
                            header={k: (None if hd.get(k) is None else float(hd[k])) for k in OS.HEADER_DEFAULTS
                                    if k in hd} if isinstance(hd, dict) else None)
-        if p.shape not in SHAPES:
-            raise ProfileError(f'profile {p.id}: unknown opening shape {p.shape!r}')
-        if p.upper not in OS.UPPERS[p.shape]:
-            raise ProfileError(f'profile {p.id}: a {p.shape} has no {p.upper!r} upper profile')
-        if p.lower not in OS.LOWERS[p.shape]:
-            raise ProfileError(f'profile {p.id}: a {p.shape} has no {p.lower!r} lower profile')
+        if p.upper not in OS.UPPERS:
+            raise ProfileError(f'profile {p.id}: unknown upper profile {p.upper!r}')
+        if p.lower not in OS.LOWERS:
+            raise ProfileError(f'profile {p.id}: unknown lower profile {p.lower!r}')
         if p.height < 0 or p.width < 0 or any(v is not None and v < 0 for v in
                                               (p.bottom_depth, p.upper_height, p.middle_height)) or \
                 any(v is not None and v < 0 for v in (p.header or {}).values()):
             raise ProfileError(f'profile {p.id}: dimensions must be ≥ 0')
-        if p.source_opening and (p.shape != 'arch' or p.upper == 'header'):
-            raise ProfileError(f'profile {p.id}: a converted Designer opening is an arch with a closing upper')
+        if p.source_opening and (p.lower != 'flat' or p.upper == 'header'):
+            raise ProfileError(f'profile {p.id}: a converted Designer opening has a flat lower and a closing upper')
         return p
 
 
@@ -601,7 +604,7 @@ def _shape_widths(p, zb, insts, tgs, wmin) -> list:
     out = []
     for inst in insts:
         z = _mid(inst)
-        w = OS.width_at(z - zb, p.width, d, m, U, p.shape, p.upper, p.lower) \
+        w = OS.width_at(z - zb, p.width, d, m, U, p.upper, p.lower) \
             if inst.design_id in tgs and z >= zb else 0.0
         out.append(0.0 if w <= OS.EPS else max(w, wmin))
     return out
@@ -617,7 +620,7 @@ def _shape_error(p, ev, h) -> str:
     if ev['reason'] == 'depth':
         return (f'its curved (sharp-pointed) bottom must be deeper than half its width: {ev["d"]:g} in ≤ '
                 f'{p.width / 2:g} in (a Rounded bottom has no such limit)')
-    what = 'its upper half' if p.shape == 'diamond' else f'its {_NAMES[p.upper]} upper profile'
+    what = f'its {_NAMES[p.upper]} upper profile'
     return (f'not self-supporting: {what} narrows a side by up to {ev["worst"]:.2f} in per layer '
             f'(maximum overhang {h:g} in)')
 
@@ -655,7 +658,193 @@ def _conversion(p, insts, tgs, openings, res):
     return k0, k1, o
 
 
-def _resolve_members(p, insts, tgs, bead, h, res, openings):
+# ---- OPENING ALIGNMENT: Vertical / Plumb (2026-10-10, global) -----------------
+# ONE Assembly-wide setting (Assembly.opening_alignment 'follow' | 'plumb') for
+# EVERY opening — Designer openings, Assembly openings, array clones, header
+# openings, conversions. A PLUMB opening stays vertical in WORLD coordinates
+# while the walls keep transforming: anchored at its world position at its
+# FIRST ACTIVE LAYER (that layer's placement of its wall applied); on every
+# layer the anchor is taken back into that layer's DESIGN coordinates through
+# the same placement (the planar top cut does the same) and the opening is
+# cut there, at its intended (physical) width: design width = width / scale.
+# ONE algorithm (`plumb_track`) for both kinds; an opening whose wall moves
+# completely away from its vertical line, or along which it would slide off
+# the wall, FOLLOWS THE WALL instead and is reported (never broken geometry).
+
+def wall_placement(inst, source):
+    """The world placement of a source's design geometry at a layer: the
+    layer's own InstanceTransform composed with the source's transform-GROUP
+    placement relative to it (inst.semantic; 'multiple' centre mode) — so a
+    wall moved by its group is compensated too."""
+    T = inst.transform
+    for s_, k, tx, ty in inst.semantic or ():
+        if s_ == source:
+            return InstanceTransform(T.scale * k, T.scale * tx + T.tx, T.scale * ty + T.ty)
+    return T
+
+
+def _to_design(T, X):
+    """A world point → the design coordinates of geometry placed by T."""
+    k = T.scale if abs(T.scale) > 1e-12 else 1.0
+    return ((X[0] - T.tx) / k, (X[1] - T.ty) / k)
+
+
+def plumb_track(insts, layers, source, xy0, k0) -> dict:
+    """THE plumb anchoring (every opening kind): the world anchor X0 =
+    placement_k0(xy0); per layer k in `layers` → (q, width factor): q = the
+    anchor in that layer's design coordinates, width factor = 1 / the layer's
+    scale (widths are physical)."""
+    X0 = wall_placement(insts[k0], source).apply(*xy0)
+    return {k: (_to_design(wall_placement(insts[k], source), X0), 1.0 / (insts[k].transform.scale or 1.0))
+            for k in layers}
+
+
+def _edge_frame(t, q):
+    """(position along a straight wall target, signed distance across it) of a design point."""
+    L = t.length or 1.0
+    ux, uy = (t.b[0] - t.a[0]) / L, (t.b[1] - t.a[1]) / L
+    dx, dy = q[0] - t.a[0], q[1] - t.a[1]
+    return dx * ux + dy * uy, dx * uy - dy * ux
+
+
+def _plumb_misfit(at, off, width, t_len, thickness, bead, closed=False):
+    """Why a plumb opening cannot be cut on this layer ('' = it can): its
+    vertical line has left the wall completely (|off| ≥ thickness), or along
+    the wall it would leave the jambs."""
+    if abs(off) >= max(thickness, 1e-9):
+        return f'the wall has moved {abs(off):.2f} in away from the opening\'s vertical line (wall {thickness:g} in)'
+    jamb = 0.5 * thickness + JAMB_BEADS * bead
+    if not closed and (at - width / 2 < jamb - 1e-9 or at + width / 2 > t_len - jamb + 1e-9):
+        return 'the wall has slid along it so far that the opening would leave the wall (its jambs)'
+    return ''
+
+
+def _plumb_member(m, t, source, insts, bead, res, pre):
+    """An Assembly opening (array clone, conversion closure) made PLUMB via
+    plumb_track: per-layer positions + design widths. If it cannot stay
+    plumb on one of its layers it follows the wall (reported)."""
+    act = [k for k, w in enumerate(m['widths']) if w > 0 and k not in m['skip']]
+    if not act:
+        return
+    k0 = m.get('anchor', act[0])
+    L = t.length or 1.0
+    ux, uy = (t.b[0] - t.a[0]) / L, (t.b[1] - t.a[1]) / L
+    track = plumb_track(insts, range(len(insts)), source, (t.a[0] + ux * m['pos'], t.a[1] + uy * m['pos']), k0)
+    at = [_edge_frame(t, track[k][0])[0] for k in range(len(insts))]
+    for k in act:
+        tk = t
+        a_, off = _edge_frame(tk, track[k][0])
+        why = _plumb_misfit(a_, off, m['widths'][k] * track[k][1], tk.length, tk.thickness, bead)
+        if why:
+            res.warnings.append(f'{pre}cannot stay vertical (plumb): at layer {k + 1} (z {insts[k].z_bottom:g}) {why} — '
+                                'it follows the wall instead')
+            return
+    m['at'], m['anchor'] = at, k0
+    m['widths'] = [w * track[k][1] if w > 0 and k not in m['skip'] else w for k, w in enumerate(m['widths'])]
+
+
+def _poly_project(pts, q):
+    """(arc length of the foot of q on an open polyline [[x, y]…], distance)."""
+    best, acc = (math.inf, 0.0), 0.0
+    for a, b in zip(pts, pts[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L2 = dx * dx + dy * dy
+        L = math.sqrt(L2)
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / L2))
+        dd = math.dist((a[0] + t * dx, a[1] + t * dy), q)
+        if dd < best[0] - 1e-12:
+            best = (dd, acc + t * L)
+        acc += L
+    return best[1], best[0]
+
+
+def _align_designer_openings(insts, openings, targets, sources, bead, per_layer, results) -> dict:
+    """PLUMB DESIGNER OPENINGS (the global setting): every Designer opening
+    of the stack, per run of contiguous layers whose design has it, anchored
+    at the run's first layer (plumb_track); every layer of the run gets a
+    ('move', source, opening id, x, y, profile, width) op and the Designer
+    re-places its own opening record there (profile_cuts 'move': projected
+    onto the processed source polyline — curved walls included). A run that
+    cannot stay plumb (_plumb_misfit: straight → its edge; curved → the
+    distance to the transformed centre line, an open wall's ends) follows
+    the wall and is reported. Returns {(layer, opening id): (at, width)} of
+    the straight-edge ones (the Assembly's spacing check)."""
+    moves = {}
+    ids = sorted({str(o['id']) for k in range(len(insts)) for o in openings.get(insts[k].design_id) or ()})
+    for oid in ids:
+        res = ProfileResult(f'align:{oid}', 'alignment')
+        results.append(res)
+
+        def rec(k):
+            return next((o for o in openings.get(insts[k].design_id) or () if str(o.get('id')) == oid), None)
+        ks = [k for k in range(len(insts)) if rec(k) is not None]
+        runs, cur = [], [ks[0]]
+        for k in ks[1:]:
+            if k == cur[-1] + 1:
+                cur.append(k)
+            else:
+                runs.append(cur)
+                cur = [k]
+        runs.append(cur)
+        for run in runs:
+            k0 = run[0]
+            o0 = rec(k0)
+            name = o0.get('label') or oid
+            if o0.get('xy') is None:
+                res.warnings.append(f'Designer opening {name}: its position on the wall is unknown — it follows the wall')
+                continue
+            track = plumb_track(insts, run, o0['source'], o0['xy'], k0)
+            ops, layer_moves, why = [], {}, ''
+            for k in run:
+                o = rec(k)
+                q, f = track[k]
+                w = float(o['width']) * f
+                th = float(o.get('thickness') or 0.0)
+                key = o['source'] if o.get('edge') is None else f"{o['source']}#{o['edge']}"
+                t = (targets.get(insts[k].design_id) or {}).get(key) if o.get('at') is not None else None
+                if t is not None:
+                    a_, off = _edge_frame(t, q)
+                    why = _plumb_misfit(a_, off, w, t.length, th or t.thickness, bead)
+                    layer_moves[k] = (a_, w)
+                else:
+                    rs = next((r for r in sources.get(insts[k].design_id) or () if r.get('source') == o['source']),
+                              None)
+                    pts = list((rs or {}).get('points') or ())
+                    closed = bool((rs or {}).get('closed'))
+                    if closed and pts:
+                        pts = pts + [pts[0]]
+                    if len(pts) >= 2:
+                        sv, dist = _poly_project(pts, q)
+                        Lp = sum(math.dist(a_, b_) for a_, b_ in zip(pts, pts[1:]))
+                        why = _plumb_misfit(sv, dist, w, Lp, th or 2 * bead, bead, closed)
+                if why:
+                    why = f'at layer {k + 1} (z {insts[k].z_bottom:g}) {why}'
+                    break
+                ops.append((k, ('move', o['source'], oid, round(q[0], 6), round(q[1], 6), f'align:{oid}', _r(w))))
+            if why:
+                res.warnings.append(f'Designer opening {name} cannot stay vertical (plumb) on layers {run[0] + 1}–'
+                                    f'{run[-1] + 1}: {why} — it follows the wall there')
+                continue
+            for k, op in ops:
+                per_layer[k].append(op)
+                res.layers.append({'layer': k, 'z': round(_mid(insts[k]), 4), 'design': insts[k].design_id,
+                                   'point': [op[3], op[4]], 'width': op[6],
+                                   **({'at': round(layer_moves[k][0], 4)} if k in layer_moves else {})})
+            for k, v in layer_moves.items():
+                moves[(k, oid)] = v
+            X0 = wall_placement(insts[k0], o0['source']).apply(*o0['xy'])
+            res.members.append({'anchor_layer': k0, 'anchor': [round(X0[0], 4), round(X0[1], 4)], 'label': name})
+        res.valid = True
+    return moves
+
+
+def _at(m, k):
+    """A member's position (along its wall, design inches) at layer k."""
+    a = m.get('at')
+    return m['pos'] if a is None else a[k]
+
+
+def _resolve_members(p, insts, tgs, bead, h, res, openings, alignment='follow', designer_moves=None):
     """Every opening of the profile (the master, its array clones, or the
     closure of a converted Designer opening): [{'pos', 'zb', 'widths',
     'skip' (layers NOT cut here: the Designer's own opening), 'label'}];
@@ -715,6 +904,11 @@ def _resolve_members(p, insts, tgs, bead, h, res, openings):
                         'middle': round(spring - zb, 4), 'spring': round(spring - zb, 4), 'height': round(p.height, 4)}
         members.append({'pos': p.position, 'zb': zb, 'widths': widths, 'skip': set(range(k0, k1 + 1)),
                         'label': 'opening', 'top_only': True})
+        if alignment == 'plumb' and (k0, str(o['id'])) in (designer_moves or {}):
+            # the closure above a PLUMB Designer opening is plumb with it (anchored
+            # where its rectangle starts, as the rectangle is)
+            members[-1]['anchor'] = k0
+            _plumb_member(members[-1], tgs.get(insts[k0].design_id), p.wall.source, insts, bead, res, '')
     else:
         p = p.completed(lh, h, bead)
         sd = p.shape_dict()
@@ -725,7 +919,7 @@ def _resolve_members(p, insts, tgs, bead, h, res, openings):
             res.hint = {k: v for k, v in (('min_height', lim['min_height']), ('max_width', lim['max_width']))
                         if v is not None}
             if res.hint:
-                res.hint['field'] = OS.height_field(sd)
+                res.hint['field'] = 'upper_height'
         res.geometry = {'lower_depth': round(ev['d'], 4), 'middle': round(ev['m'], 4),
                         'upper_height': round(ev['U'], 4), 'spring': round(ev['d'] + ev['m'], 4),
                         'height': round(ev['H'], 4)}
@@ -734,7 +928,14 @@ def _resolve_members(p, insts, tgs, bead, h, res, openings):
             members.append({'pos': pos, 'zb': zb, 'widths': _shape_widths(p, zb, insts, tgs, wmin),
                             'skip': set(), 'label': f'#{j + 1}' if len(mems) > 1 else 'opening',
                             'header': p.upper == 'header'})
-        if p.lower != 'flat' and p.shape == 'arch':
+            if alignment == 'plumb':
+                first = next((k for k, w in enumerate(members[-1]['widths']) if w > 0), None)
+                t0 = tgs.get(insts[first].design_id) if first is not None else None
+                if t0 is not None:
+                    lab = members[-1]['label']
+                    _plumb_member(members[-1], t0, p.wall.source, insts, bead, res,
+                                  '' if lab == 'opening' else f'opening {lab}: ')
+        if p.lower != 'flat':
             # the LOWER profile is not a closure (nothing hangs over its void),
             # but its jamb CAPS move outward with it: where a layer widens the
             # cut by more than 2 h (a round bottom's first layers) a cap there
@@ -750,7 +951,8 @@ def _resolve_members(p, insts, tgs, bead, h, res, openings):
     # per member — fits the wall, every transition ≤ h, closed below the stack top
     for m in members:
         _member_checks(p, m, insts, tgs, bead, h, res, warn_fit=bool(p.source_opening))
-    res.members = [{'position': m['pos'], 'z_bottom': m['zb']} for m in members]
+    res.members = [dict({'position': m['pos'], 'z_bottom': m['zb']},
+                        **({'anchor_layer': m['anchor']} if m.get('at') is not None else {})) for m in members]
     return members, p
 
 
@@ -765,6 +967,24 @@ def _member_checks(p, m, insts, tgs, bead, h, res, warn_fit=False):
             if msg not in res.errors and msg not in res.warnings:
                 (res.warnings if warn_fit else res.errors).append(msg)
             break
+    if m.get('at') is not None:
+        # PLUMB: on every layer it cuts, the (moved) opening must still lie on
+        # the transformed wall with its jambs — else it no longer intersects
+        # the wall properly: reported, never cut
+        for k, w in enumerate(widths):
+            t = tgs.get(insts[k].design_id)
+            if w <= 0 or k in m['skip'] or t is None:
+                continue
+            jamb = 0.5 * t.thickness + JAMB_BEADS * bead
+            a = m['at'][k]
+            if a - w / 2 < jamb - 1e-9 or a + w / 2 > t.length - jamb + 1e-9:
+                msg = (f'{pre}vertical (plumb): at layer {k + 1} (z {insts[k].z_bottom:g}) it no longer lies on the wall '
+                       f'with {jamb:.2f} in of jamb each side')
+                if msg not in res.errors:
+                    res.errors.append(msg)
+                break
+    if m.get('at') is not None:                     # PLUMB: design widths × scale = the world (intended) widths
+        widths = [w * (insts[k].transform.scale or 1.0) for k, w in enumerate(widths)]
     worst, where = 0.0, None
     for k in range(1, len(insts)):
         if insts[k - 1].design_id not in tgs or insts[k].design_id not in tgs:
@@ -821,7 +1041,7 @@ def _opening_headers(p, res, members, insts, tgs, bead):
         sc = inst.transform.scale or 1.0
         hid = f'{p.id}-header' + (f'-{j + 1}' if len(members) > 1 else '')
         out.append(Header(hid, inst.section_index, inst.index - first[inst.section_index],
-                          t.a[0] + ux * m['pos'], t.a[1] + uy * m['pos'], math.degrees(math.atan2(uy, ux)),
+                          t.a[0] + ux * _at(m, last + 1), t.a[1] + uy * _at(m, last + 1), math.degrees(math.atan2(uy, ux)),
                           p.width / sc, hs['bearing'], hs['depth'], hs['thickness'], snap=True,
                           profile=p.id, member=j))
     res.headers = [h.to_dict() for h in out]
@@ -839,8 +1059,9 @@ def _check_spacing(entries, insts, tgs_of, bead, name):
     layer no two overlap and at least the pier minimum of wall stays between
     them; and two openings that never share a layer have at least ONE solid
     layer between them vertically (else they print as one void and neither
-    closes). entries: [(k, lo, hi, owner)]. Returns [(owner, message)] — one
-    message per pair, at its worst layer, reported on the later owner."""
+    closes). entries: [(k, lo, hi, owner)]. Returns [((owner a, owner b),
+    message)] — one message per pair, at its worst layer (the profile of the
+    later owner reports it; BOTH openings are marked)."""
     by = {}
     for k, lo, hi, ow in entries:
         by.setdefault(k, []).append((lo, hi, ow))
@@ -867,13 +1088,13 @@ def _check_spacing(entries, insts, tgs_of, bead, name):
     out = []
     for pr, (gap, k, pier) in sorted(worst.items()):
         if gap < -1e-9:
-            out.append((pr[1], f'{name(pr[0])} and {name(pr[1])} overlap (layer {k + 1}, z {insts[k].z_bottom:g})'))
+            out.append((pr, f'{name(pr[0])} and {name(pr[1])} overlap (layer {k + 1}, z {insts[k].z_bottom:g})'))
         elif gap < pier - 1e-9:
-            out.append((pr[1], f'only {gap:.2f} in of wall between {name(pr[0])} and {name(pr[1])} at layer {k + 1} '
+            out.append((pr, f'only {gap:.2f} in of wall between {name(pr[0])} and {name(pr[1])} at layer {k + 1} '
                                f'— needs ≥ {pier:.2f} in (increase the horizontal spacing)'))
     for pr, k in sorted(vert.items()):
         if pr not in shared:
-            out.append((pr[1], f'no solid layer between {name(pr[0])} and {name(pr[1])} (layers {k + 1}–{k + 2}) '
+            out.append((pr, f'no solid layer between {name(pr[0])} and {name(pr[1])} (layers {k + 1}–{k + 2}) '
                                '— increase the vertical spacing'))
     return out
 
@@ -931,7 +1152,7 @@ def _resolve_extent(p: ExtentProfile, insts, tgs, bead, h, res: ProfileResult):
     return out
 
 
-def apply_profiles(resolved, profiles, targets, bead, max_overhang, sources=None, openings=None):
+def apply_profiles(resolved, profiles, targets, bead, max_overhang, sources=None, openings=None, alignment=None):
     """Attach each layer's CUT SPEC (LayerInstance.cuts) and report every
     profile. targets: {design id: {wall key: WallTarget}} (LayerSource.walls);
     sources: {design id: [source record]} (LayerSource.sources — every wall a
@@ -939,11 +1160,15 @@ def apply_profiles(resolved, profiles, targets, bead, max_overhang, sources=None
     (LayerSource.openings — what a conversion refers to). Invalid profiles
     cut nothing. Returns (resolved, [ProfileResult])."""
     insts = resolved.instances
-    if not profiles or not insts:
+    alignment = 'plumb' if alignment == 'plumb' else 'follow'
+    if (not profiles and alignment == 'follow') or not insts:
         return resolved, []
     h = max(0.0, min(float(max_overhang), float(bead)))
     per_layer = [[] for _ in insts]
     results = []
+    # OPENING ALIGNMENT (global, 2026-10-10): plumb Designer openings moved per layer
+    designer_moves = _align_designer_openings(insts, openings or {}, targets, sources or {}, bead, per_layer,
+                                              results) if alignment == 'plumb' else {}
     seen = set()
     pending = []                                       # openings: validated together, then emitted
     for p in profiles:
@@ -967,7 +1192,7 @@ def apply_profiles(resolved, profiles, targets, bead, max_overhang, sources=None
         missing = [d for d in dict.fromkeys(i.design_id for i in insts) if d not in tgs]
         if p.kind == 'opening':
             try:
-                members, p = _resolve_members(p, insts, tgs, bead, h, res, openings or {})
+                members, p = _resolve_members(p, insts, tgs, bead, h, res, openings or {}, alignment, designer_moves)
             except ProfileError as e:
                 res.errors.append(str(e))
                 members = []
@@ -1019,12 +1244,12 @@ def apply_profiles(resolved, profiles, targets, bead, max_overhang, sources=None
                                'retained': round(v, 4), 'cut': round(v if p.keep == 'start' else L_ - v, 4)})
             if res.valid:
                 per_layer[k].append(('extent', p.wall.source, p.wall.edge, p.end, _r(v), p.id))
-    _emit_openings(pending, insts, per_layer, bead, h, profiles, sources or {}, openings or {})
+    _emit_openings(pending, insts, per_layer, bead, h, profiles, sources or {}, openings or {}, designer_moves)
     new = [replace(i, cuts=tuple(sorted(c, key=_cut_sort))) if c else i for i, c in zip(insts, per_layer)]
     return replace(resolved, instances=new), results
 
 
-def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openings=None):
+def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openings=None, designer_moves=None):
     """The OPENING profiles of the stack, together: spacing between every
     two openings on a wall (an array's clones, other profiles and the
     Designer's own openings of each layer alike — a profile that overlaps or
@@ -1039,7 +1264,7 @@ def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openin
             for k, w in enumerate(m['widths']):
                 if w > 0:
                     by_wall.setdefault(p.wall.key, []).append(
-                        (k, m['pos'] - w / 2, m['pos'] + w / 2, (order[res.id], j)))
+                        (k, _at(m, k) - w / 2, _at(m, k) + w / 2, (order[res.id], j)))
     # the Designer's own openings on those walls (fixed: owner (-1, id)); a
     # converted one is its conversion's own rectangle — not a neighbour
     converted = {(p.wall.key, p.source_opening['id']) for p, _, _, _ in pending if p.source_opening}
@@ -1052,6 +1277,9 @@ def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openin
             for wk, w in walls.items():
                 if o.get('source') == w.source and o.get('edge') == w.edge and (wk, o['id']) not in converted:
                     a, ww = float(o['at']), float(o['width'])
+                    mv = (designer_moves or {}).get((k, str(o['id'])))
+                    if mv is not None:                  # a PLUMB Designer opening: where it is cut at this layer
+                        a, ww = mv
                     by_wall.setdefault(wk, []).append((k, a - ww / 2, a + ww / 2, (-1, str(o['id']))))
                     dlabels[(-1, str(o['id']))] = f'Designer opening {o.get("label") or o["id"]}'
     labels = dict(dlabels)
@@ -1063,13 +1291,33 @@ def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openin
     for p, res, tgs, members in pending:
         for d, t in tgs.items():
             tg_any.setdefault(p.wall.key, {})[d] = t
+    marks = {}                                          # owner → its own spacing messages
     for wk, entries in by_wall.items():
-        for owner, msg in _check_spacing(entries, insts, lambda d, wk=wk: tg_any[wk].get(d), bead,
-                                         lambda o: labels.get(o, str(o))):
-            res = pending[owner[0]][1]
+        for pr, msg in _check_spacing(entries, insts, lambda d, wk=wk: tg_any[wk].get(d), bead,
+                                      lambda o: labels.get(o, str(o))):
+            res = pending[pr[1][0]][1]
             if msg not in res.errors:
                 res.errors.append(msg)
                 res.valid = False
+            for ow in pr:
+                if ow[0] == pr[1][0]:                   # (the reporting profile's openings)
+                    marks.setdefault(ow, []).append(msg)
+    # EVERY opening of a profile judged alike (an array: the master and each
+    # clone): its own errors — its member checks, its spacing pairs — and the
+    # profile's shared ones (the shape, the wall); reported per member so the
+    # page marks exactly the openings concerned, never only the master
+    for p, res, tgs, members in pending:
+        if not members or not res.members:
+            continue
+        own = {j: (f'opening {m["label"]}:', f'opening {m["label"]} ') for j, m in enumerate(members)
+               if m['label'] != 'opening'}
+        shared = [e for e in res.errors if not any(e.startswith(a) or a2 in e for a, a2 in own.values())
+                  and not any(e in v for v in marks.values())]
+        for j, m in enumerate(members):
+            a = own.get(j)
+            mine = [e for e in res.errors if a and e.startswith(a[0])] + marks.get((order[res.id], j), [])
+            if j < len(res.members):
+                res.members[j]['errors'] = list(dict.fromkeys(shared + mine))
     planes = [q for q in profiles if q.kind == 'plane']
     cut_iv = {}                                         # (layer, wall) → [(lo, hi)] of VALID openings
     for p, res, tgs, members in pending:
@@ -1077,14 +1325,14 @@ def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openin
             for m in members:
                 for k, w in enumerate(m['widths']):
                     if w > 0:
-                        cut_iv.setdefault((k, p.wall.key), []).append((m['pos'] - w / 2, m['pos'] + w / 2))
+                        cut_iv.setdefault((k, p.wall.key), []).append((_at(m, k) - w / 2, _at(m, k) + w / 2))
     for p, res, tgs, members in pending:
         w = p.wall
         for j, m in enumerate(members):
             for k, v in enumerate(m['widths']):
                 if v > 0:
                     e = {'layer': k, 'z': round(_mid(insts[k]), 4), 'design': insts[k].design_id,
-                         'width': round(v, 4), 'at': round(m['pos'], 4)}
+                         'width': round(v, 4), 'at': round(_at(m, k), 4)}
                     if len(members) > 1:
                         e['member'] = j
                     if k in m['skip']:
@@ -1102,28 +1350,45 @@ def _emit_openings(pending, insts, per_layer, bead, h, profiles, sources, openin
         # the cut layers stay a LOCAL change (layer_design._station_reference)
         # (a converted Designer opening's own layers stay the authored design)
         authored = set().union(*(m['skip'] for m in members))
-        for pos in sorted({_r(m['pos']) for m in members}):
+        for pos in _station_positions(members, insts, tgs, bead):
             for k, inst in enumerate(insts):
                 if inst.design_id in tgs and k not in authored:
                     per_layer[k].append(('station', w.source, w.edge, pos, 0.0, p.id))
         for m in members:
             for k, v in enumerate(m['widths']):
                 if v > 0 and k not in m['skip']:
-                    per_layer[k].append(('opening', w.source, w.edge, _r(m['pos']), _r(v), p.id))
+                    per_layer[k].append(('opening', w.source, w.edge, _r(_at(m, k)), _r(v), p.id))
             wts = [0.0 if k in m['skip'] else v for k, v in enumerate(m['widths'])] if m.get('top_only') else m['widths']
             last = max((k for k, v in enumerate(m['widths']) if v > 0), default=-1)
             for k, w_, al in _transition_layers(insts, wts, tgs, bead, h):
                 if m.get('top_only') and k < last:
                     continue                            # (below a converted rectangle: authored, untouched)
                 th = (tgs.get(insts[k].design_id).thickness if tgs.get(insts[k].design_id) else 0.0)
-                if any(lo - th < m['pos'] + w_ / 2 and m['pos'] - w_ / 2 < hi + th
+                if any(lo - th < _at(m, k) + w_ / 2 and _at(m, k) - w_ / 2 < hi + th
                        for lo, hi in cut_iv.get((k, w.key), ())):
                     continue                            # another opening is cut there: no pre-deformation
-                per_layer[k].append(('transition', w.source, w.edge, _r(m['pos']), _r(w_), p.id, _r(al)))
+                per_layer[k].append(('transition', w.source, w.edge, _r(_at(m, k)), _r(w_), p.id, _r(al)))
         for q in planes:                                # a planar top cut on the same wall
             if any(w.source in {r['source'] for r in plane_selection(q, recs)} for recs in sources.values()):
                 res.warnings.append(f'planar top cut {q.id} also cuts this wall: where it removes the wall above '
                                     'an opening, that opening is open at the top (no closure)')
+
+
+def _station_positions(members, insts, tgs, bead) -> list:
+    """The lattice STATIONS of a profile's openings: one per distinct
+    position — a PLUMB opening moves along its wall from layer to layer, so
+    each of its cut positions counts, merged when closer than one bead."""
+    ps = set()
+    for m in members:
+        if m.get('at') is None:
+            ps.add(_r(m['pos']))
+        else:
+            ps |= {_r(m['at'][k]) for k, w in enumerate(m['widths']) if w > 0 and k not in m['skip']}
+    out = []
+    for x in sorted(ps):
+        if not out or x - out[-1] >= bead - 1e-9:
+            out.append(x)
+    return out
 
 
 def plane_selection(p, recs) -> list:
@@ -1252,6 +1517,9 @@ def cuts_to_dicts(cuts) -> list:
         elif c[0] == 'transition':
             out.append({'op': 'transition', 'source': c[1], 'edge': c[2], 'at': c[3], 'width': c[4],
                         'profile': c[5], 'alpha': c[6]})
+        elif c[0] == 'move':
+            out.append({'op': 'move', 'source': c[1], 'opening': c[2], 'point': [c[3], c[4]], 'profile': c[5],
+                        'width': c[6]})
         else:
             out.append({'op': 'extent', 'source': c[1], 'edge': c[2], 'end': c[3], 'retained': c[4],
                         'profile': c[5]})
@@ -1273,6 +1541,9 @@ def cuts_from_dicts(ds) -> tuple:
         elif d['op'] == 'transition':
             out.append(('transition', d['source'], d.get('edge'), _r(d['at']), _r(d['width']), d.get('profile', ''),
                         _r(d['alpha'])))
+        elif d['op'] == 'move':
+            out.append(('move', d['source'], d['opening'], round(float(d['point'][0]), 6), round(float(d['point'][1]), 6),
+                        d.get('profile', ''), _r(d['width'])))
         else:
             out.append(('extent', d['source'], d.get('edge'), d.get('end', 'end'), _r(d['retained']),
                         d.get('profile', '')))

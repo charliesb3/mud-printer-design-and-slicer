@@ -10,7 +10,7 @@ process.stdin.on('end', () => {
   const out = JSON.parse(buf).map(([s, edited, lh, h, bead]) => {
     const [q, info] = O.constrain(s, edited, lh, h, bead);
     const ev = O.evaluate(q, lh, h, bead);
-    const ws = ev.ok ? O.layerWidths(q.z_bottom, q.width, ev.d, ev.m, ev.U, q.shape, q.upper, q.lower, lh, O.wmin(bead, h)) : [];
+    const ws = ev.ok ? O.layerWidths(q.z_bottom, q.width, ev.d, ev.m, ev.U, q.upper, q.lower, lh, O.wmin(bead, h)) : [];
     return { q, info, ev, ws, lim: O.limits(s, lh, h, bead) };
   });
   process.stdout.write(JSON.stringify(out));

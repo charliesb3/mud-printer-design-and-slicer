@@ -115,6 +115,7 @@ class SupportReport:
     warnings: list = field(default_factory=list)
     min_overlap: float = 0.0                      # required: DERIVED (bead width − max overhang)
     max_overhang: float = DEFAULT_MAX_OVERHANG
+    level: str = 'bead'                           # 'bead' (authoritative) | 'envelope' (preliminary)
 
     @property
     def needs_header(self):
@@ -166,7 +167,7 @@ class SupportReport:
                 'supported': sum(f.status == 'supported' for f in self.findings),
                 'overridden': sum(f.status == 'overridden' for f in self.findings),
                 'min_overlap': self.min_overlap, 'max_overhang': self.max_overhang,
-                'warnings': self.warnings}
+                'warnings': self.warnings, 'level': self.level}
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +225,25 @@ class _SegIndex:
                         g[gx, gy].append((a, b))
             fine = self._fine = (r, cell, g)
         _, cell, g = fine
-        return any(_seg_dist(p, a, b) <= r for a, b in g.get((math.floor(p[0] / cell), math.floor(p[1] / cell)), ()))
+        # (= any(_seg_dist(p, a, b) <= r …), decided on the squared distance
+        # away from the threshold and by the identical hypot near it —
+        # bit-for-bit the same answer, ~2× faster: 2026-10-10 performance pass)
+        px, py = p
+        r2 = r * r
+        lo, hi = r2 * (1.0 - 1e-9), r2 * (1.0 + 1e-9)
+        for (ax, ay), (bx, by) in g.get((math.floor(px / cell), math.floor(py / cell)), ()):
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            if L2 == 0:
+                t = 0.0
+            else:
+                t = ((px - ax) * dx + (py - ay) * dy) / L2
+                t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            ex, ey = px - ax - t * dx, py - ay - t * dy
+            d2 = ex * ex + ey * ey
+            if d2 <= lo or (d2 <= hi and math.hypot(ex, ey) <= r):
+                return True
+        return False
 
 
 def _interval(p, n, a, b, r):
@@ -421,6 +440,102 @@ def _bound(t0, t1, bbox):
 
 # ---------------------------------------------------------------------------
 
+class _Material:
+    """Point-in-MATERIAL of an envelope layer: even-odd over its closed rings
+    (outer + holes; components disjoint), segments filed by horizontal row."""
+
+    def __init__(self, rings, cell):
+        self.cell = max(cell, 1e-6)
+        self.rows = defaultdict(list)
+        for pts in rings:
+            for a, b in zip(pts, pts[1:]):
+                if a[1] == b[1]:
+                    continue
+                for gy in range(math.floor(min(a[1], b[1]) / self.cell), math.floor(max(a[1], b[1]) / self.cell) + 1):
+                    self.rows[gy].append((a, b))
+
+    def inside(self, p) -> bool:
+        x, y = p
+        c = False
+        for (ax, ay), (bx, by) in self.rows.get(math.floor(y / self.cell), ()):
+            if (ay > y) != (by > y) and ax + (y - ay) * (bx - ax) / (by - ay) > x:
+                c = not c
+        return c
+
+
+def _envelope_pair(lower, upper, b, bl, h) -> tuple:
+    """The PRELIMINARY ARCHITECTURAL support of one layer boundary (Assembly
+    editing; the authoritative bead-level check runs on the prepared print
+    geometry). lower / upper: [(placed points, frames, role)] — material
+    rings ('ring') and bare single beads ('bead', a capsule of its width).
+    Upper points are sampled every ½ bead along its ring boundaries (the
+    material edge) and bead centrelines. A point's OVERHANG δ is how far the
+    upper material edge there lies outside the lower material: s = its
+    signed distance outside the lower material (negative inside; a lower
+    bead counts as its capsule), + half its own width for a bead — so two
+    equal beads offset by d overhang by d, a wall face stepping out by x
+    overhangs by x. Supported when δ ≤ h (Maximum overhang). Its reported
+    overlap is that of one bead at that edge, b − δ (the required overlap
+    o = b − h reads as in the bead-level report). Kinds as in the bead-level
+    check: a bridge (HEADER NEEDED) when δ > 2·b or along a stretch ≥ 1 bead
+    the cross-section line (b + 2·bl long, the bead-level corridor) touches
+    no lower material; else INSUFFICIENT LAYER SUPPORT. Returns (points,
+    runs, run_of, tf_of, ov_of, d_of, empty_of) for _pair_findings."""
+    reach = BRIDGE_FACTOR * b + bl
+    rings = [p for p, _, r in lower if r != 'bead']
+    beads = [p for p, _, r in lower if r == 'bead']
+    # (one index per query radius: each builds its fine grid once)
+    ridx, bidx = _SegIndex(rings, reach), _SegIndex(beads, reach)
+    q_ring = (_SegIndex(rings, reach), h)                         # a ring point: an edge within h
+    q_bead = ((_SegIndex(rings, reach), h - b / 2),                # a bead: its edge within h of an edge
+              (_SegIndex(beads, reach), h - b / 2 + bl / 2))       # … / its centre within reach of a bead
+    t_bead = _SegIndex(beads, reach)
+    mat = _Material(rings, b)
+
+    def signed(p):                                    # signed distance outside the lower material
+        s = -ridx.dist(p) if mat.inside(p) else ridx.dist(p)
+        return min(s, bidx.dist(p) - bl / 2)
+
+    def touches(q):
+        return mat.inside(q) or t_bead.within(q, bl / 2)
+
+    half = b / 2 + bl
+    nst = max(2, int(math.ceil(2 * half / (bl / 4))))
+
+    def empty(p, d):
+        n = (-d[1], d[0])
+        return not any(touches((p[0] + n[0] * u, p[1] + n[1] * u))
+                       for u in (-half + 2 * half * j / nst for j in range(nst + 1)))
+    points, runs, run_of, tf_of, ov_of, d_of, empty_of = [], [], [], [], [], [], []
+    for pts, tfs, role in upper:
+        bead = role == 'bead'
+        quick = q_bead if bead else (q_ring,)
+        off = b / 2 if bead else 0.0
+        cur = None
+        for p, dirn, k, alt in _sample_dirs(pts, SAMPLE_FACTOR * b):
+            if any(r >= 0 and ix.within(p, r + 1e-9) for ix, r in quick):
+                cur = None
+                continue
+            d = signed(p) + off
+            if d <= h + 1e-9:
+                cur = None
+                continue
+            if cur is None:
+                cur = []
+                runs.append(cur)
+            cur.append(p)
+            points.append(p)
+            run_of.append(len(runs) - 1)
+            tf_of.append(tfs[k])
+            ov_of.append(max(0.0, b - d))
+            d_of.append(d)
+            emp = empty(p, dirn)
+            if emp and alt is not None:
+                emp = empty(p, alt)
+            empty_of.append(emp)
+    return points, runs, run_of, tf_of, ov_of, d_of, empty_of
+
+
 def _pair_findings(resolved, i, up, points, runs, run_of, tf_of, ov_of, d_of, empty_of, b, o) -> list:
     """The findings of one layer boundary from its sampled unsupported points."""
     out = []
@@ -447,9 +562,16 @@ def _pair_findings(resolved, i, up, points, runs, run_of, tf_of, ov_of, d_of, em
     return out
 
 
-def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) -> SupportReport:
+def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None, level='bead',
+                    key_of=None) -> SupportReport:
     """geometry: {design id: (polylines, bead_width)} — the designs' resolved
     printable centrelines (untransformed; optional per-vertex 'src').
+    level: 'bead' (default — the AUTHORITATIVE bead-level check described
+    above, on printed centrelines) | 'envelope' (the PRELIMINARY
+    architectural check of Assembly editing: `geometry` holds ARCHITECTURAL
+    ENVELOPES — material rings, role 'ring', and bare single beads, role
+    'bead' (design_proto/envelope.py); see _envelope_pair). key_of(inst):
+    the geometry key of a layer (default: its geometry_key / design id).
     assembly: its objects (Headers), overrides and max_overhang. groups: the
     groups.GroupModel when layers carry per-group placements.
     cache: a dict that lives exactly as long as the geometry behind each
@@ -458,9 +580,22 @@ def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) 
     and bead parameters are unchanged (an edit of one plane re-analyses only
     the boundaries it changed). Not used with transform groups."""
     vgs = groups.vertex_groups if groups is not None else {}
+    # (groups built from the canonical ENVELOPES of Wall Group designs while
+    # the printed geometry is analysed: a vertex's group is its source tag's)
+    vgs_from_tags = groups is not None and groups.by_tag
 
     def group_at(inst, p):
         """The transform group of the vertex of `inst` nearest to local point p."""
+        if level == 'envelope' or vgs_from_tags:  # (by the vertex's source tag)
+            if not inst.parts:
+                return None
+            best = (math.inf, None)
+            for pl in geometry[gk(inst)][0]:
+                for q, t in zip(pl['pts'], pl.get('src') or ()):
+                    d = math.dist(p, q)
+                    if d < best[0]:
+                        best = (d, group_of.get(t))
+            return best[1]
         v = vgs.get(inst.design_id)
         if not v or not inst.parts:
             return None
@@ -486,6 +621,8 @@ def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) 
     group_of = groups.group_of if groups is not None else {}
 
     def gk(inst):
+        if key_of is not None:
+            return key_of(inst)
         return inst.geometry_key if inst.geometry_key in geometry else inst.design_id
 
     def placed(inst):
@@ -516,10 +653,18 @@ def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) 
     def bead(inst):
         return float(geometry[gk(inst)][1] or DEFAULT_BEAD)
 
+    def _roled(inst):
+        """[(placed points, frames, role)] — an envelope layer's polylines."""
+        return [(pts, frames, pl.get('role') or 'ring')
+                for (pts, frames), pl in zip(placed(inst), geometry[gk(inst)][0])]
+
     findings = []
     for i in range(1, len(insts)):
         lo, up = insts[i - 1], insts[i]
-        if lo.design_id not in geometry or up.design_id not in geometry or not bbox.get(gk(up)):
+        if level == 'envelope':                 # (envelopes are keyed per layer: key_of)
+            if gk(lo) not in geometry or gk(up) not in geometry or not bbox.get(gk(up)):
+                continue
+        elif lo.design_id not in geometry or up.design_id not in geometry or not bbox.get(gk(up)):
             continue
         b, bl = bead(up), bead(lo)
         h = min(max(h_max, 0.0), b)
@@ -531,6 +676,23 @@ def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) 
         if o_report is None:
             o_report = o
         allow = max(0.0, (b + bl) / 2 - o)              # allowed lateral overhang of the centreline
+        if level == 'envelope':
+            allow = h                                   # (envelopes: the material edge itself)
+            if gk(lo) == gk(up) and moved(lo, up) <= allow:
+                continue
+            ckey = None
+            if cache is not None and groups is None:
+                ckey = ('envelope', gk(lo), gk(up), lo.transform, up.transform, b, bl, h)
+                hit = cache.get(ckey)
+            if ckey is None or hit is None:
+                hit = _envelope_pair(_roled(lo), _roled(up), b, bl, h)
+                if ckey is not None:
+                    cache[ckey] = hit
+                    if len(cache) > 4096:
+                        cache.pop(next(iter(cache)))
+            if hit[0]:
+                findings += _pair_findings(resolved, i, up, *hit, b, o)
+            continue
         if gk(lo) == gk(up) and moved(lo, up) <= allow:
             continue
         reach = BRIDGE_FACTOR * b + bl
@@ -656,4 +818,4 @@ def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None) 
                 break
     if o_report is None:
         o_report = max(0.0, DEFAULT_BEAD - h_max)
-    return SupportReport(findings, headers, warnings, o_report, h_max)
+    return SupportReport(findings, headers, warnings, o_report, h_max, level)

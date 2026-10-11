@@ -32,7 +32,7 @@ global.document = {
     querySelector: () => ({ disabled: false }), set lastChild(v) {}, get lastChild() { return this.children[this.children.length - 1]; } }),
   addEventListener() {}, body: {}, activeElement: null,
 };
-global.window = { addEventListener() {}, devicePixelRatio: 1 };
+global.window = { DESIGNER_PRINT_PREVIEW: true, addEventListener() {}, devicePixelRatio: 1 };
 global.requestAnimationFrame = () => 0; global.cancelAnimationFrame = () => {};
 global.fetch = async () => ({ json: async () => ([]) });
 global.console.warn = () => {};

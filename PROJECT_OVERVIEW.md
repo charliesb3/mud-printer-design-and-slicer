@@ -122,8 +122,16 @@ The approximate current/future information flow is:
 Design + Toolpath
   ├─ Designer (design_proto): reusable 2D LAYER DESIGNS
   │         ↓ narrow interface (LayerSource: design info + resolved 2D printable geometry)
-  └─ Layer Assembly (layer_assembly): stacks Layer Designs by physical height → layers + Z
-        ↓
+  │         (WALL GROUPS since 2026-10-11: members, thickness, alignment — the architecture;
+  │          the Designer shows wall envelopes, no construction / lattice / route)
+  ├─ Layer Assembly (layer_assembly): stacks Layer Designs by physical height → layers + Z
+  │         (edited on ARCHITECTURAL ENVELOPES: walls / junctions / openings / cuts, no Wall
+  │          System lattice or routing; preliminary envelope-level support)
+  └─ WALL SYSTEMS workspace (2026-10-11): the project's printable constructions (Single /
+            Hollow / Skin + Web / Parallel / waves / Chained Loop) assigned to walls or Wall
+            Groups; "Generate Wall Systems" (explicit) = the existing full pipeline for the whole
+            building + bead-level support; status NOT GENERATED / GENERATING / CURRENT / OUTDATED
+        ↓ (only CURRENT generated geometry)
   PRINT PLAN (layer_assembly/print_plan.py, 2026-10-09): every layer routed and
   ordered (runs, travels, layer transitions, source identities) + time estimates —
   the ONE representation simulation, G-code export and machine execution consume
@@ -320,11 +328,15 @@ Do not modify GRBL merely to avoid generating appropriate G-code in the higher-l
 
 ### Project files store authoring state, versioned, separate from machine output
 
-Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release. Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
+Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release (schema 2 since 2026-10-11: Wall Groups in the designs + the project's Wall Systems; schema 3 the same day: the default Maximum Overhang became 1 in — older projects without a value keep 1.5). Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
 
 ### One authoritative print plan feeds simulation, G-code and machine execution
 
 The whole-print plan (ordered layers → continuous runs, travels and layer transitions in world coordinates, with source identities) is produced once by the Design + Toolpath subsystem from the exact geometry the designer sees. Print Simulation, G-code export and any machine-controller execution consume that plan (and its timeline) instead of re-deriving order, starts or timing. Time figures from it are estimates (constant speeds), not machine timing. Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "Print plan".
+
+### Architectural editing is separate from print-path generation (2026-10-11)
+
+The workflow is Designer → Assembly → Wall Systems → Print Simulation. The Designer and the Assembly edit ARCHITECTURE only: WALL GROUPS (which paths are walls, their thickness and alignment) and lightweight wall ENVELOPES (the Designer's build stopped after walls, junctions, trims and openings). The printable CONSTRUCTION is a separate project-level data structure, WALL SYSTEMS (construction type + parameters, assigned to individual walls or whole Wall Groups; walls of one group may differ, one construction may span thicknesses), edited in its own workspace. Wall Systems, lattice and printable wall geometry are generated only by the explicit "Generate Wall Systems" (the existing full-resolution pipeline for the whole assembled building); the Print Simulation plans (routing, lifts, timing) only from CURRENT generated geometry and never generates it. Generated geometry that no longer matches the design is labelled OUTDATED, never treated as current. Envelope-level support is preliminary; bead-level support of the generated geometry is authoritative. The Assembly places layers and validates openings from the architecture only (envelopes, architectural pier / overhang rules), so changing a Wall System never changes the Assembly; construction-specific minimums are reported after generation in the Wall Systems inspection. Project files (schema 2) store Wall Groups in the designs and the Wall Systems in the project; schema-1 files are split geometry-preservingly. Details: `design-toolpath/DEFERRED_TOOLPATH_ARCHITECTURE.md`, `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "WALL GROUPS × WALL SYSTEMS WORKSPACE" and "DEFERRED PRINT PATHS".
 
 ### Do not replace GRBL without demonstrated need
 
@@ -563,6 +575,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-11
+
+Design + Toolpath: DEFERRED PRINT PATHS (M0 + M1; uncommitted, pending manual review) — Assembly editing on architectural envelopes, explicit "Generate Print Paths" print preparation (unchanged full pipeline), preliminary vs bead-level support; new decision "Architectural editing is separate from print-path generation". Exact Assembly edits 1.2–3.4 s on the 84-layer benchmark (were 12–44 s); print outputs byte-identical. layer_assembly 619, design_proto 1724, toolpath_proto 92 tests green.
 
 2026-10-10
 

@@ -21,6 +21,20 @@ from test_profiles_designer import (line_doc, designs, targets_of, open_ends, _p
 from layer_assembly.designer_source import DesignerSource
 from layer_assembly.demo import demo_designs
 from layer_assembly.model import Assembly, Section, SectionTransform, resolve
+
+
+# (written for the 1.5 in default Maximum Overhang — since 2026-10-11 the
+# default is 1 in: these cases state the 1.5 in they were designed with)
+_Assembly = Assembly
+
+
+def Assembly(*a, **k):          # noqa: F811
+    if len(a) < 9:
+        k.setdefault('max_overhang', 1.5)
+    return _Assembly(*a, **k)
+
+
+Assembly.from_dict = _Assembly.from_dict
 from layer_assembly.profiles import OpeningProfile, OpeningArray, WallRef, PlaneProfile, apply_profiles
 from layer_assembly.source import stack_geometry
 from layer_assembly.support import analyse_support
