@@ -14,6 +14,19 @@ The codebase and Git history remain the authoritative record of the actual imple
 
 ---
 
+# 0. AUTONOMOUS WORKFLOW
+
+Work autonomously on requested tasks. The established workflow is: ChatGPT drafts a task → Claude Code implements → user reviews → user manually tests → Git checkpoint commit. Within one Claude Code task:
+
+- Complete requested work without asking the user to approve routine implementation decisions.
+- Resolve ordinary ambiguities with the repository's documentation and reasonable engineering judgment; prior memory and code are the source of truth.
+- Run tests, investigate failures, and keep working until the task is complete, or genuinely blocked by a decision only the user can make or by missing information.
+- Only interrupt the user for consequential unresolved decisions, destructive operations, hardware-related risks, or external-side-effect actions (push, gh, non-local calls).
+- Never bypass security permissions, perform destructive Git operations, or push to a remote without authorization. A local commit and a push remain separate actions (Section 3).
+- If a request implies "commit and push" but the completed work is pending review, do the local commit; ask once about pushing.
+
+---
+
 # 1. MANDATORY OPERATING LOOP
 
 For every substantive task in this repository, follow this loop.

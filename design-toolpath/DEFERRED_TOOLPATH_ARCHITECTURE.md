@@ -339,6 +339,43 @@ layers, Chained Loop rings / cross-Z transitions, junction territories. Those ar
 Benchmark: coherence improved where sections / openings changed the fit, findings unchanged (53),
 generation +1.9 % time, +1 % memory.
 
+## M4 — Round-junction orphan fillet closure (2026-10-12; junction-coherence sub-pass; UNCOMMITTED)
+
+**Reported junction issues (manual testing): awkward / dense geometry, disconnected or poorly
+integrated wall paths, inconsistent rounded vs square transitions, single-bead walls that
+connect badly to thick Wall Systems, parallel lanes that fail to continue around connected walls,
+occasional gaps.** Reproduced on the reference network with every construction × junction style
+× Line 1 variant: under `round` junctions and a non-member attached wall (`inherit` network-wall
+thickness, or `single_bead` with explicit `wall.thickness=0`), every Parallel / Interleaved /
+Linked / Chained Loop scenario produced OPEN ROUTES at Line 1's attachments. Root cause: the
+junction fillet built by `network.round_junctions` lands on the host ring's FACE polyline;
+`_apply_wall_systems` later drops that face bead and replaces it with Wall System lanes a bead
+inside the face, leaving the fillet's ring-side endpoint in space. `miter` junctions do not
+produce fillets (no corner-trim), hiding the bug. Attached-wall orphan ends are only visible for
+non-members because `_connect_skins` runs only on the mixed-region path. Fix (central, construction-
+agnostic, `design_proto/model.py` `_apply_wall_systems` final pass):
+
+1. Collect orphan fillet endpoints by `(host source, partner wall)`.
+2. For each pair of orphans at ONE attachment, pick a SHARED attach point and connect BOTH
+   orphans to it with a `junction_step` connector.
+3. Shared point = nearest Wall System lane point within 1.5 × wall thickness (step-in);
+   otherwise the pair's own midpoint (face-chord recovery for Parallel rectangles whose lane
+   does not reach the attachment).
+4. Net odd parity introduced: 0 (lane cycle picks up two edges at ONE degree-4 node).
+
+Reports `network['junction_steps']`. Preserves the M3 stack reference and every generator
+attribution. 1724 design_proto, 92 toolpath_proto, 681 layer_assembly tests green; 30 new
+regressions in `design_proto/tests/test_junction_coherence.py`. 84-layer bench: findings
+byte-for-byte identical (53 / 53 / 51 / 51 / 51 / 48 / 61 / 45), wall-clock 407.5 s (within
+variance), peak RSS 1967 MB.
+
+**Still open (future junction sub-passes):** Parallel-rectangle lane dropouts near attachments
+(the lane itself is clipped out by the host's own junctions — the step fallback routes AROUND
+this hole using the face chord but does not restore the lane); exterior-wall priority for
+single-bead to thick-wall transitions (new user decision #1 — step-in attaches to NEAREST
+lane, not necessarily the outermost); shrinking-junction motif and alternative local lattice
+solutions (both need design input before any code).
+
 ## M4 — Chained Loop rings and cross-Z transitions on the stack reference (2026-10-12; first sub-pass)
 
 **Scope.** Two of the Chained Loop cases M3 explicitly left on the per-layer generator now draw
@@ -383,3 +420,45 @@ path (the own fit still runs through the factored `_chain_adj`, verified by `tes
 morphing (the Chained Loop link's 1.53 in worst-layer coherence in the M3 benchmark is
 attributed to this — not to rings or transitions); shrinking-junction motif and alternative
 local lattice solutions (the two M4 items that need design input before any code).
+
+## J2 — Shared junction geometry (2026-10-12; FIRST PASS + MAINTENANCE; UNCOMMITTED)
+
+**First pass (detect-and-fallback).** Fixes the J1-reported "circle grazing rectangle, Parallel
+Walls, no coverage of the circle region" bug by letting a multi-wall same-system region fall
+back to a UNITED generation when the per-wall split yields zero runs for any part. Hollow +
+Parallel scope only (Skin + Web uses the mixed-region split path). Parallel adds a lane
+stitcher `wall_systems._join_parallel_at_junctions` that pairs open lane endpoints across
+strips at junction nodes (closest-pair, ~10 bead tolerance). The united path writes
+`j2_united_region: True` and the sources set on the Wall Systems report; the split path and
+every M3 fallback are preserved (overlapping-X yield test continues to pass). A dormant
+`JunctionRegion` + `Arm` + `extract()` module (`design_proto/junctions.py`) names the agreed
+vocabulary for the next J-pass but is not yet consumed by any generator — the actual J2 fix
+runs on material rings via `_apply_wall_systems`.
+
+**Maintenance pass (follow-up, same day).** The J2 probe loop ran `WS.generate` per part twice:
+once as a probe to decide fallback, once again in the split-per-part loop. The maintenance pass
+reuses the probe output in the no-fallback branch when every part's `chord_tips` list is empty
+(same arguments → same output), halving generation for Hollow / Parallel multi-wall same-system
+regions whose probes already succeed. M4 step-in also reuses the existing `kept_pts` cache for
+orphan fillet + Wall System lane samples. `_seam_hints()` + `_virtual_faces()` cached per
+`_apply_wall_systems` call. All geometry byte-identical to the pre-maintenance baseline.
+`checks.no_protrusions` dropped from `run_all` (was a pure alias of `envelope_containment`;
+kept callable). Timing watchdog recalibrated per-fixture (circle_rect 3.0 s, corner_90 2.0 s,
+cross 1.5 s, others 0.9 s) so hardware variance no longer false-alarms a ~2 × regression
+watchdog.
+
+**Measured.** Reference-network `parallel round explicit10` (4 members, probes succeed):
+1.24 s → 0.78 s (−37 %), `WS.generate` call count 8 → 4. `circle_rect` (fallback fires):
+unchanged at ~0.37 s build-only (3 `WS.generate` calls — probe × 2 + united). `parallel round
+inherit` (mixed region, probe branch not entered): unchanged. 84-layer mixed benchmark not
+re-run this pass (byte-identical geometry at the single-layer level is a stronger pin — a
+build-level perf delta would be ≤ the above).
+
+**Still open (future J-passes).** Wire `JunctionRegion` + `extract()` into
+`_apply_wall_systems` → `WS.generate` so Hollow / Parallel share the record instead of
+reconstructing from rings (J3). Parallel-rectangle lane dropouts near attachments (the lane
+itself is clipped out of its own strip by the host's junctions — the J2 fallback routes AROUND
+this hole via the face chord but does not restore the lane). Single-bead → exterior-skin
+priority (step-in attaches to the NEAREST lane, not necessarily the outermost one). Shrinking-
+junction motif and alternative local lattice solutions (both need design input before any
+code; also listed for the next M4 sub-pass).

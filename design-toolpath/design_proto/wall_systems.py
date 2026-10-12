@@ -2334,7 +2334,95 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
                         'junction_motifs': sum(i.get('junction_motifs', 0) for i in infos)}
     for i in infos:
         i.pop('_ref', None)
+    # J2 (2026-10-12): PARALLEL lane joining across strips. For a region
+    # with multiple strips meeting at junction NODES (circle grazing a
+    # rectangle: one strip for the R loop, one for the C arc, short
+    # bridges across the overlap), each strip's own lanes are OPEN at
+    # the junction nodes and the lane endpoints of adjacent strips sit
+    # about half a bead apart (lane width differs by strip orientation).
+    # Pair every open endpoint with the NEAREST open endpoint from
+    # ANOTHER polyline within one bead and splice both into one chain —
+    # the junction stitching closes the lanes into continuous closed
+    # loops across runs. Only applied to Parallel; Interleaved / Linked
+    # / Chain are untouched (their junction crossings are intentional).
+    if sp['type'] == 'parallel' and polys:
+        polys = _join_parallel_at_junctions(polys, bead)
     return polys, rep
+
+
+def _join_parallel_at_junctions(polys, bead):
+    """Stitch open Parallel polyline endpoints that sit within one bead of
+    each other at a junction node into continuous closed loops. Pure
+    O(n²) over endpoints; a region typically has at most a few dozen
+    open-ended pieces so the cost is negligible compared to the
+    generator itself."""
+    pieces = [list(p) for p in polys if len(p) >= 2]
+    # exact _join first (shares exact vertices along a strip's own corners)
+    pieces = _join(pieces)
+    tol = max(10.0 * bead, 1.0)            # pair endpoints within ~10 beads
+    # the lane-end offsets at a junction node differ by at most half a
+    # wall thickness; a generous tol lets the stitcher reach them (the
+    # closest-pair ranking inside the loop prevents cross-junction
+    # pairings when the real neighbour sits closer)
+    changed = True
+    while changed:
+        changed = False
+        # collect open endpoints
+        opens = []                         # (piece index, end 'start'/'end', Vec2)
+        for i, pl in enumerate(pieces):
+            if len(pl) < 2:
+                continue
+            if pl[0].dist(pl[-1]) < 1e-6:
+                continue                   # already closed loop
+            opens.append((i, 'start', pl[0]))
+            opens.append((i, 'end',   pl[-1]))
+        # find the closest pair across DIFFERENT pieces
+        best = None
+        for i_a in range(len(opens)):
+            ia, ea, qa = opens[i_a]
+            for i_b in range(i_a + 1, len(opens)):
+                ib, eb, qb = opens[i_b]
+                if ia == ib:
+                    continue
+                d = qa.dist(qb)
+                if d >= tol:
+                    continue
+                if best is None or d < best[0]:
+                    best = (d, ia, ea, ib, eb)
+        if best is None:
+            break
+        _, ia, ea, ib, eb = best
+        a = pieces[ia]
+        b = pieces[ib]
+        # orient so that we concatenate a → b
+        if ea == 'start':
+            a = list(reversed(a))
+        if eb == 'end':
+            b = list(reversed(b))
+        merged = a[:-1] + b                # drop the duplicate seam vertex pair
+        # replace piece a with the merge, drop piece b
+        new_pieces = []
+        for k, pl in enumerate(pieces):
+            if k == ia:
+                new_pieces.append(merged)
+            elif k == ib:
+                continue
+            else:
+                new_pieces.append(pl)
+        pieces = new_pieces
+        changed = True
+    # final pass: close any piece whose two ends sit within one bead
+    out = []
+    for pl in pieces:
+        if len(pl) < 2:
+            continue
+        if pl[0].dist(pl[-1]) < 1e-6:
+            out.append(pl)
+            continue
+        if pl[0].dist(pl[-1]) < tol:
+            pl.append(pl[0])
+        out.append(pl)
+    return out
 
 
 # ---------------------------------------------------------------------------

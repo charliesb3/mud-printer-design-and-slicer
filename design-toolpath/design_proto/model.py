@@ -3447,6 +3447,12 @@ class PrintLayer:
             return self._wall_system_key.get(sid) or json.dumps(ws, sort_keys=True)
         drop, new = set(), []
         bead, contact = self.material.bead_width, self.material.contact_separation()
+        # J2 maintenance (2026-10-12): compute once per `_apply_wall_systems`
+        # call. Both are pure w.r.t. the Designer state and are called up to
+        # 4× per region (probe x N parts + split or united). Negligible on
+        # fixtures without cut transitions; a measurable win on real projects.
+        seam_hints = self._seam_hints()
+        virtual_faces = self._virtual_faces()
 
         def emit(polys, system, k, first, tag=''):
             for j, poly in enumerate(polys):
@@ -3496,8 +3502,8 @@ class PrintLayer:
                 return sid_ if keyof(sid_) is not None else None
             if len(gen_sids) == 1 and len(keys) == 1 and '__J' not in set(msid.values()):
                 system = self._wall_systems[next(iter(sids))]
-                polys, rep = WS.generate(rings, system, bead, contact, self._seam_hints(), self.wall_system_reference,
-                                         self._virtual_faces())
+                polys, rep = WS.generate(rings, system, bead, contact, seam_hints, self.wall_system_reference,
+                                         virtual_faces)
                 self._ws_frames.extend(rep.pop('frames', []))
                 drop |= {id(p) for p in members}
                 emit(polys, system, k, sorted(sids)[0])
@@ -3516,12 +3522,75 @@ class PrintLayer:
                     continue
                 skin_sids = sorted(s for s in sids if keyof(s) is None)
                 gen = []
+                # J2 (2026-10-12): if the per-wall split would leave a part
+                # with ZERO runs (circle grazing a rectangle: C's per-part
+                # rings were three overlapping arcs → skeleton returned
+                # nothing → the circle region had no printable paths), and
+                # every generated wall of this region belongs to the SAME
+                # Wall System, generate on the UNITED region ONCE and share
+                # the output across all parts of this system. The united
+                # path produces one unified band that covers every wall;
+                # Parallel's junction stitching
+                # (`_join_parallel_at_junctions`) closes the lanes across
+                # strips. Scoped to Hollow / Parallel / Skin + Web; the
+                # overlapping / X-crossing cases where the split path still
+                # produces runs are untouched.
+                # Narrow probe scope: Hollow + Parallel only. Skin + Web
+                # handles its web through the split path even for
+                # multi-member regions; probing on every Skin + Web region
+                # was ~15 % wall-clock on the 84-layer benchmark.
+                shared_gen = None
+                probes = None
+                if len(keys) == 1:
+                    sys0 = self._wall_systems[parts[0]['sources'][0]]
+                    if sys0.get('type') in ('hollow', 'parallel'):
+                        probes = []
+                        for part in parts:
+                            system_p = self._wall_systems[part['sources'][0]]
+                            polys_p, rep_p = WS.generate(
+                                part['rings'], system_p, bead, contact,
+                                seam_hints, self.wall_system_reference,
+                                virtual_faces)
+                            probes.append((polys_p, rep_p))
+                        if any(not rp[1].get('per_run') for rp in probes):
+                            polys_u, rep_u = WS.generate(
+                                rings, sys0, bead, contact, seam_hints,
+                                self.wall_system_reference,
+                                virtual_faces)
+                            if rep_u.get('per_run'):
+                                shared_gen = (polys_u, rep_u, sys0)
+                if shared_gen is not None:
+                    polys_u, rep_u, sys0 = shared_gen
+                    frames_u = rep_u.pop('frames', [])
+                    self._ws_frames.extend(frames_u)
+                    drop |= {id(p) for p in members}
+                    sid0 = sorted(gen_sids)[0]
+                    emit(polys_u, sys0, k, sid0)
+                    rep_u.update({'sources': sorted(sids), 'region': k,
+                                  'status': 'ok',
+                                  'system_id': self._wall_system_key.get(sid0),
+                                  'j2_united_region': True})
+                    network['wall_systems'].append(rep_u)
+                    systems_used.add(sys0['type'])
+                    continue              # skip the split-per-part generation
+                # J2 maintenance (2026-10-12): when the probe branch ran and
+                # found every part viable (shared_gen is None), the probes are
+                # identical to the split-per-part generation UNLESS the part
+                # carries chord tips (the 7th WS.generate arg). Reuse them to
+                # avoid double generation; otherwise regenerate.
+                reuse_probes = probes is not None and all(
+                    not any(c.get('tip') is not None
+                            for c in (part.get('chords') or []))
+                    for part in parts)
                 for pi, part in enumerate(parts):
                     sid0 = part['sources'][0]
                     system = self._wall_systems[sid0]
-                    polys, rep = WS.generate(part['rings'], system, bead, contact, self._seam_hints(),
-                                             self.wall_system_reference, self._virtual_faces(),
-                                             [c['tip'] for c in part.get('chords', []) if c.get('tip') is not None])
+                    if reuse_probes:
+                        polys, rep = probes[pi]
+                    else:
+                        polys, rep = WS.generate(part['rings'], system, bead, contact, seam_hints,
+                                                 self.wall_system_reference, virtual_faces,
+                                                 [c['tip'] for c in part.get('chords', []) if c.get('tip') is not None])
                     self._ws_frames.extend(rep.pop('frames', []))
                     polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
                     for ch in joined:                # the incoming beads are re-emitted, extended
@@ -3608,6 +3677,126 @@ class PrintLayer:
                     if info.get('id') == j['infill'].id:
                         info['status'] = 'wall system'
                         info['wall_system'] = ', '.join(sorted(systems_used))
+        # M4 — JUNCTION COHERENCE (orphan fillet step-in). A round-junction
+        # fillet anchored to a RING whose face bead was replaced by a Wall
+        # System has its ring-side endpoint left in space: the outermost
+        # Wall System lane sits bead / 2 inside the former face, so the
+        # fillet no longer closes with the printed geometry (open route,
+        # single-bead or default-thickness skins attaching to Parallel /
+        # Interleaved / Linked / Chain rings). Pair the orphans of the two
+        # fillets at ONE attachment (two faces of the attached wall) and
+        # tie BOTH to a SHARED point on the Wall System lane — the shared
+        # point gets degree 4 (lane cycle + 2 connectors = EVEN), each
+        # orphan goes 1 → 2 (even). Net odd introduced: 0. Local,
+        # construction-agnostic.
+        kept = [p for p in result if id(p) not in drop] + new
+        kept_pts = []
+        kept_sample_of: dict = {}       # id(path) -> cached sample_points list
+        for p in kept:
+            pts = p.sample_points() if hasattr(p, 'sample_points') else []
+            if pts:
+                kept_pts.append((p, pts))
+                kept_sample_of[id(p)] = pts
+        bead = self.material.bead_width
+        tol_live = 0.5 * bead                  # another kept path's endpoint within half a bead = connected
+        ws_by_sid: dict = {}
+        for p in new:
+            if getattr(p, 'role', '') == 'wall_system':
+                ws_by_sid.setdefault(getattr(p, 'source_id', None), []).append(p)
+        step_added = 0
+        if ws_by_sid:
+            # 1) Collect orphan fillet endpoints, keyed by (source_sid, partner).
+            # A fillet id has the form 'junction:<face_a>|<face_b>#k'; the
+            # 'partner' is the OTHER wall at this junction (the attached one).
+            # Two fillets at the same (source, partner_prefix) belong to the
+            # SAME attachment and should pair.
+            orphan_groups: dict = {}
+            for p in kept:
+                if getattr(p, 'role', '') != 'cap':
+                    continue
+                lab = getattr(p, 'label', '') or ''
+                if 'junction' not in lab:
+                    continue
+                sid = getattr(p, 'source_id', None)
+                if sid is None or sid not in ws_by_sid:
+                    continue
+                fpts = kept_sample_of.get(id(p)) or p.sample_points()
+                if len(fpts) < 2:
+                    continue
+                pid = str(p.id)
+                partner = ''
+                if pid.startswith('junction:'):
+                    body = pid[len('junction:'):].split('#')[0]
+                    faces = body.split('|')
+                    # the partner is the face NOT belonging to sid
+                    partner = next((f for f in faces if not f.startswith(sid)), '')
+                    # strip a '.wall+' / '.wall-' / '_ce' / '_cs' / '~…' suffix
+                    for sfx in ('.wall+', '.wall-', '_ce', '_cs'):
+                        if partner.endswith(sfx):
+                            partner = partner[:-len(sfx)]
+                            break
+                    partner = partner.split('~')[0]
+                for end in (0, -1):
+                    q = fpts[end]
+                    live = False
+                    for other, opts in kept_pts:
+                        if other is p:
+                            continue
+                        if q.dist(opts[0]) < tol_live or q.dist(opts[-1]) < tol_live:
+                            live = True
+                            break
+                    if live:
+                        continue
+                    orphan_groups.setdefault((sid, partner), []).append((p, end, q))
+            # 2) For each group, find the nearest WS lane point to the group's
+            # centroid; attach every orphan in the group to THAT shared point.
+            # Fallback for an attachment the Wall System lane does not reach
+            # (the material has been narrowed near the junction and the
+            # outermost lane sits far inside): a direct FACE CHORD between
+            # the two paired orphans — restores the short segment of the
+            # former face the Wall System replacement dropped. The chord
+            # lives on the material boundary where the original face bead
+            # ran, so it is not excessive material; it is one route-closing
+            # bead per attachment that would otherwise print open.
+            thick_of = lambda sid_: max(
+                float((self._source_walls.get(sid_) or {}).get('thickness') or 0.0), 10.0)
+            for (sid, partner), orphans in orphan_groups.items():
+                if not orphans:
+                    continue
+                cx = sum(o[2].x for o in orphans) / len(orphans)
+                cy = sum(o[2].y for o in orphans) / len(orphans)
+                centroid = Vec2(cx, cy)
+                best = None
+                for ws_path in ws_by_sid[sid]:
+                    wpts = kept_sample_of.get(id(ws_path)) or ws_path.sample_points()
+                    for wq in wpts:
+                        d = centroid.dist(wq)
+                        if best is None or d < best[0]:
+                            best = (d, wq)
+                thick = thick_of(sid)
+                shared = None
+                if best is not None and max(o[2].dist(best[1]) for o in orphans) <= 1.5 * thick:
+                    shared = best[1]
+                elif len(orphans) == 2:
+                    # the lane does not reach: use the midpoint between the
+                    # paired orphans as the shared attach point. A straight
+                    # chord between them restores the former face segment
+                    # that the Wall System replacement dropped.
+                    o0, o1 = orphans[0][2], orphans[1][2]
+                    if o0.dist(o1) <= 3.0 * thick:          # (sane paired attachment)
+                        shared = Vec2(0.5 * (o0.x + o1.x), 0.5 * (o0.y + o1.y))
+                if shared is None:
+                    continue
+                for (fillet, end, q) in orphans:
+                    dp = DerivedPath([q, shared], closed=False, role='cap',
+                                     source_id=sid, treatment_id='junction_step',
+                                     id=f'{sid}~jstep.{id(fillet)}.{end}',
+                                     label='junction_step')
+                    cls_of[id(dp)] = N.FACE
+                    new.append(dp)
+                    step_added += 1
+        if step_added:
+            network['junction_steps'] = step_added
         return [p for p in result if id(p) not in drop] + new, jobs
 
     def _contact_staples(self, gen, rings, bead, WS):
