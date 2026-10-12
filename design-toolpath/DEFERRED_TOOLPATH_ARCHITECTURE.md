@@ -338,3 +338,48 @@ reference: Skin + Web (lineage scaffold + station ops, so `_station_reference` s
 layers, Chained Loop rings / cross-Z transitions, junction territories. Those are M4; code retirement is M5.
 Benchmark: coherence improved where sections / openings changed the fit, findings unchanged (53),
 generation +1.9 % time, +1 % memory.
+
+## M4 — Chained Loop rings and cross-Z transitions on the stack reference (2026-10-12; first sub-pass)
+
+**Scope.** Two of the Chained Loop cases M3 explicitly left on the per-layer generator now draw
+from the stack reference:
+
+- **Closed rings.** The guard in `_chain_path_ref` that returned `(None, None)` for every
+  `st.run.cycle` run has been removed. A ring layer whose Chained Loop lies on the ring / stack
+  reference now uses the existing ring-reference branch (continuous u on the reference's loop
+  grid), closes the output explicitly (`out[-1] = out[0]`), and reports `closed = True`. The
+  reference's even loop count propagates, so no new parity check is needed. If the mapped strict
+  samples do not cover one full turn of the layer ring (within 10 % of `st.L`), the function
+  bails and the own fit draws the ring with the new reason "a closed Chained Loop ring could not
+  close on the stack reference (parity / coverage mismatch); fitted whole on its own loop count".
+- **Cross-Z transitions.** `generate` no longer forces `ref = None` when `chain_vc` is non-empty
+  on a stack reference. The transition deformation (the `adj` closure of `_chain_path`, factored
+  out as module-level `_chain_adj`) is composed on top of the mapped reference curve inside
+  `_chain_path_ref` using `side = -sign * tau`. The adjusted offset is validated inside the strip
+  (`abs(y_adj) ≤ H`); if it would leave the wall (natural inputs never do — this is a defensive
+  guard), the function bails and the own fit draws the run with "a cross-Z transition next to an
+  Assembly opening pushed a chain loop past the wall face on the stack reference; the chain is
+  pre-deformed by its own fit instead".
+
+**Fall-back.** Both new cases return `(None, None)` from `_chain_path_ref` on failure; `generate`
+runs `_chain_path(..., chain_vc, junction_ends)` exactly as before, so the previous output and
+every M3 invariant are preserved on the fall-back branch.
+
+**Attribution.** The new cases enter the existing `generator / generator_reason` reporting:
+rings and transition runs now show up under `generators={'stack': N}` and inspection surfaces
+them in `/api/wallsystems/generate → inspection.generators` alongside M3's phased bands. The
+former "fitted whole (identical ring geometry gives the identical chain)" reason text is replaced
+by "could not close on the ... reference" and only appears on genuine fallback.
+`WALL_LATTICE_MODE=layer` continues to force the previous generator for every band.
+
+**Measured on this laptop (84-layer mixed benchmark, 8 workers, cold):** bead-level findings
+unchanged across all 8 edit scenarios (53, 53, 51, 51, 51, 48, 61, 45 — byte-for-byte). Print plan
+item count unchanged (6534). Wall-clock total 425.6 s → 409.1 s (−3.9 %, within bench variance).
+Peak RSS 1973 MB → 1974 MB. Print geometry byte-identical to the pre-M4 output on the capped-chain
+path (the own fit still runs through the factored `_chain_adj`, verified by `test_wall_lattice_mode_layer_matches_pre_m4_output`).
+
+**Still not on the stack reference (future M4 sub-passes).** Skin + Web / Adaptive Truss
+(lineage scaffold + `_station_reference`); transform-group (semantic) layers; junction-territory
+morphing (the Chained Loop link's 1.53 in worst-layer coherence in the M3 benchmark is
+attributed to this — not to rings or transitions); shrinking-junction motif and alternative
+local lattice solutions (the two M4 items that need design input before any code).

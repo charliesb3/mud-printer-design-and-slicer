@@ -1356,6 +1356,23 @@ def _chain_corners(st, T, H, bead, env, lo, hi, pitch, D, s_of_u, u_lo, u_hi, do
     return out
 
 
+def _chain_adj(s, y, side, H, vcuts, dst, lead_v):
+    """CROSS-Z TRANSITION deformation of a chain y-offset: toward the cut
+    layer's end motif — the forward lap toward face 0 (side −1), the return
+    lap toward face 1 (side +1), over the lead before each end station, held
+    between the stations. Shared by _chain_path (own fit) and
+    _chain_path_ref (M4: composed on top of the mapped stack-reference
+    curve)."""
+    for (fa, fb, al) in vcuts:
+        sa, sb = fa - dst, fb + dst
+        if s < sa - lead_v or s > sb + lead_v:
+            continue
+        wv = _smooth((sa - s) / lead_v) if s <= sa else (_smooth((s - sb) / lead_v) if s >= sb else 0.0)
+        tgt = side * H
+        y = tgt + (y - tgt) * (1.0 - al * (1.0 - wv))
+    return y
+
+
 def _chain_path(st, sp, T, H0, env=None, vcuts=(), jends=()):
     """The loop chain along one run, through the strip coordinates (so it
     follows the wall and stays in the envelope). Open run: a whole number of
@@ -1398,20 +1415,8 @@ def _chain_path(st, sp, T, H0, env=None, vcuts=(), jends=()):
         k_ = span / (xmax - xmin) if xmax > xmin else 1.0
         ss = [lo + (x - xmin) * k_ for x in xs]          # (backtracking loops kept inside the ends)
         ref_c = {'lo': lo, 'span': span, 'm': m, 'u0': u0, 'xmin': xmin, 'k': k_}
-    # CROSS-Z TRANSITION (vcuts, capped runs): toward the cut layer's end
-    # motif — the forward lap toward face 0, the return lap toward face 1,
-    # over the lead before each end station, held between the stations
+    # CROSS-Z TRANSITION (vcuts, capped runs): see _chain_adj for the rule.
     dst, lead_v = 0.5 * T, min(CORNER_ZONE * T, 0.25 * (hi - lo))
-
-    def adj(s, y, side, H):
-        for (fa, fb, al) in vcuts:
-            sa, sb = fa - dst, fb + dst
-            if s < sa - lead_v or s > sb + lead_v:
-                continue
-            wv = _smooth((sa - s) / lead_v) if s <= sa else (_smooth((s - sb) / lead_v) if s >= sb else 0.0)
-            tgt = side * H
-            y = tgt + (y - tgt) * (1.0 - al * (1.0 - wv))
-        return y
     vc_on = bool(vcuts) and capped
     eyes = 0
     # CORNER MOTIFS: the samples inside a corner window are laid in its
@@ -1435,7 +1440,7 @@ def _chain_path(st, sp, T, H0, env=None, vcuts=(), jends=()):
         H = fr[2]
         D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
         y = D * math.copysign(abs(sn) ** q, sn)
-        out.append(st.at(s, adj(s, y, -1.0, H) if vc_on else y, fr))
+        out.append(st.at(s, _chain_adj(s, y, -1.0, H, vcuts, dst, lead_v) if vc_on else y, fr))
     if st.run.cycle and out:
         out[-1] = out[0]
     closed = st.run.cycle
@@ -1456,7 +1461,7 @@ def _chain_path(st, sp, T, H0, env=None, vcuts=(), jends=()):
             H = fr[2]
             D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
             y = -D * math.copysign(abs(sn) ** q, sn)
-            back.append(st.at(s, adj(s, y, 1.0, H) if vc_on else y, fr))
+            back.append(st.at(s, _chain_adj(s, y, 1.0, H, vcuts, dst, lead_v) if vc_on else y, fr))
 
         def lead_pts(s0, s1, side):
             """Centre at s0 → face lane (side −1: f0, +1: f1) at s1."""
@@ -1507,7 +1512,7 @@ def _chain_path(st, sp, T, H0, env=None, vcuts=(), jends=()):
                    'loop_depth': round(min(sp['loop_depth'], H0) if sp['loop_depth'] > 0 else H0, 3)}
 
 
-def _chain_path_ref(st, sp, T, H0, env, ref):
+def _chain_path_ref(st, sp, T, H0, env, ref, vcuts=()):
     """The chain of a run lying on a reference run (PHASE REFERENCE): the
     REFERENCE curve (same pitch, same loop stations — mapped s_ref → s),
     kept where it lies inside this run's usable length; at a cut end the
@@ -1517,10 +1522,22 @@ def _chain_path_ref(st, sp, T, H0, env, ref):
     at loop boundaries, clipping by the curve's mean progression, and
     warping the last 2–5 pitches so the end starts on a centre crossing —
     all left more support findings at the cut: 11–44 vs 10.)
+    M4 (2026-10-12): a CLOSED ring layer on a ring / stack reference
+    (st.run.cycle True) draws the reference curve over its parameter range
+    and closes the output explicitly — the loops come from the reference's
+    own even loop count, so the ring reference guarantees parity. The
+    function bails with (None, None) if the mapped ring cannot close
+    (parity mismatch between reference and layer, or the mapping does not
+    cover one full turn), and the own fit takes over.
+    M4 (2026-10-12): a CROSS-Z TRANSITION on this run (vcuts) is composed
+    on top of the mapped curve through _chain_adj (same rule as _chain_path).
+    The deformation is validated inside the strip — any sample whose
+    adjusted offset would leave the wall (abs(y_adj) > H + eps) aborts the
+    composition and the own fit takes over.
     (None, None) when nothing maps (own fit then)."""
     f, fwd, inv, tau = ref
     c = f.get('chain')
-    if not c or st.run.cycle:
+    if not c:
         return None, None
     m_r = int(c['m'])
     a, w, q = chain_shape(c['span'] / m_r, sp['loop_width'], sp['neck'])
@@ -1555,11 +1572,14 @@ def _chain_path_ref(st, sp, T, H0, env, ref):
         sl = [inv(x) for x in sref]                  # (two turns: the plain mapping is continuous)
     else:
         sl = [local(x) for x in sref]
-    e_lo = st.run.a[0] == 'E'
-    e_hi = st.run.b[0] == 'E'
+    e_lo = (not st.run.cycle) and st.run.a[0] == 'E'
+    e_hi = (not st.run.cycle) and st.run.b[0] == 'E'
     capped = env is not None and e_lo and e_hi
     lead = min(CORNER_ZONE * T, 0.25 * (st.hi - st.lo)) if capped else 0.0
     lo_l, hi_l = st.lo + lead, st.hi - lead
+    # cross-Z transition composition (M4): same rule as _chain_path's own fit
+    dst, lead_v = 0.5 * T, (min(CORNER_ZONE * T, 0.25 * (hi_l - lo_l)) if capped else 0.0)
+    vc_on = bool(vcuts) and capped
     # the reference curve inside this run's usable length: an original end
     # keeps the reference loops to the end; at a cut the curve is clipped
     # where it leaves (any phase). A loop's crest may reach a little past
@@ -1603,8 +1623,26 @@ def _chain_path_ref(st, sp, T, H0, env, ref):
                 return cf.point(s_, sign * tau * D0 * math.copysign(abs(sn) ** q, sn))
         H = st.half(s_)
         D = min(sp['loop_depth'], H) if sp['loop_depth'] > 0 else H
-        return st.at(s_, sign * tau * D * math.copysign(abs(sn) ** q, sn))
-    out = [pt(i) for i in idx]
+        y = sign * tau * D * math.copysign(abs(sn) ** q, sn)
+        if vc_on:
+            # M4: compose the cross-Z transition on top of the mapped curve.
+            # The forward lap (sign +1 in ref terms) targets face at -tau in
+            # strip coordinates (matching _chain_path's side = -1 forward
+            # convention when tau = +1); the return lap targets the opposite
+            # face. side = -sign * tau. The adjusted offset stays in [-H, H]
+            # for all natural inputs (the deformation interpolates between
+            # the mapped y and ±H); the guard below is a defensive
+            # safety-net for weird numerical cases — if it fires,
+            # _chain_path_ref bails and the own fit draws this run.
+            y_adj = _chain_adj(s_, y, -sign * tau, H, vcuts, dst, lead_v)
+            if abs(y_adj) > H + 1e-6:
+                return None
+            y = y_adj
+        return st.at(s_, y)
+    _out = [pt(i) for i in idx]
+    if any(p is None for p in _out):
+        return None, None               # cross-Z deformation would leave the wall
+    out = _out
     lo, hi = sl[idx[0]], sl[idx[-1]]
 
     def ycur(i):                                       # the curve's offset at sample i (local)
@@ -1617,6 +1655,8 @@ def _chain_path_ref(st, sp, T, H0, env, ref):
     closed = False
     if capped:
         back = [pt(i, -1.0) for i in reversed(idx)]
+        if any(p is None for p in back):
+            return None, None           # (same reason: cross-Z deformation out of strip)
 
         def lead_pts(s0, s1, side, y0):
             """From (s0, y0) on the curve to the face lane `side` at s1."""
@@ -1635,6 +1675,17 @@ def _chain_path_ref(st, sp, T, H0, env, ref):
         cap_lo = _chain_cap(st, 'lo', lo_back[-1], lo_out[0], env)
         out = (lo_out[:-1] + out + hi_out[1:] + cap_hi[1:-1] + hi_back[:-1] + back + lo_back[1:]
                + cap_lo[1:-1] + lo_out[:1])
+        closed = True
+    elif st.run.cycle:                                  # M4: ring layer on a ring / stack reference
+        # the mapped curve must cover one full turn of the layer ring: the
+        # strict samples' s-range (hi − lo) must be close to the layer's
+        # perimeter st.L. The ring reference's even loop count propagates
+        # (its c['m'] is even — _chain_path's ring parity rule), so no
+        # extra parity check is needed; the kept block of (m × K) + 1
+        # samples already closes.
+        if not (0.9 * st.L <= hi - lo <= 1.1 * st.L):
+            return None, None           # (mapping did not cover one full turn)
+        out[-1] = out[0]
         closed = True
     else:                                              # a junction end: run on to the centre line
         if lo > st.lo + 1e-6:
@@ -2196,16 +2247,26 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
         p = None
         chain_vc = _virtual_cuts(st, transitions, thick) if transitions and sp['type'] == 'chain' else []
         held = None
-        if chain_vc and ref is not None and ref[0].get('stack'):
-            # a CROSS-Z TRANSITION on this run: the reference curve has no
-            # pre-deformation (_chain_path_ref) — the chain keeps its own fit
-            # with the transition (the previous generator), said so
-            ref, held = None, ('a cross-Z transition next to an Assembly opening: the chain is pre-deformed '
-                               'by its own fit (the reference curve carries no transition)')
+        # M4 (2026-10-12): a cross-Z transition on a Chained Loop run is
+        # composed on top of the mapped stack reference inside
+        # _chain_path_ref (_chain_adj), with silent fall-back to the own
+        # fit when the composed deformation would leave the wall. A closed
+        # ring layer is also tried on the stack reference (M4) and falls
+        # back when the mapping does not cover one full turn.
+        tried_ref_vc = bool(chain_vc) and ref is not None and ref[0].get('stack')
+        tried_ref_ring = (sp['type'] == 'chain' and st.run.cycle and ref is not None
+                          and ref[0].get('stack'))
         if sp['type'] == 'chain':
             if ref is not None:
-                p, info = _chain_path_ref(st, sp, T, H0, env, ref)
+                p, info = _chain_path_ref(st, sp, T, H0, env, ref, chain_vc)
             if p is None:
+                if tried_ref_vc:
+                    held = ('a cross-Z transition next to an Assembly opening pushed a chain loop '
+                            'past the wall face on the stack reference; the chain is pre-deformed '
+                            'by its own fit instead')
+                elif tried_ref_ring:
+                    held = ('a closed Chained Loop ring could not close on the stack reference '
+                            '(parity / coverage mismatch); fitted whole on its own loop count')
                 p, info = _chain_path(st, sp, T, H0, env, chain_vc, junction_ends)
                 info['phase_ref'] = False        # (no reference could be used: own fit)
         else:
@@ -2226,8 +2287,8 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
                 info['generator'] = 'layer'
                 stack_refs = [f for f in refs if f.get('stack')]
                 info['generator_reason'] = held or (
-                    'a closed Chained Loop ring is fitted whole (its own loop count; identical ring geometry '
-                    'gives the identical chain) — the stack reference applies to its open pieces'
+                    'a closed Chained Loop ring could not close on the layer reference; '
+                    'fitted whole on its own loop count'
                     if ref is not None and sp['type'] == 'chain' and st.run.cycle else
                     'the stack reference could not be applied to this run' if ref is not None else
                     'no run of the stack reference lies on this run (the architecture differs from the '

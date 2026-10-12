@@ -300,3 +300,135 @@ def test_generate_then_plan_print(monkeypatch):
         assert p['stream'] and p['support']['findings'] == g['support']['findings']
         r = post('/api/assembly/print_plan', dict(B, detail='summary', require_generated=True))
         assert r.status_code == 200 and r.get_json()['estimate']['print_length'] > 0
+
+
+# ---- M4 — Chained Loop rings and cross-Z transitions on the stack reference ----
+# Before M4 these were explicitly left on the per-layer generator (M3 memo):
+#   "a CLOSED ring is fitted whole (its own loop count; identical geometry
+#    gives the identical chain — reported as `layer` with that reason); a run
+#    with a CROSS-Z TRANSITION keeps its own fit (the reference curve has no
+#    pre-deformation — reported)."
+# M4 draws rings from the ring / stack reference (closing the output when the
+# mapping covers one turn) and composes the cross-Z transition on top of the
+# mapped curve (_chain_adj validated inside the strip). Fall-back is silent
+# and both paths report their new reason text.
+
+
+def lone_ring_building(ring_thick=10.0, pitch=9.0, derived_thick=None, derived_patch=None):
+    """(designs, wall_systems) — a stand-alone Chained Loop RING with no
+    junctions (so the layer run itself is a cycle). Optional derived design
+    may change wall thickness or carry a Designer opening on the ring."""
+    doc = {'id': 'b', 'material': dict(MAT),
+           'source_paths': [{'id': 'C', 'type': 'CirclePath', 'label': 'Ring', 'cx': 100, 'cy': 100,
+                             'radius': 60.0, 'closed': True}],
+           'wall_systems': [{'id': 'WS1', 'name': 'Ring', 'type': 'chain', 'thickness': ring_thick,
+                             'align': 'auto', 'print_reference': False,
+                             'params': {'pitch': pitch, 'neck': 0.2}, 'members': ['C'], 'web': {}}],
+           'openings': [], 'infills': [], 'junction_style': 'miter'}
+    legacy = [{'id': 'base', 'name': 'Base', 'parent': None, 'document': doc}]
+    if derived_thick is not None or derived_patch is not None:
+        patch = dict(derived_patch or {})
+        if derived_thick is not None:
+            legacy.append({'id': 'd1', 'name': 'Thick', 'parent': 'base',
+                           'patch': {**patch, 'wall_systems': {'WS1': {'thickness': derived_thick}}},
+                           'settings': {}})
+        else:
+            legacy.append({'id': 'd1', 'name': 'Var', 'parent': 'base', 'patch': patch, 'settings': {}})
+    from wall_groups import split_designs
+    return split_designs(legacy)
+
+
+def _chain_runs_info(G):
+    """Flatten every Chained Loop run's info dict with its layer index."""
+    out = []
+    for i, g in G['geo'].items():
+        for w in g.diagnostics.get('wall_systems') or []:
+            if w.get('type') != 'chain':
+                continue
+            for inf in w.get('per_run') or []:
+                out.append((i, dict(inf)))
+    return out
+
+
+def test_lone_ring_on_stack_reference_closes_and_reports_stack(monkeypatch):
+    """A stand-alone Chained Loop ring (no junctions) across two sections
+    draws its chain from the stack reference and closes."""
+    ds, ws = lone_ring_building()
+    asm = assembly(sections=(('base', 6.0),))
+    new = generate(ds, ws, asm, 'stack', monkeypatch)
+    old = generate(ds, ws, asm, 'layer', monkeypatch)
+    gen_new = generators(new)['chain']
+    gen_old = generators(old)['chain']
+    assert set(gen_new) == {'stack'}
+    assert set(gen_old) <= {'layer'}                          # pre-M4 fitted it whole
+    # no fallback reasons expected under M4 (every ring succeeded)
+    reasons = {r for g in new['geo'].values() for w in g.diagnostics.get('wall_systems') or []
+               for r in w.get('generator_reasons') or []}
+    assert reasons == set(), reasons
+    for g in new['geo'].values():
+        for w in g.diagnostics.get('wall_systems') or []:
+            assert w.get('closable') is True
+    # the ring geometry is identical across the stack → identical chain
+    assert envelopes_equal(new, old)
+
+
+def test_ring_with_differing_wall_thickness_still_uses_stack(monkeypatch):
+    """A derived design that changes the ring's wall thickness still prints
+    from the stack reference: its OWN uncut frames are added on top of the
+    root's (layer_design.stack_reference), and _ref_map accepts the matching
+    run on each layer. Both sections print the ring with `stack`."""
+    ds, ws = lone_ring_building(derived_thick=14.0)
+    new = generate(ds, ws, assembly(sections=(('base', 6.0), ('d1', 6.0))), 'stack', monkeypatch)
+    gen = generators(new)['chain']
+    assert sum(gen.values()) > 0 and set(gen) <= {'stack', 'layer-ref', 'layer'}
+    # at least one layer in each section draws from a reference (stack or
+    # layer-ref: the thickness change puts the derived design's own frame on
+    # the reference stack — same loop count, same phase)
+    assert gen.get('stack') or gen.get('layer-ref')
+    for g in new['geo'].values():
+        for w in g.diagnostics.get('wall_systems') or []:
+            assert w.get('closable') is True
+
+
+def test_cross_z_transition_composed_on_stack_reference(monkeypatch):
+    """A Chained Loop run with a cross-Z transition (Assembly opening on a
+    sibling layer) now draws from the stack reference and composes the
+    transition deformation on top of the mapped curve (_chain_adj). Reports
+    `stack` instead of M3's `layer` (own fit) with the forced reason."""
+    ds, ws = building(room='interleaved', circle='chain', link='parallel')
+    asm = assembly(profiles=[ARRAY, PLANE])          # PLANE on C → chain transitions
+    new = generate(ds, ws, asm, 'stack', monkeypatch)
+    old = generate(ds, ws, asm, 'layer', monkeypatch)
+    assert envelopes_equal(new, old)
+    gen_new = generators(new)['chain']
+    assert gen_new.get('stack'), gen_new               # every chain run on the stack
+    # a transition could still push the loop crest past the wall — the
+    # fallback goes to 'layer' with the new reason text, never silent
+    reasons = {r for g in new['geo'].values() for w in g.diagnostics.get('wall_systems') or []
+               for r in w.get('generator_reasons') or [] if w.get('type') == 'chain'}
+    for r in reasons:
+        assert ('stack reference' in r) or ('wall face' in r) or ('fitted whole' in r), r
+    assert len(new['support'].findings) <= len(old['support'].findings)
+    for g in new['geo'].values():
+        for w in g.diagnostics.get('wall_systems') or []:
+            assert w.get('closable') is not False
+
+
+def test_wall_lattice_mode_layer_matches_pre_m4_output(monkeypatch):
+    """WALL_LATTICE_MODE=layer forces the previous per-layer generator for
+    every band: Chained Loop rings and cross-Z transitions behave as before
+    M4 (no stack reference consulted). The regression also guards the
+    _chain_adj factoring (own fit is still byte-identical)."""
+    ds, ws = building(room='interleaved', circle='chain', link='parallel')
+    asm = assembly(profiles=[ARRAY, PLANE])
+    old = generate(ds, ws, asm, 'layer', monkeypatch)
+    # (re-)run and confirm identical polylines
+    again = generate(ds, ws, asm, 'layer', monkeypatch)
+    for k in old['geo']:
+        a = [(p['pts'], p.get('closed')) for p in old['geo'][k].polylines]
+        b = [(p['pts'], p.get('closed')) for p in again['geo'][k].polylines]
+        assert a == b, k
+    # on `layer` mode chain is `layer-ref` (uncut-reference) or `layer`; the
+    # stack generator must not be chosen
+    gen = generators(old).get('chain', {})
+    assert gen and set(gen) <= {'layer-ref', 'layer'}

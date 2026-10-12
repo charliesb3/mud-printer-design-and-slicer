@@ -576,6 +576,10 @@ Allow the architecture to evolve as the machine and software become better under
 
 ## Last Updated
 
+2026-10-12
+
+Design + Toolpath: M4 FIRST SUB-PASS — Chained Loop rings and cross-Z transitions on the stack reference. `wall_systems._chain_adj` factored module-level (own fit byte-identical), `_chain_path_ref` extended to accept `vcuts` and to close ring layers explicitly, `wall_systems.generate` no longer forces `ref=None` for stack + transitions. Both new paths bail with a silent, attributed fallback (new `generator_reason` strings) if the ring cannot close or the composed deformation would leave the wall. 84-layer benchmark: findings 53 / 53 / 51 / 51 / 51 / 48 / 61 / 45 unchanged across every edit scenario, wall-clock 425.6 → 409.1 s (−3.9 %, within variance), peak RSS unchanged (1.97 GB), print plan 6534 items unchanged. Still on the previous generator: Skin + Web / Adaptive Truss, transform-group layers, junction-territory morphing (next M4 sub-pass), shrinking-junction motif and alternative local lattice solutions (both need design input). design_proto 1724, toolpath_proto 92, layer_assembly 681 tests green.
+
 2026-10-11
 
 Design + Toolpath: DEFERRED PRINT PATHS (M0 + M1; uncommitted, pending manual review) — Assembly editing on architectural envelopes, explicit "Generate Print Paths" print preparation (unchanged full pipeline), preliminary vs bead-level support; new decision "Architectural editing is separate from print-path generation". Exact Assembly edits 1.2–3.4 s on the 84-layer benchmark (were 12–44 s); print outputs byte-identical. layer_assembly 619, design_proto 1724, toolpath_proto 92 tests green.
