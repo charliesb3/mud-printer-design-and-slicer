@@ -3453,6 +3453,10 @@ class PrintLayer:
         # fixtures without cut transitions; a measurable win on real projects.
         seam_hints = self._seam_hints()
         virtual_faces = self._virtual_faces()
+        # J3 (2026-10-12): JunctionRegion records extracted once by
+        # `_apply_networks` from the live NetworkResult. Threaded to every
+        # Hollow / Parallel generation; other systems ignore it.
+        junction_regions = getattr(self, '_junction_regions', None) or []
 
         def emit(polys, system, k, first, tag=''):
             for j, poly in enumerate(polys):
@@ -3503,7 +3507,7 @@ class PrintLayer:
             if len(gen_sids) == 1 and len(keys) == 1 and '__J' not in set(msid.values()):
                 system = self._wall_systems[next(iter(sids))]
                 polys, rep = WS.generate(rings, system, bead, contact, seam_hints, self.wall_system_reference,
-                                         virtual_faces)
+                                         virtual_faces, junction_regions=junction_regions)
                 self._ws_frames.extend(rep.pop('frames', []))
                 drop |= {id(p) for p in members}
                 emit(polys, system, k, sorted(sids)[0])
@@ -3550,13 +3554,15 @@ class PrintLayer:
                             polys_p, rep_p = WS.generate(
                                 part['rings'], system_p, bead, contact,
                                 seam_hints, self.wall_system_reference,
-                                virtual_faces)
+                                virtual_faces,
+                                junction_regions=junction_regions)
                             probes.append((polys_p, rep_p))
                         if any(not rp[1].get('per_run') for rp in probes):
                             polys_u, rep_u = WS.generate(
                                 rings, sys0, bead, contact, seam_hints,
                                 self.wall_system_reference,
-                                virtual_faces)
+                                virtual_faces,
+                                junction_regions=junction_regions)
                             if rep_u.get('per_run'):
                                 shared_gen = (polys_u, rep_u, sys0)
                 if shared_gen is not None:
@@ -3590,7 +3596,8 @@ class PrintLayer:
                     else:
                         polys, rep = WS.generate(part['rings'], system, bead, contact, seam_hints,
                                                  self.wall_system_reference, virtual_faces,
-                                                 [c['tip'] for c in part.get('chords', []) if c.get('tip') is not None])
+                                                 [c['tip'] for c in part.get('chords', []) if c.get('tip') is not None],
+                                                 junction_regions=junction_regions)
                     self._ws_frames.extend(rep.pop('frames', []))
                     polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
                     for ch in joined:                # the incoming beads are re-emitted, extended
@@ -3845,7 +3852,8 @@ class PrintLayer:
                 continue
             keep = [c['tip'] for c in tips if c not in bad]
             polys, rep = WS.generate(part['rings'], g['system'], bead, contact, self._seam_hints(),
-                                     self.wall_system_reference, self._virtual_faces(), keep)
+                                     self.wall_system_reference, self._virtual_faces(), keep,
+                                     junction_regions=getattr(self, '_junction_regions', None) or [])
             rep.pop('frames', None)
             polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
             rep.update({k: v for k, v in g['rep'].items() if k not in rep})
@@ -4799,7 +4807,29 @@ class PrintLayer:
         in no network are returned untouched.
         """
         summary = {'components': [], 'junctions': [], 'modified_sources': [],
-                   'regions': [], 'infills': []}
+                   'regions': [], 'infills': [],
+                   # J3 (2026-10-12): JunctionRegion records extracted once
+                   # per network component from the live NetworkResult, so
+                   # that Hollow / Parallel generators can consume the shared
+                   # representation instead of reconstructing from rings.
+                   # Also stored on `self._junction_regions` for direct
+                   # access from `_apply_wall_systems`.
+                   'junction_regions': [],
+                   # J4a (2026-10-12): shared geometric regions beyond
+                   # junctions — corners (one source turn), end-caps
+                   # (wall termination), constrained sections (too
+                   # small for the normal construction) and transitions.
+                   # Detection + diagnostic; Hollow / Parallel generators
+                   # may consult them starting here, but J4a does NOT
+                   # change geometry — the full compact-motif library is
+                   # J4b. The architectural extractors below run on the
+                   # layer directly (no NetworkResult needed), so they
+                   # run ONCE per `_apply_networks` call rather than
+                   # per network component.
+                   'shared_regions': None}
+        self._junction_regions: list = []
+        self._shared_regions = None
+        import junctions as J
         def _pts(p):
             return pts_of.get(id(p)) or p.sample_points()
         beads_all = [N.Bead(p.id, _pts(p), p.closed,
@@ -4962,6 +4992,34 @@ class PrintLayer:
             # Junction corners: treated by the layer's junction settings,
             # independent of every source's own Corner R.
             corners = N.junction_corners(res)
+            # J3 (2026-10-12): extract JunctionRegion records from the live
+            # NetworkResult BEFORE `round_junctions` reshapes the bead
+            # chains (fillet insertion makes chains start on a fillet
+            # point, not on the arrangement node, so `arr.find_node(ch[0])`
+            # would return None and no regions would be extracted for
+            # round-junction scenarios). One call per resolved component;
+            # the records belong to this component only. Hollow / Parallel
+            # generators read `self._junction_regions` via
+            # `_apply_wall_systems`. Interleaved / Linked / Chain ignore
+            # the records this pass.
+            comp_regions = J.extract(
+                res,
+                source_walls=getattr(self, '_source_walls', None),
+                junction_style=self.junction_style,
+                junction_radius=self.junction_radius)
+            self._junction_regions.extend(comp_regions)
+            summary['junction_regions'].extend({
+                'key': r.key, 'kind': r.kind,
+                'source_ids': list(r.source_ids),
+                'style': r.style,
+                'center': list(r.center),
+                'arm_count': r.arm_count,
+                'arms': [{'source_id': a.source_id,
+                          'direction': list(a.direction),
+                          'half_thickness': a.half_thickness,
+                          'is_single_bead': a.is_single_bead}
+                         for a in r.arms],
+            } for r in comp_regions)
             fillets = N.round_junctions(res, corners, self._junction_radius,
                                         max((pc.width for pc in comp_pieces), default=0.0))
             self._emit_network(N, res, replaced, appended, cls_of, summary)
@@ -4990,6 +5048,24 @@ class PrintLayer:
                     'material': f.material, 'override': f.override,
                     'region': f'{ci}:{f.region}',
                 })
+
+        # J4a: shared region framework. Extract corners / end-caps /
+        # constrained sections / transitions ONCE per `_apply_networks`
+        # call (they are architectural; no NetworkResult needed) and
+        # serialise into `summary['shared_regions']`. The junctions list
+        # already lives on `summary['junction_regions']`.
+        try:
+            self._shared_regions = J.RegionSet(
+                junctions=list(self._junction_regions),
+                corners=J.extract_corners(self),
+                end_caps=J.extract_end_caps(self),
+                constrained=J.extract_constrained_sections(self),
+            )
+            self._shared_regions.transitions = J.extract_transitions(
+                self._shared_regions.constrained)
+            summary['shared_regions'] = self._shared_regions.serialise()
+        except Exception as _exc:
+            summary['shared_regions'] = {'error': str(_exc)[:200]}
 
         out: list[Path] = []
         for p in result:

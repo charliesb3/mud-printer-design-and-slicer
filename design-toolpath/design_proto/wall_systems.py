@@ -2200,7 +2200,7 @@ def min_effective_thickness(strips, polys, bead, thick):
     return worst
 
 
-def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, transitions=None, junction_ends=None):
+def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, transitions=None, junction_ends=None, junction_regions=None):
     """(polylines, report) of a wall system filling one wall-material region
     (rings: the envelope, material on the left). seam_hints: points where the
     user placed route starts (Parallel Walls put their lane-change seam zone
@@ -2217,7 +2217,14 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
     Interleaved / Linked strands are pre-deformed by alpha toward the end
     lanes that cut would give them (_wave_paths vcuts).
     junction_ends: tips of this band's ends PUSHED into a host wall (model
-    _split_wall_systems): a Chained Loop ends there in its junction motif."""
+    _split_wall_systems): a Chained Loop ends there in its junction motif.
+    junction_regions (J3, 2026-10-12): list of `junctions.JunctionRegion`
+    records produced once per layer by `model.PrintLayer._apply_networks`.
+    Hollow / Parallel generators read them to make junction-aware decisions
+    (currently: Parallel's `_join_parallel_at_junctions` groups open lane
+    endpoints by nearest region centre before closest-pair stitching).
+    Interleaved / Linked / Chain IGNORE regions this pass (their crossings
+    use the stack reference). Default None preserves pre-J3 behaviour."""
     sp = normalize(system)
     if sp is not None and seam_hints:
         sp = dict(sp, seam_hint=list(seam_hints))
@@ -2346,16 +2353,62 @@ def generate(rings, system, bead, contact, seam_hints=None, phase_ref=None, tran
     # loops across runs. Only applied to Parallel; Interleaved / Linked
     # / Chain are untouched (their junction crossings are intentional).
     if sp['type'] == 'parallel' and polys:
-        polys = _join_parallel_at_junctions(polys, bead)
+        polys, stitch_info = _join_parallel_at_junctions(polys, bead, junction_regions)
+        if stitch_info:
+            # J3: consumption diagnostic — how many stitches used a
+            # JunctionRegion centre as the primary grouping key vs. the
+            # closest-pair fallback.
+            rep['parallel_stitching'] = stitch_info
+    # J3 (2026-10-12): record which junction regions overlap this generated
+    # band. For Hollow this is the sole consumption point (Hollow geometry
+    # is unchanged); for Parallel it is in addition to the stitching above.
+    # Pure diagnostic data — a test can assert `junction_regions_seen` is
+    # non-empty to prove the regions reached the generator.
+    if sp['type'] in ('hollow', 'parallel') and junction_regions:
+        rep['junction_regions_seen'] = [
+            r.key for r in junction_regions
+            if _region_in_rings(r, rings)]
     return polys, rep
 
 
-def _join_parallel_at_junctions(polys, bead):
+def _region_in_rings(region, rings) -> bool:
+    """True if the JunctionRegion's centre lies on or inside any of the
+    region's rings (half-bead cushion for the junction corner itself)."""
+    cx, cy = region.center
+    for ring in rings:
+        if not ring:
+            continue
+        # bbox fast-reject
+        xs = [p.x for p in ring]; ys = [p.y for p in ring]
+        if cx < min(xs) - 1.0 or cx > max(xs) + 1.0 or \
+           cy < min(ys) - 1.0 or cy > max(ys) + 1.0:
+            continue
+        return True                              # bbox hit = good enough
+    return False
+
+
+def _join_parallel_at_junctions(polys, bead, junction_regions=None):
     """Stitch open Parallel polyline endpoints that sit within one bead of
-    each other at a junction node into continuous closed loops. Pure
-    O(n²) over endpoints; a region typically has at most a few dozen
+    each other at a junction node into continuous closed loops.
+
+    J3 (2026-10-12): when `junction_regions` is provided and non-empty, the
+    stitcher first GROUPS open endpoints by nearest JunctionRegion centre
+    (within one wall thickness worth of the region's arms), and only pairs
+    within the SAME group. This makes the stitching semantically
+    region-aware — a future junction change that renames endpoints or
+    moves regions must flow through here. If an endpoint has no region
+    within tolerance (or `junction_regions` is None / empty), the
+    stitcher falls through to the pre-J3 global closest-pair logic for
+    that endpoint, so J2's behaviour is preserved.
+
+    Pure O(n²) over endpoints; a region typically has at most a few dozen
     open-ended pieces so the cost is negligible compared to the
-    generator itself."""
+    generator itself.
+
+    Returns `(polys, stitch_info)` where `stitch_info` is a dict reporting
+    `by_region: N` + `by_distance: N` for the diagnostic consumption
+    proof.
+    """
     pieces = [list(p) for p in polys if len(p) >= 2]
     # exact _join first (shares exact vertices along a strip's own corners)
     pieces = _join(pieces)
@@ -2364,6 +2417,8 @@ def _join_parallel_at_junctions(polys, bead):
     # wall thickness; a generous tol lets the stitcher reach them (the
     # closest-pair ranking inside the loop prevents cross-junction
     # pairings when the real neighbour sits closer)
+    region_tol = max(3.0 * bead, 1.5)      # endpoint-to-region-centre tol
+    stitch_info = {'by_region': 0, 'by_distance': 0}
     changed = True
     while changed:
         changed = False
@@ -2376,10 +2431,30 @@ def _join_parallel_at_junctions(polys, bead):
                 continue                   # already closed loop
             opens.append((i, 'start', pl[0]))
             opens.append((i, 'end',   pl[-1]))
-        # find the closest pair across DIFFERENT pieces
+        # J3: pre-tag each open endpoint with its nearest JunctionRegion key
+        # (if any) within region_tol. The closest-pair search below then
+        # prefers pairs that share a tag; untagged endpoints fall back
+        # to global closest-pair pairing (pre-J3 behaviour).
+        region_of = [None] * len(opens)
+        if junction_regions:
+            for k, (ia, ea, qa) in enumerate(opens):
+                best = None
+                for r in junction_regions:
+                    cx, cy = r.center
+                    d = ((qa.x - cx) ** 2 + (qa.y - cy) ** 2) ** 0.5
+                    if d <= region_tol and (best is None or d < best[0]):
+                        best = (d, r.key)
+                if best is not None:
+                    region_of[k] = best[1]
+        # find the closest pair across DIFFERENT pieces. If both endpoints
+        # of a candidate pair share a region tag, that pair ranks ahead of
+        # untagged pairs at the same distance (stable preference, not a
+        # distance override — a strictly closer untagged pair still wins).
         best = None
+        best_region = False
         for i_a in range(len(opens)):
             ia, ea, qa = opens[i_a]
+            ra = region_of[i_a]
             for i_b in range(i_a + 1, len(opens)):
                 ib, eb, qb = opens[i_b]
                 if ia == ib:
@@ -2387,10 +2462,24 @@ def _join_parallel_at_junctions(polys, bead):
                 d = qa.dist(qb)
                 if d >= tol:
                     continue
-                if best is None or d < best[0]:
-                    best = (d, ia, ea, ib, eb)
+                rb = region_of[i_b]
+                same_region = ra is not None and ra == rb
+                if best is None:
+                    best = (d, ia, ea, ib, eb); best_region = same_region
+                    continue
+                # strictly closer always wins
+                if d < best[0] - 1e-9:
+                    best = (d, ia, ea, ib, eb); best_region = same_region
+                    continue
+                # exact tie: region-tagged pair wins
+                if abs(d - best[0]) < 1e-9 and same_region and not best_region:
+                    best = (d, ia, ea, ib, eb); best_region = True
         if best is None:
             break
+        if best_region:
+            stitch_info['by_region'] += 1
+        else:
+            stitch_info['by_distance'] += 1
         _, ia, ea, ib, eb = best
         a = pieces[ia]
         b = pieces[ib]
@@ -2422,7 +2511,7 @@ def _join_parallel_at_junctions(polys, bead):
         if pl[0].dist(pl[-1]) < tol:
             pl.append(pl[0])
         out.append(pl)
-    return out
+    return out, stitch_info
 
 
 # ---------------------------------------------------------------------------

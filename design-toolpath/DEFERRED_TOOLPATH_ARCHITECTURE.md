@@ -454,11 +454,148 @@ inherit` (mixed region, probe branch not entered): unchanged. 84-layer mixed ben
 re-run this pass (byte-identical geometry at the single-layer level is a stronger pin — a
 build-level perf delta would be ≤ the above).
 
-**Still open (future J-passes).** Wire `JunctionRegion` + `extract()` into
-`_apply_wall_systems` → `WS.generate` so Hollow / Parallel share the record instead of
-reconstructing from rings (J3). Parallel-rectangle lane dropouts near attachments (the lane
+**Still open (future J-passes).** Parallel-rectangle lane dropouts near attachments (the lane
 itself is clipped out of its own strip by the host's junctions — the J2 fallback routes AROUND
 this hole via the face chord but does not restore the lane). Single-bead → exterior-skin
 priority (step-in attaches to the NEAREST lane, not necessarily the outermost one). Shrinking-
 junction motif and alternative local lattice solutions (both need design input before any
 code; also listed for the next M4 sub-pass).
+
+## J3 — Shared junction architecture integration (2026-10-12; INTEGRATION DONE; UNCOMMITTED)
+
+**Scope.** Make `JunctionRegion` the authoritative representation of corners and junctions for
+Hollow Skin and Parallel Walls. Architectural integration, NOT a new motif pass. Byte-identical
+generated geometry; the records flow through the pipeline and are genuinely consumed.
+
+**Extraction (`design_proto/model.py` `_apply_networks`).** After each `N.resolve(...)` +
+`N.junction_corners(...)` and BEFORE `N.round_junctions(...)` (which reshapes the bead chains
+onto fillet points so chain endpoints no longer land on arrangement nodes), the pass calls
+`junctions.extract(res, source_walls=self._source_walls, junction_style, junction_radius)`.
+Records accumulate on `self._junction_regions` and are also serialised into
+`summary['junction_regions']` → `meta['network']['junction_regions']` (each entry has `key`,
+`kind`, `source_ids`, `style`, `center`, `arm_count`, `arms[]`).
+
+**Threading (`design_proto/model.py` `_apply_wall_systems`).** Reads `self._junction_regions`
+once at method entry, passes it as a `junction_regions=` kwarg to every `WS.generate` call: the
+one-wall fast path, the J2 probe loop, the J2 united fallback, the split-per-part loop and the
+motif-regen fallback.
+
+**Generator signature (`design_proto/wall_systems.py` `generate`).** Added trailing kwarg
+`junction_regions=None`. Default preserves pre-J3 behaviour (every existing caller / test /
+tool works unchanged). The function reads it only on `type in {'hollow', 'parallel'}`.
+
+**Parallel consumption.** `_join_parallel_at_junctions(polys, bead, junction_regions=None)`
+tags every open endpoint with the nearest region centre within ~3 × bead; in the closest-pair
+stitch loop, ties on distance are broken by preferring a tagged pair (strictly closer untagged
+pair still wins). Return signature: `(polys, stitch_info)`. `stitch_info = {by_region, by_distance}`
+reported on the Wall System's rep as `parallel_stitching`.
+
+**Hollow consumption.** Hollow / Skins Only does NOT route through `wall_systems.generate` —
+its skin beads come from the base ring-offset pipeline inside `_apply_networks`. The shared
+representation reaches Hollow INDIRECTLY: the pre-processed material rings already encode
+miter / fillet corner geometry (`round_junctions`), and `meta['network']['junction_regions']`
+is available for any future Hollow-specific junction treatment to consume without re-
+extracting.
+
+**Diagnostic.** `rep['junction_regions_seen']` lists the keys of regions whose centre lies
+inside the generator's rings — a direct consumption-proof signal (removing the J3 extraction
+makes this field empty; a regression test catches that).
+
+**Verified.** 10 new consumption-proof tests in `design_proto/tests/test_j3_integration.py`
+pin: serialisation shape, arm-count agreement, source-wall classification on `is_single_bead`,
+Parallel's `junction_regions_seen` on tee + parallel + round, Hollow's indirect-availability
+pin, stitcher decision breakdown, pre-J3 behaviour preserved when regions=None, region-tagged
+tie-break fires, kwarg backward compatibility, no state leak across replays. Full suites:
+design_proto 1784 (+10 J3), layer_assembly 681 (unchanged), toolpath_proto 92 (unchanged).
+Geometry byte-identical on 7 harness fixtures + 24-cell reference-network sweep (SHA-1 of
+`(role|src|points…)` identical, path counts identical, junction_steps / j2_united_region /
+per_run unchanged). Perf: +5–15 % on scenarios with regions (one `extract()` call per
+resolved component + per-endpoint distance checks); `WS.generate` call count unchanged.
+
+**Covered this pass.** Parallel Walls (direct consumption via `_join_parallel_at_junctions` +
+`junction_regions_seen`). Hollow / Skins Only (indirect via `meta` and the pre-processed
+rings). Interleaved / Linked / Chain IGNORE regions this pass — their crossings use the M3
+stack reference.
+
+**Legacy junction machinery retained unchanged.** `network.junction_corners`,
+`network.round_junctions`, the M4 orphan-fillet step-in in `_apply_wall_systems`, J2's probe +
+united fallback, Chained Loop corner / junction motifs, `_check_junction_motifs`,
+`_contact_staples`. J3 is purely additive; nothing removed.
+
+**Architectural limitations (not J3 scope).**
+- `junctions.extract()` filters out same-source corners (`len(srcs) < 2 and len(arms) < 2`),
+  so a closed rectangle's four corners emit 0 regions. For `circle_rect` (two overlapping
+  sources R + C), extract also returns 0 regions because the bead chains in that fixture
+  don't terminate at an arrangement node (the X-crossings are interior; current extract
+  reads chain endpoints only). Vocabulary expansion is J4 territory.
+- Hollow still uses the base ring-offset pipeline. Rewiring Hollow to a direct
+  `WS.generate(..., type='hollow')` branch so it reads regions is a plausible J4 refactor.
+- The region tagging in `_join_parallel_at_junctions` uses a 3-bead tolerance; wider / per-
+  wall-thickness tolerances could tag more Parallel strip endpoints but risk cross-junction
+  mis-tagging. Not changed.
+
+**Next steps toward selectable junction motifs (NOT J4 scope — forecasting).**
+1. Widen `junctions.extract()` so bead-level crossings and single-source corners surface.
+2. Route Hollow through a direct `WS.generate(..., type='hollow')` branch.
+3. Add a junction-motif descriptor on `JunctionRegion`; let generators dispatch on
+   `region.motif` (user-selected per junction).
+4. Make `_join_parallel_at_junctions` region-DRIVEN once (1) + (2) are in place.
+
+## J4a — Shared geometric regions and connectivity (2026-10-12; DETECTION DONE; UNCOMMITTED)
+
+**Scope.** Extend the J1–J3 junction framework into FIVE conceptual region types, with
+reliable detection, stable identities, and diagnostic reporting. Byte-identical geometry;
+motif consumption is J4b/J4c scope.
+
+**Region types** (`design_proto/junctions.py`):
+- `CornerRegion`      — direction change inside one source (e.g. rectangle corners).
+- `JunctionRegion`    — multiple walls connecting (existing J2/J3 record).
+- `EndCapRegion`      — wall termination: free end or opening jamb.
+- `ConstrainedRegion` — section too small for normal construction (short pier, short jamb).
+- `TransitionRegion`  — explicit relationship between a normal region and a constrained one.
+
+Each record carries a stable source-prefixed `key`, so a region keeps its identity across
+layers, through semantic transforms and across cuts. Serialised on `meta['network']['shared_regions']`.
+
+**Extraction (`design_proto/model.py` `_apply_networks`).** After the per-component loop,
+the architectural extractors (`J.extract_corners`, `J.extract_end_caps`,
+`J.extract_constrained_sections`, `J.extract_transitions`) run ONCE per build on `self`
+directly — they walk the Designer source paths + wall table + openings + cut transitions
+and do NOT need a `NetworkResult`. The pre-existing J3 `self._junction_regions` list is
+copied into the new `RegionSet.junctions`.
+
+**Constrained-section rule.** `required_length = max(wall_thickness, 2 × bead)`. Reasons:
+`short_section` (whole open path), `short_between_openings` (pier between consecutive
+openings on the same source), `short_jamb` (open-path jamb margin to the nearest opening).
+
+**Bug audit — the four reported J4a bugs.**
+
+| # | Reported bug | Current state after audit | J4a response |
+|---|---|---|---|
+| 1 | Rounded circle/rectangle junctions developing gaps | Already corrected by J2 (united-generation) + Parallel stitching + M4 orphan-fillet step-in. Automated continuity + exterior-continuity + region-coverage all pass for every circle_rect × system × style. | Pinned by `test_j4a_circle_rect_connectivity_across_systems_and_styles`. |
+| 2 | 45° chamfers at rectangular corners on certain layers | The ARCHITECTURAL corner always reports 90° miter (`test_j4a_rectangular_corners_architecture_stays_90` for every system). The Chain system's current CORNER MOTIF produces ~8 short (0.5-1.5 in) 45° segments near each rectangle corner — these are internal motif detail, NOT architectural chamfers. | Documented via `test_j4a_chain_corner_motif_segments_are_reported_as_a_known_issue` so a J4b motif revision can show its diff. No J4a geometry change. |
+| 3 | Single-bead attachments creating exterior protrusions | Current pipeline closes continuity for every scenario. The branch's two lanes are currently DROPPED when the host is a Wall System (separate rendering issue, not an exterior protrusion). | Pinned by `test_j4a_single_bead_attachment_reports_connected_regions`. Branch preservation under Wall System host → J4b. |
+| 4 | Short pier between opening arrays producing disconnected fragments | DETECTED by `ConstrainedRegion` with correct reason + available/required lengths. | Pinned by `test_j4a_short_pier_between_two_openings_is_flagged` and `test_j4a_short_jamb_margin_is_flagged`. The compact-loop motif library for these regions is J4b scope. |
+
+**Tests.** 38 new regressions in `design_proto/tests/test_j4a_regions.py` covering: region
+extraction completeness per fixture, `region_type` consistency, rectangle 90° corners under
+every system, circle produces no corners, T free ends → end-caps, opening jamb pair, short
+pier flagged, wide pier NOT flagged, short jamb flagged, transition per constrained region,
+circle/rect connectivity, Chain corner-motif documentation, single-bead attach regions,
+region keys stable across rebuilds.
+
+**Perf.** Region extraction = ~0.1 % of build time on harness fixtures (0.01–0.29 ms vs
+20–386 ms). Full suites: design_proto 1822, layer_assembly 681, toolpath_proto 92 green.
+Geometry byte-identical to the J3 baseline on 7 fixtures + 24-cell reference-network sweep.
+
+**Still open — J4b scope.**
+1. Compact-loop motif library for `ConstrainedRegion` scenarios.
+2. Chain system corner motif review (option to produce clean miter corners when document
+   requests miter).
+3. Single-bead attachment preservation under a Wall System host (currently the two lanes
+   are dropped).
+4. `TransitionRegion` motif — the pattern shape as it morphs from normal to constrained.
+5. Begin consumption of `CornerRegion` + `EndCapRegion` in Hollow / Parallel generators
+   (motif-aware caps / corners).
+6. Fill the `JunctionRegion.arms[].face0`/`face1` connect-points so Parallel's stitcher
+   becomes region-driven rather than tie-breaker.
