@@ -333,6 +333,17 @@ function wsysSelectContinuity(k) {
   wsys.display = 'generated';
   wsysSelectLayer((c.layers || [0])[0]);
 }
+function wsysSelectRepair(k) {
+  const RP = wsys.gen && wsys.gen.inspection && wsys.gen.inspection.repairs;
+  const x = RP && RP.items.filter(y => y.strategy)[k];
+  if (!x) return;
+  wsys.sel = { which: 'repair', id: k };
+  wsys.display = 'generated';
+  wsys.view.mode = 'top';
+  Object.assign(wsys.view, { zoom: 1, px: 0, py: 0 });
+  wsys.view.focus = { x: x.centre[0], y: x.centre[1], span: 12 };
+  wsysSelectLayer(x.layer, true);
+}
 function wsysSelectOpening(k) {
   const o = ((wsys.gen && wsys.gen.inspection && wsys.gen.inspection.openings) || [])[k];
   if (!o) return;
@@ -342,7 +353,7 @@ function wsysSelectOpening(k) {
 }
 function _wsysSelected() {
   const s = wsys.sel;
-  if (!s || s.which === 'continuity' || s.which === 'opening') return null;
+  if (!s || s.which === 'continuity' || s.which === 'opening' || s.which === 'repair') return null;
   return (s.which === 'final' ? _wsysFinal() : _wsysPreliminary()).find(x => x.id === s.id) || null;
 }
 function wsysOrbit() { wsys.view.mode = 'orbit'; Object.assign(wsys.view, { zoom: 1, px: 0, py: 0 }); wsysRender(); }
@@ -597,6 +608,27 @@ function _wsysRenderFindings() {
       r.onclick = () => wsysSelectContinuity(k);
       box.appendChild(r);
     });
+  }
+  // LOCAL REPAIRS (M4): where the generator moved a strand locally onto the
+  // layer below to meet the bead-level rule — the findings above are those
+  // that REMAIN after it (computed on the repaired geometry)
+  const RP = wsys.gen.inspection && wsys.gen.inspection.repairs;
+  if (RP && RP.mode === 'off')
+    box.appendChild(_el('div', 'asm-calc wsys-cat-head', 'Local repairs: OFF (WALL_LATTICE_REPAIR=off — the M3 output)'));
+  else if (RP && (RP.applied || RP.unresolved)) {
+    box.appendChild(_el('div', 'asm-calc wsys-cat-head',
+      `Local repairs · ${RP.applied} applied (${RP.resolved} resolved, ${RP.partial} improved) · ${RP.unresolved} not repairable locally`));
+    const applied = RP.items.filter(x => x.strategy);
+    applied.slice(0, 60).forEach((x, k) => {
+      const r = _el('div', 'wsys-find' + (wsys.sel && wsys.sel.which === 'repair' && wsys.sel.id === k ? ' sel' : ''));
+      r.appendChild(_el('span', 'wsys-cat repair', x.resolved ? 'repaired' : 'improved'));
+      r.appendChild(_el('span', null, `L${x.layer + 1} · ${x.role === 'lattice' ? 'web lattice' : 'Wall System path'} · ` +
+        `contact shift (${x.margin_beads} bead blend${x.smoothed ? ', smoothed' : ''}) at (${x.centre[0].toFixed(0)}, ${x.centre[1].toFixed(0)}) · ` +
+        `unsupported ${x.before} → ${x.after} samples`));
+      r.onclick = () => wsysSelectRepair(k);
+      box.appendChild(r);
+    });
+    if (applied.length > 60) box.appendChild(_el('div', 'asm-calc', `… ${applied.length - 60} more`));
   }
   // the Assembly's openings / tapers judged with the CONSTRUCTION's own
   // minimum (the Assembly validated them on the architecture only)

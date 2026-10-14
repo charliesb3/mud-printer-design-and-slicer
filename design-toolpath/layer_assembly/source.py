@@ -131,6 +131,11 @@ def variant_request(inst) -> tuple:
 def layer_geometry(source, inst):
     """The geometry a layer prints: its design, or its VARIANT (transform
     groups → semantic transforms; profiles → cuts)."""
+    rep = getattr(source, 'repaired', None)
+    if rep and getattr(inst, 'repair', ''):
+        g = rep.get(inst.geometry_key)          # (M4: the generation's LOCALLY REPAIRED layer)
+        if g is not None:
+            return g
     if not inst.is_variant:
         return source.geometry(inst.design_id)
     if inst.cuts:

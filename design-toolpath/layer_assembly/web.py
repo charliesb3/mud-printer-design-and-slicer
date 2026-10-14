@@ -511,7 +511,8 @@ def _planned(data, cancelled=None):
     from .print_plan import build_plan
     asm = dict(data['assembly'])
     asm.pop('print_speeds', None)
-    key = json.dumps([asm, data.get('designs'), data.get('wall_systems'), data.get('start')], sort_keys=True)
+    key = json.dumps([asm, data.get('designs'), data.get('wall_systems'), data.get('start'),
+                      generation_key(data) if data.get('require_generated') else None], sort_keys=True)
     if data.get('rebuild'):
         _PLANS.pop(key, None)
         ws_ = data.get('wall_systems')
@@ -524,6 +525,12 @@ def _planned(data, cancelled=None):
         return _PLANS[key]
     from .lifts import LiftSettings
     st = _resolve_stack(data)
+    if data.get('require_generated'):
+        # the Simulation plans EXACTLY the generated stack — its layers as
+        # generated and locally repaired (M4), as inspected
+        hit = _GENERATED.get(generation_key(data))
+        if hit is not None:
+            st = dict(st, res=hit['res'], src=hit['src'])
     plan = build_plan(st['res'], st['src'], data.get('start'), cancelled=cancelled,
                       lift_settings=LiftSettings.from_dict(st['assembly'].machine))
     src, res, assembly = st['src'], st['res'], st['assembly']
@@ -582,14 +589,69 @@ def _planned(data, cancelled=None):
 _GENERATED: OrderedDict = OrderedDict()
 
 
+def _repair(st, geo, gen_key, cancelled=None):
+    """M4 LOCAL LATTICE SUPPORT REPAIR of a generated stack (lattice_repair):
+    bottom-up, every repaired layer becomes its own instance geometry (a
+    `repair` tag → a geometry key of its own; the print adapter's
+    `repaired` overrides) so the support report, the inspection, the layer
+    views and the Print Simulation all see exactly the repaired stack. →
+    (stack with the repaired instances, geometry, {records, layers, seconds})."""
+    import hashlib
+    import time
+    from dataclasses import replace
+    from .lattice_repair import repair_stack
+    t0 = time.perf_counter()
+    src, res = st['src'], st['res']
+    layers = {i.index: layer_geometry(src, i) for i in res.instances}
+    egeo, ekey, _ = _envelope_stack(st)
+    env = {i.index: egeo[ekey[i.index]][0] for i in res.instances}
+    changed, records = repair_stack(res, layers, env, st['assembly'], cancelled)
+    tag = hashlib.sha1(gen_key.encode()).hexdigest()[:12]
+    insts = list(res.instances)
+    over = getattr(src, 'repaired', None)
+    if over is None:
+        over = src.repaired = {}
+    geo = dict(geo)
+    for k, g in changed.items():
+        insts[k] = replace(insts[k], repair=f'{tag}:{k}')
+        over[insts[k].geometry_key] = g
+        geo[insts[k].geometry_key] = (g.polylines, g.bead_width)
+    while len(over) > 4096:                     # (bounded: the oldest generations' repairs go first)
+        over.pop(next(iter(over)))
+    res2 = replace(res, instances=type(res.instances)(insts))
+    return dict(st, res=res2), geo, {'records': records, 'layers': sorted(changed),
+                                     'seconds': round(time.perf_counter() - t0, 3)}
+
+
+def _repair_summary(repairs, rep):
+    """The inspection's view of the local repairs: where, which strategy,
+    whether support improved, what remains (the report itself is computed
+    on the repaired geometry — nothing is suppressed)."""
+    from .designer_source import repair_mode
+    if repairs is None:
+        return {'mode': repair_mode(), 'applied': 0, 'resolved': 0, 'partial': 0, 'unresolved': 0, 'items': []}
+    R = repairs['records']
+    items = [{'layer': r['layer'], 'centre': r['centre'], 'role': r.get('role'), 'strategy': r['strategy'],
+              'resolved': r['resolved'], 'before': r['before'], 'after': r['after'],
+              **({'margin_beads': r['margin_beads'], 'smoothed': r['smoothed']} if r['strategy'] else {})}
+             for r in R]
+    return {'mode': repair_mode(), 'seconds': repairs['seconds'], 'layers': repairs['layers'],
+            'applied': sum(1 for r in R if r['strategy']), 'resolved': sum(1 for r in R if r['strategy'] and r['resolved']),
+            'partial': sum(1 for r in R if r['strategy'] and not r['resolved']),
+            'unresolved': sum(1 for r in R if not r['strategy']),
+            'remaining_findings': len(rep.findings), 'items': items}
+
+
 def generation_key(data) -> str:
     asm = dict(data['assembly'])
     asm.pop('print_speeds', None)
     asm.pop('machine', None)
-    from .designer_source import lattice_mode
+    from .designer_source import lattice_mode, repair_mode
     key = [asm, data.get('designs'), data.get('wall_systems')]
     if lattice_mode() != 'stack':                # (M3: the previous generator's geometry is another generation)
         key.append(lattice_mode())
+    if repair_mode() != 'on':                    # (M4: the unrepaired M3 output is another generation)
+        key.append('repair:' + repair_mode())
     return json.dumps(key, sort_keys=True)
 
 
@@ -602,6 +664,10 @@ def _generated_current(data) -> bool:
     src = g['src']
     from .designer_source import _vkey
     for i in g['res'].instances:
+        if i.repair:                                # (M4: a repaired layer — its override must still be held)
+            if i.geometry_key not in (getattr(src, 'repaired', None) or {}):
+                return False
+            continue
         if i.is_variant:
             d, tr, cu = variant_request(i)
             if _vkey(d, tr or None, cu or None) not in getattr(src, '_variants', {}):
@@ -644,10 +710,18 @@ def api_wallsystems_generate():
                         geo[i.geometry_key] = (g.polylines, g.bead_width)
                 if cancelled is not None and cancelled():
                     raise PlanCancelled('generation cancelled')
+                repairs = None
+                from .designer_source import repair_mode
+                if repair_mode() == 'on':
+                    st, geo, repairs = _repair(st, geo, key, cancelled)
+                    res = st['res']
+                    if cancelled is not None and cancelled():
+                        raise PlanCancelled('generation cancelled')
                 rep = _support_report(st, geo)
                 if cancelled is not None and cancelled():
                     raise PlanCancelled('generation cancelled')
                 inspection = _inspection(st, geo, rep)
+                inspection['repairs'] = _repair_summary(repairs, rep)
                 for d in src.design_ids():               # (the Base design view: its canonical build)
                     if src.info(d).parent is None:
                         src.geometry(d)

@@ -44,6 +44,12 @@ def lattice_mode() -> str:
     return 'layer' if os.environ.get('WALL_LATTICE_MODE', 'stack').strip().lower() == 'layer' else 'stack'
 
 
+def repair_mode() -> str:
+    """M4 LOCAL LATTICE SUPPORT REPAIR in print preparation (lattice_repair):
+    'on' (default) | 'off' (the M3 output exactly: WALL_LATTICE_REPAIR=off)."""
+    return 'off' if os.environ.get('WALL_LATTICE_REPAIR', 'on').strip().lower() in ('off', '0', 'no') else 'on'
+
+
 def _geometry_of(built):
     from source_attribution import attribute
     import time

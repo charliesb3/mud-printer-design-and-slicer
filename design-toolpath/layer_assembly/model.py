@@ -340,6 +340,9 @@ class LayerInstance:
     cuts: tuple = field(default=(), compare=False)             # ASSEMBLY PROFILE cut spec of this
                                                                # layer (profiles.py; applied by the
                                                                # Designer before the semantic transform)
+    repair: str = field(default='', compare=False)             # M4: its geometry was LOCALLY REPAIRED
+                                                               # by print preparation (lattice_repair;
+                                                               # the generation's own key + layer)
 
     def transform_of(self, key) -> 'InstanceTransform':
         return self.parts.get(key, self.transform)
@@ -348,7 +351,7 @@ class LayerInstance:
     def geometry_key(self) -> str:
         """Which geometry this layer prints: its design, or the design's
         semantically transformed VARIANT."""
-        if not self.semantic and not self.cuts:
+        if not self.semantic and not self.cuts and not self.repair:
             return self.design_id
         key = self.design_id
         if self.semantic:
@@ -356,13 +359,15 @@ class LayerInstance:
         if self.cuts:
             from .profiles import cut_key
             key += '|cut:' + cut_key(self.cuts)
+        if self.repair:
+            key += '|repair:' + self.repair
         return key
 
     @property
     def is_variant(self) -> bool:
         """Prints a Designer-resolved VARIANT of its design (transform groups
         and / or profile cuts), not the canonical design."""
-        return bool(self.semantic or self.cuts)
+        return bool(self.semantic or self.cuts or self.repair)
 
     def cut_spec(self) -> list:
         from .profiles import cuts_to_dicts
