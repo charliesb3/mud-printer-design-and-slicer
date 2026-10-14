@@ -58,7 +58,7 @@ import re
 from datetime import datetime, timezone
 
 FORMAT = 'mud-printer-project'
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 EXTENSION = '.muddesign'
 GENERATOR = 'design_proto'
 MAX_BYTES = 200 * 1024 * 1024          # (a sanity bound, far above real projects)
@@ -110,7 +110,25 @@ def _v2_to_v3(data: dict) -> dict:
     return data
 
 
-MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3}
+def _v3_to_v4(data: dict) -> dict:
+    """Schema 4 (2026-10-14): the DEFAULT Opening Alignment became Vertical
+    / Plumb (was Follow Wall, stored only when 'plumb'). A project that stored
+    no value — or the short-lived per-opening form — gets its EFFECTIVE
+    alignment written explicitly (the same rule as layer_assembly.model.
+    _alignment before the change), so it opens exactly as before."""
+    st = ((data.get('project') or {}).get('assembly') or {}).get('state')
+    if isinstance(st, dict):
+        v = st.get('opening_alignment')
+        if v is None or isinstance(v, dict):
+            ops = [p for p in st.get('profiles') or []
+                   if (p.get('kind') or 'opening') == 'opening' and not p.get('source_opening')]
+            any_plumb = any(a == 'plumb' for a in (v or {}).values()) or any(p.get('alignment') == 'plumb' for p in ops)
+            all_plumb = all(p.get('alignment') == 'plumb' for p in ops)
+            st['opening_alignment'] = 'plumb' if any_plumb and all_plumb else 'follow'
+    return data
+
+
+MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
 
 
 def migrate(data: dict) -> tuple[dict, int]:

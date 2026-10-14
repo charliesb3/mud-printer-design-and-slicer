@@ -228,12 +228,14 @@ class Assembly:
     # 'head_clearance'} in inches; {} = the defaults (18 / 18 / 1). The print
     # plan divides the stack into lifts of whole layers with these.
     machine: dict = field(default_factory=dict)
-    # OPENING ALIGNMENT (2026-10-10, ONE global setting): 'follow' (every
-    # opening follows the Assembly transforms — the default, older projects)
-    # | 'plumb' (every opening — Designer, Assembly, arrays, headers — stays
-    # vertical in world coordinates from its first active layer while the
-    # walls transform: profiles.plumb_track). Stored only when 'plumb'.
-    opening_alignment: str = 'follow'
+    # OPENING ALIGNMENT (2026-10-10, ONE global setting): 'plumb' (every
+    # opening — Designer, Assembly, arrays, headers — stays vertical in world
+    # coordinates from its first active layer while the walls transform:
+    # profiles.plumb_track) — the DEFAULT since 2026-10-14 (also when the
+    # field is absent) | 'follow' (every opening follows the Assembly
+    # transforms — the default before; older project files say so explicitly
+    # after the schema-4 migration). Always stored.
+    opening_alignment: str = 'plumb'
 
     def to_dict(self) -> dict:
         return {'name': self.name, 'layer_height': self.layer_height,
@@ -249,7 +251,7 @@ class Assembly:
                 'profiles': [p.to_dict() for p in self.profiles],
                 'print_speeds': dict(self.print_speeds),
                 'machine': dict(self.machine),
-                **({'opening_alignment': 'plumb'} if self.opening_alignment == 'plumb' else {})}
+                'opening_alignment': self.opening_alignment}
 
     @staticmethod
     def from_dict(d: dict) -> 'Assembly':
@@ -292,7 +294,10 @@ def _alignment(v, profiles=()) -> str:
     and Assembly opening profiles' `alignment` → 'plumb' when something was
     plumb and NO Assembly opening explicitly followed the wall (the effective
     alignment is kept), else 'follow' (mixed: cannot be preserved → the
-    default)."""
+    former default). Absent: 'plumb' — the default since 2026-10-14 (older
+    project files carry their value explicitly: project_file schema 4)."""
+    if v is None and not any('alignment' in p for p in profiles):
+        return 'plumb'
     if v is None or isinstance(v, dict):
         legacy = dict(v or {})
         ops = [p for p in profiles if (p.get('kind') or 'opening') == 'opening' and not p.get('source_opening')]

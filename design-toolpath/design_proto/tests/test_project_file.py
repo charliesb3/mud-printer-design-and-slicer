@@ -354,7 +354,7 @@ def test_save_refuses_an_invalid_project(client):
 def test_file_text_is_human_readable_json(client):
     _, r = save(client, project())
     text = PF.dumps(r['file'])
-    assert text.startswith('{\n "format": "mud-printer-project",\n "schema_version": 3,')
+    assert text.startswith('{\n "format": "mud-printer-project",\n "schema_version": 4,')
     assert json.loads(text) == r['file']
 
 

@@ -75,6 +75,7 @@ def systems(t):
 def assembly(arr, h_spacing=14.0, v_spacing=6.0, position=120.0, upper_height=9.0, height=60.0):
     """A TRANSFORMED stack (shift + taper) with a self-supporting pointed opening array on one wall."""
     return {'layer_height': 1.5, 'max_overhang': 1.0, 'sections': [{'design_id': 'A', 'height': height}],
+            'opening_alignment': 'follow',        # (written for Follow Wall geometry; the default is Plumb since 2026-10-14)
             'transform': {'profile': 'linear', 'shift': [0.1, 0.05], 'scale_in': 0.0625},
             'profiles': [{'kind': 'opening', 'id': 'p1', 'wall': {'source': 'R', 'edge': 0}, 'position': position,
                           'z_bottom': 6.0, 'height': 24.0, 'width': 10.0, 'upper': 'pointed', 'lower': 'pointed',

@@ -328,11 +328,15 @@ Do not modify GRBL merely to avoid generating appropriate G-code in the higher-l
 
 ### Project files store authoring state, versioned, separate from machine output
 
-Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release (schema 2 since 2026-10-11: Wall Groups in the designs + the project's Wall Systems; schema 3 the same day: the default Maximum Overhang became 1 in — older projects without a value keep 1.5). Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
+Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release (schema 2 since 2026-10-11: Wall Groups in the designs + the project's Wall Systems; schema 3 the same day: the default Maximum Overhang became 1 in — older projects without a value keep 1.5; schema 4 on 2026-10-14: the default Opening Alignment became Vertical / Plumb — older projects get their effective alignment written explicitly). Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
 
 ### One authoritative print plan feeds simulation, G-code and machine execution
 
 The whole-print plan (ordered layers → continuous runs, travels and layer transitions in world coordinates, with source identities) is produced once by the Design + Toolpath subsystem from the exact geometry the designer sees. Print Simulation, G-code export and any machine-controller execution consume that plan (and its timeline) instead of re-deriving order, starts or timing. Time figures from it are estimates (constant speeds), not machine timing. Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "Print plan".
+
+### Active Design + Toolpath baseline (2026-10-14)
+
+**ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface (2026-10-14). Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE".
 
 ### Architectural editing is separate from print-path generation (2026-10-11)
 
@@ -575,6 +579,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-14
+
+Design + Toolpath ROLLED BACK to the stable four-workspace baseline (`dd70148` + cleanup; branch `restart/post-print-simulation`): Wall Geometry (junction / end-cap treatment) moved from the Designer to the Wall Systems workspace, the Designer's Extra Offsets control removed (older designs can still remove theirs), Assembly Opening Alignment default Vertical / Plumb (project file schema 4 keeps older projects' alignment). Later M3 / M4 / junction work archived, not current. Development focus moved to the Raspberry Pi interface.
 
 2026-10-11
 

@@ -42,6 +42,7 @@ const asm = {
            center_mode: 'footprint',   // scale centre: 'footprint' | 'multiple'
            centers: [],     // transform groups [{id, x, y, sources: [source id], label}]
            center_counter: 0,
+           opening_alignment: 'plumb',   // Vertical / Plumb: the default since 2026-10-14 (Follow Wall before)
            max_overhang: 1.0,  // in: how far a bead may hang past the one below (min overlap = bead − this; 1.5 until 2026-10-11)
            profiles: [],    // ASSEMBLY PROFILES (Z-dependent source geometry of straight walls)
            profile_counter: 0 },
@@ -2661,13 +2662,15 @@ function _asmConfigName(p) {
 }
 
 // OPENING ALIGNMENT — ONE global Assembly setting (asm.state.opening_alignment:
-// absent = Follow Wall, 'plumb' = Vertical / Plumb) for every opening:
-// Designer openings, Assembly openings, arrays, header openings (profiles.py)
+// 'plumb' = Vertical / Plumb — the DEFAULT since 2026-10-14, also when absent —
+// | 'follow' = Follow Wall, stored explicitly; older project files are made
+// explicit by the schema-4 migration) for every opening: Designer openings,
+// Assembly openings, arrays, header openings (profiles.py)
 const ASM_ALIGN = [['follow', 'Follow Wall'], ['plumb', 'Vertical / Plumb']];
-const _asmPlumbOn = () => asm.state.opening_alignment === 'plumb';
+const _asmPlumbOn = () => asm.state.opening_alignment !== 'follow';
 function asmSetOpeningAlignment(v) {
   return asmEdit(null, () => {
-    if (v === 'plumb') asm.state.opening_alignment = 'plumb'; else delete asm.state.opening_alignment;
+    asm.state.opening_alignment = v === 'follow' ? 'follow' : 'plumb';
     return asmResolve();
   });
 }
@@ -3395,11 +3398,13 @@ window.AssemblyProject = {
     // Assembly opening explicitly followed the wall; else Follow Wall)
     {
       const v = asm.state.opening_alignment;
-      if (v == null || typeof v === 'object') {
+      const legacy = (asm.state.profiles || []).some(p => 'alignment' in p);
+      if (v == null && !legacy) asm.state.opening_alignment = 'plumb';      // (the default since 2026-10-14)
+      else if (v == null || typeof v === 'object') {
         const ops = (asm.state.profiles || []).filter(p => (p.kind || 'opening') === 'opening' && !p.source_opening);
         const anyPlumb = Object.values(v || {}).includes('plumb') || ops.some(p => p.alignment === 'plumb');
         const allPlumb = ops.every(p => p.alignment === 'plumb');
-        if (anyPlumb && allPlumb) asm.state.opening_alignment = 'plumb'; else delete asm.state.opening_alignment;
+        asm.state.opening_alignment = anyPlumb && allPlumb ? 'plumb' : 'follow';
       }
       for (const p of asm.state.profiles || []) delete p.alignment;
     }

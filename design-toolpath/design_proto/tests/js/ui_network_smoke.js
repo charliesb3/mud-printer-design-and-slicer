@@ -100,35 +100,30 @@ eval(src + `
   updatePathList();
   const nets = _networkOf();
   check(nets[R.id].label === 'N1' && nets[P.id].label === 'N1', 'network badge N1 for both');
-  // --- junctions: click a diamond → junction panel → treatment override
+  // --- junctions: the Designer only SHOWS the diamonds (connectivity); their
+  // treatment is Wall Geometry, edited from the Wall Systems workspace through
+  // window.Designer (2026-10-14) — the same overrides as before
   selectedId = null; selectedOpeningId = null;
   onMouseDown(ev(198.5, 140.5)); onMouseUp();
-  check(selectedJunction && selectedJunction.key === 'p1|p2#0', 'clicking a diamond selects the junction');
-  const pathPanelEl = document.getElementById('path-props');
-  const junctionPanelEl = document.getElementById('junction-props');
-  const rebuild = () => { pathPanelEl.children.length = 0; junctionPanelEl.children.length = 0; updatePropPanel(); };  // stub: innerHTML='' doesn't clear
-  // a selected junction shows its own section of the DESIGN sidebar (next to Wall
-  // Geometry), separate from the path Properties
-  let panelEl = junctionPanelEl;
-  rebuild();
-  const findRow = label => panelEl.children.find(r => r.children && r.children[0] &&
-                                                 r.children[0].textContent === label);
-  check(document.getElementById('junction-props-section').style.display === '' &&
-        document.getElementById('path-props-section').style.display === 'none' &&
-        pathPanelEl.children.length === 0, 'junction panel renders in its own section, not in the path Properties');
-  const tRow = findRow('Treatment');
-  check(!!tRow, 'junction panel has a Treatment row');
-  tRow.children[1].value = 'Rounded'; tRow.children[1].onchange();
+  check(!selectedJunction, 'clicking a diamond no longer selects the junction in the Designer');
+  const D = window.Designer;
+  const J = D.wallJunctions();
+  check(J.length === 1 && J[0].key === 'p1|p2#0', 'the Wall Systems list offers the corner junction only (internal: no treatment)');
+  D.setJunctionTreatment('p1|p2#0', 'round', 2);
   const ov = layer.junction_overrides.find(o => o.key === 'p1|p2#0');
   check(ov && ov.treatment === 'round' && ov.radius === 2, 'Rounded override stored for that junction only');
   check(buildPayload().junction_overrides.length === 1, 'payload carries junction overrides');
-  rebuild();
-  const rRow = findRow('Radius');
-  check(!!rRow, 'radius row shown for a rounded junction');
-  rRow.children[1].value = '0.75'; rRow.children[1].onchange();
-  check(ov.radius === 0.75, 'junction radius edited independently');
-  selectJunction(networkInfo.junctions[1]); rebuild();
-  check(!findRow('Treatment'), 'internal (non-corner) junction offers no corner treatment');
+  D.setJunctionTreatment('p1|p2#0', 'round', 0.75);
+  check(layer.junction_overrides.find(o => o.key === 'p1|p2#0').radius === 0.75, 'junction radius edited independently');
+  D.setJunctionTreatment('p1|p2#0', null);
+  check(!layer.junction_overrides.length, 'back to the default');
+  D.setJunctionTreatment('p1|p2#0', 'round', 0.75);
+  const pathPanelEl = document.getElementById('path-props');
+  const junctionPanelEl = document.getElementById('junction-props');
+  const rebuild = () => { pathPanelEl.children.length = 0; junctionPanelEl.children.length = 0; updatePropPanel(); };  // stub: innerHTML='' doesn't clear
+  let panelEl = pathPanelEl;
+  const findRow = label => panelEl.children.find(r => r.children && r.children[0] &&
+                                                 r.children[0].textContent === label);
   // --- per-path Corner R (rect) is the path's own, not the layer's
   selectedJunction = null; selectedId = R.id; panelEl = pathPanelEl; rebuild();
   check(document.getElementById('junction-props-section').style.display === 'none' &&

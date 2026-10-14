@@ -326,8 +326,8 @@ eval(src + `
   check(P.wall_systems.length === 3 && P.wall_systems.some(s => s.name === 'Waves' && s.groups.includes(G2.id)),
         'the project state carries the Wall Systems');
   const saved = await _post('/api/project/save', { project: P });
-  check(saved.file.schema_version === 3 && JSON.stringify(saved.file.project.wall_systems) === JSON.stringify(P.wall_systems),
-        'saved (schema 3) with the Wall Systems');
+  check(saved.file.schema_version === 4 && JSON.stringify(saved.file.project.wall_systems) === JSON.stringify(P.wall_systems),
+        'saved (schema 4) with the Wall Systems');
   global.confirm = () => true;
   await openProjectText(JSON.stringify(saved.file), 'ws.muddesign');
   check(JSON.stringify(project.wall_systems) === JSON.stringify(P.wall_systems) && layer.wall_groups.length === 2 &&

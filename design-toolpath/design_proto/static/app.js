@@ -1930,11 +1930,14 @@ function _afterNetworkUpdate() {
   // into that undo step, never a step of their own (which would make Undo re-sync
   // against the response and clear Redo)
   if (!_isTyping()) { updateNetworkSection(); updateWallSystemSection(); }
+  // (the Wall Systems workspace's Wall Geometry lists this design's junctions)
+  if (typeof _wsysRenderGeometry === 'function' && typeof currentWorkspace !== 'undefined' &&
+      currentWorkspace === 'wallsystems' && !_isTyping()) _wsysRenderGeometry();
   // Wall Geometry: say when rounded junctions are limited by the geometry
   const lim = ((networkInfo && networkInfo.junctions) || []).filter(j => j.limited && !j.derived);
   const wn = document.getElementById('wg-junction-note');
   if (wn) wn.textContent = lim.length
-    ? `${lim.length} junction${lim.length > 1 ? 's' : ''} limited by the geometry — select its ◆ for the actual radius.` : '';
+    ? `${lim.length} junction${lim.length > 1 ? 's' : ''} limited by the geometry — see its actual radius in the list.` : '';
   if (selectedJunction || (selectedId && _trimsOf(selectedId).length && !_isTyping())) updatePropPanel();
   if (tool === 'trim' && _mousePosW) _updateTrimHover(_mousePosW[0], _mousePosW[1]);
 }
@@ -2018,11 +2021,11 @@ function updateHint() {
     return;
   }
   if (selectedJunction) {
-    hint.textContent = 'Junction selected: set its corner treatment in the Design sidebar (independent of Corner R).';
+    hint.textContent = 'Junction treatments (Miter / Rounded) are set in the Wall Systems workspace.';
     return;
   }
   if (!selectedId) {
-    hint.textContent = 'Click a path to select and edit it, or a ◆ junction to treat its corner. Add primitives from the toolbar or use Draw Path.';
+    hint.textContent = 'Click a path to select and edit it. Add primitives from the toolbar or use Draw Path. (◆ = a junction: its treatment is set in Wall Systems.)';
     return;
   }
   const path = layer.source_paths.find(p => p.id === selectedId);
@@ -2168,13 +2171,10 @@ function onMouseDown(e) {
       }
     }
 
-    // 1a. A network junction diamond
-    const jn = hitTestJunction(wx, wy);
-    if (jn && !selectedId) { selectJunction(jn); return; }
-    if (jn && selectedId) {
-      const path = layer.source_paths.find(p => p.id === selectedId);
-      if (!(path && findHandle(path, wx, wy))) { selectJunction(jn); return; }
-    }
+    // 1a. (Network junction diamonds are shown as CONNECTIVITY only: their
+    // treatment — Miter / Rounded, radius — is WALL GEOMETRY, set in the
+    // Wall Systems workspace since 2026-10-14; the Designer no longer
+    // selects them)
 
     // 1b. An opening gap (slide it) — before the wall body under it
     const oid = hitTestOpening(wx, wy);
@@ -3955,6 +3955,9 @@ function addPropRowCheck(panel, label, value, onChange) {
 function updateOffsetList() {
   const el = document.getElementById('offset-list');
   el.innerHTML = '';
+  // (legacy: shown only while the design still carries extra offsets)
+  const sec = document.getElementById('offset-section');
+  if (sec) sec.style.display = layer.offset_treatments.length ? '' : 'none';
   for (const ot of layer.offset_treatments) {
     const block = document.createElement('div');
     block.className = 'treatment-block';
@@ -6153,6 +6156,51 @@ function setArchThickness(snap) {
   routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint();
 }
 
+// WALL GEOMETRY (junctions, end caps) — owned by the WALL SYSTEMS workspace
+// since 2026-10-14 (UI boundary cleanup on the dd70148 baseline): the same
+// fields of the design being edited (`layer`), edited from there; the
+// algorithms are unchanged.
+function wallGeometry() {
+  return { design: project.active, junction_style: layer.junction_style || 'miter',
+           junction_radius: layer.junction_radius != null ? layer.junction_radius : 2,
+           cap_style: layer.cap_style === 'round' ? 'full_round' : (layer.cap_style || 'flat'),
+           cap_corner_radius: layer.cap_corner_radius || 0,
+           junction_overrides: JSON.parse(JSON.stringify(layer.junction_overrides || [])) };
+}
+function setWallGeometry(g) {
+  const cur = wallGeometry();
+  const next = { ...cur, ...g };
+  if (JSON.stringify(next) === JSON.stringify(cur)) return false;
+  layer.junction_style = next.junction_style;
+  layer.junction_radius = Math.max(0, +next.junction_radius || 0);
+  layer.cap_style = next.cap_style;
+  layer.cap_corner_radius = Math.max(0, +next.cap_corner_radius || 0);
+  layer.junction_overrides = next.junction_overrides || [];
+  for (const p of layer.source_paths) _computePrimitivePoints(p);     // (as the former sidebar did)
+  routeResult = null;
+  scheduleRefresh();                         // the Designer geometry (and its own undo step)
+  repaint();
+  return true;
+}
+// the treatable junctions of the design being edited (wall-face corners
+// created by the network; a turn's inner face follows its outer corner)
+function wallJunctions() {
+  const out = [];
+  for (const jn of (networkInfo && networkInfo.junctions) || []) {
+    if (!jn.corner || jn.derived || !jn.key) continue;
+    const ov = (layer.junction_overrides || []).find(o => o.key === jn.key) || null;
+    out.push({ key: jn.key, x: jn.x, y: jn.y, label: jn.key.split('#')[0].split('|').map(_faceName).join(' meets '),
+               treatment: ov ? ov.treatment : null, radius: ov ? ov.radius : null,
+               limited: !!jn.limited, actual_radius: jn.actual_radius });
+  }
+  return out;
+}
+function setJunctionTreatment(key, treatment, radius) {
+  const ovs = (layer.junction_overrides || []).filter(o => o.key !== key);
+  if (treatment) ovs.push({ key, treatment, radius: Math.max(0, radius != null ? +radius : (layer.junction_radius || 2)) });
+  return setWallGeometry({ junction_overrides: ovs });
+}
+
 async function _post(url, body) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                  body: JSON.stringify(body) });
@@ -6492,6 +6540,7 @@ window.Designer = {
   wallSystems: () => project.wall_systems || (project.wall_systems = []),   // the project's constructions
   setWallSystems: list => { project.wall_systems = list; },
   wallCatalog, setWallThickness, archThickness, setArchThickness,
+  wallGeometry, setWallGeometry, wallJunctions, setJunctionTreatment,
   onWorkspaceShow: (name, fn) => { _workspaceHooks[name] = fn; },
   onWorkspaceHide: (name, fn) => { _workspaceHideHooks[name] = fn; },
 };

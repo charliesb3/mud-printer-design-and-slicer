@@ -99,12 +99,16 @@ async function wsysNoteState(light = false) {
 // ---- editing (no geometry is generated) ------------------------------------------------
 // (a snapshot = the Wall Systems + the architectural thicknesses this workspace may edit upstream)
 function _wsysSnap() {
-  return JSON.stringify({ ws: _wsysList(), arch: window.Designer.archThickness ? window.Designer.archThickness() : null });
+  return JSON.stringify({ ws: _wsysList(), arch: window.Designer.archThickness ? window.Designer.archThickness() : null,
+                          geom: window.Designer.wallGeometry ? window.Designer.wallGeometry() : null });
 }
 function _wsysRestore(snap) {
   const s = JSON.parse(snap), now = JSON.parse(_wsysSnap());
   window.Designer.setWallSystems(s.ws);
   if (s.arch && JSON.stringify(s.arch) !== JSON.stringify(now.arch)) window.Designer.setArchThickness(s.arch);
+  // (wall geometry: restored only on the design it was recorded for)
+  if (s.geom && now.geom && s.geom.design === now.geom.design && JSON.stringify(s.geom) !== JSON.stringify(now.geom))
+    window.Designer.setWallGeometry(s.geom);
 }
 function _wsysEdit(fn, rebuild = true) {
   const before = _wsysSnap();
@@ -527,6 +531,7 @@ function _wsysClear(el) { if (!el) return; el.innerHTML = ''; if (Array.isArray(
 function wsysRender() {
   _wsysRenderStatus();
   _wsysRenderList();
+  _wsysRenderGeometry();
   _wsysRenderLayer();
   _wsysRenderFindings();
   wsysDraw();
@@ -644,6 +649,61 @@ function _wsysRenderStatus() {
   const u = el('wsys-undo'), r = el('wsys-redo');
   if (u) u.disabled = !wsys.hist.undo.length;
   if (r) r.disabled = !wsys.hist.redo.length;
+}
+
+// WALL GEOMETRY (2026-10-14: moved here from the Designer): the junction
+// and end-cap treatment of the design being edited — defaults, then each
+// wall-face junction (Default / Miter / Rounded). The same document fields
+// and algorithms as before; edits are part of this workspace's undo.
+function _wsysRenderGeometry() {
+  const box = document.getElementById('wsys-geom'), title = document.getElementById('wsys-geom-title');
+  if (!box || !window.Designer.wallGeometry) return;
+  _wsysClear(box);
+  const G = window.Designer.wallGeometry();
+  const D = (window.Designer.listDesigns() || []).find(d => d.id === G.design);
+  if (title) title.textContent = `Wall Geometry · ${D ? D.name : G.design}`;
+  const set = patch => _wsysEdit(() => window.Designer.setWallGeometry(patch));
+  const row = (label, input, unit) => {
+    const r = _el('div', 'prop-row');
+    r.appendChild(_el('span', 'prop-label', label));
+    r.appendChild(input);
+    if (unit) r.appendChild(_el('span', 'prop-unit', unit));
+    box.appendChild(r);
+  };
+  const select = (id, value, options, onChange) => {
+    const s = _el('select', 'prop-input');
+    s.id = id;
+    for (const [v, t] of options) { const o = _el('option', null, t); o.value = v; s.appendChild(o); }
+    s.value = value;
+    s.onchange = () => onChange(s.value);
+    return s;
+  };
+  const num = (id, value, step, onChange) => {
+    const n = _el('input', 'prop-input');
+    Object.assign(n, { id, type: 'number', min: 0, step, value });
+    n.onchange = () => onChange(Math.max(0, parseFloat(n.value) || 0));
+    return n;
+  };
+  row('Junctions', select('wsys-junction-style', G.junction_style, [['miter', 'Miter'], ['round', 'Rounded']],
+                          v => set({ junction_style: v })));
+  if (G.junction_style === 'round') row('Junction R', num('wsys-junction-radius', G.junction_radius, 0.5, v => set({ junction_radius: v })), 'in');
+  row('End caps', select('wsys-cap-style', G.cap_style, [['flat', 'Flat'], ['rounded_corners', 'Rounded Corners'],
+                                                         ['full_round', 'Full Round']], v => set({ cap_style: v })));
+  if (G.cap_style === 'rounded_corners') row('End R', num('wsys-cap-radius', G.cap_corner_radius, 1, v => set({ cap_corner_radius: v })), 'in');
+  const J = window.Designer.wallJunctions ? window.Designer.wallJunctions() : [];
+  if (!J.length) { box.appendChild(_el('div', 'asm-calc', 'No wall-face junctions in this design.')); return; }
+  box.appendChild(_el('div', 'asm-calc', `Junctions (${J.length}) — each follows the default unless set:`));
+  const dflt = `Default (${G.junction_style === 'round' ? 'Rounded ' + G.junction_radius + ' in' : 'Miter'})`;
+  J.forEach((j, k) => {
+    const cur = j.treatment || 'default';
+    row(`◆ ${j.label}`, select(`wsys-junction-${k}`, cur, [['default', dflt], ['miter', 'Miter'], ['round', 'Rounded']],
+        v => _wsysEdit(() => window.Designer.setJunctionTreatment(j.key, v === 'default' ? null : v, j.radius))));
+    if (j.treatment === 'round')
+      row('  Radius', num(`wsys-junction-r-${k}`, j.radius, 0.5,
+          v => _wsysEdit(() => window.Designer.setJunctionTreatment(j.key, 'round', v))), 'in');
+    if (j.limited && j.actual_radius != null)
+      box.appendChild(_el('div', 'asm-diff', `  actual radius ${(+j.actual_radius).toFixed(1)} in (geometry limit)`));
+  });
 }
 
 function _wsysRenderList() {

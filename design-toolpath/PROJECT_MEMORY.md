@@ -1401,6 +1401,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 
 ## Last Updated
 
+2026-10-14 — ACTIVE BASELINE = `dd70148` + cleanup (branch `restart/post-print-simulation`; later M3 / M4 / junction work archived, not current). Designer UI: the Wall Geometry panel (junction / end-cap treatment) and junction selection moved to the Wall Systems workspace (`window.Designer.wallGeometry / setWallGeometry / wallJunctions / setJunctionTreatment`); the Extra Offsets control removed (an "older project" list appears only when a design has offsets). Design + Toolpath paused; focus → Raspberry Pi interface. Details: `layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE + CLEANUP PASS".
+
 2026-10-11 — `DesignerSource.walls / openings` read the ARCHITECTURE composition for Wall Group designs (no construction minimum); `profile_cuts.straight_walls` unchanged (its `min_length` is still used for the Wall Systems construction check). Checkpoint commit of the M0–M2 deferred-toolpath work.
 
 2026-10-11 — Designer default display = the WALL ENVELOPE again (each wall at its architectural thickness, its source line dashed; a wall without thickness = its single centreline), supersedes the earlier same-day "shapes by default". `_geometry_of` diagnostics carry the Wall System reports (`wall_systems`: closable / status) for the Wall Systems workspace's continuity inspection. Assembly-side record: `layer_assembly/PROJECT_MEMORY.md` → "M2 PRINTABILITY INSPECTION".

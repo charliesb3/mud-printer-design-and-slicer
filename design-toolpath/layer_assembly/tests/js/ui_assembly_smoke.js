@@ -138,6 +138,7 @@ eval(src + `
 
   // ---- reuse the same design; preview data ----
   asm.state.sections = [{ design_id: 'base', height: 36 }, { design_id: d1, height: 24 }, { design_id: 'base', height: 12 }];
+  asm.state.opening_alignment = 'follow';   // (caching of the designs in use: no plumb opening variants)
   const g0 = geoCalls();
   await asmResolve();
   check(geoCalls() === g0 + 1 && Object.keys(asm.geometry).sort().join() === ['base', d1].sort().join(),
@@ -576,7 +577,7 @@ eval(src + `
   _downloadText = (name, text) => { saved = { name, text }; };
   await saveProject();
   const F = JSON.parse(saved.text);
-  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 3 &&
+  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 4 &&
         saved.text.indexOf('"schema_version"') < saved.text.indexOf('"project"'),
         'Save Project downloads Smoke house.muddesign: format id + schema version first, human-readable JSON');
   const FD = F.project.designer;

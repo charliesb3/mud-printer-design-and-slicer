@@ -931,8 +931,12 @@ async function run() {
     await asmProfileSet(S.id, 'upper', 'pointed'); await asmProfileSet(S.id, 'z_bottom', 12);
     S = _asmProfile(S.id);
     const worldAt = L => { const T = asm.resolved.instances[L.layer].transform; return Math.round((T.scale * L.at + T.tx) * 1e3) / 1e3; };
-    check(!asm.state.opening_alignment && rep(S.id).valid && new Set(rep(S.id).layers.map(worldAt)).size > 5,
-          'Follow Wall by default: under a sideways shift the self-supporting opening leans (moves in world)');
+    check(asm.state.opening_alignment === 'plumb', 'Vertical / Plumb by default (since 2026-10-14)');
+    asm.state.opening_alignment = 'follow';
+    await asmResolve();
+    S = _asmProfile(S.id);
+    check(rep(S.id).valid && new Set(rep(S.id).layers.map(worldAt)).size > 5,
+          'Follow Wall (chosen): under a sideways shift the self-supporting opening leans (moves in world)');
     asmProfileEdit(S.id);
     _asmRenderProfiles(); asmRender();
     const fl7 = n => [n, ...(n.children || []).flatMap(fl7)];
@@ -952,7 +956,7 @@ async function run() {
     check(al && al.valid && al.members.length === 1 && moves > 10,
           `…and the Designer window too (re-placed on ${moves} layers) — one setting for every opening`);
     await asmUndo();
-    check(!asm.state.opening_alignment && new Set(rep(S.id).layers.map(worldAt)).size > 5 &&
+    check(asm.state.opening_alignment === 'follow' && new Set(rep(S.id).layers.map(worldAt)).size > 5 &&
           !asm.resolved.instances.some(i => /"move"/.test(i.geometry_key || '')), 'undo → Follow Wall for all');
     await asmRedo();
     check(asm.state.opening_alignment === 'plumb' && new Set(rep(S.id).layers.map(worldAt)).size === 1, 'redo → plumb');
@@ -973,7 +977,7 @@ async function run() {
     legacy.state.profiles.forEach(p => { delete p.alignment; });
     window.AssemblyProject.importState(legacy);
     await asmResolve();
-    check(!asm.state.opening_alignment, 'mixed (a following Assembly opening) → Follow Wall');
+    check(asm.state.opening_alignment === 'follow', 'mixed (a following Assembly opening) → Follow Wall (stored explicitly)');
   }
 
 }

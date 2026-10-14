@@ -56,10 +56,13 @@ def _world(res, L):
     return T.scale * L['at'] + T.tx, L['width'] * T.scale
 
 
-# ---- Follow Wall stays the default and unchanged -------------------------------------------
+# ---- Vertical / Plumb is the default (2026-10-14); Follow Wall unchanged ---------------------
 
 def test_follow_wall_is_the_default_and_unchanged():
-    assert Assembly(LH, []).opening_alignment == 'follow' and 'opening_alignment' not in Assembly(LH, []).to_dict()
+    # (the default became Vertical / Plumb on 2026-10-14 — always stored now;
+    # Follow Wall, chosen explicitly, behaves exactly as before)
+    assert Assembly(LH, []).opening_alignment == 'plumb' and Assembly(LH, []).to_dict()['opening_alignment'] == 'plumb'
+    assert Assembly(LH, [], opening_alignment='follow').to_dict()['opening_alignment'] == 'follow'
     res, rep = _run(_door(), al='follow')
     res0, rep0 = apply_profiles(resolve(Assembly(LH, [Section('A', 150, '', SectionTransform('linear', (0.3, 0.0), 0.0))]),
                                         ['A'], FP), [_door()], {'A': {'L': WALL}}, BEAD, H)
@@ -211,7 +214,14 @@ def test_save_open_and_migration_of_the_per_opening_form():
     base = {'layer_height': 1.5, 'max_overhang': 1.5, 'sections': [{'design_id': 'A', 'height': 12}]}
     pd = _door().to_dict()
     mig = lambda **kw: Assembly.from_dict(dict(base, **kw)).opening_alignment
-    assert mig() == 'follow', 'older projects: Follow Wall'
+    assert mig() == 'plumb', 'absent: Vertical / Plumb — the default since 2026-10-14'
+    # older PROJECT FILES keep their effective alignment (schema-4 migration, project_file._v3_to_v4)
+    import project_file as PF
+    v4 = lambda st: PF._v3_to_v4({'project': {'assembly': {'state': st}}})['project']['assembly']['state']['opening_alignment']
+    assert v4(dict(base)) == 'follow', 'older projects: Follow Wall'
+    assert v4(dict(base, opening_alignment={'door': 'plumb'})) == 'plumb'
+    assert v4(dict(base, opening_alignment={'door': 'plumb'}, profiles=[pd])) == 'follow'
+    assert v4(dict(base, opening_alignment='plumb')) == 'plumb' and v4(dict(base, opening_alignment='follow')) == 'follow'
     assert mig(opening_alignment={'door': 'plumb'}) == 'plumb', 'Designer openings plumb, no Assembly opening'
     assert mig(profiles=[dict(pd, alignment='plumb')]) == 'plumb'
     assert mig(opening_alignment={'door': 'plumb'}, profiles=[dict(pd, alignment='plumb')]) == 'plumb'
@@ -357,8 +367,8 @@ def test_print_plan_and_web_reflect_plumb_geometry():
     app.register_blueprint(bp)
     c = app.test_client()
     tf = {'profile': 'linear', 'shift': [0.25, 0], 'scale_in': 0}
-    asm = {'layer_height': 1.5, 'max_overhang': 1.5, 'sections': [{'design_id': 'A', 'height': 36, 'transform': tf},
-                                             {'design_id': 'B', 'height': 24, 'transform': tf}]}
+    asm = {'layer_height': 1.5, 'max_overhang': 1.5, 'opening_alignment': 'follow',
+           'sections': [{'design_id': 'A', 'height': 36, 'transform': tf}, {'design_id': 'B', 'height': 24, 'transform': tf}]}
     body = {'assembly': asm, 'designs': demo_designs()}
     out = c.post('/api/assembly/resolve', json=body).get_json()
     assert any(o['id'] == 'door' for o in out['designer_openings']) and out['alignments'] == []

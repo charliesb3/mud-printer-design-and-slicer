@@ -92,7 +92,6 @@ class TestWorkspaceLayout:
         assert len(p.ids) == len(set(p.ids)), 'duplicate element ids'
         design = ['path-list', 'path-props-section', 'path-props', 'offset-section', 'offset-list',
                   'junction-props-section', 'junction-props',
-                  'wg-junction-style', 'wg-junction-radius', 'wg-cap-style', 'wg-cap-corner-radius',
                   'network-section', 'network-props']
         prnt = ['override-reverse', 'route-returns', 'route-closed', 'metrics-section', 'm-runs']
         # the old Infill authoring UI is gone: a wall's web lives in its Wall System
@@ -102,6 +101,13 @@ class TestWorkspaceLayout:
                  'btn-toolpath', 'btn-arrows', 'btn-dims']
         for i in design:
             assert p.where.get(i) == 'sidebar-design', f'{i} should be in the Design sidebar'
+        # WALL GEOMETRY (junction / end-cap treatment) belongs to the Wall Systems
+        # workspace since 2026-10-14 — not the Designer; no Extra Offsets control
+        for i in ('wg-junction-style', 'wg-junction-radius', 'wg-cap-style', 'wg-cap-corner-radius'):
+            assert i not in p.ids, f'{i} is no longer a Designer control'
+        assert 'wsys-geom' in p.ids and 'wsys-geom-title' in p.ids
+        html = open(os.path.join(os.path.dirname(__file__), '..', 'static', 'index.html')).read()
+        assert 'addOffset()' not in html and 'Add Extra Offset' not in html
         # WALL SYSTEM: its own sidebar next to Design (construction, not geometry)
         # (2026-10-11: the Designer's WALL GROUPS sidebar; constructions: the Wall Systems workspace)
         for i in ('wallgrp-section', 'wallgrp-list', 'wallgrp-edit-section', 'wallgrp-props'):

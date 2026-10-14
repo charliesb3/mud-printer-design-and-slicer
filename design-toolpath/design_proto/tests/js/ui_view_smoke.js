@@ -174,7 +174,7 @@ eval(src + `
   networkInfo = { junctions: [{ x: R.x + 120, y: R.y + 60, key: 'k#0', corner: true, treatment: 'miter', radius: 2 }],
                   trim_sections: [], trims: {}, modified_sources: [] };
   selectedId = null; onMouseDown(ev(R.x + 120.5, R.y + 60.5)); onMouseUp({});
-  check(selectedJunction && selectedJunction.key === 'k#0', 'junction selection under zoom');
+  check(!selectedJunction, 'a junction ◆ is not selected in the Designer (its treatment is set in Wall Systems)');
   selectedJunction = null;
   // Route Origin drag
   const mv = (a, b) => ({ kind: 'print', strand_id: 'q', start: a, end: b });

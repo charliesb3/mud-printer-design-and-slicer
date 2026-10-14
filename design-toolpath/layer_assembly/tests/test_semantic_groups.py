@@ -27,6 +27,7 @@ def designs():
 
 def assembly(sections, max_overhang=1.5):
     return {'layer_height': 1.5, 'sections': sections, 'max_overhang': max_overhang,
+            'opening_alignment': 'follow',        # (transform-group tests: Follow Wall, the former default)
             'transform': {'profile': 'linear', 'shift': [0, 0], 'scale_in': 0.5},      # assembly-wide scale
             'center_mode': 'multiple', 'center_counter': 2,
             'centers': [{'id': 'c1', 'x': 480, 'y': 180, 'sources': ['C']},

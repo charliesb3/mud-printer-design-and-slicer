@@ -327,3 +327,12 @@ The Assembly validates openings and places layers from the architecture only (en
 pier / overhang rules); construction minimums are checked after generation in the Wall Systems
 inspection. This closes the last backwards dependency of the Assembly on Wall Systems found in manual
 testing. M3 not started.
+
+## Status 2026-10-14: rollback — M3+ not the current plan
+
+Development was rolled back to `dd70148` (M0–M2 + Wall Systems workspace) as the stable baseline
+(branch `restart/post-print-simulation`). The M3 / M4 / J-series work that followed is archived on
+`main` / `origin/main` and `archive/home-m4-local-repair-wip-2026-10-14`, kept for reference only.
+The staged milestones M3–M5 above are historical context, not the plan of record; junction, end-cap,
+motif and corner work is explicitly deferred. Design + Toolpath is paused; focus is the Raspberry Pi
+interface.

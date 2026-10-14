@@ -51,6 +51,15 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 
 ## Current decisions
 
+### ACTIVE BASELINE + CLEANUP PASS (2026-10-14; committed on `restart/post-print-simulation`)
+**ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface (2026-10-14).
+- **Cleanup on the baseline (UI / ownership only — no geometry algorithm changed):**
+  - **Wall Geometry belongs to Wall Systems.** The Designer's "Wall Geometry" panel (Junctions Miter / Rounded + Junction R, End caps Flat / Rounded Corners / Full Round + End R) and its per-junction "Selected Junction" treatment moved to the Wall Systems workspace (left column, "Wall Geometry · <design being edited>": the defaults + a list of the design's wall-face junctions with Default / Miter / Rounded + radius, the geometry-limit note). Same document fields (`junction_style`, `junction_radius`, `cap_style`, `cap_corner_radius`, `junction_overrides`) via `window.Designer.wallGeometry / setWallGeometry / wallJunctions / setJunctionTreatment`; edits are part of the workspace's undo (snapshot `geom`, restored only on the same design). The Designer still DRAWS junction ◆ markers (connectivity) but no longer selects them; the Wall Network panel (connectivity) stays in the Designer.
+  - **Extra Offsets removed from the Designer UI** ("Advanced: Extra Offsets", + Add): no exposed feature needs them (legacy `lattice_instances` have no UI). Kept for compatibility: the backend `offset_treatments`, rendering, and an "Extra Offsets (older project)" list shown ONLY when a design still carries some (edit / remove, no add); `addOffset` remains unused.
+  - **Opening Alignment default = Vertical / Plumb** (was Follow Wall). Now always stored explicitly (`Assembly.to_dict`, the page); absent = plumb; the legacy per-opening form keeps its rule. Project file **schema 4** (`project_file._v3_to_v4`): older projects get their EFFECTIVE alignment written explicitly (absent → follow unless every opening was plumb), so they open exactly as before.
+- **Explicitly deferred** (do not attempt without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour.
+- **Verified 2026-10-14:** layer_assembly 662, design_proto 1724, toolpath_proto 92, pi-interface 78 — all green; tests that relied on the former Follow Wall default now state `opening_alignment: 'follow'`, Designer UI tests assert the new Wall Geometry boundary, schema checks expect 4. Manual smoke (headless Chrome): Designer (no Wall Geometry / Extra Offsets, junction ◆ not selectable) → Assembly (Plumb default) → Wall Systems (Wall Geometry edits + undo, Generate → CURRENT) → Print Simulation (planned). Observed, not changed: under Plumb with zero transforms, Designer openings still produce identical-geometry `move` variants (extra builds only).
+
 ### Stack resolution
 - Sections are given by desired PHYSICAL height; layer counts are derived by rounding section BOUNDARIES (cumulative height / layer height, half up): every transition within ½ layer of its Z, no accumulation; a section rounding to 0 layers is warned. Changing the layer height re-resolves the same intent.
 - Instances only REFERENCE a design (Base used for 40 layers exists once).
@@ -324,7 +333,8 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 ## Next steps
 
 -2. Manual review of the Wall Groups / Wall Systems workspace (2026-10-11); (placement pivot decided 2026-10-11: architectural envelope).
--1. Manual review of DEFERRED PRINT PATHS (2026-10-11): envelope preview, preliminary vs bead-level support, Generate Print Paths / outdated / background preparation. Then M2 (link bead-level findings back to Assembly locations) and M3 (stack-aware lattice per wall run, replacing station ops) — `DEFERRED_TOOLPATH_ARCHITECTURE.md`.
+-3. **Design + Toolpath is PAUSED (2026-10-14) on the stable baseline (see "ACTIVE BASELINE"); development focus is the Raspberry Pi interface.** The items below are historical context, not a plan of record; M3+ / junction / end-cap / motif work (archived on `main` and the archive branch) is NOT the current direction.
+-1. ~~Manual review of DEFERRED PRINT PATHS~~ (reviewed; M0–M2 are part of the baseline). M3+ of `DEFERRED_TOOLPATH_ARCHITECTURE.md`: not the current direction (archived attempt, see "ACTIVE BASELINE").
 
 0. Manual review of the Assembly Profiles correction pass (2026-10-08); then period / phase carry-over for the generated wave / chain constructions at cuts (the remaining non-local case); the local join technique may also help item 1.
 1. Transformed-junction lattice coherence (Designer side; see the Designer memory).
@@ -346,6 +356,8 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 - Benchmark history (cold / warm, 8 workers): 49 layers 8.2 / 1.1 s, 99 → 12.7 / 2.2 s, 299 → 38.3 / 6.3 s before stabilization pass 2; current numbers in the Designer memory → "Performance".
 
 ## Last Updated
+
+2026-10-14 — ROLLBACK to `dd70148` as the active baseline + cleanup pass (Wall Geometry UI → Wall Systems, Extra Offsets UI removed, Opening Alignment default Plumb + schema 4); later M3 / M4 / J-series work archived. Design + Toolpath paused; focus → Raspberry Pi interface. See "ACTIVE BASELINE + CLEANUP PASS".
 
 2026-10-11 — ASSEMBLY OPENINGS ARE ARCHITECTURAL: Assembly opening validation, placement and groups read the architecture only (construction minimum moved to the Wall Systems inspection); per-opening errors for arrays. Checkpoint commit of M0–M2 + Wall Systems workspace + performance pass.
 

@@ -200,12 +200,12 @@ def test_project_file_v1_opens_as_schema_2_and_round_trips(client):
         'assembly': {'state': B.assembly(12), 'header_counter': 0}}}
     res = PF.load(json.dumps(v1), _deserialise_layer)
     P = res['project']
-    assert res['migrated_from'] == 1 and res['schema_version'] == 3 and P['wall_systems']
+    assert res['migrated_from'] == 1 and res['schema_version'] == 4 and P['wall_systems']
     assert all('wall_systems' not in (d.get('document') or {}) and 'wall_systems' not in (d.get('patch') or {})
                for d in P['designer']['designs'])
     assert 'wall_groups' in res['active_document']
     code, saved = post(client, '/api/project/save', {'project': P})
-    assert code == 200 and saved['file']['schema_version'] == 3 and saved['file']['project']['wall_systems'] == P['wall_systems']
+    assert code == 200 and saved['file']['schema_version'] == 4 and saved['file']['project']['wall_systems'] == P['wall_systems']
     again = client.post('/api/project/open', data=json.dumps(saved['file']).encode()).get_json()
     assert again['project']['wall_systems'] == P['wall_systems'] and again['project']['designer'] == P['designer']
 
