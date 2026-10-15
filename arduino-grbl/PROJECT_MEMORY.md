@@ -43,24 +43,15 @@ This system has already operated successfully.
 
 ### Z
 
-Z is provided by a linear actuator.
+CURRENT (decided 2026-10-14): Z is NOT a GRBL axis and needs nothing from
+this subsystem. The Raspberry Pi is the sole Z command source, through a
+Cytron MD13S driving the 12 V reversible linear actuator
+(`../CONTROL_BOX_HARDWARE.md` → Z axis). Do not add Z to GRBL.
 
-Z has historically been controlled manually rather than through GRBL.
-
-Automatic Z control is a desired futurey.
-
-The architecture for automatic Z control has NOT been selected.
-
-Possible approaches should be evaluated when the project reaches that problem.
-
-Do not assume that Z must be added to GRBL.
-
-Manual Z control should remain available even after automatic control is introduced.
-
-DECIDED 2026-10-14 (control-box baseline): Z is NOT a GRBL axis. The
-Raspberry Pi is the sole Z command source, through a Cytron MD13S driving the
-12 V actuator (`../CONTROL_BOX_HARDWARE.md`). Z needs nothing from GRBL or
-this subsystem. (Previous state: Z method undecided, GRBL one option.)
+HISTORY: Z has historically been controlled manually (still the case until
+the new control box is built). Until 2026-10-14 the automatic Z architecture
+was unselected and GRBL was one option ("do not assume Z must be added to
+GRBL"); that question is now answered for the hardware path.
 
 ---
 
@@ -118,7 +109,7 @@ The system has successfully moved and printed with the physical machine.
 
 UGS is currently used as the higher-level sender/interface.
 
-Z remains manually controlled.
+Z remains manually controlled today; in the new control box it will be commanded by the Pi via the MD13S (not GRBL).
 
 No GRBL modifications associated with this new software project have yet been made.
 
@@ -161,7 +152,7 @@ Do not answer these by assumption. Resolve them as the physical machine and requ
 
 - Existing Arduino + GRBL architecture identified as the working motion-control baseline (board: Uno per the 2026-10-14 baseline).
 - X/Y responsibility established.
-- Z identified as currently manual and requiring future architectural investigation.
+- Z identified as currently manual; 2026-10-14 decided as Pi-commanded (MD13S), outside GRBL.
 - Responsibility boundary between GRBL and Raspberry Pi established.
 
 No new firmware work has yet been completed for this project.
@@ -175,7 +166,8 @@ No new firmware work has yet been completed for this project.
 3. Record relevant machine settings and existing X/Y behavior.
 4. Preserve a known-good copy/configuration of the working controller before experimentation.
 5. Defer GRBL modification until a concrete software or machine requirement requires it.
-6. Investigate Z-control options when automatic Z becomes an active development milestone.
+6. ~~Investigate Z-control options~~ — decided 2026-10-14 (Pi → MD13S, not GRBL); nothing to do here for Z.
+7. When wiring the control box: connect the existing X/Y limit switches to the Uno and document GRBL limit / homing settings (`../CONTROL_BOX_HARDWARE.md` VERIFY list).
 
 ---
 

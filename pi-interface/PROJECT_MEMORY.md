@@ -251,26 +251,35 @@ bottleneck (unlikely for large-scale printing with slow moves).
 The Pi interface communicates through the GRBL serial protocol only.
 It never sends `$$=` or `$N=` commands. Existing machine settings are preserved.
 
-### Z is out of scope for Milestone 1
-Z is a manually controlled linear actuator. No Z commands, no Z jog UI,
-no Z architecture decisions made. Future automatic Z control method is TBD.
+### Z — the Pi is the sole Z command source (decided 2026-10-14; not implemented)
+CURRENT: the Pi will command Z through GPIO PWM + DIR → Cytron MD13S → the
+12 V actuator; manual Z comes from the UI and the remote's Z UP / Z DOWN as
+inputs to Pi software. Requirements for the implementation are in
+`../CONTROL_BOX_HARDWARE.md` → Z axis: open-loop (never assume a known Z
+height), dead-man / time-bounded motion, guaranteed default STOP on boot /
+shutdown / crash / loss of control (hardware pull-down + loss-of-control
+mechanism still TBD), contradictory inputs → STOP. GPIO pins are
+intentionally unassigned (pending the touchscreen) and must come from
+configuration. The old SRDKG RF Z controller is not part of the architecture.
+What Z does within a print remains the undecided `z_within_lift`.
 
-2026-10-14 (control-box baseline): the Pi WILL be the sole Z command source —
-GPIO PWM + DIR to a Cytron MD13S driving the 12 V actuator; manual Z from the
-UI and the remote's Z UP / Z DOWN. Open-loop (no limits / homing / position
-feedback), so Z software must be dead-man / time-bounded and never assume a
-known Z height. Not implemented; GPIO pins not assigned (pending the
-touchscreen). The old SRDKG RF Z controller is not part of the architecture.
+HISTORY: in Milestone 1 Z was out of scope (manual actuator; no Z commands,
+no Z UI, method TBD). M1 code still contains no Z — that is current fact,
+not a design rule.
 
 ### Wireless remote = Pi GPIO inputs (planned, 2026-10-14)
-Kaleinavi 6-channel RF receiver dry contacts → Pi GPIO (internal pull-ups,
-active-low, ~1 kΩ series). Tentative functions: REMOTE STOP, Z UP, Z DOWN,
+Operator-input device only: handheld → Kaleinavi 6-channel RF receiver → dry
+contacts → Pi GPIO (internal pull-ups, active-low, ~1 kΩ series) → Pi
+software; it never drives Z directly. Tentative functions: REMOTE STOP, Z UP, Z DOWN,
 extrusion pause / resume, two spare — mapping configurable in software.
 REMOTE STOP is an operational software stop, NOT an E-stop; the UI must
 never present it as one. Not implemented.
 
 ### Extrusion is out of scope
 The external pumping system is independently controlled. Not addressed here.
+(2026-10-14: electrically deferred; future pump control anticipated, so an
+extrusion pause / resume concept is reserved — e.g. on the remote — with no
+implementation, signal or wiring defined. `../CONTROL_BOX_HARDWARE.md`.)
 
 ### Homing / limit switches not required for Milestone 1
 No homing commands in the UI. No assumption about limit switch configuration.
@@ -374,9 +383,10 @@ refused, lift-details list in the UI. Verified end to end over HTTP only
   and offer "start at lift N"?)
 
 Lift-job questions (2026-10-14, need user decisions before the exporter):
-- Z inside a lift: Z is manual, but layers, back-down moves to another
-  island (dz < 0) and clear-height travels all change Z. XY-only G-code with
-  manual Z, per-layer operator pauses, or other?
+- Z inside a lift: layers, back-down moves to another island (dz < 0) and
+  clear-height travels all change Z. Z is (to be) Pi-commanded via the MD13S
+  but open-loop with no position feedback — XY-only G-code with operator /
+  Pi Z steps, per-layer pauses, or other? (`z_within_lift`)
 - Travels/transitions with the pump independently running: plain moves or
   operator pause?
 - Does a frame raise preserve XY registration / GRBL position, or involve

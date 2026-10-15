@@ -65,35 +65,29 @@ This arrangement has already been used successfully to move and print with the m
 
 ### Z
 
-The Z axis is physically different from X and Y.
+The Z axis is physically different from X and Y: a 12 V reversible DC linear
+actuator (ECO-WORTHY, 18 in stroke), not a stepper axis.
 
-Z motion is provided by a linear actuator rather than the same stepper-motor arrangement used for X/Y.
+CURRENT ARCHITECTURE (decided 2026-10-14; details and implementation
+consequences: `CONTROL_BOX_HARDWARE.md` → Z axis):
+- The Raspberry Pi is the SOLE Z command source: Pi 3.3 V GPIO PWM + DIR →
+  Cytron MD13S (planned) → actuator. Z is NOT a GRBL axis.
+- Manual Z = Pi UI and the RF remote's Z UP / Z DOWN, both as inputs to Pi
+  software (the remote never drives Z directly).
+- Open-loop: no Z limits, homing or position feedback yet (actuator internal
+  end-of-travel only); software must not assume a known Z position and Z
+  motion must be dead-man / time-bounded with a guaranteed default STOP.
+- Still OPEN: how Z is used within a print (`z_within_lift`) and whether /
+  how Z position ever becomes known.
 
-Historically, Z has been controlled manually rather than through GRBL.
+Today, before the new control box is built, Z is still operated manually.
 
-Future software should ideally provide automatic Z control while preserving the ability to control Z manually.
-
-IMPORTANT:
-
-Automatic Z control is a desired future capability.
-
-The method of implementing automatic Z control has NOT yet been decided.
-
-Do not assume that Z must be integrated into GRBL unless that approach is deliberately evaluated and chosen.
-
-The eventual solution may involve GRBL, separate hardware control, the Raspberry Pi, or another architecture.
-
-Treat this as an open architectural question.
-
-DECIDED 2026-10-14 (control-box hardware baseline) — supersedes the open
-question above for the HARDWARE path: Z is commanded by the Raspberry Pi
-alone, through a Cytron MD13S motor driver (Pi 3.3 V GPIO PWM + DIR) driving
-the existing 12 V, 18 in reversible DC actuator. Z is not a GRBL axis. Manual
-Z is through the Pi (UI and the wireless remote's Z UP / Z DOWN); the old
-SRDKG RF Z controller is no longer part of the architecture. Z is open-loop:
-no limits, homing or position feedback yet (actuator internal end stops
-only). Still OPEN: what Z does within a print (`z_within_lift`). Previous
-state: method undecided, GRBL / separate hardware / Pi all possible.
+HISTORY: until 2026-10-14 the Z control method was an open architectural
+question (GRBL, separate hardware, the Pi or another architecture were all
+possible; "do not assume Z must be integrated into GRBL"). The hardware path
+is now chosen as above; the earlier SRDKG RF Z controller and a separate Pi
+relay board / D2-ZFZ are superseded (`CONTROL_BOX_HARDWARE.md` →
+"Superseded").
 
 ### Lifts and frame repositioning (stated 2026-10-09)
 
@@ -246,7 +240,9 @@ Potential responsibilities include:
 - communication with the Arduino/GRBL controller
 - sending G-code or other machine instructions
 - jogging X/Y
-- future interaction with whatever Z-control system is developed
+- Z control: the Pi is the sole Z command source via the Cytron MD13S
+  (`CONTROL_BOX_HARDWARE.md`; not yet implemented)
+- reading the wireless remote (Kaleinavi dry contacts on Pi GPIO; planned)
 - homing where appropriate
 - starting jobs
 - pausing jobs
@@ -396,17 +392,16 @@ Consider modification or replacement only when an actual requirement cannot reas
 
 ---
 
-### Automatic Z control is a goal, not a solved architecture
+### Z is commanded by the Pi; automatic Z within prints is still a goal (2026-10-14)
 
-Future software should automate Z motion while retaining manual control.
+Z hardware path DECIDED: Pi → Cytron MD13S → 12 V actuator; not a GRBL axis
+(`CONTROL_BOX_HARDWARE.md`). Manual Z remains available through the Pi UI and
+the remote. Automating Z within prints remains a goal whose method is NOT
+decided (`z_within_lift`); Z is open-loop, so do not assume known Z positions.
 
-How that automation will work has not yet been decided.
-
-Do not silently convert this goal into an assumption that Z will be controlled through GRBL.
-
-2026-10-14: the Z HARDWARE path is now decided (Pi → Cytron MD13S →
-actuator; not GRBL). How Z is used within a print and whether / how Z
-position becomes known (no feedback yet) remain undecided.
+(Previously, until 2026-10-14: "how automation will work has not been
+decided; do not assume Z will be controlled through GRBL" — the GRBL caution
+still stands; the hardware question is now answered.)
 
 ---
 
@@ -446,7 +441,7 @@ Closing the browser, losing Wi-Fi temporarily, or disconnecting the client shoul
 
 The physical printer already exists and has successfully printed.
 
-The existing software/control workflow is approximately:
+The existing (pre-control-box, still in use today) software/control workflow is approximately:
 
 computer running UGS
         ↓
@@ -457,7 +452,7 @@ Arduino (documented as Mega at the time; Uno per the 2026-10-14 baseline) runnin
 X/Y motion
 
 Z:
-manual control of linear actuator
+manual control of linear actuator (to be replaced by Pi → MD13S; see CONTROL_BOX_HARDWARE.md)
 
 Extrusion:
 independently controlled external pumping system
@@ -590,16 +585,16 @@ Important unresolved questions currently include:
 
 - What is the correct jog speed for this machine's scale? (Must be validated physically)
 - Does the Pi need to act as a Wi-Fi access point for offline field use?
-- Should the interface support job recovery after power failure?
+- Should the interface support job recovery after power failure? (The hardwired E-stop is believed to cut power to the Pi and Uno too — VERIFY; see `CONTROL_BOX_HARDWARE.md`.)
+- How should Pi-side Z control guarantee default STOP on boot / crash / loss of control (hardware pull-down + loss-of-control mechanism TBD)?
 - How should local/offline networking be implemented?
 
 ### Arduino / GRBL
 
 - Will stock/current GRBL satisfy all required future machine behavior?
 - Are any GRBL customizations actually necessary?
-- How should automatic Z control be implemented?
-- Should Z eventually be controlled through GRBL or through a separate mechanism?
-- How should manual Z control coexist with automatic Z control?
+- Which board and GRBL build are actually installed (Uno per the 2026-10-14 baseline; earlier docs said Mega)?
+- ~~How should automatic Z control be implemented? Through GRBL or a separate mechanism? How should manual and automatic Z coexist?~~ Hardware answered 2026-10-14: Pi → MD13S, not GRBL; manual and automatic Z both go through Pi software. Open: Z use within prints, Z position knowledge.
 
 These are open questions.
 
