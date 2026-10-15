@@ -256,8 +256,9 @@ html, body {
 .btn-stop   { background: var(--stop-bg); }
 .btn-stop:not(:disabled):hover { background: var(--stop-hover); }
 
-/* Stop-button hold-to-confirm fill */
-.stop-fill {
+/* Press-and-hold fill (Stop, Confirm reposition). Duration set per button
+   by app.js through --hold-ms so the animation matches the timer. */
+.hold-fill {
   position: absolute;
   left: 0; top: 0;
   width: 0%;
@@ -266,10 +267,11 @@ html, body {
   pointer-events: none;
   transition: none;
 }
-.btn-stop.holding .stop-fill {
+.holding .hold-fill {
   width: 100%;
-  transition: width 2.5s linear;
+  transition: width var(--hold-ms, 2500ms) linear;
 }
+.ctrl-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .estop-note {
   text-align: center;
@@ -441,3 +443,83 @@ html, body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* --- Lifts --- */
+[hidden] { display: none !important; }
+
+.lift-badge { background: #1e3a5f; color: var(--blue); }
+.lift-badge.awaiting { background: #451a03; color: var(--amber); }
+
+.lift-summary {
+  font-size: 0.9em;
+  margin-bottom: 8px;
+}
+
+.lift-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.lift-chip {
+  min-width: 44px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-weight: 700;
+  text-align: center;
+}
+.lift-chip.done    { background: #052e16; color: var(--green); border-color: #14532d; }
+.lift-chip.current { background: #1e3a5f; color: var(--blue); border-color: var(--blue); }
+.lift-chip.next    { background: #451a03; color: var(--amber); border-color: var(--amber); }
+
+/* Frame reposition panel: the one thing to look at between lifts */
+.reposition-panel {
+  border: 2px solid var(--amber);
+  background: #1f1503;
+}
+.reposition-title {
+  color: var(--amber);
+  font-size: 1.25em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.reposition-text { font-size: 1.05em; margin-bottom: 6px; }
+.reposition-detail {
+  font-size: 0.95em;
+  color: var(--amber);
+  margin-bottom: 6px;
+}
+.reposition-note {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.btn-confirm {
+  width: 100%;
+  min-height: 72px;
+  background: #78350f;
+  font-size: 1.05em;
+}
+.btn-confirm:not(:disabled):hover { background: #92400e; }
+.btn-confirm .hold-fill { background: rgba(251, 191, 36, 0.4); }
+.reposition-blocked {
+  font-size: 0.85em;
+  color: var(--red);
+  margin-top: 8px;
+  min-height: 1.2em;
+}
+
+/* Refusal notices (sent only to the client that made the request) */
+#notice {
+  font-size: 0.85em;
+  color: var(--bg);
+  background: var(--amber);
+  padding: 6px 12px;
+  text-align: center;
+}

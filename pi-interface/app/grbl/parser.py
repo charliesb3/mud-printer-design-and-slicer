@@ -129,3 +129,28 @@ def is_end_of_program(line: str) -> bool:
     """True if the G-code line signals end of program (M2, M30, or bare %)."""
     normalized = strip_gcode_comment(line).upper().replace(' ', '')
     return normalized in ('M2', 'M02', 'M30', '%')
+
+
+# Program pause / end words: M0, M1, M2, M30 (leading zeros allowed: M00, M02).
+_PROGRAM_CONTROL_RE = re.compile(r'M0*(0|1|2|30)(?!\d)')
+
+
+def program_control_reason(line: str) -> str | None:
+    """
+    Why a line may not appear inside a building-job lift, or None if it may.
+
+    Lift G-code is ordinary motion G-code; the Pi job runner owns all pauses
+    and the end of the job. Program pause/end words (M0/M1/M2/M30), '%'
+    markers, and '$' system commands are therefore rejected.
+    """
+    normalized = strip_gcode_comment(line).upper().replace(' ', '')
+    if not normalized:
+        return None
+    if normalized.startswith('%'):
+        return "'%' program marker"
+    if normalized.startswith('$'):
+        return "GRBL '$' system command"
+    m = _PROGRAM_CONTROL_RE.search(normalized)
+    if m:
+        return f"program pause/end word {m.group(0)}"
+    return None

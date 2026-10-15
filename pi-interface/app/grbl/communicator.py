@@ -49,6 +49,10 @@ class GRBLCommunicator:
         self._read_task: Optional[asyncio.Task] = None
         self._running = False
 
+    @property
+    def state(self) -> AppState:
+        return self._state
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
@@ -86,13 +90,17 @@ class GRBLCommunicator:
 
         Returns the raw response string: "ok" or "error:N".
         Raises asyncio.TimeoutError if GRBL does not respond within timeout.
+        A timeout <= 0 waits without limit (the future is still rejected on
+        disconnect, reset, or alarm).
         Raises RuntimeError if not connected.
         May raise asyncio.CancelledError if the calling task is cancelled.
         """
         if self._transport is None or not self._transport.is_open():
             raise RuntimeError("Not connected to GRBL")
 
-        effective_timeout = timeout if timeout is not None else config.COMMAND_TIMEOUT_S
+        effective_timeout: float | None = timeout if timeout is not None else config.COMMAND_TIMEOUT_S
+        if effective_timeout <= 0:
+            effective_timeout = None
 
         async with self._send_lock:
             loop = asyncio.get_running_loop()

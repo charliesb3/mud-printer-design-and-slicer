@@ -53,12 +53,25 @@ Hold: busy-poll on job.state every 50ms while state=="held".
 Stop: task.cancel() from the HTTP handler; CancelledError propagates out.
 End: job.state="completed" when all lines sent or M2/M30/% encountered.
 
+Lifts (2026-10-14): the runner streams `job.lifts` in order (a flat G-code
+file = one lift → identical M1 behaviour). After every non-final lift:
+`G4 P0` drain (no timeout by default, `LIFT_DRAIN_TIMEOUT_S`) → wait for a
+status report newer than the dwell's ok showing Idle (`AppState.status_seq`)
+→ `awaiting_reposition` (`awaiting_lift` = next lift) → poll until the
+confirm handler sets `running`. GRBL disconnect or reset (`AppState.reset_seq`)
+while awaiting → job `error`. Hold pressed during the drain is honoured
+before the boundary.
+
 ### WebSocket
 
 - `ConnectionManager` broadcasts to all connected clients
 - On connect: full state snapshot sent immediately (supports reconnection)
-- Broadcast loop: every 200ms unconditionally
+- Broadcast loop: every 200ms unconditionally; also immediately after any
+  state-changing action (hold/resume/stop/job_start/confirm_reposition, upload)
 - Client-side: auto-reconnect with 1.5s delay
+- `notice {level, message}`: refusal sent only to the requesting client
+- `AppState.job` is the live `CurrentJob` (shared reference; the duplicate
+  `JobInfo` mirror was removed)
 
 ### Dead-Man Jog
 
@@ -84,14 +97,14 @@ sending a release message.
 pi-interface/
 ├── app/
 │   ├── config.py           # All settings, loaded from .env
-│   ├── state.py            # AppState + JobInfo dataclasses
+│   ├── state.py            # AppState (job = live CurrentJob reference)
 │   ├── main.py             # FastAPI app, lifespan, background loops
 │   ├── grbl/
 │   │   ├── parser.py       # Pure GRBL response parsing (no I/O)
 │   │   ├── transport.py    # GRBLTransport ABC + SerialTransport
 │   │   └── communicator.py # GRBLCommunicator (lock + future + loops)
 │   ├── jobs/
-│   │   ├── current_job.py  # CurrentJob dataclass + load_job_from_file()
+│   │   ├── current_job.py  # CurrentJob + JobLift, .mudjob parsing/validation, load_job_from_file()
 │   │   └── runner.py       # JobRunner (asyncio task, server-owned)
 │   ├── api/
 │   │   ├── ws.py           # ConnectionManager (broadcast to all clients)
@@ -99,15 +112,18 @@ pi-interface/
 │   └── static/
 │       ├── index.html      # Single-page app
 │       ├── style.css       # Dark touch-first theme
-│       └── app.js          # WS client, jog events, stop hold-to-confirm
+│       └── app.js          # WS client, jog, hold buttons (stop, confirm), lifts UI
 ├── tests/
 │   ├── mock_transport.py   # MockTransport + wait_until_sent helper
 │   ├── test_parser.py      # 34 tests
 │   ├── test_communicator.py # 18 tests
 │   ├── test_runner.py      # 13 tests
-│   └── test_api.py         # 13 tests
+│   ├── test_lifts.py       # 53 tests (format, sequencing, handler rules)
+│   ├── test_api.py         # 21 tests (incl. building upload, synced clients)
+│   └── fixtures/sample_building.mudjob  # 3-lift reference job
 ├── docs/
 │   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
+│   ├── job-format.md              # Building job (.mudjob) format v1 — exporter contract
 │   ├── deployment.md              # Pi OS, systemd, kiosk, networking
 │   └── acceptance-test.md         # Physical machine acceptance criteria
 ├── .env.example
@@ -148,21 +164,37 @@ All settings in `.env`. Key values:
   operator performs the physical frame reposition and explicitly confirms it.
 - Underneath, GRBL still receives ordinary machine G-code.
 
-Implementation notes from the 2026-10-14 inspection (proposed, not yet built):
-- Boundary: a versioned JSON job container defined by the Pi
-  (`format`, `version`, `units`, `source`, `lifts[]` each with index, z range,
-  layer range, `reposition_before` {rise, frame z from/to, nozzle xy} and
-  plain `gcode` lines), produced by a Design + Toolpath exporter from
-  `PrintPlan.items()` (which already carries lift/stage/pass per move and a
-  `FrameMove` per later lift). Format spec + one shared fixture; the Pi does
-  not import design-toolpath code. Plain `.gcode` uploads stay valid as a
-  one-lift job (M1 behaviour preserved).
-- Lift end: GRBL `ok` means buffered, not executed — the runner must drain
-  (`G4 P0`) and see status Idle before declaring the lift complete.
-- Confirmation must name the lift it confirms (prevents stale/double confirm).
-- M0/M1/M2/M30/% are not allowed inside a lift's G-code; the Pi owns pauses.
-- No G-code export exists yet in Design + Toolpath. PrintPlan units are
-  inches, world coordinates, Z = building Z of the layer top.
+Implemented 2026-10-14 (P1 + P2):
+- Boundary: versioned JSON job file `.mudjob` defined by the Pi —
+  `docs/job-format.md` (v1) + `tests/fixtures/sample_building.mudjob`. The
+  future Design + Toolpath exporter (P3) builds it from `PrintPlan.items()`
+  (lift/stage/pass per move, `FrameMove` per later lift); the Pi never imports
+  design-toolpath code. Plain G-code uploads remain valid as a one-lift job.
+- `reposition_before` / `units` / `name` are display-only: the Pi shows them
+  and interprets nothing (no unit conversion, no Z, no origin handling).
+- Lift end: GRBL `ok` means buffered, not executed — the runner drains with
+  `G4 P0` and waits for a fresh Idle report before the boundary.
+- Confirmation names the lift it confirms (stale/double confirm refused), is
+  accepted only while GRBL is Idle, and `resume` never confirms.
+- M0/M1/M2/M30/%/`$` are rejected inside lift G-code; the Pi owns pauses.
+- While `awaiting_reposition` the job is ACTIVE: jog, console, upload and
+  start are refused (conservative until decision on frame raise / re-zeroing;
+  revisit if the operator must jog or re-zero between lifts).
+- GRBL disconnect/reset while awaiting → job error (position untrusted; no
+  resume-at-lift yet).
+- Design + Toolpath still has no G-code export. PrintPlan units are inches,
+  world coordinates, Z = building Z of the layer top.
+
+### One responsive UI, synchronized clients (decided 2026-10-14)
+There is ONE web UI — not separate desktop and touchscreen interfaces.
+Developed/tested on the computer first; later the Pi touchscreen shows the
+same UI locally in kiosk/fullscreen mode. Laptop and touchscreen may be
+connected at once as equal, synchronized views of the one Pi-owned
+machine/job state: any client's action is broadcast to all; connecting or
+disconnecting a client never affects an active print. Controls stay
+touch-sized but work with mouse and keyboard (hold buttons accept a held
+Space/Enter). Deliberate actions use press-and-hold: Stop 2.5 s, Confirm
+frame reposition 2 s (the confirm sends the lift shown when the hold began).
 
 ### Dead-man jog — incremental commands + heartbeat timeout
 Jogging uses short incremental `$J=` moves sent in a loop. The loop dies if
@@ -230,7 +262,11 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-78 tests total, all passing on Python 3.9 (Mac development environment).
+139 tests total, all passing on Python 3.9 (Mac development environment):
+the 78 M1 tests unchanged + 61 lift/building-job tests. `MockTransport` can
+answer `?` polls with a settable `status_reply` (used to simulate Run→Idle
+around a lift drain). API tests that need machine state set directly patch
+out `main._connection_loop` (`offline_client` fixture).
 
 ---
 
@@ -246,6 +282,16 @@ All application code has been written:
 - Touch-first single-page frontend
 - Full test suite (78 tests, all passing)
 - Deployment docs, GRBL capture checklist, acceptance test procedure
+
+**Lift-aware building jobs (P1 + P2) implemented on Mac, 2026-10-14:**
+`.mudjob` loading/validation, per-lift runner with drain +
+`awaiting_reposition` + lift-named confirmation, synchronized-client
+broadcasts, UI (status-bar lift badge, lift chips, lift progress, amber
+reposition panel with 2 s hold-to-confirm, refusal notices). 139 tests pass.
+Also exercised end to end against a throwaway fake-GRBL server with two
+websocket clients (3-lift fixture: boundaries, cross-client confirm, stale
+confirm refused, reconnect mid-job). NOT yet visually reviewed in a browser
+or on the touchscreen, and not run on hardware.
 
 **Not yet complete:**
 - Physical machine testing on the Pi (hardware not yet available)
@@ -281,7 +327,16 @@ Lift-job questions (2026-10-14, need user decisions before the exporter):
   allowed while awaiting reposition — both are blocked during an active job.)
 - XY work zero: operator-set before start, or an offset in the export?
   G20 (inches, matching the plan) or convert to G21 mm?
-- Confirmation strength: single hold-to-confirm or a checklist?
+- Confirmation strength: single hold-to-confirm (implemented, provisional)
+  or a checklist?
+- Is `G4 P0` accepted and does it synchronise as expected on the installed
+  GRBL? (Expected per GRBL 1.1; verify on hardware.)
+
+Risk found 2026-10-14 (M1, not yet addressed): line-at-a-time streaming uses
+`COMMAND_TIMEOUT_S` = 10 s per line. GRBL withholds `ok` while its planner
+buffer is full, so on this machine's long, slow moves a single line's ok can
+plausibly exceed 10 s → TimeoutError → job error. Needs a decision/fix before
+real prints (e.g. longer/no per-line timeout while a job runs).
 
 ---
 
@@ -295,16 +350,17 @@ Lift-job questions (2026-10-14, need user decisions before the exporter):
 5. If field offline use is needed, configure Wi-Fi access point.
 6. After Milestone 1 is verified on hardware, define Milestone 2.
 
-Lift-aware job work (software, can proceed before hardware; proposed stages):
-- P1: lift-aware `CurrentJob` (keeps flat `lines` view so M1 tests stand),
-  JSON job loader + validation, runner streams per lift, drains + waits Idle
-  at lift end, state `awaiting_reposition`, WS `confirm_reposition {lift}`.
-  Mock-transport tests. Independent of the Z decision.
-- P2: UI — lift list, boundary panel with frame rise, hold-to-confirm,
-  lift/line progress.
-- P3: Design + Toolpath exporter PrintPlan → job (blocked on Z / travel /
-  origin / units decisions above); round-trip test against the Pi loader.
+Lift-aware job work:
+- ~~P1~~ / ~~P2~~ done 2026-10-14 (see Current State).
+- Manual visual review of the lift UI in a browser (laptop) and later on the
+  Pi touchscreen kiosk; adjust layout if needed.
+- Decide the per-line timeout risk above before the first real print.
+- P3: Design + Toolpath exporter PrintPlan → `.mudjob` (blocked on Z /
+  travel / origin / units decisions above); round-trip test against
+  `load_job_from_file` and `docs/job-format.md`.
 - P4 (optional): persist progress at lift boundaries; start at lift N.
+- Add a lift-boundary step to docs/acceptance-test.md once hardware testing
+  of lifts is planned.
 
 ---
 
@@ -317,6 +373,8 @@ Lift-aware job work (software, can proceed before hardware; proposed stages):
 - Dead-man jog implemented and tested
 - Server-owned job runner implemented and tested
 - Full test suite: 78 tests passing
+- 2026-10-14: lift-aware building jobs (P1 model/runner/format, P2 UI);
+  139 tests passing
 - Deployment documentation written
 - GRBL capture checklist written
 - Acceptance test procedure written
@@ -327,9 +385,13 @@ Lift-aware job work (software, can proceed before hardware; proposed stages):
 
 2026-10-14
 
-Decision: whole building = one job of first-class PrintPlan lifts with an
-operator-confirmed frame reposition between lifts. Inspection done; staged
-plan P1–P4 recorded; nothing implemented yet. M1 tests: 78 passing.
+P1 + P2 implemented: whole-building `.mudjob` jobs with first-class lifts,
+drain + `awaiting_reposition` + lift-named hold-to-confirm, one responsive UI
+with synchronized clients. 139 tests passing. Exporter (P3) still blocked on
+Z / travel / origin / units decisions.
+
+Earlier 2026-10-14: decision recorded — whole building = one job of
+PrintPlan lifts with an operator-confirmed frame reposition between lifts.
 
 2026-10-03
 

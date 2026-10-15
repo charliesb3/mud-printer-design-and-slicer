@@ -1,0 +1,43 @@
+{
+  "format": "mudprinter-job",
+  "version": 1,
+  "name": "Sample building (3 lifts) — test fixture, not a real print",
+  "units": "in",
+  "source": {"generator": "hand-written fixture"},
+  "lifts": [
+    {
+      "index": 0,
+      "description": "Layers 1–2",
+      "gcode": [
+        "; lift 1",
+        "G90",
+        "G1 X0 Y0 F120",
+        "G1 X10 Y0",
+        "G1 X10 Y10",
+        "G1 X0 Y10",
+        "G1 X0 Y0"
+      ]
+    },
+    {
+      "index": 1,
+      "description": "Layers 3–4",
+      "reposition_before": {"rise": 18, "note": "Raise the frame one lift."},
+      "gcode": [
+        "G1 X0 Y0 F120",
+        "G1 X10 Y0",
+        "G1 X10 Y10",
+        "G1 X0 Y0"
+      ]
+    },
+    {
+      "index": 2,
+      "description": "Layers 5–6",
+      "reposition_before": {"rise": 18},
+      "gcode": [
+        "G1 X0 Y0 F120",
+        "G1 X10 Y10",
+        "G1 X0 Y0"
+      ]
+    }
+  ]
+}

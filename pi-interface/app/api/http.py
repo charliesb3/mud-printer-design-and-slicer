@@ -10,14 +10,24 @@ WebSocket (/ws):
     jog_heartbeat  {}  — sent every ~100 ms while button held
     jog_stop       {}
     hold           {}
-    resume         {}
+    resume         {}  — resumes a feed hold; never confirms a reposition
     stop           {}  — terminates the current job + sends GRBL soft reset
     job_start      {}
+    confirm_reposition {lift: int}  — 0-based index of the lift about to start
     console_send   {command: str}
 
   Server → Client message types:
-    state          — full machine/job state (broadcast every 200 ms)
+    state          — full machine/job state (broadcast every 200 ms, and
+                     immediately after any job/control action)
     console        {direction, line} — individual TX/RX console lines
+    notice         {level, message} — sent only to the client whose request
+                     was refused (e.g. a stale reposition confirmation)
+
+Synchronized clients:
+  Every client (laptop browser, Pi touchscreen kiosk, …) is an equal view of
+  the one server-owned machine/job state. Any client's action changes that
+  state and the change is broadcast to all. Connecting or disconnecting a
+  client never affects the job.
 
 HTTP:
   POST /upload   — multipart file upload, sets the current job
@@ -48,7 +58,7 @@ from fastapi import APIRouter, File, UploadFile, WebSocket, WebSocketDisconnect
 
 from .. import config
 from ..grbl.communicator import GRBLCommunicator
-from ..jobs.current_job import CurrentJob, load_job_from_file
+from ..jobs.current_job import CurrentJob, JobFormatError, load_job_from_file
 from ..jobs.runner import JobRunner
 from ..state import AppState
 from .ws import ConnectionManager
@@ -163,6 +173,12 @@ async def _start_jog(axis: str, direction: int) -> None:
         log.debug("Jog rejected: GRBL state is %s", _state.grbl_state)
         return
 
+    # A job owns the machine while running, held, or awaiting a frame
+    # reposition (GRBL is Idle then, but jogging would move the job's XY).
+    if _current_job and _current_job.is_active:
+        log.debug("Jog rejected: job is %s", _current_job.state)
+        return
+
     # Cancel previous jog task if still running
     if _jog_task and not _jog_task.done():
         _jog_task.cancel()
@@ -210,9 +226,7 @@ async def _start_job() -> None:
         return
 
     assert _comm is not None
-    _current_job.state = "ready"
-    _current_job.current_line = 0
-    _current_job.error = None
+    _current_job.reset_progress()
     runner = JobRunner(_comm, _current_job)
     _runner_task = asyncio.create_task(runner.run(), name="job-runner")
 
@@ -235,9 +249,40 @@ async def _stop_job() -> None:
     _runner_task = None
 
 
+def _confirm_reposition(lift) -> Optional[str]:
+    """Accept the operator's frame-reposition confirmation, or say why not."""
+    if _current_job is None:
+        return "No job loaded."
+    if not isinstance(lift, int) or isinstance(lift, bool):
+        return "Confirmation must name the lift it confirms."
+    if _state is None or not _state.connected:
+        return "Not connected to GRBL."
+    if _current_job.state == "awaiting_reposition" and _state.grbl_state != "Idle":
+        return f"GRBL must be Idle to continue (it is {_state.grbl_state})."
+    return _current_job.confirm_reposition(lift)
+
+
+async def _notify(ws: WebSocket, message: str, level: str = "warn") -> None:
+    try:
+        await ws.send_json({"type": "notice", "level": level, "message": message})
+    except Exception:
+        pass
+
+
+async def broadcast_state() -> None:
+    """Push the current state to every client now (not waiting for the 200 ms loop)."""
+    sync_job_state_to_appstate()
+    if _ws_manager and _state and _ws_manager.client_count > 0:
+        await _ws_manager.broadcast(_state.to_dict())
+
+
 # ------------------------------------------------------------------ #
 # WebSocket message dispatcher                                         #
 # ------------------------------------------------------------------ #
+
+# Messages that change machine/job state: broadcast to all clients right after.
+_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition"}
+
 
 async def _handle_message(data: dict, ws: WebSocket) -> None:
     global _jog_last_heartbeat, _current_job
@@ -275,6 +320,14 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
     elif msg_type == "job_start":
         await _start_job()
 
+    elif msg_type == "confirm_reposition":
+        refusal = _confirm_reposition(data.get("lift"))
+        if refusal:
+            log.info("Reposition confirmation refused: %s", refusal)
+            await _notify(ws, refusal)
+        else:
+            log.info("Frame reposition confirmed for lift %d", data["lift"] + 1)
+
     elif msg_type == "console_send":
         command = str(data.get("command", "")).strip()
         if not command:
@@ -290,6 +343,9 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
                 log.debug("Console error: %s", exc)
     else:
         log.debug("Unknown WS message type: %s", msg_type)
+
+    if msg_type in _STATE_CHANGING:
+        await broadcast_state()
 
 
 # ------------------------------------------------------------------ #
@@ -340,24 +396,22 @@ async def upload_gcode(file: UploadFile = File(...)):
 
     try:
         job = load_job_from_file(destination)
+    except JobFormatError as exc:
+        return {"success": False, "error": f"Invalid building job: {exc}"}
     except Exception as exc:
         return {"success": False, "error": f"Could not parse file: {exc}"}
 
     _current_job = job
+    await broadcast_state()
 
-    # Sync job info into AppState for WebSocket broadcasts
-    if _state:
-        from ..state import JobInfo
-        _state.job = JobInfo(
-            filename=job.filename,
-            total_lines=job.total_lines,
-        )
-
-    log.info("Job uploaded: %s (%d sendable lines)", job.filename, job.total_lines)
+    log.info("Job uploaded: %s (%s, %d sendable lines, %d lifts)",
+             job.filename, job.kind, job.total_lines, job.total_lifts)
     return {
         "success": True,
         "filename": job.filename,
+        "kind": job.kind,
         "total_lines": job.total_lines,
+        "total_lifts": job.total_lifts,
     }
 
 
@@ -381,21 +435,6 @@ def get_current_job() -> Optional[CurrentJob]:
 
 
 def sync_job_state_to_appstate() -> None:
-    """Keep AppState.job in sync with the CurrentJob object for WS broadcasts."""
-    if _state is None:
-        return
-    job = _current_job
-    if job is None:
-        _state.job = None
-        return
-
-    import time
-    from ..state import JobInfo
-    if _state.job is None or _state.job.filename != job.filename:
-        _state.job = JobInfo(filename=job.filename, total_lines=job.total_lines)
-
-    sj = _state.job
-    sj.state = job.state
-    sj.current_line = job.current_line
-    sj.started_at = job.started_at
-    sj.error = job.error
+    """Point AppState.job at the current job (shared by reference) for WS broadcasts."""
+    if _state is not None:
+        _state.job = _current_job

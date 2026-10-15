@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
+
 import pytest
 from starlette.testclient import TestClient
 
+from app import main as main_module
 from app.main import app
 from app.api import http as http_module
 
@@ -163,3 +166,132 @@ class TestJogConfiguration:
             assert data["jog_enabled"] is False
             assert data["jog_warning"] is not None
             assert "JOG_SPEED_MM_MIN" in data["jog_warning"]
+
+
+# ------------------------------------------------------------------ #
+# Building jobs and synchronized clients                               #
+# ------------------------------------------------------------------ #
+
+FIXTURE = Path(__file__).parent / "fixtures" / "sample_building.mudjob"
+
+
+def receive_state_until(ws, predicate, max_messages: int = 40) -> dict:
+    """Read messages (state broadcasts arrive every 200 ms) until one matches."""
+    for _ in range(max_messages):
+        msg = ws.receive_json()
+        if msg.get("type") == "state" and predicate(msg):
+            return msg
+    raise AssertionError("expected state never arrived")
+
+
+@pytest.fixture
+def offline_client(monkeypatch):
+    """App without the serial reconnect loop, so tests can set machine state directly."""
+    async def no_connection_loop():
+        return None
+    monkeypatch.setattr(main_module, "_connection_loop", no_connection_loop)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+    main_module.app_state.mark_disconnected()
+
+
+def upload_fixture(client):
+    return client.post(
+        "/upload",
+        files={"file": ("sample.mudjob", FIXTURE.read_bytes(), "application/json")},
+    ).json()
+
+
+class TestBuildingJobUpload:
+    def test_upload_building_job(self, client):
+        data = upload_fixture(client)
+        assert data["success"] is True
+        assert data["kind"] == "building"
+        assert data["total_lifts"] == 3
+        assert data["total_lines"] == 13
+
+        job = client.get("/api/state").json()["job"]
+        assert job["kind"] == "building"
+        assert job["total_lifts"] == 3
+        assert job["current_lift"] == 0
+        assert job["awaiting_lift"] is None
+        assert job["lifts"][1]["reposition_before"]["rise"] == 18
+
+    def test_flat_upload_reports_one_lift(self, client):
+        data = client.post("/upload", files={"file": ("a.nc", io.BytesIO(b"G0 X0\n"), "text/plain")}).json()
+        assert data["kind"] == "gcode"
+        assert data["total_lifts"] == 1
+
+    def test_invalid_building_job_rejected(self, client):
+        bad = json.dumps({"format": "mudprinter-job", "version": 1,
+                          "lifts": [{"gcode": ["G1 X1", "M0"]}]})
+        data = client.post("/upload", files={"file": ("bad.mudjob", io.BytesIO(bad.encode()), "application/json")}).json()
+        assert data["success"] is False
+        assert "M0" in data["error"]
+        assert http_module._current_job is None
+
+    def test_upload_rejected_while_awaiting_reposition(self, client):
+        upload_fixture(client)
+        http_module._current_job.state = "awaiting_reposition"
+        data = client.post("/upload", files={"file": ("a.nc", io.BytesIO(b"G0 X0\n"), "text/plain")}).json()
+        assert data["success"] is False
+
+
+class TestSynchronizedClients:
+    def _await_lift_2(self):
+        """Put the loaded job at the lift 1 → 2 boundary with GRBL Idle (no runner needed)."""
+        job = http_module._current_job
+        job.state = "awaiting_reposition"
+        job.awaiting_lift = 1
+        main_module.app_state.connected = True
+        main_module.app_state.grbl_state = "Idle"
+        return job
+
+    def test_upload_appears_on_every_client(self, offline_client):
+        with offline_client.websocket_connect("/ws") as a, offline_client.websocket_connect("/ws") as b:
+            upload_fixture(offline_client)
+            for ws in (a, b):
+                s = receive_state_until(ws, lambda m: m["job"] is not None)
+                assert s["job"]["total_lifts"] == 3
+
+    def test_confirmation_from_one_client_appears_on_the_other(self, offline_client):
+        upload_fixture(offline_client)
+        self._await_lift_2()
+        with offline_client.websocket_connect("/ws") as laptop, offline_client.websocket_connect("/ws") as kiosk:
+            receive_state_until(kiosk, lambda m: m["job"]["state"] == "awaiting_reposition")
+            laptop.send_json({"type": "confirm_reposition", "lift": 1})
+            s = receive_state_until(kiosk, lambda m: m["job"]["state"] == "running")
+            assert s["job"]["awaiting_lift"] is None
+
+    def test_stale_confirmation_gets_notice_and_changes_nothing(self, offline_client):
+        upload_fixture(offline_client)
+        job = self._await_lift_2()
+        with offline_client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "confirm_reposition", "lift": 2})
+            for _ in range(40):
+                msg = ws.receive_json()
+                if msg["type"] == "notice":
+                    break
+            else:
+                raise AssertionError("no notice received")
+            assert "lift 2" in msg["message"].lower()
+        assert job.state == "awaiting_reposition"
+
+    def test_client_disconnect_does_not_affect_awaiting_job(self, offline_client):
+        upload_fixture(offline_client)
+        job = self._await_lift_2()
+        with offline_client.websocket_connect("/ws") as kiosk:
+            with offline_client.websocket_connect("/ws") as laptop:
+                receive_state_until(laptop, lambda m: m["job"] is not None)
+            # laptop gone; job unchanged and the kiosk still sees it
+            s = receive_state_until(kiosk, lambda m: m["job"] is not None)
+            assert s["job"]["state"] == "awaiting_reposition"
+            assert s["job"]["awaiting_lift"] == 1
+        assert job.state == "awaiting_reposition"
+
+        # a reconnecting client gets the full boundary state immediately
+        with offline_client.websocket_connect("/ws") as again:
+            s = again.receive_json()
+            assert s["job"]["state"] == "awaiting_reposition"
+            assert s["job"]["awaiting_lift"] == 1
+            assert s["job"]["total_lifts"] == 3

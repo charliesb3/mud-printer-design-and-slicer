@@ -26,13 +26,16 @@ class MockTransport:
     binding issues when the object is constructed in a synchronous fixture.
     """
 
-    def __init__(self, auto_ok: bool = False) -> None:
+    def __init__(self, auto_ok: bool = False, status_reply: Optional[str] = None) -> None:
         """
         Args:
             auto_ok: if True, every write_line call automatically triggers
                      an 'ok' response, useful for tests that only care about
                      streaming logic rather than response handling.
+            status_reply: if set, every '?' status poll is answered with this
+                     status report line (tests may change it at any time).
         """
+        self.status_reply = status_reply
         self._rx: Optional[asyncio.Queue] = None  # lazy init
         self._tx_lines: list[str] = []
         self._raw_writes: list[bytes] = []
@@ -61,6 +64,8 @@ class MockTransport:
 
     async def write_raw(self, data: bytes) -> None:
         self._raw_writes.append(data)
+        if data == b"?" and self.status_reply and self._open:
+            await self._queue().put(self.status_reply)
 
     def is_open(self) -> bool:
         return self._open

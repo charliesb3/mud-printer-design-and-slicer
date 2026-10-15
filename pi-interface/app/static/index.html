@@ -15,6 +15,7 @@
     <div class="status-left">
       <span class="badge badge-disconnected" id="conn-badge">DISCONNECTED</span>
       <span class="state-badge state-disconnected" id="grbl-state">—</span>
+      <span class="state-badge lift-badge" id="lift-badge" hidden></span>
     </div>
     <div class="status-right">
       <span class="pos-label">X</span>
@@ -28,8 +29,25 @@
 
   <!-- WebSocket connection indicator -->
   <div id="ws-status">● connecting…</div>
+  <div id="notice" hidden></div>
 
   <div id="main-content">
+
+    <!-- Frame reposition required (shown on every connected client) -->
+    <div class="section reposition-panel" id="reposition-panel" hidden>
+      <div class="reposition-title" id="reposition-title">Frame reposition required</div>
+      <div class="reposition-text" id="reposition-text"></div>
+      <div class="reposition-detail" id="reposition-detail" hidden></div>
+      <p class="reposition-note">
+        The print is paused between lifts. Nothing is sent to the machine
+        until the reposition is confirmed here or on any other connected screen.
+      </p>
+      <button class="ctrl-btn btn-confirm" id="btn-confirm" title="Press and hold to confirm">
+        <span id="btn-confirm-label">Hold to confirm</span>
+        <div class="hold-fill"></div>
+      </button>
+      <div class="reposition-blocked" id="reposition-blocked"></div>
+    </div>
 
     <!-- Jog section -->
     <div class="section">
@@ -56,7 +74,7 @@
         <button class="ctrl-btn btn-resume" id="btn-resume">RESUME</button>
         <button class="ctrl-btn btn-stop" id="btn-stop" title="Hold for 2.5 s to stop">
           <span>STOP</span>
-          <div class="stop-fill" id="stop-fill"></div>
+          <div class="hold-fill"></div>
         </button>
       </div>
       <p class="estop-note">
@@ -72,14 +90,16 @@
         <span class="state-badge" id="job-state-badge" style="display:none"></span>
       </div>
       <div class="job-meta" id="job-meta"></div>
+      <div class="lift-summary" id="lift-summary" hidden></div>
+      <div class="lift-strip" id="lift-strip" hidden></div>
       <div class="progress-bar-wrap" id="progress-wrap">
         <div class="progress-bar-fill" id="progress-fill"></div>
       </div>
       <div id="upload-status"></div>
       <div class="job-actions-row" style="margin-top:8px">
         <label class="upload-label">
-          Upload G-code
-          <input type="file" id="file-input" accept=".nc,.gcode,.g,.txt,.ngc" />
+          Upload job
+          <input type="file" id="file-input" accept=".mudjob,.json,.nc,.gcode,.g,.txt,.ngc" />
         </label>
         <button class="ctrl-btn btn-start" id="btn-start" disabled>START JOB</button>
       </div>

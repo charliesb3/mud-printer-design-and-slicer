@@ -10,34 +10,13 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from . import config
 from .grbl.parser import StatusReport
 
-
-@dataclass
-class JobInfo:
-    filename: str
-    total_lines: int
-    state: str = "ready"   # ready | running | held | stopped | completed | error
-    current_line: int = 0
-    started_at: Optional[float] = None
-    error: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        elapsed = (time.time() - self.started_at) if self.started_at else None
-        d: dict = {
-            "filename": self.filename,
-            "total_lines": self.total_lines,
-            "state": self.state,
-            "current_line": self.current_line,
-            "elapsed_seconds": round(elapsed, 1) if elapsed is not None else None,
-        }
-        if self.error:
-            d["error"] = self.error
-        return d
+if TYPE_CHECKING:
+    from .jobs.current_job import CurrentJob
 
 
 class AppState:
@@ -48,7 +27,14 @@ class AppState:
         self.mpos_y: float = 0.0
         self.feed_rate: float = 0.0
         self.grbl_version: Optional[str] = None
-        self.job: Optional[JobInfo] = None
+        # The loaded job (CurrentJob). Shared by reference with the HTTP layer
+        # and the runner, so every broadcast reflects the live job state.
+        self.job: Optional["CurrentJob"] = None
+        # Incremented on every status report / GRBL welcome (reset). The job
+        # runner uses them to wait for a FRESH Idle report after draining a lift
+        # and to notice a reset or disconnect while awaiting a frame reposition.
+        self.status_seq: int = 0
+        self.reset_seq: int = 0
         self._console: deque = deque(maxlen=config.CONSOLE_MAX_LINES)
 
     # --- GRBL state updates ---
@@ -56,6 +42,7 @@ class AppState:
     def update_from_status(self, report: StatusReport) -> None:
         """Apply a parsed GRBL status report to the current state."""
         self.connected = True
+        self.status_seq += 1
         state = report.state
         if report.sub_state:
             self.grbl_state = f"{state}:{report.sub_state}"
@@ -74,8 +61,10 @@ class AppState:
         self.grbl_state = "Disconnected"
 
     def mark_connected_idle(self) -> None:
+        """GRBL welcome message: a (re)start or reset of the controller."""
         self.connected = True
         self.grbl_state = "Idle"
+        self.reset_seq += 1
 
     # --- Console ---
 
