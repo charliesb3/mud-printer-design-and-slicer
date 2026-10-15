@@ -22,6 +22,8 @@ Underneath, every lift is ordinary GRBL G-code.
 """
 from __future__ import annotations
 
+import bisect
+import itertools
 import json
 import time
 from dataclasses import dataclass, field
@@ -29,6 +31,8 @@ from pathlib import Path
 from typing import Optional
 
 from ..grbl.parser import lift_gcode_reason, prepare_gcode_line, program_control_reason
+from .layout import LiftLayout
+from .motion import analyze
 
 
 JOB_FORMAT = "mudprinter-job"
@@ -60,6 +64,8 @@ class JobLift:
     # layer / Z metadata for the operator (manual Z): [{line, layer, z,
     # z_in_lift, pass}] with `line` = index into `lines` where it begins
     marks: list = field(default_factory=list)
+    # indices into `lines` of non-printing moves (job `travel_lines`), if given
+    travel: Optional[list] = None
 
     def mark_at(self, line: int) -> Optional[dict]:
         """The layer mark in effect once `line` lines of this lift have been sent."""
@@ -81,31 +87,49 @@ class JobLift:
         return d
 
 
+_JOB_SEQ = itertools.count(1)
+
+
 @dataclass
 class CurrentJob:
     filename: str
     filepath: Path
     lines: list[str] = field(default_factory=list)   # all sendable lines, in order
-    lifts: list[JobLift] = field(default_factory=list)
+    lifts: list[JobLift] = field(default_factory=list)   # the EXPORTED lifts (never changed)
     kind: str = "gcode"   # gcode (flat file, one lift) | building (.mudjob)
     name: Optional[str] = None
     units: Optional[str] = None   # informational only — never converted
     executable: bool = True       # False: structure only (no G-code) — displayed, never run
     xy_bounds: Optional[dict] = None   # building XY extent in work coordinates (display only)
+    lift_plan: Optional[dict] = None   # {target_lift_height, max_z_travel, layer_height} (display / checks)
+    reentry: bool = False              # every layer mark starts a re-entry segment
+    machine: Optional[dict] = None     # the job's `machine` block (display: planned feeds)
     phase: Optional[str] = None        # "origin" while returning to the print origin
     unresolved: list = field(default_factory=list)   # [{id, summary}] why not executable
     state: str = "ready"  # ready | running | held | awaiting_reposition | stopped | completed | error
     current_line: int = 0         # lines acknowledged, across the whole job
-    current_lift: int = 0         # the lift being (or last) streamed
-    awaiting_lift: Optional[int] = None   # the lift waiting for reposition confirmation
+    current_lift: int = 0         # the EFFECTIVE lift being (or last) streamed
+    awaiting_lift: Optional[int] = None   # the effective lift waiting for reposition confirmation
     started_at: Optional[float] = None
     error: Optional[str] = None
+    observed_layer: Optional[float] = None   # operator's layer thickness (in) — the physical one; default nominal
+    target_lift: Optional[float] = None      # operator's target lift height (in); default lift_plan
+    rapid_in_min: Optional[float] = None     # GRBL max rate, for G0 estimates (flat G-code)
 
     def __post_init__(self) -> None:
         if not self.lifts:
             self.lifts = [JobLift(index=0, lines=list(self.lines))]
         else:
             self.lines = [line for lift in self.lifts for line in lift.lines]
+        self.job_id = next(_JOB_SEQ)
+        self.layout = LiftLayout(self.lifts, self.lift_plan, self.reentry)
+        travel = None
+        if any(l.travel is not None for l in self.lifts):
+            travel = {self.layout.offsets[i] + t for i, l in enumerate(self.lifts) for t in (l.travel or [])}
+        self.profile = analyze(self.lines, travel, self.rapid_in_min)
+        self.waiting_s = 0.0                     # time spent awaiting frame repositions
+        self.awaiting_since: Optional[float] = None
+        self.adjustments: list[dict] = []        # operator lift-boundary changes (log)
 
     @property
     def total_lines(self) -> int:
@@ -113,15 +137,16 @@ class CurrentJob:
 
     @property
     def total_lifts(self) -> int:
-        return len(self.lifts)
+        """Number of EFFECTIVE lifts (the exported ones unless the operator moved a boundary)."""
+        return self.layout.count
 
     @property
     def is_active(self) -> bool:
         return self.state in ACTIVE_STATES
 
     def lift_start_line(self, lift_index: int) -> int:
-        """Global line offset of the first line of a lift."""
-        return sum(len(l.lines) for l in self.lifts[:lift_index])
+        """Global line offset of the first line of an effective lift."""
+        return self.layout.range_of(lift_index)[0]
 
     def reset_progress(self) -> None:
         self.phase = None
@@ -130,6 +155,18 @@ class CurrentJob:
         self.current_lift = 0
         self.awaiting_lift = None
         self.error = None
+        self.waiting_s = 0.0
+        self.awaiting_since = None
+
+    # --- frame-reposition waits (excluded from motion time) ---
+
+    def begin_wait(self) -> None:
+        self.awaiting_since = time.time()
+
+    def end_wait(self) -> None:
+        if self.awaiting_since is not None:
+            self.waiting_s += time.time() - self.awaiting_since
+            self.awaiting_since = None
 
     def confirm_reposition(self, lift_index) -> Optional[str]:
         """
@@ -145,13 +182,259 @@ class CurrentJob:
                     f"but lift {self.awaiting_lift + 1} is the one waiting.")
         self.awaiting_lift = None
         self.state = "running"
+        self.end_wait()
         return None
+
+    # --- operator-observed layer thickness and lift-boundary adjustment ---
+
+    def layer_thickness(self) -> Optional[float]:
+        """The thickness used for physical estimates: observed, else nominal."""
+        return self.observed_layer or self.layout.nominal_layer
+
+    def target_lift_height(self) -> Optional[float]:
+        return self.target_lift or (self.lift_plan or {}).get("target_lift_height")
+
+    def propose_lift_end(self, target: float, thickness: float) -> dict:
+        """
+        From the operator's physical variables to a SAFE lift end (2026-10-14
+        UI pass). Layers needed = floor(target / thickness); the proposal is
+        the clean-cut end of the adjustable lift with the most layers not
+        above that (else the earliest end still available). The Pi never
+        invents layers: when the exact count is not available it says why.
+        Same rule in the UI (app.js `proposeLiftEnd`) for the live preview.
+        """
+        k = self.adjustable_lift()
+        out = {"lift": k, "needed": None, "choice": None, "exact": False, "reason": None}
+        if k is None:
+            out["reason"] = ("Lift ends cannot be adjusted for this job now"
+                             + ("" if self.layout.adjustable else " (no re-entry layer marks — re-export it)") + ".")
+            return out
+        needed = max(1, int(target / thickness + 1e-9))
+        out["needed"] = needed
+        mz = (self.lift_plan or {}).get("max_z_travel")
+        cands = [c for c in self.end_candidates()
+                 if mz is None or c["layers"] * thickness <= mz + 1e-9]
+        if not cands:
+            out["reason"] = "No safe whole-layer end is available for this lift."
+            return out
+        below = [c for c in cands if c["layers"] <= needed]
+        choice = max(below, key=lambda c: c["layers"]) if below else min(cands, key=lambda c: c["layers"])
+        out["choice"], out["exact"] = choice, choice["layers"] == needed
+        if choice["layers"] > needed:
+            out["reason"] = (f"This lift already has {choice['layers'] - 1} or more layers under way — "
+                             f"the earliest end still possible is after {choice['layers']} layers.")
+        elif choice["layers"] < needed:
+            if choice["end_of_job"]:
+                out["reason"] = f"Only {choice['layers']} layers remain in the job."
+            elif any(c["layers"] > choice["layers"] for c in cands):
+                # longer ends exist, but none at exactly `needed`: no clean cut there
+                out["reason"] = (f"No safe whole-layer end at {needed} layers here (layers of different islands "
+                                 f"interleave) — nearest below: {choice['layers']}.")
+            else:
+                out["reason"] = (f"{needed} layers × {thickness:g} in would exceed the machine's Z travel — "
+                                 f"limited to {choice['layers']}.")
+        return out
+
+    def apply_lift_parameters(self, lift_index, target: float, thickness: float) -> tuple:
+        """Store the operator's target / thickness and move the adjustable
+        lift's end to the proposed safe cut. Returns (refusal, info)."""
+        k = self.adjustable_lift()
+        if k is None or lift_index != k:
+            return (self.propose_lift_end(target, thickness)["reason"] if k is None
+                    else f"The parameters apply to lift {k + 1} now.", None)
+        mz = (self.lift_plan or {}).get("max_z_travel")
+        if mz is not None and target > mz + 1e-9:
+            return (f"The target lift height cannot exceed the machine's Z travel ({mz:g} in).", None)
+        prop = self.propose_lift_end(target, thickness)
+        c = prop["choice"]
+        if c is None:
+            return (prop["reason"], None)
+        self.observed_layer, self.target_lift = thickness, target
+        if c["planned"]:
+            return (None, f"Lift {k + 1} keeps its end after {c['layers']} layers." +
+                    (f" {prop['reason']}" if prop["reason"] else ""))
+        refusal, warning = self.adjust_lift_end(k, c["at"])
+        if refusal:
+            return (refusal, None)
+        info = f"Lift {k + 1} now ends after building layer {c['end_layer'] + 1} ({c['layers']} layers)."
+        return (None, " ".join(x for x in (info, prop["reason"], warning) if x))
+
+    def adjustable_lift(self) -> Optional[int]:
+        """The effective lift whose END the operator may move now, if any."""
+        if not (self.layout.adjustable and self.executable):
+            return None
+        if self.state == "awaiting_reposition" and self.awaiting_lift is not None:
+            return self.awaiting_lift - 1            # just printed: may continue into more layers
+        if self.state in ("ready", "running", "held"):
+            return self.current_lift
+        return None
+
+    def end_candidates(self) -> list:
+        k = self.adjustable_lift()
+        if k is None:
+            return []
+        lp = self.lift_plan or {}
+        after = self.current_line if self.state in ("running", "held", "awaiting_reposition") else 0
+        if self.state == "awaiting_reposition":
+            after = self.layout.range_of(k)[1]       # the lift is printed through its current end
+        return self.layout.candidates(k, after, self.layer_thickness(),
+                                      lp.get("max_z_travel"), lp.get("target_lift_height"))
+
+    def adjust_lift_end(self, lift_index, at) -> tuple:
+        """Move the end of the adjustable lift to clean cut `at`.
+        Returns (refusal or None, warning or None)."""
+        k = self.adjustable_lift()
+        if k is None:
+            return ("Lift boundaries cannot be adjusted for this job now"
+                    + ("" if self.layout.adjustable else
+                       " (the job has no re-entry layer marks — re-export it from the Designer)") + ".", None)
+        if lift_index != k:
+            return (f"Only the end of lift {k + 1} can be adjusted now.", None)
+        cands = {c["at"]: c for c in self.end_candidates()}
+        c = cands.get(at)
+        if c is None:
+            return ("That is not an allowed lift end (only whole-layer clean cuts after what has been sent).", None)
+        if c["exceeds_max"]:
+            return (f"Refused: {c['layers']} layers at {self.layer_thickness():g} in ≈ {c['physical_estimate']:g} in "
+                    f"exceeds the machine's Z travel.", None)
+        start, old_end = self.layout.range_of(k)
+        self.layout.set_end(k, at)
+        self.adjustments.append({"lift": k, "from_line": old_end, "to_line": at, "end_layer": c["end_layer"],
+                                 "layers": c["layers"], "thickness": self.layer_thickness(), "t": time.time()})
+        warning = None
+        if self.state == "awaiting_reposition" and not self.layout.is_boundary(old_end):
+            # the operator continues the just-printed lift: no reposition here
+            self.awaiting_lift = None
+            self.state = "running"
+            self.end_wait()
+        if k + 1 < self.layout.count:
+            nxt = self.layout.layers_in(*self.layout.range_of(k + 1))
+            t = self.layer_thickness()
+            mz = (self.lift_plan or {}).get("max_z_travel")
+            if t and mz and len(nxt) * t > mz + 1e-9:
+                warning = (f"Lift {k + 2} now holds {len(nxt)} layers ≈ {len(nxt) * t:g} in at {t:g} in/layer — "
+                           f"more than the {mz:g} in Z travel: end it early when you reach it.")
+        return (None, warning)
+
+    def restore_planned_lifts(self) -> Optional[str]:
+        if self.is_active and self.state != "awaiting_reposition":
+            return "Cannot restore the planned lifts while the job is running."
+        if self.state == "awaiting_reposition":
+            return "Cannot restore the planned lifts while awaiting a frame reposition."
+        self.layout.boundaries = list(self.layout.offsets)
+        self.layout._bset = set(self.layout.boundaries)
+        self.adjustments.clear()
+        self.observed_layer = None        # back to the Slicer's plan: nominal thickness, planned target
+        self.target_lift = None
+        return None
+
+    # --- outline (controller feature; never changes the job) ---
+
+    def outline(self) -> Optional[dict]:
+        """The rectangle Outline traces (work coordinates, inches): the job's
+        `xy_bounds`, else the extent of its G-code moves."""
+        if not self.executable:
+            return None
+        if hasattr(self, "_outline"):
+            return self._outline
+        self._outline = self._compute_outline()
+        return self._outline
+
+    def _compute_outline(self) -> Optional[dict]:
+        b, source = self.xy_bounds, "job xy_bounds"
+        if not b:
+            b = self.profile.bounds()
+            source = "G-code moves" + ("" if self.kind == "building" else
+                                       " (flat file: assumes its coordinates are work coordinates)")
+        if not b:
+            return None
+        x0, y0, x1, y1 = b["min_x"], b["min_y"], b["max_x"], b["max_y"]
+        corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
+        return {"corners": [[round(x, 4), round(y, 4)] for x, y in corners], "source": source,
+                "width": round(x1 - x0, 4), "height": round(y1 - y0, 4)}
+
+    # --- progress ---
+
+    def progress(self) -> dict:
+        """Estimates (motion only, 100 % feed) and progress at job / lift / layer level."""
+        P, L = self.profile, self.layout
+        g = min(self.current_line, self.total_lines)
+        k = min(self.current_lift, L.count - 1)
+        start, end = L.range_of(k)
+        job_t, lift_t = P.between(0, self.total_lines), P.between(start, end)
+        done_t, lift_done = P.between(0, g), P.between(start, max(start, min(g, end)))
+        now = time.time()
+        elapsed = (now - self.started_at) if self.started_at else None
+        waiting = self.waiting_s + ((now - self.awaiting_since) if self.awaiting_since else 0.0)
+        out = {
+            "estimate": True,
+            "unknown_lines": P.unknown_lines,
+            "classified": P.classified,
+            "total_s": round(job_t["time_s"], 1),
+            "remaining_s": round(job_t["time_s"] - done_t["time_s"], 1),
+            "lift_total_s": round(lift_t["time_s"], 1),
+            "lift_remaining_s": round(lift_t["time_s"] - lift_done["time_s"], 1),
+            "fraction": round(done_t["time_s"] / job_t["time_s"], 4) if job_t["time_s"] > 0
+            else (round(g / self.total_lines, 4) if self.total_lines else 0.0),
+            "lift_fraction": round(lift_done["time_s"] / lift_t["time_s"], 4) if lift_t["time_s"] > 0 else 0.0,
+            "print_in": round(job_t["print_in"], 1),
+            "print_done_in": round(done_t["print_in"], 1),
+            "lift_print_in": round(lift_t["print_in"], 1),
+            "lift_print_done_in": round(lift_done["print_in"], 1),
+            "path_in": round(job_t["path_in"], 1),
+            "elapsed_s": round(elapsed, 1) if elapsed is not None else None,
+            "waiting_s": round(waiting, 1),
+            "motion_elapsed_s": round(elapsed - waiting, 1) if elapsed is not None else None,
+        }
+        lp = self.lift_plan or {}
+        t_obs = self.layer_thickness()
+        layers = L.layers_in(start, end)
+        seg = L.segment_at(g)
+        lift = {
+            "nominal_layer": L.nominal_layer,
+            "observed_layer": self.observed_layer,
+            "target_lift_height": self.target_lift_height(),
+            "planned_target_lift_height": lp.get("target_lift_height"),
+            "max_z_travel": lp.get("max_z_travel"),
+            "layers": len(layers) or None,
+            "adjustable": L.adjustable,
+        }
+        if layers:
+            done_layers = L.completed_layers(start, end, g)
+            base = L.frame_base(k)
+            lift["completed_layers"] = done_layers
+            lift["planned_height_nominal"] = (round(L.layer_top[layers[-1]] - base, 4)
+                                              if base is not None and layers[-1] in L.layer_top else None)
+            if t_obs:
+                lift["physical_lift_estimate"] = round(len(layers) * t_obs, 3)
+                lift["physical_done_estimate"] = round(done_layers * t_obs, 3)
+            if seg is not None and start <= seg[0] < end:
+                lift["layer"] = seg[1]
+                lift["layer_in_lift"] = layers.index(seg[1]) + 1 if seg[1] in layers else None
+                if isinstance(seg[2], (int, float)):
+                    lift["z"] = seg[2]
+                    if base is not None:
+                        lift["z_in_lift"] = round(seg[2] - base, 4)
+        out["lift"] = lift
+        return out
 
     def to_dict(self) -> dict:
         elapsed = (time.time() - self.started_at) if self.started_at else None
-        lift = self.lifts[self.current_lift]
-        lift_line = max(0, self.current_line - self.lift_start_line(self.current_lift))
+        L = self.layout
+        k = min(self.current_lift, L.count - 1)
+        start, end = L.range_of(k)
+        lift_line = max(0, self.current_line - start)
+        orig = self.lifts[min(bisect.bisect_right(L.offsets, start) - 1, len(self.lifts) - 1)]
+        mark = None
+        seg = L.segment_at(min(self.current_line, self.total_lines))
+        if seg is not None:
+            base = L.frame_base(k)
+            mark = {"layer": seg[1], "z": seg[2],
+                    "z_in_lift": round(seg[2] - base, 6) if base is not None and seg[2] is not None else None}
+        elif orig.marks:
+            mark = orig.mark_at(max(0, self.current_line - L.offsets[orig.index]))
         d: dict = {
+            "job_id": self.job_id,
             "filename": self.filename,
             "kind": self.kind,
             "executable": self.executable,
@@ -165,12 +448,19 @@ class CurrentJob:
             "total_lifts": self.total_lifts,
             "current_lift": self.current_lift,
             "awaiting_lift": self.awaiting_lift,
-            "lift_line": min(lift_line, len(lift.lines)),
-            "lift_total_lines": len(lift.lines),
-            "lifts": [l.to_dict() for l in self.lifts],
+            "lift_line": min(lift_line, end - start),
+            "lift_total_lines": end - start,
+            "lifts": [L.describe(i) for i in range(L.count)],
+            "lifts_adjusted": bool(self.adjustments),
             "phase": self.phase,
             "xy_bounds": self.xy_bounds,
-            "current_mark": lift.mark_at(min(lift_line, len(lift.lines))),
+            "lift_plan": self.lift_plan,
+            "machine": self.machine,
+            "current_mark": mark,
+            "progress": self.progress(),
+            "outline": self.outline(),
+            "adjust": {"lift": self.adjustable_lift(), "candidates": self.end_candidates()}
+            if self.layout.adjustable else None,
         }
         if self.error:
             d["error"] = self.error
@@ -240,6 +530,7 @@ def parse_building_job(text: str, filename: str = "") -> dict:
     raw_lifts = doc.get("lifts")
     if not isinstance(raw_lifts, list) or not raw_lifts:
         raise JobFormatError("'lifts' must be a non-empty list")
+    reentry = doc.get("reentry_marks") is True
 
     lifts: list[JobLift] = []
     for pos, raw in enumerate(raw_lifts):
@@ -277,8 +568,11 @@ def parse_building_job(text: str, filename: str = "") -> dict:
             raise JobFormatError(f"{where}: 'description' must be a string")
         meta = {k: raw[k] for k in LIFT_META_KEYS if k in raw}
         marks = _layer_marks(raw, where) if executable else []
+        travel = _travel_lines(raw, where) if executable else None
+        if executable and reentry:
+            _check_reentry(lines, marks, travel, where)
         lifts.append(JobLift(index=pos, lines=lines, description=desc, reposition_before=repo, meta=meta,
-                             marks=marks))
+                             marks=marks, travel=travel))
 
     name = doc.get("name")
     units = doc.get("units")
@@ -286,10 +580,22 @@ def parse_building_job(text: str, filename: str = "") -> dict:
     if bounds is not None and not (isinstance(bounds, dict) and all(
             isinstance(bounds.get(k), (int, float)) for k in ("min_x", "min_y", "max_x", "max_y"))):
         raise JobFormatError("'xy_bounds' must be {min_x, min_y, max_x, max_y} numbers")
+    lift_plan = doc.get("lift_plan")
+    if lift_plan is not None:
+        if not isinstance(lift_plan, dict):
+            raise JobFormatError("'lift_plan' must be an object")
+        for key in ("target_lift_height", "max_z_travel", "layer_height"):
+            v = lift_plan.get(key)
+            if v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
+                raise JobFormatError(f"'lift_plan.{key}' must be a positive number or null")
+    machine = doc.get("machine") if isinstance(doc.get("machine"), dict) else None
     return {
         "name": name if isinstance(name, str) else None,
         "units": units if isinstance(units, str) else None,
         "xy_bounds": bounds,
+        "lift_plan": lift_plan,
+        "reentry": reentry,
+        "machine": machine,
         "executable": executable,
         "unresolved": [{"id": u["id"], "summary": u["summary"]} for u in unresolved],
         "lifts": lifts,
@@ -308,12 +614,7 @@ def _layer_marks(raw: dict, where: str) -> list:
             isinstance(m, dict) and isinstance(m.get("line"), int) and not isinstance(m.get("line"), bool)
             and 0 <= m["line"] <= len(gcode) for m in marks):
         raise JobFormatError(f"{where}: 'layer_marks' must be a list of {{line, …}} with line indices into 'gcode'")
-    sendable_before, n = [], 0
-    for g in gcode:
-        sendable_before.append(n)
-        if prepare_gcode_line(g):
-            n += 1
-    sendable_before.append(n)
+    sendable_before = _sendable_index(gcode)
     out = []
     for m in sorted(marks, key=lambda m: m["line"]):
         d = {k: m[k] for k in ("layer", "pass", "z", "z_in_lift") if isinstance(m.get(k), (int, float))}
@@ -322,8 +623,53 @@ def _layer_marks(raw: dict, where: str) -> list:
     return out
 
 
-def load_job_from_file(filepath: Path) -> CurrentJob:
-    """Read a flat G-code file or a building job and return a CurrentJob."""
+def _sendable_index(gcode: list) -> list:
+    """sendable_before[i] = number of sendable lines before raw index i (len + 1 entries)."""
+    out, n = [], 0
+    for g in gcode:
+        out.append(n)
+        if prepare_gcode_line(g):
+            n += 1
+    out.append(n)
+    return out
+
+
+def _travel_lines(raw: dict, where: str) -> Optional[list]:
+    """A lift's optional `travel_lines` (raw gcode indices) as sendable-line indices."""
+    tl = raw.get("travel_lines")
+    if tl is None:
+        return None
+    gcode = raw["gcode"]
+    if not isinstance(tl, list) or not all(isinstance(i, int) and not isinstance(i, bool)
+                                           and 0 <= i < len(gcode) for i in tl):
+        raise JobFormatError(f"{where}: 'travel_lines' must be a list of indices into 'gcode'")
+    idx = _sendable_index(gcode)
+    return sorted({idx[i] for i in tl if prepare_gcode_line(gcode[i])})
+
+
+_XY_MOTION = ("X", "Y")
+
+
+def _check_reentry(lines: list, marks: list, travel: Optional[list], where: str) -> None:
+    """`reentry_marks`: every layer mark must begin a self-contained segment —
+    units + distance mode, then a travel with an explicit feed as its first move."""
+    travel_set = set(travel or [])
+    for m in marks:
+        i = m["line"]
+        j = i
+        while j < len(lines) and not any(a in lines[j].upper() for a in _XY_MOTION):
+            j += 1
+        if j >= len(lines):
+            raise JobFormatError(f"{where}: layer mark at line {i} has no motion after it")
+        reason = lift_gcode_reason(lines[i:j + 1])
+        if reason or j not in travel_set or "F" not in lines[j].upper():
+            raise JobFormatError(f"{where}: layer mark at line {i} is not a re-entry point "
+                                 f"(needs units + distance mode, then a travel with a feed)")
+
+
+def load_job_from_file(filepath: Path, rapid_in_min: Optional[float] = None) -> CurrentJob:
+    """Read a flat G-code file or a building job and return a CurrentJob.
+    `rapid_in_min`: GRBL's max rate (in/min) if known — for G0 time estimates."""
     raw = filepath.read_text(encoding="utf-8", errors="replace")
     if is_building_job(filepath.name, raw):
         parsed = parse_building_job(raw, filepath.name)
@@ -337,9 +683,14 @@ def load_job_from_file(filepath: Path) -> CurrentJob:
             executable=parsed["executable"],
             unresolved=parsed["unresolved"],
             xy_bounds=parsed["xy_bounds"],
+            lift_plan=parsed["lift_plan"],
+            reentry=parsed["reentry"],
+            machine=parsed["machine"],
+            rapid_in_min=rapid_in_min,
         )
     return CurrentJob(
         filename=filepath.name,
         filepath=filepath,
         lines=_clean_lines(raw.splitlines()),
+        rapid_in_min=rapid_in_min,
     )

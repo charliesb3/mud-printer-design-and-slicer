@@ -228,7 +228,7 @@ class TestBuildingJobUpload:
         ).json()
         assert data["success"] is True
         assert data["kind"] == "building" and data["executable"] is True and data["unresolved"] == []
-        assert data["total_lifts"] == 3 and data["total_lines"] == 60
+        assert data["total_lifts"] == 3 and data["total_lines"] == 72
         job = client.get("/api/state").json()["job"]
         assert job["executable"] is True and job["xy_bounds"]["max_x"] == 140.0
         assert [l["index"] for l in job["lifts"]] == [0, 1, 2]

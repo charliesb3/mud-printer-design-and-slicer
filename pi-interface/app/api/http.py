@@ -17,6 +17,15 @@ WebSocket (/ws):
     set_origin     {}  — print origin = current XY (work XY zero, G54)
     set_prime      {}  — prime position = current XY (work coordinates)
     prime          {}  — move to the prime position (operator then runs the pump)
+    outline        {}  — trace the loaded job's XY bounds at jog speed (preview in state)
+    feed_override  {step: -10|-1|1|10|"reset"}  — GRBL real-time feed override
+    adjust_lift_end {lift: int, at: int}  — move the end of the adjustable lift to a clean cut
+    set_observed_layer {thickness: float}  — operator-observed physical layer thickness (in)
+    measure_lift_height {height: float}  — measured height of the completed layers of this lift (in)
+    apply_lift_parameters {lift: int, target: float, thickness: float}  — operator target lift
+                   height + layer thickness → the safe lift end (Hold to Apply)
+    restore_planned_lifts {}
+    read_grbl      {what: "settings"|"parser"|"offsets"}  — read-only $$ / $G / $#
     console_send   {command: str}
 
   Server → Client message types:
@@ -34,6 +43,7 @@ Synchronized clients:
 
 HTTP:
   POST /upload   — multipart file upload, sets the current job
+  GET  /api/job/path — the loaded job's XY path (2D live view), from its G-code
   GET  /         — serves the static frontend
 
 Dead-man jogging:
@@ -62,6 +72,7 @@ from fastapi import APIRouter, File, UploadFile, WebSocket, WebSocketDisconnect
 from .. import config
 from ..grbl.communicator import GRBLCommunicator
 from ..jobs.current_job import CurrentJob, JobFormatError, load_job_from_file
+from ..jobs.motion import path_payload
 from ..jobs.runner import DRAIN_COMMAND, JobRunner
 from ..state import AppState
 from .ws import ConnectionManager
@@ -424,6 +435,138 @@ async def _run_positioning(line: str) -> None:
         setup.moving = None
 
 
+# ------------------------------------------------------------------ #
+# Outline: trace the job's XY bounds (controller feature, like UGS's   #
+# "Outline" — separate from Prime; never changes the job)              #
+# ------------------------------------------------------------------ #
+
+async def _outline() -> Optional[str]:
+    global _position_task
+    refusal = _setup_refusal()
+    if refusal:
+        return refusal
+    assert _state is not None
+    if not _state.setup.origin_set:
+        return "Set the print origin first — the outline is in work coordinates."
+    preview = _current_job.outline() if _current_job else None
+    if preview is None:
+        return "Load an executable job first — Outline traces its XY bounds."
+    feed = _positioning_feed_in_min()
+    if feed is None:
+        return "Outline moves at the jog speed, and jogging is disabled (JOG_SPEED_MM_MIN not set)."
+    lines = [f"G54 G20 G90 G1 X{x:.4f} Y{y:.4f} F{feed:.1f}" for x, y in preview["corners"]]
+    _state.setup.moving = "outline"
+    _state.setup.note = None
+    _position_task = asyncio.create_task(_run_moves(lines), name="outline")
+    return None
+
+
+async def _run_moves(lines: list) -> None:
+    """Positioning moves (Outline) then wait until finished."""
+    assert _state is not None and _comm is not None
+    setup = _state.setup
+    try:
+        for cmd in [*lines, DRAIN_COMMAND]:
+            result = await _comm.send_command(cmd, live=True)
+            if result.startswith("error:"):
+                setup.note = f"Move refused by GRBL ({cmd}): {result}"
+                return
+        await _fresh_status()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        setup.note = f"Move failed: {exc}"
+    finally:
+        setup.moving = None
+
+
+# ------------------------------------------------------------------ #
+# Feed override (GRBL 1.1 real-time bytes; value read back from Ov:)  #
+# ------------------------------------------------------------------ #
+
+FEED_OVERRIDE_BYTES = {"reset": b"\x90", 10: b"\x91", -10: b"\x92", 1: b"\x93", -1: b"\x94"}
+
+
+async def _feed_override(step) -> Optional[str]:
+    if isinstance(step, bool) or step not in FEED_OVERRIDE_BYTES:
+        return "Feed override steps are -10, -1, +1, +10 or reset."
+    if _state is None or _comm is None or not _state.connected:
+        return "Not connected to GRBL."
+    await _comm.send_realtime(FEED_OVERRIDE_BYTES[step])
+    log.info("Feed override %s", step)
+    return None
+
+
+# ------------------------------------------------------------------ #
+# Read-only GRBL queries (diagnostics)                                 #
+# ------------------------------------------------------------------ #
+
+READ_QUERIES = {"settings": "$$", "parser": "$G", "offsets": "$#"}
+
+
+async def _read_grbl(what) -> Optional[str]:
+    if what not in READ_QUERIES:
+        return "Unknown query."
+    refusal = _setup_refusal()
+    if refusal:
+        return refusal
+    assert _comm is not None
+    try:
+        result = await _comm.send_command(READ_QUERIES[what])
+    except Exception as exc:
+        return f"Query failed: {exc}"
+    return None if result == "ok" else f"GRBL answered {result}"
+
+
+# ------------------------------------------------------------------ #
+# Adaptive lift boundaries (operator; see jobs/layout.py)              #
+# ------------------------------------------------------------------ #
+
+def _job_number(value, low: float, high: float) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    return v if low <= v <= high else None
+
+
+async def _lift_message(msg_type: str, data: dict) -> tuple:
+    """(refusal, info) for the lift-adjustment messages."""
+    job = _current_job
+    if job is None or job.kind != "building":
+        return ("Load a building job first.", None)
+    if msg_type == "set_observed_layer":
+        v = _job_number(data.get("thickness"), 0.05, 24.0)
+        if v is None:
+            return ("Layer thickness must be a number between 0.05 and 24 in.", None)
+        job.observed_layer = v
+        return (None, None)
+    if msg_type == "measure_lift_height":
+        h = _job_number(data.get("height"), 0.05, 1000.0)
+        if h is None:
+            return ("Measured height must be a positive number (in).", None)
+        L = job.layout
+        k = min(job.current_lift, L.count - 1)
+        a, b = L.range_of(k)
+        done = L.completed_layers(a, b, job.current_line)
+        if done < 1:
+            return ("No layer of this lift is complete yet.", None)
+        job.observed_layer = round(h / done, 4)
+        return (None, f"Observed layer thickness {job.observed_layer:g} in ({h:g} in over {done} layers).")
+    if msg_type == "restore_planned_lifts":
+        return (job.restore_planned_lifts(), None)
+    if msg_type == "apply_lift_parameters":
+        lift = data.get("lift")
+        target = _job_number(data.get("target"), 0.1, 1000.0)
+        thickness = _job_number(data.get("thickness"), 0.05, 24.0)
+        if not isinstance(lift, int) or isinstance(lift, bool) or target is None or thickness is None:
+            return ("Lift parameters need the lift, a target height and a layer thickness (in).", None)
+        return job.apply_lift_parameters(lift, target, thickness)
+    lift, at = data.get("lift"), data.get("at")
+    if not isinstance(lift, int) or isinstance(lift, bool) or not isinstance(at, int) or isinstance(at, bool):
+        return ("An adjustment must name the lift and the new end.", None)
+    return job.adjust_lift_end(lift, at)
+
+
 async def _cancel_positioning() -> None:
     global _position_task
     if _position_task and not _position_task.done():
@@ -457,7 +600,9 @@ async def broadcast_state() -> None:
 
 # Messages that change machine/job state: broadcast to all clients right after.
 _STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition",
-                   "set_origin", "set_prime", "prime"}
+                   "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
+                   "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
+                   "apply_lift_parameters"}
 
 
 async def _handle_message(data: dict, ws: WebSocket) -> None:
@@ -498,8 +643,29 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
         if refusal:
             await _notify(ws, refusal)
 
-    elif msg_type in ("set_origin", "set_prime", "prime"):
-        action = {"set_origin": _set_origin, "set_prime": _set_prime, "prime": _prime}[msg_type]
+    elif msg_type == "feed_override":
+        refusal = await _feed_override(data.get("step"))
+        if refusal:
+            await _notify(ws, refusal)
+
+    elif msg_type == "read_grbl":
+        refusal = await _read_grbl(data.get("what"))
+        if refusal:
+            await _notify(ws, refusal)
+
+    elif msg_type in ("adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
+                      "apply_lift_parameters"):
+        refusal, info = await _lift_message(msg_type, data)
+        if refusal:
+            await _notify(ws, refusal)
+        elif info:
+            await _notify(ws, info, level="info")
+        if msg_type == "adjust_lift_end" and not refusal:
+            log.info("Lift %s end moved by the operator to line %s", data.get("lift"), data.get("at"))
+
+    elif msg_type in ("set_origin", "set_prime", "prime", "outline"):
+        action = {"set_origin": _set_origin, "set_prime": _set_prime, "prime": _prime,
+                  "outline": _outline}[msg_type]
         refusal = await action()
         if refusal:
             log.info("%s refused: %s", msg_type, refusal)
@@ -579,8 +745,16 @@ async def upload_gcode(file: UploadFile = File(...)):
     content = await file.read()
     destination.write_bytes(content)
 
+    rapid = None
+    if _state and _state.grbl_settings:
+        try:   # GRBL max rates are mm/min — for G0 time estimates of flat G-code
+            rapid = min(float(_state.grbl_settings[110]), float(_state.grbl_settings[111])) / 25.4
+        except (KeyError, ValueError):
+            rapid = None
     try:
-        job = load_job_from_file(destination)
+        # parsing + motion analysis can take seconds on a Pi for a whole
+        # building: off the event loop, so status / jog dead-man keep running
+        job = await asyncio.get_running_loop().run_in_executor(None, load_job_from_file, destination, rapid)
     except JobFormatError as exc:
         return {"success": False, "error": f"Not a valid print job: {exc}"}
     except Exception as exc:
@@ -605,6 +779,23 @@ async def upload_gcode(file: UploadFile = File(...)):
 # ------------------------------------------------------------------ #
 # HTTP: current state (for debugging / REST clients)                  #
 # ------------------------------------------------------------------ #
+
+@router.get("/api/job/path")
+async def get_job_path():
+    """The loaded job's XY path for the live 2D view — derived only from its G-code."""
+    job = _current_job
+    if job is None:
+        return {"job_id": None}
+    if getattr(job, "_path_payload", None) is None:
+        # bounded-error simplification: seconds on a Pi for a whole building —
+        # computed once per job, off the event loop
+        breaks = {g for g, _, _ in job.layout.segments} | set(job.layout.offsets)
+        job._path_payload = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: path_payload(job.profile, breaks))
+    out = dict(job._path_payload)
+    out["job_id"] = job.job_id
+    return out
+
 
 @router.get("/api/state")
 async def get_state():

@@ -148,8 +148,8 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
         J.lifts.length === D.res.plan.lifts.length && J.lifts.every((L, i) => L.index === i) &&
         J.lifts[J.lifts.length - 1].layers.last === 6 && plans() === nPlans,
         'Export Print Job downloads <project>.mudjob: the lifts of the plan in order, nothing re-planned');
-  check(J.executable === true && !J.unresolved && J.lifts.every(L => L.gcode[0] === 'G20' && L.gcode[1] === 'G90' &&
-        L.gcode.slice(2).every(g => /^G1 X/.test(g)) && !L.gcode.some(g => /Z/.test(g))) &&
+  check(J.executable === true && !J.unresolved && J.reentry_marks === true && J.lifts.every(L => L.gcode[0] === 'G20 G90' &&
+        L.gcode.slice(1).every(g => /^G1 X/.test(g) || g === 'G20 G90') && !L.gcode.some(g => /Z/.test(g))) &&
         /XY-only G-code/.test(txt('sim-export-note')) && /PLACEHOLDER speeds/.test(txt('sim-export-note')),
         'the export is executable XY-only G-code in inches (no Z), with a placeholder-speed warning in the note');
   _downloadText = _dl; project.name = '';

@@ -204,7 +204,8 @@ class TestContractFixtures:
         for lift, raw in zip(job.lifts, doc["lifts"]):
             assert lift.index == raw["index"]
             assert lift.lines == raw["gcode"]                     # the exporter writes no comments
-            assert lift.lines[:2] == ["G20", "G90"]
+            assert lift.lines[0] == "G20 G90"                    # each pass: a re-entry segment
+            assert lift.travel == sorted(raw["travel_lines"])
             assert not any("Z" in l for l in lift.lines)
             assert lift.meta["layers"] == raw["layers"]
             assert (lift.meta["z_bottom"], lift.meta["z_top"]) == (raw["z_bottom"], raw["z_top"])

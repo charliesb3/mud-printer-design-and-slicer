@@ -27,8 +27,15 @@ CURRENT MACHINE (decided 2026-10-14) — executable, XY-only G-code:
 - NO Z words: Z is manual. Layer / pass / Z information is kept as metadata
   (`layer_marks`) for the operator and for future automatic Z;
 - no prime moves, no pump / extrusion commands, no program pause / end words.
-The first move of every lift is an absolute travel to that lift's first
-point (the nozzle may have been moved during the frame reposition).
+
+RE-ENTRY SEGMENTS (2026-10-14, adaptive lift boundaries): every PASS (one
+layer piece, `layer_marks` entry) begins a self-contained segment — `G20 G90`
+then an absolute travel `G1 X… Y… F<travel>` to the pass start (emitted even
+when the nozzle is already there) — so the controller may pause before any
+pass (a frame reposition at an adjusted lift boundary) and resume exactly,
+without generating motion of its own (`reentry_marks: true`). The first pass
+of a lift therefore opens the lift. `travel_lines` lists every non-printing
+move (display / progress only); `lift_plan` carries the planning targets.
 """
 from __future__ import annotations
 
@@ -40,7 +47,7 @@ MUDJOB_FORMAT = 'mudprinter-job'
 MUDJOB_VERSION = 1
 MUDJOB_EXTENSION = '.mudjob'
 GENERATOR = 'Mud Printer Design + Toolpath'
-LIFT_PREAMBLE = ('G20', 'G90')          # inches, absolute — explicit in every lift
+PASS_PREAMBLE = 'G20 G90'                # inches, absolute — explicit at every pass (re-entry)
 COORD_DIGITS = 4                        # 0.0001 in
 _TOL = 1e-6
 
@@ -62,9 +69,16 @@ class _Writer:
     """G-code for one lift: absolute G1 moves, F only when it changes."""
 
     def __init__(self, print_feed, travel_feed):
-        self.lines = list(LIFT_PREAMBLE)
+        self.lines = []
+        self.travel = []                 # indices of non-printing moves
         self.feeds = {'print': print_feed, 'retrace': print_feed, 'travel': travel_feed, 'transition': travel_feed}
         self.pos = None                 # the rounded position after the last move (None: unknown)
+        self.feed = None
+
+    def entry(self):
+        """Start a re-entry segment: explicit modal state, position and feed unknown."""
+        self.lines.append(PASS_PREAMBLE)
+        self.pos = None
         self.feed = None
 
     def move(self, kind, p):
@@ -76,14 +90,16 @@ class _Writer:
         if f != self.feed:
             line += f' F{_num(f, 1)}'
             self.feed = f
+        if kind in ('travel', 'transition'):
+            self.travel.append(len(self.lines))
         self.lines.append(line)
         self.pos = (x, y)
 
 
 def _lift_gcode(plan, items, print_feed, travel_feed):
-    """(gcode lines, layer_marks) of one lift's items (print order)."""
+    """(gcode lines, layer_marks, travel line indices) of one lift's items (print order)."""
     w = _Writer(print_feed, travel_feed)
-    marks, cur_pass, last = [], None, None
+    marks, cur_pass, last, entering = [], None, None, False
     for it in items:
         kind, layer, pts, ps = it[0], it[1], it[3], it[11]
         if kind == 'frame':
@@ -94,18 +110,21 @@ def _lift_gcode(plan, items, print_feed, travel_feed):
             marks.append({'line': len(w.lines), 'pass': ps, 'layer': P.layer, 'z': _r(P.z),
                           'z_in_lift': _r(P.z - Lf.z_bottom)})
             cur_pass = ps
+            w.entry()                    # a re-entry segment per pass
+            entering = True
         start = pts[0]
         if kind in ('travel', 'transition'):
             w.move(kind, pts[-1])        # a travel goes to its end, from wherever the nozzle is
         else:
-            if last is None:
-                w.move('travel', start)  # lift start: travel to the first point (position unknown)
+            if entering:
+                w.move('travel', start)  # pass start: explicit travel to its first point
             elif math.hypot(start[0] - last[0], start[1] - last[1]) > _TOL:
                 raise ExportError(f'print plan discontinuity before layer {layer + 1} (pass {ps})')
             for p in pts[1:]:
                 w.move(kind, p)
+        entering = False
         last = pts[-1]
-    return w.lines, marks
+    return w.lines, marks, w.travel
 
 
 def export_job(plan, speeds, name: str | None = None, generated_at: str | None = None,
@@ -151,15 +170,20 @@ def export_job(plan, speeds, name: str | None = None, generated_at: str | None =
     if xs:
         doc['xy_bounds'] = {'min_x': _r(min(xs), 4), 'min_y': _r(min(ys), 4),
                             'max_x': _r(max(xs), 4), 'max_y': _r(max(ys), 4)}
+    hs = {round(L.z_top - L.z_bottom, 9) for L in plan.layers}
+    doc['lift_plan'] = {'target_lift_height': _r(plan.settings.get('lift_height')) if plan.settings.get('lift_height') else None,
+                        'max_z_travel': _r(plan.settings.get('max_z_travel')) if plan.settings.get('max_z_travel') else None,
+                        'layer_height': _r(hs.pop()) if len(hs) == 1 else None}
+    doc['reentry_marks'] = True
     lifts = []
     for L in plan.lifts:
-        gcode, marks = _lift_gcode(plan, by_lift.get(L.index, []), print_feed, travel_feed)
-        lifts.append(_lift(plan, L, gcode, marks))
+        gcode, marks, travel = _lift_gcode(plan, by_lift.get(L.index, []), print_feed, travel_feed)
+        lifts.append(_lift(plan, L, gcode, marks, travel))
     doc['lifts'] = lifts
     return doc
 
 
-def _lift(plan, L, gcode, marks) -> dict:
+def _lift(plan, L, gcode, marks, travel_lines) -> dict:
     passes = [plan.passes[i] for i in L.passes]
     runs = [r for P in passes for r in P.runs]
     travel = sum(t.length for P in passes for t in P.travels) + \
@@ -180,6 +204,7 @@ def _lift(plan, L, gcode, marks) -> dict:
             'frame_z_from': _r(fm.frame_z_from), 'frame_z_to': _r(fm.frame_z_to),
             'nozzle_at': [_r(fm.at[0]), _r(fm.at[1])], 'nozzle_z': _r(fm.z)}
     out['layer_marks'] = marks
+    out['travel_lines'] = travel_lines
     out['gcode'] = gcode
     return out
 

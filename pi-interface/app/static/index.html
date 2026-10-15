@@ -34,15 +34,16 @@
   <div id="main-content">
 
     <!-- Frame reposition required (shown on every connected client) -->
-    <div class="section reposition-panel" id="reposition-panel" hidden>
+    <div class="section reposition-panel span-all" id="reposition-panel" hidden>
       <div class="reposition-title" id="reposition-title">Frame reposition required</div>
       <div class="reposition-text" id="reposition-text"></div>
       <div class="reposition-detail" id="reposition-detail" hidden></div>
       <p class="reposition-note">
-        The print is paused between lifts. Nothing of the next lift is sent
-        until the reposition is confirmed here or on any other connected screen.
-        If the frame raise moved the XY registration you may jog and
-        <b>Set origin</b> again (and Prime) before confirming.
+        Nothing of the next lift is sent until the reposition is confirmed here
+        or on any other connected screen. You may jog and <b>Set origin</b> again
+        (and Prime) first. If this lift is still too low, raise the target lift
+        height or thin the layer thickness under <b>Print parameters</b> and
+        hold Apply to continue it into more layers instead.
       </p>
       <button class="ctrl-btn btn-confirm" id="btn-confirm" title="Press and hold to confirm">
         <span id="btn-confirm-label">Hold to confirm</span>
@@ -51,100 +52,194 @@
       <div class="reposition-blocked" id="reposition-blocked"></div>
     </div>
 
-    <!-- Jog section -->
-    <div class="section">
-      <div class="section-title">Manual Jog (X / Y)</div>
-      <div class="jog-warning" id="jog-warning"></div>
-      <div class="jog-pad">
-        <div></div>
-        <button class="jog-btn" id="jog-yp" data-axis="Y" data-dir="1">Y+</button>
-        <div></div>
-        <button class="jog-btn" id="jog-xm" data-axis="X" data-dir="-1">X−</button>
-        <div class="jog-center">JOG</div>
-        <button class="jog-btn" id="jog-xp" data-axis="X" data-dir="1">X+</button>
-        <div></div>
-        <button class="jog-btn" id="jog-ym" data-axis="Y" data-dir="-1">Y−</button>
-        <div></div>
-      </div>
-    </div>
+    <!-- LEFT: the job, its progress, adjustable print parameters -->
+    <div class="col col-left">
 
-    <!-- Print origin + prime position (machine setup; not part of the job) -->
-    <div class="section" id="setup-section">
-      <div class="section-title">Print origin &amp; prime</div>
-      <div class="setup-rows">
-        <div class="setup-row"><span class="setup-label">Origin</span><span id="origin-status">Not set</span></div>
-        <div class="setup-row"><span class="setup-label">Work X / Y</span><span id="work-pos">—</span></div>
-        <div class="setup-row"><span class="setup-label">Prime</span><span id="prime-status">Not set</span></div>
-      </div>
-      <div class="controls-row">
-        <button class="ctrl-btn btn-setup" id="btn-set-origin" title="Press and hold: the current XY becomes the print origin (work X0 Y0)">
-          <span>Set origin here</span><div class="hold-fill"></div>
-        </button>
-        <button class="ctrl-btn btn-setup" id="btn-set-prime" title="The current XY becomes the prime position (relative to the origin)">Set prime here</button>
-        <button class="ctrl-btn btn-prime" id="btn-prime" title="Press and hold: move to the prime position at jog speed">
-          <span>Prime</span><div class="hold-fill"></div>
-        </button>
-      </div>
-      <div class="setup-note" id="setup-note"></div>
-    </div>
-
-    <!-- Operational controls -->
-    <div class="section">
-      <div class="section-title">Controls</div>
-      <div class="controls-row">
-        <button class="ctrl-btn btn-hold" id="btn-hold">HOLD</button>
-        <button class="ctrl-btn btn-resume" id="btn-resume">RESUME</button>
-        <button class="ctrl-btn btn-stop" id="btn-stop" title="Hold for 2.5 s to stop">
-          <span>STOP</span>
-          <div class="hold-fill"></div>
-        </button>
-      </div>
-      <p class="estop-note">
-        Software controls only — use the physical E-STOP for emergencies.
-      </p>
-    </div>
-
-    <!-- Job section -->
-    <div class="section">
-      <div class="section-title">Current Job</div>
-      <div class="job-file-row">
-        <div class="job-filename empty" id="job-filename">No job loaded</div>
-        <span class="state-badge" id="job-state-badge" style="display:none"></span>
-      </div>
-      <div class="job-meta" id="job-meta"></div>
-      <div class="lift-summary" id="lift-summary" hidden></div>
-      <div class="mark-line" id="mark-line" hidden></div>
-      <div class="lift-strip" id="lift-strip" hidden></div>
-      <div class="job-blocked" id="job-blocked" hidden>
-        <div class="job-blocked-title">Not executable — building structure only</div>
-        <div class="job-blocked-text">
-          This job lists the building's lifts but contains no machine instructions yet,
-          so it cannot be started. Unresolved:
+      <div class="section" id="job-section">
+        <div class="section-title">Current Job</div>
+        <div class="job-file-row">
+          <div class="job-filename empty" id="job-filename">No job loaded</div>
+          <span class="state-badge" id="job-state-badge" style="display:none"></span>
         </div>
-        <ul class="job-unresolved" id="job-unresolved"></ul>
+        <div class="job-meta" id="job-meta"></div>
+        <div class="lift-summary" id="lift-summary" hidden></div>
+        <div class="lift-strip" id="lift-strip" hidden></div>
+        <div class="job-blocked" id="job-blocked" hidden>
+          <div class="job-blocked-title">Not executable — building structure only</div>
+          <div class="job-blocked-text">
+            This job lists the building's lifts but contains no machine instructions yet,
+            so it cannot be started. Unresolved:
+          </div>
+          <ul class="job-unresolved" id="job-unresolved"></ul>
+        </div>
+        <details class="lift-details" id="lift-details" hidden>
+          <summary>Lift details</summary>
+          <div class="lift-list" id="lift-list"></div>
+        </details>
+        <div class="job-actions-row">
+          <label class="upload-label">
+            Upload job
+            <input type="file" id="file-input" accept=".mudjob,.json,.nc,.gcode,.g,.txt,.ngc" />
+          </label>
+        </div>
+        <div id="upload-status"></div>
       </div>
-      <details class="lift-details" id="lift-details" hidden>
-        <summary>Lift details</summary>
-        <div class="lift-list" id="lift-list"></div>
-      </details>
-      <div class="progress-bar-wrap" id="progress-wrap">
-        <div class="progress-bar-fill" id="progress-fill"></div>
-      </div>
-      <div id="upload-status"></div>
-      <div class="job-actions-row" style="margin-top:8px">
-        <label class="upload-label">
-          Upload job
-          <input type="file" id="file-input" accept=".mudjob,.json,.nc,.gcode,.g,.txt,.ngc" />
-        </label>
-        <button class="ctrl-btn btn-start" id="btn-start" disabled>START JOB</button>
-      </div>
-      <div class="start-note" id="start-note"></div>
-    </div>
 
-    <!-- Console (collapsed by default) -->
-    <div class="section">
-      <button class="console-toggle" id="console-toggle">Advanced / Console ▾</button>
+      <div class="section" id="progress-section" hidden>
+        <div class="section-title">Print progress <span class="est-tag">estimates</span></div>
+        <div class="prog-head"><span>Whole job</span><span id="prog-job-pct">—</span></div>
+        <div class="progress-bar-wrap visible"><div class="progress-bar-fill" id="prog-job-bar"></div></div>
+        <div class="kv-grid" id="prog-job"></div>
+        <div id="prog-lift-block">
+          <div class="prog-head"><span id="prog-lift-title">Current lift</span><span id="prog-lift-pct">—</span></div>
+          <div class="progress-bar-wrap visible"><div class="progress-bar-fill lift-fill" id="prog-lift-bar"></div></div>
+          <div class="kv-grid" id="prog-lift"></div>
+          <div class="height-meter" id="height-meter" hidden>
+            <div class="height-track"><div class="height-done" id="height-done"></div><div class="height-plan" id="height-plan"></div></div>
+            <div class="height-labels" id="height-labels"></div>
+          </div>
+        </div>
+        <p class="est-note" id="prog-note">
+          From the job's own G-code (length ÷ feed at 100 %, no acceleration).
+          Waiting at frame repositions never changes the estimate.
+        </p>
+      </div>
+
+      <div class="section" id="params-section">
+        <div class="section-title">Print parameters</div>
+        <div id="lift-params" hidden>
+          <div class="param-row">
+            <div class="param-label">Target lift height<small id="p-target-note"></small></div>
+            <button class="step-btn" data-param="target" data-delta="-0.5">−</button>
+            <div class="param-value" id="p-target-value">—</div>
+            <button class="step-btn" data-param="target" data-delta="0.5">+</button>
+          </div>
+          <div class="param-row">
+            <div class="param-label">Layer thickness<small id="p-thick-note"></small></div>
+            <button class="step-btn" data-param="thickness" data-delta="-0.1">−</button>
+            <div class="param-value" id="p-thick-value">—</div>
+            <button class="step-btn" data-param="thickness" data-delta="0.1">+</button>
+          </div>
+          <div class="param-result" id="p-result"></div>
+          <div class="param-reason" id="p-reason"></div>
+          <div class="controls-row compact">
+            <button class="ctrl-btn btn-adjust" id="btn-apply-params" title="Press and hold to apply to the current lift">
+              <span id="btn-apply-label">Hold to apply</span><div class="hold-fill"></div>
+            </button>
+            <button class="ctrl-btn btn-setup" id="btn-restore-lifts">Restore planned lifts</button>
+          </div>
+          <div class="est-note" id="params-note"></div>
+        </div>
+        <div class="param-sub">Speed</div>
+        <div class="kv-grid" id="planned-speeds"></div>
+        <div class="override-row">
+          <div class="override-value"><span id="ovr-value">—</span><span class="override-unit">feed</span></div>
+          <div class="override-gauge" title="Feed override (GRBL 10–200 %)">
+            <div class="override-fill" id="ovr-fill"></div><div class="override-100"></div>
+          </div>
+        </div>
+        <div class="controls-row override-buttons">
+          <button class="ctrl-btn btn-ovr" data-step="-10">−10%</button>
+          <button class="ctrl-btn btn-ovr" data-step="-1">−1%</button>
+          <button class="ctrl-btn btn-ovr btn-ovr-reset" data-step="reset">100%</button>
+          <button class="ctrl-btn btn-ovr" data-step="1">+1%</button>
+          <button class="ctrl-btn btn-ovr" data-step="10">+10%</button>
+        </div>
+        <div class="est-note" id="ovr-note">GRBL feed override: applies to feed moves at once (10–200 %).</div>
+      </div>
+
+    </div><!-- .col-left -->
+
+    <!-- MIDDLE: machine operation -->
+    <div class="col col-mid">
+
+      <div class="section" id="controls-section">
+        <div class="section-title">Controls</div>
+        <button class="ctrl-btn btn-start" id="btn-start" disabled>START JOB</button>
+        <div class="start-note" id="start-note"></div>
+        <div class="controls-row">
+          <button class="ctrl-btn btn-hold" id="btn-hold">HOLD</button>
+          <button class="ctrl-btn btn-resume" id="btn-resume">RESUME</button>
+          <button class="ctrl-btn btn-stop" id="btn-stop" title="Hold for 2.5 s to stop">
+            <span>STOP</span>
+            <div class="hold-fill"></div>
+          </button>
+        </div>
+        <div class="setup-status">
+          <span>Origin <b id="origin-status">Not set</b></span>
+          <span>Prime <b id="prime-status">Not set</b></span>
+          <span>Work <b id="work-pos">—</b></span>
+        </div>
+        <div class="controls-row setup-buttons">
+          <button class="ctrl-btn btn-setup" id="btn-set-origin" title="Press and hold: the current XY becomes the print origin (work X0 Y0)">
+            <span>Set origin here</span><div class="hold-fill"></div>
+          </button>
+          <button class="ctrl-btn btn-setup" id="btn-set-prime" title="The current XY becomes the prime position (relative to the origin)">Set prime here</button>
+        </div>
+        <div class="controls-row setup-buttons">
+          <button class="ctrl-btn btn-prime" id="btn-prime" title="Press and hold: move to the prime position at jog speed">
+            <span>Prime</span><div class="hold-fill"></div>
+          </button>
+          <button class="ctrl-btn btn-outline" id="btn-outline" title="Press and hold: trace the job's XY bounds at jog speed">
+            <span>Outline</span><div class="hold-fill"></div>
+          </button>
+        </div>
+        <div class="outline-preview" id="outline-preview"></div>
+        <div class="setup-note" id="setup-note"></div>
+        <p class="estop-note">Software controls only — use the physical E-STOP for emergencies.</p>
+      </div>
+
+      <div class="section" id="jog-section">
+        <div class="section-title">Manual Jog (X / Y)</div>
+        <div class="jog-warning" id="jog-warning"></div>
+        <div class="jog-pad">
+          <div></div>
+          <button class="jog-btn" id="jog-yp" data-axis="Y" data-dir="1">Y+</button>
+          <div></div>
+          <button class="jog-btn" id="jog-xm" data-axis="X" data-dir="-1">X−</button>
+          <div class="jog-center">JOG</div>
+          <button class="jog-btn" id="jog-xp" data-axis="X" data-dir="1">X+</button>
+          <div></div>
+          <button class="jog-btn" id="jog-ym" data-axis="Y" data-dir="-1">Y−</button>
+          <div></div>
+        </div>
+      </div>
+
+    </div><!-- .col-mid -->
+
+    <!-- RIGHT: persistent toolpath top view (from the loaded job only) -->
+    <div class="col col-view">
+      <div class="section" id="view-section">
+        <div class="section-title">Toolpath (top view)<span class="mark-line" id="mark-line" hidden></span></div>
+        <canvas id="path-canvas" width="700" height="560"></canvas>
+        <div class="view-row">
+          <button class="view-btn" id="view-fit">Fit</button>
+          <button class="view-btn" id="view-zoom-in">＋</button>
+          <button class="view-btn" id="view-zoom-out">－</button>
+          <label class="view-check"><input type="checkbox" id="view-all" /> all lifts</label>
+          <span class="view-legend"><i class="lg-done"></i>printed <i class="lg-todo"></i>remaining <i class="lg-travel"></i>travel <i class="lg-nozzle"></i>nozzle</span>
+        </div>
+        <div class="est-note" id="view-note">Load a job to see its toolpath.</div>
+      </div>
+    </div><!-- .col-view -->
+
+    <!-- Advanced: GRBL diagnostics + console (collapsed by default) -->
+    <div class="section span-all">
+      <button class="console-toggle" id="console-toggle">Advanced / Diagnostics / Console ▾</button>
       <div class="console-body" id="console-body" style="display:none">
+        <div class="diag-grid" id="diag-status"></div>
+        <div class="diag-title">Alarms, errors &amp; messages</div>
+        <div class="diag-events" id="diag-events"></div>
+        <div class="diag-title">Read from GRBL (read-only)</div>
+        <div class="view-row">
+          <button class="view-btn" data-read="settings">Settings ($$)</button>
+          <button class="view-btn" data-read="parser">Parser state ($G)</button>
+          <button class="view-btn" data-read="offsets">Offsets ($#)</button>
+        </div>
+        <div class="diag-pre" id="diag-parser"></div>
+        <div class="diag-pre" id="diag-offsets"></div>
+        <table class="diag-table" id="diag-settings"></table>
+        <div class="diag-title">Console</div>
         <div class="console-log" id="console-log"></div>
         <div class="console-input-row">
           <input type="text" id="console-cmd" placeholder="GRBL command (e.g. $$, $G, G0 X0)" />

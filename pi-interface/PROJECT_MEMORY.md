@@ -112,11 +112,14 @@ pi-interface/
 │   ├── state.py            # AppState (job = live CurrentJob reference)
 │   ├── main.py             # FastAPI app, lifespan, background loops
 │   ├── grbl/
-│   │   ├── parser.py       # Pure GRBL response parsing (no I/O)
+│   │   ├── parser.py       # Pure GRBL response parsing (no I/O; status Ov/Pn/Bf/WCO/Ln, [..] lines)
+│   │   ├── codes.py        # GRBL 1.1 alarm / error descriptions, setting names (read-only reference)
 │   │   ├── transport.py    # GRBLTransport ABC + SerialTransport
 │   │   └── communicator.py # GRBLCommunicator (lock + future + loops)
 │   ├── jobs/
-│   │   ├── current_job.py  # CurrentJob + JobLift, .mudjob parsing/validation, load_job_from_file()
+│   │   ├── current_job.py  # CurrentJob + JobLift, .mudjob parsing/validation, progress, load_job_from_file()
+│   │   ├── layout.py       # LiftLayout: effective lift boundaries, clean cuts, adjusting a lift's end
+│   │   ├── motion.py       # G-code motion analysis: time / distance estimates, 2D path points
 │   │   └── runner.py       # JobRunner (asyncio task, server-owned)
 │   ├── api/
 │   │   ├── ws.py           # ConnectionManager (broadcast to all clients)
@@ -132,6 +135,9 @@ pi-interface/
 │   ├── test_runner.py      # 13 tests
 │   ├── test_lifts.py       # 82 tests (contract + current-machine lift rules, fixtures incl. executing the Designer export, sequencing, handler rules)
 │   ├── test_setup.py       # 25 tests (live ok-wait, origin / prime, Start returns to origin, reposition re-zero)
+│   ├── test_progress.py    # 60 tests (motion estimates, progress, adaptive lifts, lift parameters, feed override, outline, diagnostics, path, multi-client)
+│   ├── test_ui.py          # 6 tests (dashboard structure; UI proposal rule == server rule, via Node)
+│   └── js/propose_check.js # runs app.js proposeLiftEnd for test_ui.py
 │   └── test_api.py         # 25 tests (building/export upload, .muddesign refusal, synced clients incl. setup)
 ├── docs/
 │   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
@@ -244,6 +250,93 @@ memory):
 - Why G10 L20 / G54 rather than G92 or G28/G30: standard, persists across
   idle resets, motion stays in G54; G28/G30 store MACHINE positions (prime
   must follow the origin) and move at the unvalidated rapid rate.
+
+### Controller features pass (2026-10-14; manually reviewed, checkpoint 2026-10-15)
+Behaviour modelled on Universal G-code Sender (checked in its source / GRBL
+docs), not its code: UGS feed override = coarse ±10 / fine ±1 real-time
+bytes + reset, value from `Ov:`; UGS Outline = convex hull of non-rapid
+moves traced with `G90 G1` at the jog feed when Idle with a file loaded.
+- **Progress / estimates** (`job.progress()`, `motion.py`): from the job's own
+  G-code — per line XY length / modal F (G21 converted to inches), G0 at
+  min($110,$111) if known else counted as unknown, G4 dwell, arcs as chords;
+  100 % feed, no acceleration. Totals / remaining for job and EFFECTIVE lift
+  from cumulative arrays at `current_line` (lines acknowledged — may lead
+  real motion by up to GRBL's ~15-block planner buffer). Print distance uses
+  the job's `travel_lines` (flat G-code: G0 = travel). Elapsed shown with
+  frame-reposition WAITING separated (`begin_wait`/`end_wait`); waits never
+  change the estimate. UI also shows remaining at the current override.
+- **Feed override** (`feed_override {step}`): only −10/−1/+1/+10/"reset" →
+  0x92/0x94/0x93/0x91/0x90 (GRBL 1.1; GRBL clamps 10–200 %). Value displayed
+  = GRBL's reported `Ov:` (intermittent; None until reported, cleared on
+  reset). Buttons, no draggable slider; the gauge is display-only.
+- **2D view** (`GET /api/job/path`): points of every XY move from the G-code
+  (decimated evenly above 120k, kind changes kept), canvas top view of the
+  current effective lift (or all), printed / remaining / travel, nozzle =
+  work position (needs the origin), fit / zoom / drag, redrawn ≤ 2.5 Hz.
+- **Outline** (`outline`, UI hold 1 s): traces the job's `xy_bounds` (else the
+  extent of its G-code moves) as a rectangle — `G54 G20 G90 G1` corners at
+  the jog speed, then G4 P0; preview text in the job state before motion;
+  same preconditions as Prime (origin set, Idle, no running job); never
+  touches the job. Rectangle (not UGS's convex hull) — per the requested
+  "XY bounds".
+- **Diagnostics** (Advanced): connection / version / state, overrides, Pn
+  pins, Bf, WCO, report units; alarm / error / reset / [MSG] history with
+  GRBL 1.1 descriptions (error detail names the last command); read-only
+  `read_grbl` = `$$` / `$G` / `$#` only (whitelist; Idle, no running job);
+  settings table with names. Never writes settings; no macros.
+- **Lift height / adaptive lifts** (`layout.py`): see Key decision below.
+- Job loading (parse + motion analysis) runs in a thread executor so the
+  event loop (status, jog dead-man) keeps running.
+
+### Dashboard layout + print parameters (UI pass 2026-10-14; manually reviewed, checkpoint 2026-10-15)
+- ONE responsive dashboard. ≥1100 px: LEFT Current Job → Print progress →
+  Print parameters (lift + speed); MIDDLE Controls (Start, Hold / Resume /
+  Stop, Set origin / Set prime / Prime / Outline + origin / prime / work
+  status) → Manual Jog; RIGHT the toolpath top view (sticky, most width).
+  760–1099 px: left | middle, view full width; <760 px (touch portrait):
+  one column, Controls + Jog first. Current Job holds only the job (upload,
+  identity, readiness, lifts); machine operations live in Controls.
+  Diagnostics / console unchanged (collapsed, full width).
+- PRINT PARAMETERS replace the old "end of lift" picker and the measured-
+  height input: the operator edits physical variables with ± buttons —
+  Target lift height (±0.5 in, ≤ Z travel; planned value shown) and Layer
+  thickness (±0.1 in; Slicer nominal shown) — and sees "target ÷ thickness
+  → N layers needed · Lift k: planned P → proposed M (ending after building
+  layer L)" plus WHY when M ≠ N. Rule (server `propose_lift_end`, mirrored
+  in app.js `proposeLiftEnd`, kept identical by a Node test): the clean-cut
+  end with the most layers ≤ N, else the earliest end still available;
+  reasons: interleaved islands (no cut at N), job ends, layers already under
+  way, Z travel. Edits are local to the client until "Hold to apply"
+  (1.5 s; `apply_lift_parameters`), which re-computes on the server, stores
+  target + thickness on the job and moves the current lift's end; while
+  awaiting a reposition it reads "Hold to continue lift k". Applies to the
+  current lift only (later lifts keep their planned ends until applied
+  there). "Restore planned lifts" also resets target and thickness.
+- Speed lives in the same panel: planned print / travel feeds + the feed
+  override (±1 / ±10 / 100 % buttons, read-back value, display-only gauge).
+
+### Adaptive lift boundaries — operator-moved lift ends at clean cuts (decided 2026-10-14)
+The job's lines are one ordered sequence; `LiftLayout.boundaries` (global
+line indices) are where the runner pauses — initially the exported lifts.
+The operator may move the END of the current effective lift (`adjust_lift_end
+{lift, at}`, UI hold 1.5 s) — before/while printing it ("end early" /
+"continue"), or while awaiting its reposition ("continue into more layers":
+the pause point moves later and the runner resumes WITHOUT a reposition) —
+but only to a CLEAN CUT: a layer mark with every earlier pass in a lower
+layer than every later pass (global order), which with `reentry_marks` is a
+validated re-entry segment. Lines are never added, removed, reordered or
+altered; only pause points move. Rules: cut after the lines already sent;
+early end → the remainder joins the next lift; extension may absorb whole
+later lifts; a lift estimated (layers × observed thickness) taller than
+`lift_plan.max_z_travel` is refused, above `target_lift_height` warned; a
+warning when the NEXT lift becomes taller than the Z travel ("end it early
+when you reach it"). Observed thickness: `set_observed_layer` or
+`measure_lift_height` (height ÷ completed layers of the lift). `Restore
+planned lifts` when not active. Not adjustable: jobs without re-entry marks
+(older exports, hand-written, flat G-code) and inside interleaved islands —
+that would need replanning upstream (not faked). Effective lifts are what
+`total_lifts` / `current_lift` / `awaiting_lift` / `lifts` report (identical
+to the export when unchanged).
 
 ### Live ok-wait instead of a fixed per-line timeout (decided 2026-10-14)
 GRBL withholds `ok` while its 15-block planner buffer is full (until the
@@ -369,7 +462,10 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-196 tests total, all passing on Python 3.9 (Mac development environment):
+262 tests total, all passing on Python 3.9 (Mac development environment)
+(196 before the controller features pass, 246 before the UI pass;
+`test_ui.py` checks the dashboard structure from index.html and runs the
+UI's proposal rule under Node against the server's):
 the 78 M1 tests unchanged + lift / building-job / contract / setup tests.
 `MockTransport` can answer `?` polls with a settable `status_reply` (used to
 simulate Run→Idle around a lift drain, positions, alarms) and print scripted
@@ -416,6 +512,12 @@ refused without origin → Set Origin → jog → Set Prime → Prime → Start 
 return) → lift 1 → jog + re-zero during the reposition → confirm → lift 2 →
 completed). Not yet visually reviewed in a browser; not run on hardware.
 
+**Controller features pass, 2026-10-14 (manually reviewed, checkpoint 2026-10-15):** progress / estimates, speeds + feed override, 2D view, Outline,
+diagnostics, lift height + adaptive lift ends. 246 tests pass. Exercised end
+to end against a throwaway fake GRBL (override 119 % read back, $$/$G/$#,
+outline, lift end moved before start, continued while awaiting, completion
+with waits separated). UI checked only headlessly (render code under Node).
+
 **Not yet complete:**
 - Physical machine testing on the Pi (hardware not yet available)
 - Pi deployment and systemd configuration (depends on hardware)
@@ -454,6 +556,82 @@ inches. Still open:
 - GRBL ALARM during a frame reposition: no Unlock (`$X`) control while a job
   is active (console blocked) — the operator must Stop the job.
 
+KNOWN ISSUE — corner-cutting in path views (diagnosed 2026-10-15; FIXED the same day, see below).
+Symptom: corners / openings / junctions look rough or diagonally cut in the
+Pi top view, and in the Designer's Print Simulation only while dragging /
+scrubbing. Traced on the operator's `test 4.mudjob` (project "test 3", 73
+layers, 7 lifts, 374 749 moves; exported from an UNSAVED Designer state, so
+the PrintPlan was not rebuilt for that exact geometry — the saved
+`test 3.muddesign` is older). Upper-right corner of the rectangular island,
+layer 1, G-code lines 28926 / 29068 / 30298 / 30437: clean right-angle bead
+corners in the G-code, e.g. (363.6334, 315.5516), (368.2064, 320.1246).
+- PrintPlan → .mudjob: faithful. The job's G-code print length = the
+  PrintPlan run lengths it records, every lift (≤ 0.003 in over ~65 000 in);
+  the saved project's real-scale plan re-exported: 17 028 vertices, max
+  |PrintPlan − G-code| 0.00005 in (rounding only).
+- The machine follows the CLEAN path: the runner sends every job line; the
+  view payload is never used for motion.
+- FIRST DIVERGENCE = the renderers' vertex decimation by INDEX STRIDE:
+  * Pi: `jobs/motion.path_payload` keeps every k-th point above 120 000
+    (k = 4 here, computed over the WHOLE job, so even the current-lift view
+    is thinned, also when stationary). 3 of the 4 corner vertices dropped;
+    the drawn chords miss them by 3.84 / 7.02 / 5.13 in. Job-wide: 5 943
+    dropped vertices > 1 in off (max 9.2 in), 68 % at turns > 45°.
+  * Designer Print Simulation: `SIM_LOD_VERTICES = 120000`; while
+    `sim.drag || sim.scrubbing` `_simDrawItems` draws every
+    ceil(V/120000)-th vertex inside each item (+ first / last) → the same
+    corner cuts (emulated; exact item splits are per strand). The stationary
+    Simulation draws every vertex and is faithful (stream coordinates
+    rounded to 0.001 in).
+- Planned fix (not implemented): error-bounded simplification instead of
+  stride — Ramer–Douglas–Peucker per same-kind run, keeping kind changes
+  (Pi ε ≈ 0.01 in; Simulation keep-mask computed once at ingest in world XY,
+  ε ≈ 0.05 in, sharp turns always kept). Never smooth geometry.
+- Tests to add: realistic PrintPlan → .mudjob vertex-for-vertex fidelity
+  (wave Wall System + corners + opening); Pi path payload: every original
+  vertex within ε of the served path, corners present, > 120 000 points;
+  Simulation LOD (node): corner kept, every skipped vertex within ε.
+
+FIX IMPLEMENTED 2026-10-15 (manually reviewed in the Pi top view and the
+Designer Print Simulation, checkpoint 2026-10-15): stride
+decimation replaced by ERROR-BOUNDED simplification (Ramer–Douglas–Peucker);
+geometry, routing, PrintPlan and `.mudjob` untouched.
+- Pi (`jobs/motion.path_payload`): per run, split at print/travel changes and
+  at every pass / lift start (`breaks`); tolerance 0.10 in (sub-pixel at the
+  fitted view), relaxed ×1.6 only above a 150 000-point budget, never past
+  0.25 in; kept points are exact G-code coordinates (4 decimals); payload
+  reports `tolerance_in`; computed once per job in an executor and cached.
+  test 4: 137 199 of 374 749 points, 0.10 in, 1.1 s on the Mac, 4.1 MB JSON
+  (stride version: ~94 k points, corners cut by up to 9 in).
+- Designer Simulation (`simulation.js`): `_simLodMask` once per plan (first
+  drag / scrub) — per item, world XY, tolerance 0.05 in, doubled while above
+  SIM_LOD_VERTICES (120 000), never past 0.5 in; `_simDrawItems` draws the
+  masked vertices while dragging / scrubbing; small plans (V ≤ budget) and
+  the stationary view always draw every vertex. test 4-scale stream (375 k
+  vertices): 33 ms, 0.2 in, 106 k vertices.
+- Tests: layer_assembly `test_view_fidelity.py` (realistic fixture
+  `fixtures/realistic_stack_request.json` = the "test 3" plan request: every
+  PrintPlan vertex in the G-code in order ≤ 0.00005 in, print length per
+  lift; stationary Simulation stream = plan ≤ 0.0005 in; drag LOD under node
+  (`tests/js/sim_lod_check.js`) error-bounded with every sharp turn drawn,
+  real stream + a > 120 k synthetic stream with corners at non-stride
+  indices); pi-interface `TestViewAccuracy` (every original vertex within the
+  reported tolerance, exact corners, travel + pass-start points kept, the
+  old stride shortcut case, and the operator's test 4 job when present).
+
+EXACT-PROJECT VERIFICATION (2026-10-15): the operator saved the exported
+state as "test 3 (1).muddesign" (plan request now in layer_assembly
+tests/fixtures/test4_stack_request.json). Rebuilt with the page's own
+request logic: 73 layers, 286 passes, 7 lifts; re-export == test 4.mudjob
+(identical apart from generated_at). The traced corner in the PrintPlan,
+strand p2~ws1.0: (363.633429, 315.551588), (368.206400, 320.124558),
+(365.527616, 317.445774), (370.100586, 322.018745) — clean; stationary
+Simulation stream = those to 0.001 in; the OLD drag stride (4, V = 376 617)
+skipped vertices 649 / 791 / 2021 of that 2 819-vertex item (confirmed, not
+emulated); the NEW drag LOD (0.20 in, 107 557 vertices, 27 ms) draws all 4;
+the Pi view (0.10 in) draws all 4 exactly. Regression:
+test_view_fidelity.py::TestOperatorProject (~50 s planning).
+
 ~~Risk found 2026-10-14: fixed 10 s per-line ok timeout~~ — RESOLVED the same
 day by the live ok-wait (see Key Decisions).
 
@@ -477,9 +655,14 @@ Lift-aware job work:
 - ~~P3~~ done 2026-10-14: `.mudjob` interchange; ~~executable export~~ done
   (current-machine pass, XY-only).
 - Manual browser review of the origin / prime / reposition workflow.
-- Hardware: validate jog speed (also the origin-return / prime speed), check
-  G4 P0, G10 L20 and the `$13` units on the real GRBL, then a first
-  air-print (no material) of an exported job.
+- Hardware: validate jog speed (also the origin-return / prime / outline
+  speed), check G4 P0, G10 L20, `$13` units, feed-override bytes + `Ov:`
+  reports (override support compiled in), `Pn:` limit pins and alarm codes
+  on the real GRBL, then a first air-print (no material) of an exported job.
+- Manual browser review of the controller features + UI passes, then commit.
+- Estimates vs reality: compare the G-code estimate with real lift times;
+  consider using `Bf:` ($10 buffer reporting) to correct progress for the
+  planner lead.
 - Third-party G-code compatibility / preflight (later, not started).
 
 Hardware-facing work (not started; needs `../CONTROL_BOX_HARDWARE.md` VERIFY
@@ -515,6 +698,23 @@ behaviour definition.
 ---
 
 ## Last Updated
+
+2026-10-15 — diagnosed: the Pi top view (and the Designer Simulation's drag
+LOD) cut corners by stride-decimating vertices; PrintPlan → .mudjob and the
+machine path are faithful. See Open Questions → "KNOWN ISSUE — corner-cutting".
+Fixed the same day with error-bounded simplification, verified on the exact
+project, manually reviewed in both viewers and committed (checkpoint). 265 tests.
+
+2026-10-14 (UI pass — manually reviewed, checkpoint 2026-10-15)
+
+Three-area dashboard (job / progress / parameters · controls / jog · toolpath
+view); lift adjustment through target lift height + layer thickness with
+Hold to apply; speed + feed override in the parameters panel. 262 tests.
+
+2026-10-14 (controller features — manually reviewed, checkpoint 2026-10-15)
+
+Progress / estimates, feed override, 2D view, Outline, diagnostics, manual-Z
+lift height with operator-adjustable lift ends at clean cuts. 246 tests.
 
 2026-10-14 (current-machine execution)
 

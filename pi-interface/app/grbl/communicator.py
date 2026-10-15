@@ -28,9 +28,11 @@ from typing import Optional
 
 from .. import config
 from ..state import AppState
+from .codes import describe_error
 from .parser import (
     is_end_of_program,
     is_welcome_message,
+    parse_bracket,
     parse_grbl_version,
     parse_setting,
     parse_status_report,
@@ -46,6 +48,7 @@ class GRBLCommunicator:
         self._transport: Optional[GRBLTransport] = None
         self._send_lock = asyncio.Lock()
         self._pending_future: Optional[asyncio.Future[str]] = None
+        self._last_command: Optional[str] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._read_task: Optional[asyncio.Task] = None
         self._running = False
@@ -119,6 +122,7 @@ class GRBLCommunicator:
             future = self._pending_future
             try:
                 await self._transport.write_line(command)
+                self._last_command = command.strip()
                 self._state.console_add("tx", command.strip())
                 if live:
                     return await self._await_live(future, command)
@@ -213,8 +217,17 @@ class GRBLCommunicator:
             self._state.console_add("rx", line)
             return
 
-        # Bracketed messages: [MSG:...], [GC:...], [HLP:...], etc.
+        # Bracketed messages: [MSG:...], [GC:...], [G54:...], [HLP:...], etc.
         if line.startswith("["):
+            kv = parse_bracket(line)
+            if kv:
+                key, value = kv
+                if key == "GC":
+                    self._state.parser_state = value
+                elif key == "MSG":
+                    self._state.add_event("message", value)
+                elif key[0] in "GPT" and key not in ("GC",):   # $#: G54…G59, G28, G30, G92, TLO, PRB
+                    self._state.offsets[key] = value
             self._state.console_add("rx", line)
             return
 
@@ -224,6 +237,7 @@ class GRBLCommunicator:
             if version:
                 self._state.grbl_version = version
             self._state.mark_connected_idle()
+            self._state.add_event("reset", line)
             # Cancel any pending command — GRBL reset mid-command
             self._reject_pending(RuntimeError("GRBL reset"))
             self._state.console_add("rx", line)
@@ -237,6 +251,13 @@ class GRBLCommunicator:
 
         # Error response
         if line.startswith("error:"):
+            try:
+                detail = describe_error(int(line.split(":", 1)[1]))
+            except ValueError:
+                detail = ""
+            if self._last_command:
+                detail = f"{detail} (after: {self._last_command})"
+            self._state.add_event("error", line, detail)
             self._resolve_pending(line)
             self._state.console_add("rx", line)
             return

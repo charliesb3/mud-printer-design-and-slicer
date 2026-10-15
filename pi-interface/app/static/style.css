@@ -132,7 +132,7 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 900px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
@@ -559,3 +559,155 @@ html, body {
 .btn-setup .hold-fill, .btn-prime .hold-fill { background: rgba(96, 165, 250, 0.35); }
 .setup-note, .start-note { font-size: 0.82em; color: var(--amber); margin-top: 6px; min-height: 1.1em; }
 .mark-line { font-size: 0.9em; color: var(--blue); margin-bottom: 8px; }
+
+/* --- Responsive two-column layout: printing | job & setup.
+       One UI for the Pi touchscreen and the laptop: stacks on narrow screens. --- */
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* (layout: see "Dashboard layout" at the end of this file) */
+
+/* Progress / estimates */
+.est-tag { font-size: 0.85em; color: var(--amber); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.est-note { font-size: 0.75em; color: var(--text-muted); margin-top: 6px; }
+.prog-block { margin-bottom: 12px; }
+.prog-head { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 4px; }
+.lift-fill { background: var(--amber); }
+.kv-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 0.88em; }
+.kv-grid .k { color: var(--text-muted); }
+.kv-grid .v { font-variant-numeric: tabular-nums; }
+.height-meter { margin-top: 8px; }
+.height-track { position: relative; height: 14px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.height-done { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green); opacity: 0.7; }
+.height-plan { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--blue); }
+.height-labels { font-size: 0.75em; color: var(--text-muted); margin-top: 3px; }
+
+/* Speed / feed override */
+.override-row { display: flex; align-items: center; gap: 12px; margin: 10px 0 8px; }
+.override-value { font-size: 2em; font-weight: 800; min-width: 110px; font-variant-numeric: tabular-nums; }
+.override-value.changed { color: var(--amber); }
+.override-unit { font-size: 0.4em; color: var(--text-muted); margin-left: 4px; }
+.override-gauge { position: relative; flex: 1; height: 16px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.override-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
+.override-100 { position: absolute; left: 47.37%; top: 0; bottom: 0; width: 2px; background: var(--text); }
+.override-buttons .ctrl-btn { min-height: 52px; padding: 10px 4px; background: var(--btn-bg); }
+.override-buttons .ctrl-btn:not(:disabled):hover { background: var(--btn-hover); }
+.btn-ovr-reset { background: #1e3a5f !important; }
+
+/* 2D toolpath view */
+#path-canvas { width: 100%; height: auto; aspect-ratio: 10 / 7; background: #0b0b0b; border: 1px solid var(--border);
+               border-radius: 6px; touch-action: none; display: block; }
+.view-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.85em; }
+.view-btn, .small-btn { background: var(--btn-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+            min-width: 44px; min-height: 40px; padding: 6px 10px; cursor: pointer; }
+.view-btn:hover, .small-btn:hover { background: var(--btn-hover); }
+.view-check { display: flex; align-items: center; gap: 4px; }
+.view-legend i { display: inline-block; width: 14px; height: 4px; margin: 0 3px 2px 8px; vertical-align: middle; }
+.lg-done { background: var(--green); } .lg-todo { background: #555; } .lg-travel { background: #a855f7; }
+.lg-nozzle { background: var(--red); width: 8px !important; height: 8px !important; border-radius: 50%; }
+
+/* Lift height / adjustment */
+.input-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.88em; flex-wrap: wrap; }
+.input-row label { flex: 1 1 140px; color: var(--text-muted); }
+.input-row input { width: 90px; min-height: 40px; background: var(--surface2); color: var(--text);
+                   border: 1px solid var(--border); border-radius: 6px; padding: 6px; font-size: 1em; }
+.unit { color: var(--text-muted); }
+.adjust-title { margin-top: 12px; font-weight: 700; }
+#adjust-select { width: 100%; min-height: 44px; margin-top: 6px; background: var(--surface2); color: var(--text);
+                 border: 1px solid var(--border); border-radius: 6px; font-size: 0.95em; }
+.adjust-info { font-size: 0.85em; margin: 6px 0; min-height: 1.2em; }
+.adjust-info.warn { color: var(--amber); } .adjust-info.bad { color: var(--red); }
+.btn-adjust { background: #78350f; }
+.btn-adjust .hold-fill { background: rgba(251, 191, 36, 0.4); }
+
+/* Outline */
+.outline-box { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+.outline-preview { flex: 1; font-size: 0.82em; color: var(--text-muted); }
+.btn-outline { flex: 0 0 140px; background: var(--btn-bg); }
+.btn-outline .hold-fill { background: rgba(96, 165, 250, 0.35); }
+
+/* Diagnostics */
+.diag-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 0.82em; margin-bottom: 8px; }
+.diag-title { font-size: 0.72em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;
+              color: var(--text-muted); margin: 10px 0 4px; }
+.diag-events { font-size: 0.8em; max-height: 160px; overflow-y: auto; }
+.diag-events .ev-alarm, .diag-events .ev-error { color: var(--red); }
+.diag-events .ev-reset { color: var(--amber); }
+.diag-pre { font-family: var(--font-mono); font-size: 0.78em; white-space: pre-wrap; margin-top: 4px; }
+.diag-table { font-size: 0.78em; border-collapse: collapse; margin-top: 6px; width: 100%; }
+.diag-table td { padding: 2px 6px; border-bottom: 1px solid var(--border); }
+.diag-table td:first-child { font-family: var(--font-mono); color: var(--text-muted); }
+
+/* ============================================================
+   Dashboard layout (UI pass 2026-10-14) — one responsive UI.
+   ≥1100 px: LEFT job · progress · parameters | MIDDLE controls · jog |
+             RIGHT persistent toolpath view (sticky).
+   760–1099 px: left | middle, the view full width below.
+   <760 px (touchscreen portrait / phone): one column, controls first.
+   ============================================================ */
+#app { max-width: 1680px; }
+#main-content { padding: 8px; gap: 8px; }
+.col { gap: 8px; }
+.section { padding: 10px; }
+.section-title { margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; }
+.ctrl-btn { min-height: 46px; padding: 8px 6px; font-size: 0.9em; }
+.controls-row { gap: 6px; margin-top: 6px; }
+.controls-row.compact .ctrl-btn { min-height: 44px; }
+.estop-note { margin-top: 6px; }
+.btn-start { width: 100%; min-height: 52px; font-size: 1em; }
+.job-actions-row { margin-top: 6px; }
+.job-meta { margin-bottom: 4px; }
+
+@media (min-width: 1100px) {
+  #main-content { display: grid; align-items: start;
+                  grid-template-columns: minmax(300px, 380px) minmax(270px, 330px) minmax(0, 1fr); }
+  .span-all { grid-column: 1 / -1; }
+  .col-view { position: sticky; top: 0; }
+}
+@media (min-width: 760px) and (max-width: 1099px) {
+  #main-content { display: grid; align-items: start; grid-template-columns: 1fr 1fr; }
+  .span-all, .col-view { grid-column: 1 / -1; }
+}
+@media (max-width: 759px) {
+  #main-content { display: flex; flex-direction: column; }
+  .col-mid { order: 1; } .col-view { order: 2; } .col-left { order: 3; }
+  .reposition-panel { order: 0; } .span-all:not(.reposition-panel) { order: 4; }
+}
+
+/* Controls: origin / prime / outline status */
+.setup-status { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.82em; color: var(--text-muted); margin-top: 8px; }
+.setup-status b { color: var(--text); font-weight: 600; }
+.setup-status b.ok { color: var(--green); } .setup-status b.missing { color: var(--amber); }
+.setup-buttons .ctrl-btn { font-size: 0.82em; }
+.outline-preview { font-size: 0.76em; color: var(--text-muted); margin-top: 6px; }
+.btn-outline { flex: 1; }
+
+/* Jog: compact */
+.jog-pad { max-height: 190px; max-width: 270px; gap: 6px; }
+.jog-btn { min-height: 52px; font-size: 1.15em; }
+
+/* Toolpath view: the right area */
+#path-canvas { aspect-ratio: 5 / 4; }
+.section-title .mark-line { margin: 0 0 0 auto; text-transform: none; letter-spacing: 0; font-weight: 600; }
+
+/* Progress: compact */
+.prog-head { font-size: 0.88em; margin: 6px 0 2px; }
+.progress-bar-wrap.visible { margin-bottom: 4px; }
+.kv-grid { font-size: 0.84em; gap: 1px 10px; }
+
+/* Print parameters */
+.param-row { display: grid; grid-template-columns: 1fr 44px 92px 44px; align-items: center; gap: 6px; margin-bottom: 6px; }
+.param-label { font-size: 0.88em; }
+.param-label small { display: block; color: var(--text-muted); font-size: 0.82em; }
+.param-value { text-align: center; font-size: 1.15em; font-weight: 800; font-variant-numeric: tabular-nums; }
+.param-value.changed { color: var(--amber); }
+.step-btn { min-height: 44px; border-radius: 6px; border: 1px solid var(--border); background: var(--btn-bg);
+            color: var(--text); font-size: 1.3em; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.step-btn:hover:not(:disabled) { background: var(--btn-hover); }
+.step-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.param-result { font-size: 0.86em; margin: 2px 0; }
+.param-result b { font-size: 1.05em; }
+.param-reason { font-size: 0.8em; color: var(--amber); min-height: 1em; }
+.param-sub { font-size: 0.72em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;
+             color: var(--text-muted); margin: 10px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+.override-row { margin: 6px 0 4px; }
+.override-value { font-size: 1.5em; min-width: 90px; }
+.override-buttons .ctrl-btn { min-height: 44px; padding: 6px 2px; }

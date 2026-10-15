@@ -49,7 +49,7 @@ import time
 
 from ..grbl.communicator import GRBLCommunicator
 from ..grbl.parser import is_end_of_program
-from .current_job import CurrentJob, JobLift
+from .current_job import CurrentJob
 
 log = logging.getLogger(__name__)
 
@@ -87,13 +87,7 @@ class JobRunner:
             if self._origin_feed is not None:
                 if not await self._return_to_origin():
                     return
-            for li, lift in enumerate(job.lifts):
-                job.current_lift = li
-                if not await self._stream_lift(lift):
-                    return
-                if li < job.total_lifts - 1:
-                    if not await self._finish_lift(li):
-                        return
+            await self._stream()
 
         except asyncio.CancelledError:
             # Task was cancelled externally (stop command). Let it propagate.
@@ -129,12 +123,28 @@ class JobRunner:
         self._job.error = message
         self._job.awaiting_lift = None
 
-    async def _stream_lift(self, lift: JobLift) -> bool:
-        """Stream one lift's lines. False: the job ends here (stopped, error, or M2/M30)."""
+    async def _stream(self) -> None:
+        """Stream the job's global line sequence, stopping at each EFFECTIVE
+        lift boundary (job.layout — the exported lifts unless the operator
+        moved the end of a lift to another clean cut). Boundaries are read
+        live, so an adjustment made while printing takes effect at once."""
         job = self._job
-        base = job.current_line
-        for n, line in enumerate(lift.lines):
-            i = base + n
+        lines = job.lines
+        paused_at: set = set()
+        i = 0
+        while i < len(lines):
+            if i > 0 and job.layout.is_boundary(i) and i not in paused_at:
+                paused_at.add(i)
+                ended = job.layout.lift_of(i) - 1
+                if not await self._finish_lift(ended, i):
+                    return
+                if job.layout.is_boundary(i):
+                    log.info("Frame reposition confirmed — starting lift %d", ended + 2)
+                else:
+                    log.info("Lift %d extended by the operator — continuing without a reposition", ended + 1)
+            job.current_lift = job.layout.lift_of(i)
+            line = lines[i]
+
             # Wait while the operator has issued a feed hold
             while job.state == "held":
                 await asyncio.sleep(_HOLD_POLL_INTERVAL)
@@ -142,7 +152,7 @@ class JobRunner:
             # Stop was issued while we were held or between lines
             if job.state == "stopped":
                 log.info("Job stopped at line %d", i)
-                return False
+                return
 
             # Send the G-code line and wait for GRBL's acknowledgement
             try:
@@ -153,12 +163,12 @@ class JobRunner:
             except Exception as exc:
                 log.error("GRBL error at line %d (%s): %s", i, line, exc)
                 self._fail(str(exc))
-                return False
+                return
 
             if result.startswith("error:"):
                 log.warning("GRBL rejected line %d (%s): %s", i, line, result)
                 self._fail(f"Line {i + 1}: {result}")
-                return False
+                return
 
             job.current_line = i + 1
 
@@ -166,11 +176,12 @@ class JobRunner:
             # (only flat G-code jobs: building-job lifts may not contain them)
             if is_end_of_program(line):
                 log.info("Job end-of-program marker at line %d", i + 1)
-                return False
-        return True
+                return
+            i += 1
 
-    async def _finish_lift(self, li: int) -> bool:
-        """Drain GRBL, then wait for the operator to confirm the frame reposition."""
+    async def _finish_lift(self, li: int, at: int) -> bool:
+        """Drain GRBL, then wait for the operator to confirm the frame
+        reposition (or to extend lift `li` past line `at`, removing the boundary)."""
         job = self._job
         state = self._comm.state
 
@@ -183,8 +194,11 @@ class JobRunner:
         if job.state != "running":
             return False
 
+        if not job.layout.is_boundary(at):           # extended while draining
+            return True
         job.awaiting_lift = li + 1
         job.state = "awaiting_reposition"
+        job.begin_wait()
         reset_seq = state.reset_seq
         log.info("Lift %d complete — awaiting frame reposition before lift %d", li + 1, li + 2)
 
@@ -198,9 +212,9 @@ class JobRunner:
                 return False
             await asyncio.sleep(_HOLD_POLL_INTERVAL)
 
+        job.end_wait()
         if job.state != "running":   # stopped while awaiting
             return False
-        log.info("Frame reposition confirmed — starting lift %d", li + 2)
         return True
 
     async def _drain(self, li: int) -> bool:

@@ -21,6 +21,7 @@ serialized into a conforming, EXECUTABLE document for the current machine:
 """
 import copy
 import json
+import math
 import os
 import re
 import sys
@@ -58,6 +59,22 @@ DESIGNS = [{'id': 'two', 'name': 'two', 'parent': None,
 # 6 layers of 1.5 in, lifts of 3 in → 3 lifts of 2 layers, two islands each
 ASSEMBLY = {'layer_height': 1.5, 'sections': [{'design_id': 'two', 'height': 9.0}],
             'machine': {'max_z_travel': 18, 'lift_height': 3.0, 'head_clearance': 1}}
+
+
+# a single connected wall: one pass per layer, every layer boundary is a
+# clean cut → the Pi can adjust lift boundaries on it
+WALL_FIXTURE = CONTRACT / 'fixtures' / 'designer-export-single-wall.mudjob'
+WALL_DESIGNS = [{'id': 'wall', 'name': 'wall', 'parent': None,
+                 'document': {'id': 'wall', 'source_paths': [rect('W', 0)], 'material': dict(MAT), 'wall_systems': []}}]
+WALL_ASSEMBLY = {'layer_height': 1.5, 'sections': [{'design_id': 'wall', 'height': 18.0}],
+                 'machine': {'max_z_travel': 18, 'lift_height': 4.5, 'head_clearance': 1}}
+
+
+@pytest.fixture(scope='module')
+def wall_plan():
+    from layer_assembly.web import _resolve_stack
+    st = _resolve_stack({'assembly': WALL_ASSEMBLY, 'designs': WALL_DESIGNS})
+    return build_plan(st['res'], st['src'], lift_settings=LiftSettings.from_dict(WALL_ASSEMBLY['machine']))
 
 
 @pytest.fixture(scope='module')
@@ -134,19 +151,21 @@ def expected_moves(plan, lift):
         if q != last:
             out.append((q[0], q[1], f))
             last = q
-    first = True
+    entering, cur = False, None
     for it in items(plan):
         kind, pts = it[0], it[3]
         if it[9] != lift or kind == 'frame':
             continue
+        if it[11] != cur:                 # every pass is a re-entry segment: position "unknown"
+            cur, last, entering = it[11], None, True
         if kind in ('travel', 'transition'):
             add(pts[-1], SPEEDS.travel_speed * 60)
         else:
-            if first:
+            if entering:
                 add(pts[0], SPEEDS.travel_speed * 60)
             for p in pts[1:]:
                 add(p, SPEEDS.print_speed * 60)
-        first = False
+        entering = False
     return out
 
 
@@ -197,8 +216,36 @@ class TestExport:
 
     def test_every_lift_sets_inches_and_absolute_first(self, plan):
         for L in export_job(plan, SPEEDS, generated_at=FIXED_TIME)['lifts']:
-            assert L['gcode'][:2] == ['G20', 'G90']
-            assert all(line.startswith('G1 X') for line in L['gcode'][2:])
+            assert L['gcode'][0] == 'G20 G90'
+            assert all(line.startswith('G1 X') or line == 'G20 G90' for line in L['gcode'][1:])
+
+    def test_every_pass_is_a_reentry_segment(self, plan):
+        """A controller may pause before any layer mark and resume with no motion of its own."""
+        doc = export_job(plan, SPEEDS, generated_at=FIXED_TIME)
+        assert doc['reentry_marks'] is True
+        for L in doc['lifts']:
+            g = L['gcode']
+            assert [i for i, line in enumerate(g) if line == 'G20 G90'] == [m['line'] for m in L['layer_marks']]
+            for m in L['layer_marks']:
+                entry = g[m['line'] + 1]
+                assert entry.startswith('G1 X') and ' F360' in entry and (m['line'] + 1) in L['travel_lines']
+
+    def test_travel_lines_split_print_from_travel(self, plan):
+        doc = export_job(plan, SPEEDS, generated_at=FIXED_TIME)
+        for L in doc['lifts']:
+            pos, printed = None, 0.0
+            for i, line in enumerate(L['gcode']):
+                w = dict(words(line))
+                if w.get('G') != 1:
+                    continue
+                if pos is not None and i not in L['travel_lines']:
+                    printed += math.hypot(w['X'] - pos[0], w['Y'] - pos[1])
+                pos = (w['X'], w['Y'])
+            assert printed == pytest.approx(L['print_length'], abs=0.01)
+
+    def test_lift_plan_targets(self, plan):
+        lp = export_job(plan, SPEEDS, generated_at=FIXED_TIME)['lift_plan']
+        assert lp == {'target_lift_height': 3.0, 'max_z_travel': 18.0, 'layer_height': 1.5}
 
     def test_xy_only_no_z_no_pump_no_prime(self, plan):
         for L in export_job(plan, SPEEDS, generated_at=FIXED_TIME)['lifts']:
@@ -227,7 +274,7 @@ class TestExport:
             marks = L['layer_marks']
             assert [m['pass'] for m in marks] == PL.passes
             lines = [m['line'] for m in marks]
-            assert lines == sorted(lines) and lines[0] == 2 and lines[-1] < len(L['gcode'])
+            assert lines == sorted(lines) and lines[0] == 0 and lines[-1] < len(L['gcode'])
             for m in marks:
                 P = plan.passes[m['pass']]
                 assert m['layer'] == P.layer and m['z'] == pytest.approx(P.z)
@@ -277,6 +324,18 @@ class TestContractFixture:
             FIXTURE.write_text(text, encoding='utf-8')
         assert FIXTURE.exists(), 'run with MUDJOB_UPDATE_FIXTURE=1 to create the contract fixture'
         assert json.loads(FIXTURE.read_text(encoding='utf-8')) == doc
+
+    def test_single_wall_export_equals_shared_fixture(self, wall_plan):
+        assert len(wall_plan.lifts) == 4 and len(wall_plan.passes) == 12
+        doc = export_job(wall_plan, SPEEDS, name='Single wall test building', generated_at=FIXED_TIME)
+        check_contract(doc)
+        text = json.dumps(doc, indent=1, ensure_ascii=False) + '\n'
+        if os.environ.get('MUDJOB_UPDATE_FIXTURE'):
+            WALL_FIXTURE.write_text(text, encoding='utf-8')
+        assert json.loads(WALL_FIXTURE.read_text(encoding='utf-8')) == doc
+        # one pass per layer, in layer order: every layer boundary is a clean cut
+        layers = [m['layer'] for L in doc['lifts'] for m in L['layer_marks']]
+        assert layers == list(range(12))
 
     def test_handwritten_executable_fixture_conforms(self):
         check_contract(json.loads((CONTRACT / 'fixtures' / 'executable-3-lifts.mudjob').read_text(encoding='utf-8')))

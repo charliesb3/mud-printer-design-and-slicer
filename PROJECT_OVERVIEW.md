@@ -391,6 +391,32 @@ Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with 
 - Travel is `G1` at the planned travel speed (not `G0`).
 - Automatic Z and pump control remain future controller capabilities.
 
+### Adaptive lift boundaries — operator, clean cuts only (2026-10-14)
+
+The TARGET physical lift height (e.g. 18 in, a planning setting) is distinct
+from the Slicer's NOMINAL layer thickness. With manual Z the real layers may
+be thinner or thicker than nominal, so the operator may move the END of the
+current lift on the controller ("end this lift early" / "continue into more
+layers", also while awaiting its frame reposition) using an observed layer
+thickness. The controller never invents layers or geometry and never
+reorders: a boundary may only move to a CLEAN CUT of the exported pass order
+(every earlier pass in a lower layer than every later one) that starts a
+re-entry segment (`reentry_marks`). Same lines, same order — only the pause
+point moves; lifts estimated taller than the machine's Z travel are refused.
+Interleaved islands inside a lift offer no clean cuts there; changing that
+would need replanning upstream. Contract: `contracts/mudjob/README.md`.
+
+### Controller features use only the job and GRBL (2026-10-14)
+
+Progress / time estimates (from the job's own G-code feeds and lengths,
+labelled estimates, waits excluded), the live 2D toolpath view, Outline
+(trace the job's XY bounds at jog speed, separate from Prime), GRBL feed
+override (real-time bytes, deliberate ±1 / ±10 % steps + reset, value read
+back from GRBL), and read-only GRBL diagnostics are Pi controller features —
+modelled on Universal G-code Sender's behaviour, not its code — derived only
+from the loaded `.mudjob` / G-code and GRBL's own reports. No macros,
+probing, 3D view, G-code editing or GRBL setting writes.
+
 ### Design + Toolpath and the Pi interface are independent applications (2026-10-14)
 
 Their ONLY integration boundary is the `.mudjob` file: a small, documented, versioned interchange contract (`contracts/mudjob/README.md` + example fixtures, version 1). Neither imports code from the other, shares runtime modules with it, calls its API, requires it to be installed or running, or couples to its internal data model. Design + Toolpath serializes its authoritative PrintPlan into the contract (`layer_assembly/machine_job.py`); the Pi parses and validates it independently (`pi-interface/app/jobs/current_job.py`). A `.mudjob` exported on one computer must open on an independent Raspberry Pi with no knowledge of the Designer. Interoperability is tested with contract fixture FILES read by each subsystem's own tests — never by cross-importing code.
@@ -662,6 +688,14 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-15 (checkpoint)
+
+Committed after manual review: the Pi controller features pass, the dashboard UI pass, and the viewer corner-cutting fix (Pi top view + Designer Print Simulation drag LOD: index-stride vertex skipping replaced by error-bounded simplification; PrintPlan → .mudjob verified faithful vertex for vertex on the exact operator project). Machine Profile work not started.
+
+2026-10-14 (controller features)
+
+Pi controller: progress / estimates (job + lift + layer), planned speeds + GRBL feed override, live 2D toolpath view, Outline, Advanced diagnostics (alarms / errors with descriptions, read-only $$ / $G / $#), manual-Z lift-height display with observed layer thickness, and operator-adjustable lift ends at clean cuts. `.mudjob` gains optional `lift_plan`, `reentry_marks`, `travel_lines` (exporter emits a re-entry segment per pass). New decisions "Adaptive lift boundaries" and "Controller features use only the job and GRBL".
 
 2026-10-14 (current-machine execution)
 

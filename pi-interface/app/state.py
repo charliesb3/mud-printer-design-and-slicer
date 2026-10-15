@@ -15,8 +15,18 @@ from typing import TYPE_CHECKING, Optional
 from . import config
 from .grbl.parser import StatusReport
 
+from .grbl.codes import PINS, SETTINGS, describe_alarm
+
 if TYPE_CHECKING:
     from .jobs.current_job import CurrentJob
+
+
+def _code(line: str) -> Optional[int]:
+    """The number in 'ALARM:1' / 'error:22'."""
+    try:
+        return int(line.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
 
 
 MM_PER_IN = 25.4
@@ -77,6 +87,17 @@ class AppState:
         self.pos_kind: Optional[str] = None          # "mpos" | "wpos" — what reports carry
         # GRBL `$N=value` settings seen in `$$` listings (read only — never written).
         self.grbl_settings: dict[int, str] = {}
+        # Status-report extras (GRBL 1.1): overrides (feed, rapid, spindle %),
+        # triggered pins, planner/RX buffer, work offset, line number.
+        self.overrides: Optional[tuple] = None
+        self.pins: str = ""
+        self.buffer: Optional[tuple] = None
+        self.wco: Optional[tuple] = None
+        self.line_number: Optional[int] = None
+        # Diagnostics (read-only queries / history)
+        self.parser_state: Optional[str] = None        # $G → [GC:…]
+        self.offsets: dict[str, str] = {}             # $# → [G54:…] … [PRB:…]
+        self.events: deque = deque(maxlen=30)         # alarms, errors, resets, messages
         self.setup = MachineSetup()
         self._console: deque = deque(maxlen=config.CONSOLE_MAX_LINES)
 
@@ -102,6 +123,14 @@ class AppState:
             self.pos_kind = "wpos"
         if report.feed_rate is not None:
             self.feed_rate = report.feed_rate
+        if report.overrides is not None:
+            self.overrides = report.overrides
+        self.pins = report.pins
+        if report.buffer is not None:
+            self.buffer = report.buffer
+        if report.wco is not None:
+            self.wco = report.wco
+        self.line_number = report.line_number
         if state.lower().startswith("alarm"):
             self.setup.invalidate("GRBL alarm (machine position may be lost)")
 
@@ -109,6 +138,12 @@ class AppState:
         """An `ALARM:n` message from GRBL."""
         self.grbl_state = line
         self.setup.invalidate(f"GRBL {line} (machine position may be lost)")
+        code = _code(line)
+        self.add_event("alarm", line, describe_alarm(code) if code is not None else "")
+
+    def add_event(self, kind: str, text: str, detail: str = "") -> None:
+        """Diagnostics history: alarms, errors, resets, GRBL messages."""
+        self.events.append({"t": time.time(), "kind": kind, "text": text, "detail": detail})
 
     def mark_disconnected(self) -> None:
         self.connected = False
@@ -143,6 +178,7 @@ class AppState:
         self.connected = True
         self.grbl_state = "Idle"
         self.reset_seq += 1
+        self.overrides = None          # GRBL resets overrides to 100 %; known again at the next Ov report
 
     # --- Console ---
 
@@ -185,6 +221,23 @@ class AppState:
             "jog_warning": jog_warning,
             "job": self.job.to_dict() if self.job else None,
             "setup": self._setup_dict(),
+            "grbl": {
+                "overrides": ({"feed": self.overrides[0], "rapid": self.overrides[1], "spindle": self.overrides[2]}
+                              if self.overrides else None),
+                "pins": self.pins,
+                "pins_named": [PINS.get(c, c) for c in self.pins],
+                "buffer": list(self.buffer) if self.buffer else None,
+                "wco": list(self.wco) if self.wco else None,
+                "line_number": self.line_number,
+                "report_units": self.report_units,
+            },
+            "diag": {
+                "settings": [{"n": n, "value": v, "name": SETTINGS.get(n, "")}
+                             for n, v in sorted(self.grbl_settings.items())],
+                "parser_state": self.parser_state,
+                "offsets": dict(self.offsets),
+                "events": list(self.events),
+            },
         }
 
     def _setup_dict(self) -> dict:

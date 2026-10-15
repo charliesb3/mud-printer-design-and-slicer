@@ -38,7 +38,14 @@ const SIM_PALETTE = ['#4a9eff', '#ff9f43', '#2ecc71', '#e056fd', '#f9ca24', '#ff
 const SIM_RUN_COLORS = ['#4a9eff', '#2ecc71', '#f9ca24', '#e056fd', '#48dbfb', '#ff9f43', '#a29bfe', '#55efc4'];
 const SIM_TRAVEL = '#ff6b6b', SIM_TRANSITION = '#e056fd', SIM_DOWN = '#ffa94d', SIM_LIFT = '#ffd43b';
 const SIM_KIND = { PRINT: 0, RETRACE: 1, TRAVEL: 2, TRANSITION: 3, FRAME: 4 };
-const SIM_LOD_VERTICES = 120000;      // while dragging: draw at most about this many vertices
+const SIM_LOD_VERTICES = 120000;      // while dragging: aim to draw at most about this many vertices
+// DRAG / SCRUB LOD (2026-10-15): an ERROR-BOUNDED vertex subset, computed once
+// per plan (`_simLodMask`): every vertex of every item lies within the
+// tolerance (world XY, inches) of what is drawn; item end points are always
+// drawn. Replaces the earlier index stride (every k-th vertex), which cut
+// right-angle corners by several inches while orbiting. Stationary: full detail.
+const SIM_LOD_TOLERANCE_IN = 0.05;
+const SIM_LOD_MAX_TOLERANCE_IN = 0.5;     // never coarser: above the budget at this, draw more vertices
 
 const sim = {
   data: null, key: null, speedsKey: null, loading: false, error: null, paramError: null, reqGen: 0, inflight: null,
@@ -305,9 +312,53 @@ function _simProjectAll(W, H) {
   return { sx, sy, over };
 }
 
-// draw items [a, b) with their styles; `stride` > 1 = reduced detail; `only`
-// = 'extrusion' (the ghost) or null; batched into one path per style run
-function _simDrawItems(g, C, a, b, stride, only) {
+// Ramer–Douglas–Peucker on item [o, o + n) of the flat xy array: marks in
+// `mask` the vertices needed so every vertex lies within `eps` of the kept
+// polyline; returns how many it kept
+function _simRdp(xy, o, n, eps, mask) {
+  if (n <= 0) return 0;
+  mask[o] = 1; mask[o + n - 1] = 1;
+  let kept = n > 1 ? 2 : 1;
+  const stack = [o, o + n - 1], e2 = eps * eps;
+  while (stack.length) {
+    const j = stack.pop(), i = stack.pop();
+    if (j <= i + 1) continue;
+    const ax = xy[2 * i], ay = xy[2 * i + 1], dx = xy[2 * j] - ax, dy = xy[2 * j + 1] - ay, l2 = dx * dx + dy * dy;
+    let best = -1, bk = -1;
+    for (let k = i + 1; k < j; k++) {
+      const px = xy[2 * k] - ax, py = xy[2 * k + 1] - ay;
+      let d;
+      if (l2 === 0) d = px * px + py * py;
+      else {
+        let t = (px * dx + py * dy) / l2;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        const ex = px - t * dx, ey = py - t * dy;
+        d = ex * ex + ey * ey;
+      }
+      if (d > best) { best = d; bk = k; }
+    }
+    if (best > e2) { mask[bk] = 1; kept++; stack.push(i, bk, bk, j); }
+  }
+  return kept;
+}
+
+// the drag / scrub vertex subset of plan D: tolerance from
+// SIM_LOD_TOLERANCE_IN, doubled while above the vertex budget (≤ max)
+function _simLodMask(D) {
+  let eps = SIM_LOD_TOLERANCE_IN, mask, kept;
+  for (;;) {
+    mask = new Uint8Array(D.V); kept = 0;
+    for (let i = 0; i < D.N; i++) kept += _simRdp(D.xy, D.off[i], D.n[i], eps, mask);
+    if (kept <= SIM_LOD_VERTICES || eps >= SIM_LOD_MAX_TOLERANCE_IN) break;
+    eps = Math.min(SIM_LOD_MAX_TOLERANCE_IN, eps * 2);
+  }
+  D.lodMask = mask; D.lodTol = eps; D.lodKept = kept;
+}
+
+// draw items [a, b) with their styles; `lod` = the drag / scrub subset
+// (D.lodMask, error-bounded); `only` = 'extrusion' (the ghost) or null;
+// batched into one path per style run
+function _simDrawItems(g, C, a, b, lod, only) {
   const D = sim.data;
   let cur = null;
   const flush = () => { if (cur) { g.stroke(); cur = null; } };
@@ -330,8 +381,8 @@ function _simDrawItems(g, C, a, b, stride, only) {
     g.moveTo(C.sx[o], C.sy[o]);
     const ov = C.over && C.over[i];
     if (ov) { g.lineTo(ov[0], ov[1]); g.lineTo(ov[2], ov[3]); }
-    const step = n > 2 ? stride : 1;
-    for (let k = step; k < n - 1; k += step) g.lineTo(C.sx[o + k], C.sy[o + k]);
+    const M = lod ? D.lodMask : null;
+    for (let k = 1; k < n - 1; k++) if (!M || M[o + k]) g.lineTo(C.sx[o + k], C.sy[o + k]);
     g.lineTo(C.sx[o + n - 1], C.sy[o + n - 1]);
     sim.stats.itemsDrawn++;
   }
@@ -339,8 +390,10 @@ function _simDrawItems(g, C, a, b, stride, only) {
   if (g.setLineDash) g.setLineDash([]);
 }
 
-function _simStride(lod) {
-  return lod ? Math.max(1, Math.ceil(sim.data.V / SIM_LOD_VERTICES)) : 1;
+function _simLod(lod) {
+  if (!lod || sim.data.V <= SIM_LOD_VERTICES) return false;     // small plans: always full detail
+  if (!sim.data.lodMask) _simLodMask(sim.data);                 // once per plan
+  return true;
 }
 
 function _simEnsureCache(W, H) {
@@ -356,7 +409,7 @@ function _simEnsureCache(W, H) {
   }
   C.ghost = _simCanvas(W, H);
   const gg = C.ghost.getContext('2d');
-  _simDrawItems(gg, C, 0, sim.data.N, _simStride(lod), 'extrusion');
+  _simDrawItems(gg, C, 0, sim.data.N, _simLod(lod), 'extrusion');
   C.printed = _simCanvas(W, H);
   C.drawn = 0;
   sim.stats.fullRedraws++;
@@ -372,7 +425,7 @@ function _simCatchUp(C, upTo) {
     C.drawn = 0;
   }
   if (upTo > C.drawn) {
-    _simDrawItems(g, C, C.drawn, upTo, _simStride(C.lod), null);
+    _simDrawItems(g, C, C.drawn, upTo, _simLod(C.lod), null);
     C.drawn = upTo;
   }
 }

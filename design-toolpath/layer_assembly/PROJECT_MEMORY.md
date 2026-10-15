@@ -166,10 +166,10 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 ### MACHINE JOB EXPORT — `.mudjob` (2026-10-14, Pi P3)
 - **Decision (durable, project-wide):** Design + Toolpath and the Pi interface are INDEPENDENT applications; the `.mudjob` file is their only boundary (spec + fixtures: `contracts/mudjob/`, version 1). No imports, shared runtime modules, API calls or data-model coupling either way; interop is tested with contract FILES. `.muddesign` = authoring (Save / Open), never a print job (the Pi refuses it; the Designer's Open refuses a `.mudjob`). `.mudjob` = one whole-building print as the PrintPlan's ordered lifts.
 - **Exporter (`machine_job.py`, pure):** `export_job(plan, name, generated_at)` → one job lift per `plan.lifts` entry, in order: `index`, description, `layers` {first, last, count} (global, 0-based), `z_bottom` / `z_top`, stages / passes / runs, print_length (incl. retrace) / travel_length (incl. transitions), and the lift's `FrameMove` as `reposition_before` {from_lift, rise, frame_z_from / to, nozzle_at, nozzle_z}; `units` = plan units ('in'); `source` = generator, time, plan version, lift settings, layer / pass counts. Reconstructs nothing; refuses (ExportError) a plan without lifts or whose lift indices / frame moves break the contract's invariants. `job_filename(name)`.
-- **EXECUTABLE for the current machine (2026-10-14, supersedes the P3 non-executable export — then Z, pump travel, origin, units and frame behaviour were undecided and every export was `executable: false` with an `unresolved` list):** `export_job(plan, speeds, name, generated_at, placeholder_speeds)` → each lift's `gcode` = `G20`, `G90`, then absolute `G1 X… Y…` (4 decimals, F only on change) from `items()` in print order: print / retrace at the print speed, travel / transition at the travel speed (G1, not G0 — the rapid rate is unvalidated); the first move of each lift is a travel to its first point (the nozzle may have moved during the frame reposition); NO Z words (Z manual), no pump / M / prime / G10 / G92. Coordinates = the plan's world XY = the work coordinates from the operator's print origin (no invented offset). Metadata: per-lift `layer_marks` [{line (index into gcode), pass, layer, z, z_in_lift}], top-level `machine` {axes XY, z manual, extrusion manual, feeds_in_min}, `xy_bounds`, `source.speeds_in_s` + `placeholder_speeds`. A discontinuity inside a lift raises ExportError (never repaired).
+- **EXECUTABLE for the current machine (2026-10-14, supersedes the P3 non-executable export — then Z, pump travel, origin, units and frame behaviour were undecided and every export was `executable: false` with an `unresolved` list):** `export_job(plan, speeds, name, generated_at, placeholder_speeds)` → each lift's `gcode` = `G20`, `G90`, then absolute `G1 X… Y…` (4 decimals, F only on change) from `items()` in print order: print / retrace at the print speed, travel / transition at the travel speed (G1, not G0 — the rapid rate is unvalidated); the first move of each lift is a travel to its first point (the nozzle may have moved during the frame reposition); NO Z words (Z manual), no pump / M / prime / G10 / G92. Coordinates = the plan's world XY = the work coordinates from the operator's print origin (no invented offset). Metadata: per-lift `layer_marks` [{line (index into gcode), pass, layer, z, z_in_lift}], top-level `machine` {axes XY, z manual, extrusion manual, feeds_in_min}, `xy_bounds`, `source.speeds_in_s` + `placeholder_speeds`. A discontinuity inside a lift raises ExportError (never repaired). *(Controller pass, 2026-10-14, uncommitted: every PASS now opens a RE-ENTRY segment — `G20 G90` + an explicit travel `G1 X… Y… F<travel>` to its start, even when already there — so the Pi can pause before any pass and resume without generating motion; top-level `reentry_marks: true`, `lift_plan` {target_lift_height, max_z_travel from the lift settings, nominal `layer_height` when uniform}, per-lift `travel_lines` (gcode indices of non-printing moves). The Pi may move a lift's end only to clean cuts of this order — see the contract.)*
 - **Endpoint:** `POST /api/assembly/print_job` (the plan request + `name`, optional `speeds`; default the Assembly's print_speeds) → {job, filename, executable, lines, placeholder_speeds}; exports ONLY a plan already in `_PLANS` for exactly that request (`_plan_key`, shared with `_planned`; speeds are not part of it) — never plans; otherwise 409 `outdated`.
 - **UI:** Print Simulation → Print plan column: "Export Print Job" under Plan Print, enabled only for a CURRENT plan (not outdated / loading / failed); downloads `<project>.mudjob` (`_downloadText`) and states lifts, line count, "XY-only G-code (inches; Z and pump manual)" and a PLACEHOLDER-speeds warning when the project has no measured speeds (`#sim-export-note`, status line). Save Project stays the authoring file.
-- **Tests:** `tests/test_machine_job.py` (23: lifts = the plan's lifts / boundaries / frame moves / numbers; executable, G20 + G90 first in every lift, XY-only (no Z / M / G0 / prime), the G-code move sequence = the plan's `items()` (independent G-code reading), each lift starts with a travel to its first point, layer marks, bounds, feeds from speeds; contract conformance (checker written from the README, no Pi code), pure + deterministic, golden = `contracts/mudjob/fixtures/designer-export-3-lifts.mudjob` (the Pi's import tests load it; regenerate with `MUDJOB_UPDATE_FIXTURE=1`), endpoint (no plan → 409, export = the plan, a changed design → 409, speeds don't matter), `.mudjob` refused as a project file); `ui_simulation_smoke.js` export block (button enabled for a current plan, download, note; disabled when OUTDATED).
+- **Tests:** `tests/test_machine_job.py` (27 since the controller pass: + re-entry segments at every mark, travel_lines reproduce the print length, lift_plan, a second golden fixture `designer-export-single-wall.mudjob` (one pass per layer); earlier 23: lifts = the plan's lifts / boundaries / frame moves / numbers; executable, G20 + G90 first in every lift, XY-only (no Z / M / G0 / prime), the G-code move sequence = the plan's `items()` (independent G-code reading), each lift starts with a travel to its first point, layer marks, bounds, feeds from speeds; contract conformance (checker written from the README, no Pi code), pure + deterministic, golden = `contracts/mudjob/fixtures/designer-export-3-lifts.mudjob` (the Pi's import tests load it; regenerate with `MUDJOB_UPDATE_FIXTURE=1`), endpoint (no plan → 409, export = the plan, a changed design → 409, speeds don't matter), `.mudjob` refused as a project file); `ui_simulation_smoke.js` export block (button enabled for a current plan, download, note; disabled when OUTDATED).
 - **Verified across the boundary (HTTP + file only):** Designer :5051 plans + exports → uploaded to the Pi :8765 → identical lift boundaries shown, start refused.
 
 ### Print plan — the whole print, ordered (2026-10-09; uncommitted, not yet manually reviewed)
@@ -318,6 +318,79 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 
 ## Known limitations
 
+- KNOWN ISSUE — corner-cutting in path views (diagnosed 2026-10-15; FIXED the same day, see below).
+  Symptom: corners / openings / junctions look rough or diagonally cut in the
+  Pi top view, and in the Designer's Print Simulation only while dragging /
+  scrubbing. Traced on the operator's `test 4.mudjob` (project "test 3", 73
+  layers, 7 lifts, 374 749 moves; exported from an UNSAVED Designer state, so
+  the PrintPlan was not rebuilt for that exact geometry — the saved
+  `test 3.muddesign` is older). Upper-right corner of the rectangular island,
+  layer 1, G-code lines 28926 / 29068 / 30298 / 30437: clean right-angle bead
+  corners in the G-code, e.g. (363.6334, 315.5516), (368.2064, 320.1246).
+  - PrintPlan → .mudjob: faithful. The job's G-code print length = the
+    PrintPlan run lengths it records, every lift (≤ 0.003 in over ~65 000 in);
+    the saved project's real-scale plan re-exported: 17 028 vertices, max
+    |PrintPlan − G-code| 0.00005 in (rounding only).
+  - The machine follows the CLEAN path: the runner sends every job line; the
+    view payload is never used for motion.
+  - FIRST DIVERGENCE = the renderers' vertex decimation by INDEX STRIDE:
+    * Pi: `jobs/motion.path_payload` keeps every k-th point above 120 000
+      (k = 4 here, computed over the WHOLE job, so even the current-lift view
+      is thinned, also when stationary). 3 of the 4 corner vertices dropped;
+      the drawn chords miss them by 3.84 / 7.02 / 5.13 in. Job-wide: 5 943
+      dropped vertices > 1 in off (max 9.2 in), 68 % at turns > 45°.
+    * Designer Print Simulation: `SIM_LOD_VERTICES = 120000`; while
+      `sim.drag || sim.scrubbing` `_simDrawItems` draws every
+      ceil(V/120000)-th vertex inside each item (+ first / last) → the same
+      corner cuts (emulated; exact item splits are per strand). The stationary
+      Simulation draws every vertex and is faithful (stream coordinates
+      rounded to 0.001 in).
+  - Planned fix (not implemented): error-bounded simplification instead of
+    stride — Ramer–Douglas–Peucker per same-kind run, keeping kind changes
+    (Pi ε ≈ 0.01 in; Simulation keep-mask computed once at ingest in world XY,
+    ε ≈ 0.05 in, sharp turns always kept). Never smooth geometry.
+  - Tests to add: realistic PrintPlan → .mudjob vertex-for-vertex fidelity
+    (wave Wall System + corners + opening); Pi path payload: every original
+    vertex within ε of the served path, corners present, > 120 000 points;
+    Simulation LOD (node): corner kept, every skipped vertex within ε.
+  FIX IMPLEMENTED 2026-10-15 (manually reviewed in both viewers, checkpoint 2026-10-15): stride
+  decimation replaced by ERROR-BOUNDED simplification (Ramer–Douglas–Peucker);
+  geometry, routing, PrintPlan and `.mudjob` untouched.
+  - Pi (`jobs/motion.path_payload`): per run, split at print/travel changes and
+    at every pass / lift start (`breaks`); tolerance 0.10 in (sub-pixel at the
+    fitted view), relaxed ×1.6 only above a 150 000-point budget, never past
+    0.25 in; kept points are exact G-code coordinates (4 decimals); payload
+    reports `tolerance_in`; computed once per job in an executor and cached.
+    test 4: 137 199 of 374 749 points, 0.10 in, 1.1 s on the Mac, 4.1 MB JSON
+    (stride version: ~94 k points, corners cut by up to 9 in).
+  - Designer Simulation (`simulation.js`): `_simLodMask` once per plan (first
+    drag / scrub) — per item, world XY, tolerance 0.05 in, doubled while above
+    SIM_LOD_VERTICES (120 000), never past 0.5 in; `_simDrawItems` draws the
+    masked vertices while dragging / scrubbing; small plans (V ≤ budget) and
+    the stationary view always draw every vertex. test 4-scale stream (375 k
+    vertices): 33 ms, 0.2 in, 106 k vertices.
+  - Tests: layer_assembly `test_view_fidelity.py` (realistic fixture
+    `fixtures/realistic_stack_request.json` = the "test 3" plan request: every
+    PrintPlan vertex in the G-code in order ≤ 0.00005 in, print length per
+    lift; stationary Simulation stream = plan ≤ 0.0005 in; drag LOD under node
+    (`tests/js/sim_lod_check.js`) error-bounded with every sharp turn drawn,
+    real stream + a > 120 k synthetic stream with corners at non-stride
+    indices); pi-interface `TestViewAccuracy` (every original vertex within the
+    reported tolerance, exact corners, travel + pass-start points kept, the
+    old stride shortcut case, and the operator's test 4 job when present).
+  EXACT-PROJECT VERIFICATION (2026-10-15): the operator saved the exported
+  state as "test 3 (1).muddesign" (plan request now in layer_assembly
+  tests/fixtures/test4_stack_request.json). Rebuilt with the page's own
+  request logic: 73 layers, 286 passes, 7 lifts; re-export == test 4.mudjob
+  (identical apart from generated_at). The traced corner in the PrintPlan,
+  strand p2~ws1.0: (363.633429, 315.551588), (368.206400, 320.124558),
+  (365.527616, 317.445774), (370.100586, 322.018745) — clean; stationary
+  Simulation stream = those to 0.001 in; the OLD drag stride (4, V = 376 617)
+  skipped vertices 649 / 791 / 2021 of that 2 819-vertex item (confirmed, not
+  emulated); the NEW drag LOD (0.20 in, 107 557 vertices, 27 ms) draws all 4;
+  the Pi view (0.10 in) draws all 4 exactly. Regression:
+  test_view_fidelity.py::TestOperatorProject (~50 s planning).
+
 - **Wall Groups × Wall Systems (2026-10-11):** (correction pass: every wall is listed and assignable; thickness editable in the workspace.) Layer PLACEMENT pivots on the architectural envelope since 2026-10-11 (previously the printed footprint — existing scaled stacks of generated constructions may shift slightly). An opening valid in the Assembly can still be reported by Wall Systems as too narrow for its construction (`inspection.openings`) — reported, not enforced. The workspace's wall catalogue lists the walls / groups of Base + the design being edited (walls introduced only in another derived design appear once that design is edited); a thickness edit there changes Base and the edited design (a derived design that OVERRIDES a group's thickness keeps its override). A system's Chained Loop clamps use the smallest assigned thickness. A Wall System given only to some layers is possible only through the migration's `designs` scope (no UI for it). `Single` on a thick group keeps the group's envelope in the Designer / Assembly while one bead prints. Generated layers are kept while cached (variant LRU 512, 4 generations).
 - **Deferred print paths (2026-10-11):** lattice-level support problems (and any route that cannot close) appear only after Generate Print Paths; the Assembly's live report is architectural. Canonical designs are still FULL builds (once per design set: their printed footprints place the stack exactly as the print does; ~6 s cold for the benchmark). A plain / Hollow wall without infill is represented by its face beads (bead rule), a filled wall by its material rings (overhang rule). Cold print preparation does all variant work at once (~73 s on the benchmark). The preview shows outlines, not beads.
 - **Transformed junction lattice (the main open problem):** on the reference stack (`design_proto/tests/reference_network.py`, 32 layers, Circle 1 / Rect 1 / Rect 2 in three groups scaling, round junctions) support reports ≈ 51 (zigzag) / 71 (wave) findings, ~85 % on lattice at the Rect 1 ↔ Circle 1 lens and the Rect 1 ↔ Rect 2 crossing. Every variant's route closes. Cause (Designer side): junction transitions are re-planned per layer. Precise statement and next step: Designer memory → "Transformed-junction lattice".
@@ -366,6 +439,10 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 - Benchmark history (cold / warm, 8 workers): 49 layers 8.2 / 1.1 s, 99 → 12.7 / 2.2 s, 299 → 38.3 / 6.3 s before stabilization pass 2; current numbers in the Designer memory → "Performance".
 
 ## Last Updated
+
+2026-10-15 — Print Simulation drag / scrub LOD: index-stride vertex skipping (corner-cutting) replaced by error-bounded simplification + realistic PrintPlan → .mudjob / Simulation fidelity tests; verified on the exact operator project, manually reviewed, committed (checkpoint). See Known limitations → "KNOWN ISSUE — corner-cutting".
+
+2026-10-14 — `.mudjob` re-entry segments per pass + `lift_plan` / `travel_lines` / `reentry_marks` (Pi controller pass; manually reviewed, checkpoint 2026-10-15). See "MACHINE JOB EXPORT".
 
 2026-10-14 — EXECUTABLE `.mudjob` (current-machine pass): XY-only G-code in inches from `items()`, layer / Z metadata, placeholder-speed flag; Z and pump manual; no prime moves. See "MACHINE JOB EXPORT".
 

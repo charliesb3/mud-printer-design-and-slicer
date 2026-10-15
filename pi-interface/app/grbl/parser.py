@@ -19,13 +19,23 @@ class StatusReport:
     wpos_x: float | None
     wpos_y: float | None
     feed_rate: float | None
+    overrides: tuple | None = None      # Ov:feed,rapid,spindle (only in some reports)
+    pins: str = ""                      # Pn: triggered input pins ("" = none reported)
+    buffer: tuple | None = None         # Bf:planner blocks free, RX bytes free
+    wco: tuple | None = None            # WCO:x,y (only in some reports)
+    line_number: int | None = None      # Ln:
 
 
 # Position fields: MPos:x,y,z or WPos:x,y,z
 _MPOS_RE = re.compile(r'MPos:(-?[\d.]+),(-?[\d.]+)')
 _WPOS_RE = re.compile(r'WPos:(-?[\d.]+),(-?[\d.]+)')
-# Feed/speed: FS:feed,spindle
-_FS_RE = re.compile(r'FS:(-?[\d.]+)')
+# Feed/speed: FS:feed,spindle (or F:feed)
+_FS_RE = re.compile(r'(?:^|\|)F(?:S)?:(-?[\d.]+)')
+_OV_RE = re.compile(r'Ov:(\d+),(\d+),(\d+)')
+_PN_RE = re.compile(r'Pn:([A-Z]+)')
+_BF_RE = re.compile(r'Bf:(\d+),(\d+)')
+_WCO_RE = re.compile(r'WCO:(-?[\d.]+),(-?[\d.]+)')
+_LN_RE = re.compile(r'Ln:(\d+)')
 
 # GRBL 0.9: <State,MPos:x,y,z,WPos:x,y,z> — comma-separated, no | characters
 _GRBL09_RE = re.compile(r'^<(\w+),MPos:(-?[\d.]+),(-?[\d.]+)(?:[^>]*)>')
@@ -60,9 +70,11 @@ def parse_status_report(line: str) -> StatusReport | None:
         if pw:
             wpos_x, wpos_y = float(pw.group(1)), float(pw.group(2))
 
-        fm = _FS_RE.search(rest)
+        fm = _FS_RE.search('|' + rest)
         if fm:
             feed_rate = float(fm.group(1))
+        ov, pn, bf, wco, ln = (_OV_RE.search(rest), _PN_RE.search(rest), _BF_RE.search(rest),
+                               _WCO_RE.search(rest), _LN_RE.search(rest))
 
         return StatusReport(
             state=state,
@@ -72,6 +84,11 @@ def parse_status_report(line: str) -> StatusReport | None:
             wpos_x=wpos_x,
             wpos_y=wpos_y,
             feed_rate=feed_rate,
+            overrides=tuple(int(v) for v in ov.groups()) if ov else None,
+            pins=pn.group(1) if pn else "",
+            buffer=(int(bf.group(1)), int(bf.group(2))) if bf else None,
+            wco=(float(wco.group(1)), float(wco.group(2))) if wco else None,
+            line_number=int(ln.group(1)) if ln else None,
         )
 
     # GRBL 0.9 format: <State,MPos:x,y,z,WPos:x,y,z>
@@ -197,3 +214,13 @@ def lift_gcode_reason(lines: list[str]) -> str | None:
             return (f"line {n} ({line}): XY motion before the lift sets its units (G20/G21) "
                     f"and distance mode (G90/G91)")
     return None
+
+
+# Bracketed query responses: [GC:…] ($G parser state), [G54:x,y,z] … [PRB:…] ($#)
+_BRACKET_RE = re.compile(r'^\[([A-Z0-9.]+):(.*)\]$')
+
+
+def parse_bracket(line: str) -> tuple[str, str] | None:
+    """(key, value) for a `[KEY:value]` GRBL line, e.g. ('GC', 'G0 G54 …'), ('G54', '0.000,0.000,0.000')."""
+    m = _BRACKET_RE.match(line.strip())
+    return (m.group(1), m.group(2)) if m else None

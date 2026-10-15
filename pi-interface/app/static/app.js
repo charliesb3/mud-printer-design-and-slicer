@@ -155,8 +155,15 @@ function handleState(s) {
   // Lifts + frame reposition panel
   renderLifts(s);
 
-  // Print origin + prime position
+  // Print origin + prime position + outline
   renderSetup(s);
+
+  // Progress / estimates, speeds + feed override, lift height, 2D view, diagnostics
+  renderProgress(s);
+  renderSpeed(s);
+  renderParams(s);
+  renderView(s);
+  renderDiagnostics(s);
 }
 
 function renderJogSection(s) {
@@ -195,8 +202,6 @@ function renderJobSection(s) {
   const fileEl = document.getElementById("job-filename");
   const stateBadge = document.getElementById("job-state-badge");
   const metaEl = document.getElementById("job-meta");
-  const progressWrap = document.getElementById("progress-wrap");
-  const progressFill = document.getElementById("progress-fill");
   const startBtn = document.getElementById("btn-start");
 
   if (!job) {
@@ -204,8 +209,9 @@ function renderJobSection(s) {
     fileEl.className = "job-filename empty";
     stateBadge.style.display = "none";
     metaEl.textContent = "";
-    progressWrap.classList.remove("visible");
     startBtn.disabled = true;
+    startBtn.textContent = "START JOB";
+    document.getElementById("start-note").textContent = "Upload a job first.";
     return;
   }
 
@@ -227,24 +233,14 @@ function renderJobSection(s) {
     error:     "state-alarm",
   }[jobState] || "state-other";
 
-  // Meta line
-  const pct = job.total_lines > 0
-    ? Math.round((job.current_line / job.total_lines) * 100) : 0;
-  const elapsed = job.elapsed_seconds != null
-    ? fmtDuration(job.elapsed_seconds) : null;
-
-  let meta = `${job.current_line} / ${job.total_lines} lines (${pct}%)`;
-  if (elapsed) meta += `   ${elapsed} elapsed`;
+  // Identity line: kind, lifts / layers, lines, readiness (progress is in its own panel)
+  const layers = (job.lifts || []).reduce((n, l) => n + ((l.layers && l.layers.count) || 0), 0);
+  let meta = job.kind === "building"
+    ? `Building job · ${job.total_lifts} lifts` + (layers ? ` · ${layers} layers` : "") + ` · ${job.total_lines} lines`
+    : `G-code file · ${job.total_lines} lines`;
+  if (job.executable === false) meta += " · not executable";
   if (job.error) meta = `Error: ${job.error}`;
   metaEl.textContent = meta;
-
-  // Progress bar
-  if (["running", "held", "awaiting_reposition", "stopped", "completed"].includes(jobState)) {
-    progressWrap.classList.add("visible");
-    progressFill.style.width = pct + "%";
-  } else {
-    progressWrap.classList.remove("visible");
-  }
 
   // Start button (never for a non-executable job: the server refuses it too).
   // A building job needs the print origin and returns to it first.
@@ -263,7 +259,7 @@ function renderJobSection(s) {
     && !startWhy
     && !setup.moving;
   startBtn.disabled = !canStart;
-  startBtn.textContent = building && job.executable !== false ? "START (returns to origin first)" : "START JOB";
+  startBtn.textContent = building && job.executable !== false ? "START — returns to origin first" : "START JOB";
   document.getElementById("start-note").textContent = startWhy;
 }
 
@@ -372,6 +368,22 @@ function renderLifts(s) {
   if (blocked) cancelConfirmHold();
 }
 
+function renderOutline(s, ready) {
+  const o = s.job && s.job.outline;
+  const st = s.setup || {};
+  const el = document.getElementById("outline-preview");
+  if (!o) {
+    el.textContent = "Outline: load an executable job to see the rectangle it would trace.";
+  } else {
+    const c = o.corners;
+    el.textContent = `Outline traces X ${fmtNum(c[0][0])} → ${fmtNum(c[1][0])}, Y ${fmtNum(c[0][1])} → ` +
+      `${fmtNum(c[2][1])} in (${fmtNum(o.width)} × ${fmtNum(o.height)} in, from ${o.source}) at jog speed, ` +
+      "starting at the first corner. Z is not moved — make sure the nozzle clears everything.";
+  }
+  document.getElementById("btn-outline").disabled =
+    !(ready && o && st.origin_set && st.positioning_enabled);
+}
+
 function renderSetup(s) {
   const st = s.setup || {};
   const u = "in";
@@ -392,9 +404,11 @@ function renderSetup(s) {
   document.getElementById("btn-set-origin").disabled = !ready;
   document.getElementById("btn-set-prime").disabled = !(ready && st.origin_set);
   document.getElementById("btn-prime").disabled = !(ready && st.prime_ready && st.positioning_enabled);
+  renderOutline(s, ready);
 
   let note = st.note || "";
   if (st.moving === "prime") note = "Moving to the prime position… (HOLD / STOP available)";
+  else if (st.moving === "outline") note = "Tracing the outline… (HOLD / STOP available)";
   else if (!note && st.prime_ready && !st.positioning_enabled) note = "Prime uses the jog speed — jogging is disabled.";
   else if (!note && s.job && s.job.state === "awaiting_reposition")
     note = "Frame reposition: you may jog and Set origin again before confirming.";
@@ -438,6 +452,366 @@ function renderLiftList(job) {
     if (lift.description) row.title = lift.description;
     list.appendChild(row);
   });
+}
+
+function fmtTime(secs) {
+  if (secs == null || !isFinite(secs)) return "—";
+  secs = Math.max(0, Math.round(secs));
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), sec = secs % 60;
+  return h ? `${h} h ${String(m).padStart(2, "0")} min` : (m ? `${m} min ${String(sec).padStart(2, "0")} s` : `${sec} s`);
+}
+
+function kvGrid(el, rows) {
+  el.innerHTML = "";
+  rows.filter(r => r && r[1] != null && r[1] !== "").forEach(([k, v]) => {
+    const a = document.createElement("div"); a.className = "k"; a.textContent = k;
+    const b = document.createElement("div"); b.className = "v"; b.textContent = v;
+    el.appendChild(a); el.appendChild(b);
+  });
+}
+
+function feedOverride(s) {
+  return s.grbl && s.grbl.overrides ? s.grbl.overrides.feed : null;
+}
+
+// ---- Print progress: whole job + current lift (estimates from the job's G-code)
+function renderProgress(s) {
+  const job = s.job;
+  const sec = document.getElementById("progress-section");
+  sec.hidden = !(job && job.executable !== false && job.progress);
+  if (sec.hidden) return;
+  const p = job.progress, lf = p.lift || {};
+  const ov = feedOverride(s);
+  const atOv = (t) => (ov && ov !== 100 && t != null) ? ` (≈ ${fmtTime(t * 100 / ov)} at ${ov}%)` : "";
+  const unk = p.unknown_lines ? ` — ${p.unknown_lines} move(s) without a known speed are not included` : "";
+  document.getElementById("prog-job-pct").textContent = Math.round(p.fraction * 100) + "%";
+  document.getElementById("prog-job-bar").style.width = (p.fraction * 100) + "%";
+  const inch = (v) => v == null ? null : `${fmtNum(v)} in`;
+  kvGrid(document.getElementById("prog-job"), [
+    ["Estimated total", fmtTime(p.total_s) + unk],
+    ["Elapsed", p.elapsed_s != null ? fmtTime(p.elapsed_s) +
+      (p.waiting_s ? ` (of which ${fmtTime(p.waiting_s)} waiting at frame repositions)` : "") : "—"],
+    ["Estimated remaining", fmtTime(p.remaining_s) + atOv(p.remaining_s)],
+    ["Print path", `${inch(p.print_done_in)} of ${inch(p.print_in)}` + (p.classified ? "" : " (feed moves)")],
+    ["Lifts", `${job.current_lift + 1} of ${job.total_lifts}` + (job.lifts_adjusted ? " (adjusted)" : "")],
+  ]);
+  const building = job.kind === "building";
+  document.getElementById("prog-lift-block").hidden = !building;
+  if (!building) return;
+  document.getElementById("prog-lift-title").textContent =
+    `Lift ${job.current_lift + 1} of ${job.total_lifts}`;
+  document.getElementById("prog-lift-pct").textContent = Math.round(p.lift_fraction * 100) + "%";
+  document.getElementById("prog-lift-bar").style.width = (p.lift_fraction * 100) + "%";
+  const u = " in";
+  kvGrid(document.getElementById("prog-lift"), [
+    ["Layer", lf.layer_in_lift != null ? `${lf.layer_in_lift} of ${lf.layers} in this lift (building layer ${lf.layer + 1})`
+      : (lf.layers ? `${lf.layers} layers in this lift` : null)],
+    ["Expected nozzle Z", lf.z != null ? `${fmtNum(lf.z)}${u} building · ${fmtNum(lf.z_in_lift)}${u} above the frame base` : null],
+    ["Lift estimate", `${fmtTime(p.lift_total_s)} · remaining ${fmtTime(p.lift_remaining_s)}${atOv(p.lift_remaining_s)}`],
+    ["Lift print path", `${inch(p.lift_print_done_in)} of ${inch(p.lift_print_in)}`],
+    ["Layer thickness", lf.nominal_layer != null ? `${fmtNum(lf.nominal_layer)}${u} nominal (Slicer)` +
+      (lf.observed_layer ? ` · ${fmtNum(lf.observed_layer)}${u} observed` : "") : null],
+    ["Target lift height", lf.target_lift_height != null ? `${fmtNum(lf.target_lift_height)}${u}` +
+      (lf.max_z_travel != null ? ` (Z travel ${fmtNum(lf.max_z_travel)}${u})` : "") : null],
+  ]);
+  // physical progress toward the target lift height
+  const meter = document.getElementById("height-meter");
+  const target = lf.target_lift_height, maxz = lf.max_z_travel || target;
+  meter.hidden = !(target && lf.layers);
+  if (!meter.hidden) {
+    const scale = Math.max(maxz || 0, lf.physical_lift_estimate || 0, target);
+    const done = lf.physical_done_estimate || 0, plan = lf.physical_lift_estimate || 0;
+    document.getElementById("height-done").style.width = (100 * done / scale) + "%";
+    document.getElementById("height-plan").style.left = (100 * Math.min(plan, scale) / scale) + "%";
+    document.getElementById("height-labels").textContent =
+      `≈ ${fmtNum(done)}${u} done (${lf.completed_layers} layers) · this lift ≈ ${fmtNum(plan)}${u} at ` +
+      `${fmtNum(lf.observed_layer || lf.nominal_layer)}${u}/layer · target ${fmtNum(target)}${u}`;
+  }
+}
+
+// ---- Speeds + live feed override (GRBL real-time bytes; value read back from GRBL)
+function renderSpeed(s) {
+  const job = s.job;
+  const feeds = job && job.machine && job.machine.feeds_in_min;
+  const ov = feedOverride(s);
+  const eff = (f) => (ov && ov !== 100) ? ` → ${fmtNum(f * ov / 100)} in/min at ${ov}%` : "";
+  kvGrid(document.getElementById("planned-speeds"), feeds ? [
+    ["Print speed (planned)", `${fmtNum(feeds.print)} in/min (${fmtNum(feeds.print / 60)} in/s)${eff(feeds.print)}`],
+    ["Travel speed (planned)", `${fmtNum(feeds.travel)} in/min (${fmtNum(feeds.travel / 60)} in/s)${eff(feeds.travel)}`],
+  ] : [["Planned speeds", job ? "from the G-code F words" : "load a job"]]);
+  const val = document.getElementById("ovr-value");
+  val.textContent = ov != null ? ov + "%" : (s.connected ? "100%?" : "—");
+  val.className = "override-value" + (ov != null && ov !== 100 ? " changed" : "");
+  const pos = ov != null ? (ov - 10) / 190 : (100 - 10) / 190;
+  document.getElementById("ovr-fill").style.width = (100 * Math.max(0, Math.min(1, pos))) + "%";
+  document.querySelectorAll(".btn-ovr").forEach(b => { b.disabled = !s.connected; });
+  document.getElementById("ovr-note").textContent = ov == null && s.connected
+    ? "GRBL has not reported its override yet (it reports after a change or every few status reports)."
+    : "GRBL feed override: applies to feed moves at once (10–200 %). Estimates stay at 100 %.";
+}
+
+// ---- Print parameters: target lift height + layer thickness → the lift's layer count.
+// The operator edits physical VARIABLES; the Pi turns them into the safe end of
+// the current lift — only whole-layer clean cuts of the exported order (never
+// new layers). Edits stay local until "Hold to apply"; the server re-checks.
+const params = { key: null, target: null, thickness: null };
+const TARGET_STEP = 0.5, THICK_STEP = 0.1;
+
+// Same rule as CurrentJob.propose_lift_end (server): layers needed =
+// floor(target / thickness); the clean-cut end with the most layers not above
+// that, else the earliest end still available.
+function proposeLiftEnd(cands, target, t, maxZ) {
+  const needed = Math.max(1, Math.floor(target / t + 1e-9));
+  const ok = cands.filter(c => maxZ == null || c.layers * t <= maxZ + 1e-9);
+  if (!ok.length) return { needed, choice: null, reason: "No safe whole-layer end is available for this lift." };
+  const below = ok.filter(c => c.layers <= needed);
+  const choice = below.length ? below.reduce((a, b) => (b.layers > a.layers ? b : a))
+                              : ok.reduce((a, b) => (b.layers < a.layers ? b : a));
+  let reason = null;
+  if (choice.layers > needed) {
+    reason = `This lift already has ${choice.layers - 1} or more layers under way — ` +
+             `the earliest end still possible is after ${choice.layers} layers.`;
+  } else if (choice.layers < needed) {
+    if (choice.end_of_job) reason = `Only ${choice.layers} layers remain in the job.`;
+    else if (ok.some(c => c.layers > choice.layers))
+      reason = `No safe whole-layer end at ${needed} layers here (layers of different islands interleave) — ` +
+               `nearest below: ${choice.layers}.`;
+    else reason = `${needed} layers × ${t} in would exceed the machine's Z travel — limited to ${choice.layers}.`;
+  }
+  return { needed, choice, reason };
+}
+
+function approx(a, b) { return a != null && b != null && Math.abs(a - b) < 1e-6; }
+
+function renderParams(s) {
+  const job = s.job;
+  const box = document.getElementById("lift-params");
+  const lf = (job && job.progress && job.progress.lift) || {};
+  box.hidden = !(job && job.kind === "building" && job.executable !== false && lf.layers);
+  if (box.hidden) { params.key = null; return; }
+  const adj = job.adjust && job.adjust.lift != null ? job.adjust : null;
+  const appliedTarget = lf.target_lift_height, appliedT = lf.observed_layer || lf.nominal_layer;
+  const key = `${job.job_id}:${adj ? adj.lift : "-"}`;
+  if (params.key !== key || params.target == null || params.thickness == null) {
+    params.key = key; params.target = appliedTarget; params.thickness = appliedT;     // start from the applied values
+  }
+  const maxZ = lf.max_z_travel;
+  const tv = document.getElementById("p-target-value"), hv = document.getElementById("p-thick-value");
+  tv.textContent = params.target != null ? `${fmtNum(params.target)} in` : "—";
+  hv.textContent = params.thickness != null ? `${fmtNum(params.thickness)} in` : "—";
+  tv.className = "param-value" + (approx(params.target, appliedTarget) ? "" : " changed");
+  hv.className = "param-value" + (approx(params.thickness, appliedT) ? "" : " changed");
+  document.getElementById("p-target-note").textContent =
+    lf.planned_target_lift_height != null ? `planned ${fmtNum(lf.planned_target_lift_height)} in` +
+    (maxZ != null ? ` · Z travel ${fmtNum(maxZ)} in` : "") : "";
+  document.getElementById("p-thick-note").textContent =
+    lf.nominal_layer != null ? `Slicer nominal ${fmtNum(lf.nominal_layer)} in` : "";
+  document.querySelectorAll(".step-btn").forEach(b => { b.disabled = !adj; });
+
+  const res = document.getElementById("p-result"), why = document.getElementById("p-reason");
+  const applyBtn = document.getElementById("btn-apply-params");
+  const k = adj ? adj.lift : job.current_lift;
+  const planned = adj ? adj.candidates.find(c => c.planned) : null;
+  const plannedLayers = planned ? planned.layers : lf.layers;
+  if (!adj) {
+    res.innerHTML = "";
+    res.append(`Lift ${k + 1}: ${lf.layers} layers planned.`);
+    why.textContent = "";
+    applyBtn.disabled = true;
+    document.getElementById("params-note").textContent = (lf.adjustable === false)
+      ? "This job has no re-entry layer marks, so lift ends cannot be adjusted (re-export it from the Designer)."
+      : "Lift parameters can be applied before or while a lift prints, or while it awaits its reposition.";
+  } else {
+    const prop = (params.target && params.thickness) ? proposeLiftEnd(adj.candidates, params.target, params.thickness, maxZ) : null;
+    const c = prop && prop.choice;
+    res.innerHTML = "";
+    const b1 = document.createElement("b");
+    b1.textContent = prop ? `${prop.needed} layers` : "—";
+    res.append(`${fmtNum(params.target)} ÷ ${fmtNum(params.thickness)} in → `, b1, " needed. ");
+    if (c) {
+      const b2 = document.createElement("b");
+      b2.textContent = c.planned ? `${c.layers} layers (unchanged)` : `${c.layers} layers`;
+      res.append(`Lift ${k + 1}: planned ${plannedLayers} → `, b2,
+        c.planned ? "" : `, ending after building layer ${c.end_layer + 1} (≈ ${fmtNum(c.layers * params.thickness)} in).`);
+    }
+    why.textContent = prop ? (prop.reason || "") : "";
+    const changes = c && (!c.planned || !approx(params.target, appliedTarget) || !approx(params.thickness, appliedT));
+    applyBtn.disabled = !changes;
+    applyBtn.dataset.lift = String(k);
+    document.getElementById("btn-apply-label").textContent =
+      job.state === "awaiting_reposition" && c && !c.planned ? `Hold to continue lift ${k + 1}` : "Hold to apply";
+    document.getElementById("params-note").textContent =
+      "Applies to the current lift only. The Pi re-uses the exported layers in their exact order — it never adds layers.";
+  }
+  document.getElementById("btn-restore-lifts").disabled =
+    !job.lifts_adjusted || ["running", "held", "awaiting_reposition"].includes(job.state);
+}
+
+function stepParam(name, delta) {
+  const lf = (lastState.job && lastState.job.progress && lastState.job.progress.lift) || {};
+  const maxZ = lf.max_z_travel || 1000;
+  const round = (v) => Math.round(v * 1000) / 1000;
+  if (name === "target") params.target = round(Math.min(maxZ, Math.max(TARGET_STEP, (params.target || 0) + delta)));
+  else params.thickness = round(Math.min(24, Math.max(THICK_STEP, (params.thickness || 0) + delta)));
+  renderParams(lastState);
+}
+
+// ---- Diagnostics (Advanced): GRBL state, alarms / errors, read-only queries
+function renderDiagnostics(s) {
+  if (document.getElementById("console-body").style.display === "none") return;
+  const g = s.grbl || {}, d = s.diag || {};
+  kvGrid(document.getElementById("diag-status"), [
+    ["Connection", s.connected ? "connected" : "disconnected"],
+    ["GRBL", `${s.grbl_version || "?"} · ${s.grbl_state}`],
+    ["Feed override", g.overrides ? `${g.overrides.feed}% (rapid ${g.overrides.rapid}%)` : "not reported yet"],
+    ["Input pins", g.pins_named && g.pins_named.length ? g.pins_named.join(", ") : "none triggered"],
+    ["Planner / RX buffer", g.buffer ? `${g.buffer[0]} blocks / ${g.buffer[1]} bytes free` : "not reported ($10)"],
+    ["Work offset (WCO)", g.wco ? `${g.wco[0]}, ${g.wco[1]} ${g.report_units || ""}` : "—"],
+    ["Report units ($13)", g.report_units || "unknown (read settings)"],
+  ]);
+  const ev = document.getElementById("diag-events");
+  ev.innerHTML = "";
+  (d.events || []).slice().reverse().forEach(e => {
+    const row = document.createElement("div");
+    row.className = "ev-" + e.kind;
+    row.textContent = `${new Date(e.t * 1000).toLocaleTimeString()} ${e.text}${e.detail ? " — " + e.detail : ""}`;
+    ev.appendChild(row);
+  });
+  if (!(d.events || []).length) ev.textContent = "none";
+  document.getElementById("diag-parser").textContent = d.parser_state ? "Parser state: " + d.parser_state : "";
+  document.getElementById("diag-offsets").textContent = d.offsets && Object.keys(d.offsets).length
+    ? Object.entries(d.offsets).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
+  const tbl = document.getElementById("diag-settings");
+  tbl.innerHTML = "";
+  (d.settings || []).forEach(r => {
+    const tr = document.createElement("tr");
+    [`$${r.n}`, r.value, r.name].forEach(t => { const td = document.createElement("td"); td.textContent = t; tr.appendChild(td); });
+    tbl.appendChild(tr);
+  });
+  const idle = s.connected && s.grbl_state === "Idle" && !(s.job && ["running", "held"].includes(s.job.state));
+  document.querySelectorAll("[data-read]").forEach(b => { b.disabled = !idle; });
+}
+
+function attachFeatureControls() {
+  document.querySelectorAll(".btn-ovr").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const step = btn.dataset.step === "reset" ? "reset" : parseInt(btn.dataset.step, 10);
+      send({ type: "feed_override", step });
+    });
+  });
+  attachHoldButton(document.getElementById("btn-outline"), 1000, () => send({ type: "outline" }));
+  // the values shown when the hold BEGAN are applied; the server re-checks them
+  attachHoldButton(document.getElementById("btn-apply-params"), 1500,
+    (v) => send({ type: "apply_lift_parameters", lift: v.lift, target: v.target, thickness: v.thickness }),
+    () => ({ lift: parseInt(document.getElementById("btn-apply-params").dataset.lift, 10),
+             target: params.target, thickness: params.thickness }));
+  document.querySelectorAll(".step-btn").forEach(b =>
+    b.addEventListener("click", () => stepParam(b.dataset.param, parseFloat(b.dataset.delta))));
+  document.getElementById("btn-restore-lifts").addEventListener("click", () => send({ type: "restore_planned_lifts" }));
+  document.querySelectorAll("[data-read]").forEach(b =>
+    b.addEventListener("click", () => send({ type: "read_grbl", what: b.dataset.read })));
+}
+
+// ---- Live 2D toolpath view: drawn only from the loaded job's G-code (GET /api/job/path)
+const view = { jobId: null, path: null, scale: 1, cx: 0, cy: 0, fitted: false, drawnAt: 0, drag: null };
+
+async function loadPath(jobId) {
+  view.jobId = jobId; view.path = null; view.fitted = false;
+  try {
+    const r = await fetch("/api/job/path");
+    const data = await r.json();
+    if (data.job_id === jobId) view.path = data;
+  } catch (e) { /* the next state broadcast retries */ view.jobId = null; }
+}
+
+function viewRange(s) {
+  const job = s.job;
+  if (!job || document.getElementById("view-all").checked) return [0, Infinity];
+  const L = job.lifts[Math.min(job.current_lift, job.lifts.length - 1)];
+  return L && L.start_line != null ? [L.start_line, L.end_line] : [0, Infinity];
+}
+
+function fitView(s) {
+  const P = view.path, canvas = document.getElementById("path-canvas");
+  if (!P || !P.x.length) return;
+  const [a, b] = viewRange(s);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < P.x.length; i++) {
+    if (P.line[i] < a || P.line[i] >= b) continue;
+    x0 = Math.min(x0, P.x[i]); x1 = Math.max(x1, P.x[i]); y0 = Math.min(y0, P.y[i]); y1 = Math.max(y1, P.y[i]);
+  }
+  if (!isFinite(x0)) return;
+  const w = Math.max(x1 - x0, 1), h = Math.max(y1 - y0, 1);
+  view.scale = 0.9 * Math.min(canvas.width / w, canvas.height / h);
+  view.cx = (x0 + x1) / 2; view.cy = (y0 + y1) / 2; view.fitted = true;
+}
+
+function renderView(s, force) {
+  const job = s.job;
+  const sec = document.getElementById("view-section");
+  sec.hidden = !(job && job.executable !== false);
+  if (sec.hidden) return;
+  if (job.job_id !== view.jobId) { loadPath(job.job_id).then(() => renderView(lastState, true)); return; }
+  const now = Date.now();
+  if (!force && now - view.drawnAt < 400) return;          // ~2.5 Hz: light on the Pi
+  view.drawnAt = now;
+  const P = view.path, canvas = document.getElementById("path-canvas"), ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0b0b0b"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!P) return;
+  if (!view.fitted) fitView(s);
+  const [a, b] = viewRange(s);
+  const done = job.current_line;
+  const X = (x) => canvas.width / 2 + (x - view.cx) * view.scale;
+  const Y = (y) => canvas.height / 2 - (y - view.cy) * view.scale;
+  // one pass per style: remaining, travel, printed (segments end at point i)
+  const styles = [
+    { test: (i) => P.kind[i] === 0 && P.line[i] >= done, color: "#555", width: 2, dash: [] },
+    { test: (i) => P.kind[i] === 1, color: "#a855f7", width: 1, dash: [6, 6] },
+    { test: (i) => P.kind[i] === 0 && P.line[i] < done, color: "#4ade80", width: 2.5, dash: [] },
+  ];
+  for (const st of styles) {
+    ctx.beginPath(); ctx.strokeStyle = st.color; ctx.lineWidth = st.width; ctx.setLineDash(st.dash);
+    for (let i = 1; i < P.x.length; i++) {
+      if (P.line[i] < a || P.line[i] >= b || P.line[i - 1] < a || !st.test(i)) continue;
+      ctx.moveTo(X(P.x[i - 1]), Y(P.y[i - 1])); ctx.lineTo(X(P.x[i]), Y(P.y[i]));
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // work origin
+  ctx.strokeStyle = "#60a5fa"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(X(0) - 8, Y(0)); ctx.lineTo(X(0) + 8, Y(0)); ctx.moveTo(X(0), Y(0) - 8); ctx.lineTo(X(0), Y(0) + 8); ctx.stroke();
+  // nozzle (work coordinates, inches) — only when the origin is established
+  const st = s.setup || {};
+  if (st.work_x != null) {
+    ctx.fillStyle = "#f87171"; ctx.beginPath(); ctx.arc(X(st.work_x), Y(st.work_y), 6, 0, 2 * Math.PI); ctx.fill();
+  }
+  document.getElementById("view-note").textContent =
+    (st.work_x == null ? "Nozzle position appears once the print origin is set. " : "") +
+    (P.decimated ? `Simplified view (${P.points} moves). ` : "") +
+    "Drawn from the loaded job's G-code only (work coordinates, inches).";
+}
+
+function attachView() {
+  const canvas = document.getElementById("path-canvas");
+  const zoom = (f) => { view.scale *= f; renderView(lastState, true); };
+  document.getElementById("view-zoom-in").addEventListener("click", () => zoom(1.4));
+  document.getElementById("view-zoom-out").addEventListener("click", () => zoom(1 / 1.4));
+  document.getElementById("view-fit").addEventListener("click", () => { view.fitted = false; renderView(lastState, true); });
+  document.getElementById("view-all").addEventListener("change", () => { view.fitted = false; renderView(lastState, true); });
+  canvas.addEventListener("pointerdown", (e) => { view.drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!view.drag) return;
+    const k = canvas.width / canvas.getBoundingClientRect().width;
+    view.cx -= (e.clientX - view.drag.x) * k / view.scale;
+    view.cy += (e.clientY - view.drag.y) * k / view.scale;
+    view.drag = { x: e.clientX, y: e.clientY };
+    renderView(lastState, true);
+  });
+  const end = () => { view.drag = null; };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
 }
 
 function fmtDuration(secs) {
@@ -696,7 +1070,7 @@ function attachConsole() {
   toggle.addEventListener("click", () => {
     open = !open;
     body.style.display = open ? "block" : "none";
-    toggle.textContent = "Advanced / Console " + (open ? "▴" : "▾");
+    toggle.textContent = "Advanced / Diagnostics / Console " + (open ? "▴" : "▾");
   });
 
   const input = document.getElementById("console-cmd");
@@ -727,6 +1101,8 @@ document.addEventListener("DOMContentLoaded", () => {
   attachStopButton();
   attachConfirmButton();
   attachSetupButtons();
+  attachFeatureControls();
+  attachView();
 
   // Attach other controls
   attachControls();

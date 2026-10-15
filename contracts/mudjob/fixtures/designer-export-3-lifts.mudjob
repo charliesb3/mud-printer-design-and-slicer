@@ -37,6 +37,12 @@
   "max_x": 140.0,
   "max_y": 30.0
  },
+ "lift_plan": {
+  "target_lift_height": 3.0,
+  "max_z_travel": 18.0,
+  "layer_height": 1.5
+ },
+ "reentry_marks": true,
  "lifts": [
   {
    "index": 0,
@@ -55,52 +61,62 @@
    "travel_length": 100.0,
    "layer_marks": [
     {
-     "line": 2,
+     "line": 0,
      "pass": 0,
      "layer": 0,
      "z": 1.5,
      "z_in_lift": 1.5
     },
     {
-     "line": 7,
+     "line": 6,
      "pass": 1,
      "layer": 1,
      "z": 3.0,
      "z_in_lift": 3.0
     },
     {
-     "line": 11,
+     "line": 12,
      "pass": 2,
      "layer": 0,
      "z": 1.5,
      "z_in_lift": 1.5
     },
     {
-     "line": 16,
+     "line": 18,
      "pass": 3,
      "layer": 1,
      "z": 3.0,
      "z_in_lift": 3.0
     }
    ],
+   "travel_lines": [
+    1,
+    7,
+    13,
+    19
+   ],
    "gcode": [
-    "G20",
-    "G90",
+    "G20 G90",
     "G1 X0 Y0 F360",
     "G1 X0 Y30 F120",
     "G1 X40 Y30",
     "G1 X40 Y0",
     "G1 X0 Y0",
-    "G1 X0 Y30",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
     "G1 X40 Y30",
     "G1 X40 Y0",
     "G1 X0 Y0",
+    "G20 G90",
     "G1 X100 Y0 F360",
     "G1 X100 Y30 F120",
     "G1 X140 Y30",
     "G1 X140 Y0",
     "G1 X100 Y0",
-    "G1 X100 Y30",
+    "G20 G90",
+    "G1 X100 Y0 F360",
+    "G1 X100 Y30 F120",
     "G1 X140 Y30",
     "G1 X140 Y0",
     "G1 X100 Y0"
@@ -134,52 +150,62 @@
    },
    "layer_marks": [
     {
-     "line": 2,
+     "line": 0,
      "pass": 4,
      "layer": 2,
      "z": 4.5,
      "z_in_lift": 1.5
     },
     {
-     "line": 7,
+     "line": 6,
      "pass": 5,
      "layer": 3,
      "z": 6.0,
      "z_in_lift": 3.0
     },
     {
-     "line": 11,
+     "line": 12,
      "pass": 6,
      "layer": 2,
      "z": 4.5,
      "z_in_lift": 1.5
     },
     {
-     "line": 16,
+     "line": 18,
      "pass": 7,
      "layer": 3,
      "z": 6.0,
      "z_in_lift": 3.0
     }
    ],
+   "travel_lines": [
+    1,
+    7,
+    13,
+    19
+   ],
    "gcode": [
-    "G20",
-    "G90",
+    "G20 G90",
     "G1 X100 Y0 F360",
     "G1 X100 Y30 F120",
     "G1 X140 Y30",
     "G1 X140 Y0",
     "G1 X100 Y0",
-    "G1 X100 Y30",
+    "G20 G90",
+    "G1 X100 Y0 F360",
+    "G1 X100 Y30 F120",
     "G1 X140 Y30",
     "G1 X140 Y0",
     "G1 X100 Y0",
+    "G20 G90",
     "G1 X40 Y0 F360",
     "G1 X40 Y30 F120",
     "G1 X0 Y30",
     "G1 X0 Y0",
     "G1 X40 Y0",
-    "G1 X40 Y30",
+    "G20 G90",
+    "G1 X40 Y0 F360",
+    "G1 X40 Y30 F120",
     "G1 X0 Y30",
     "G1 X0 Y0",
     "G1 X40 Y0"
@@ -213,52 +239,62 @@
    },
    "layer_marks": [
     {
-     "line": 2,
+     "line": 0,
      "pass": 8,
      "layer": 4,
      "z": 7.5,
      "z_in_lift": 1.5
     },
     {
-     "line": 7,
+     "line": 6,
      "pass": 9,
      "layer": 5,
      "z": 9.0,
      "z_in_lift": 3.0
     },
     {
-     "line": 11,
+     "line": 12,
      "pass": 10,
      "layer": 4,
      "z": 7.5,
      "z_in_lift": 1.5
     },
     {
-     "line": 16,
+     "line": 18,
      "pass": 11,
      "layer": 5,
      "z": 9.0,
      "z_in_lift": 3.0
     }
    ],
+   "travel_lines": [
+    1,
+    7,
+    13,
+    19
+   ],
    "gcode": [
-    "G20",
-    "G90",
+    "G20 G90",
     "G1 X40 Y0 F360",
     "G1 X40 Y30 F120",
     "G1 X0 Y30",
     "G1 X0 Y0",
     "G1 X40 Y0",
-    "G1 X40 Y30",
+    "G20 G90",
+    "G1 X40 Y0 F360",
+    "G1 X40 Y30 F120",
     "G1 X0 Y30",
     "G1 X0 Y0",
     "G1 X40 Y0",
+    "G20 G90",
     "G1 X100 Y0 F360",
     "G1 X100 Y30 F120",
     "G1 X140 Y30",
     "G1 X140 Y0",
     "G1 X100 Y0",
-    "G1 X100 Y30",
+    "G20 G90",
+    "G1 X100 Y0 F360",
+    "G1 X100 Y30 F120",
     "G1 X140 Y30",
     "G1 X140 Y0",
     "G1 X100 Y0"
