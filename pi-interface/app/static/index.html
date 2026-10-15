@@ -92,6 +92,18 @@
       <div class="job-meta" id="job-meta"></div>
       <div class="lift-summary" id="lift-summary" hidden></div>
       <div class="lift-strip" id="lift-strip" hidden></div>
+      <div class="job-blocked" id="job-blocked" hidden>
+        <div class="job-blocked-title">Not executable — building structure only</div>
+        <div class="job-blocked-text">
+          This job lists the building's lifts but contains no machine instructions yet,
+          so it cannot be started. Unresolved:
+        </div>
+        <ul class="job-unresolved" id="job-unresolved"></ul>
+      </div>
+      <details class="lift-details" id="lift-details" hidden>
+        <summary>Lift details</summary>
+        <div class="lift-list" id="lift-list"></div>
+      </details>
       <div class="progress-bar-wrap" id="progress-wrap">
         <div class="progress-bar-fill" id="progress-fill"></div>
       </div>

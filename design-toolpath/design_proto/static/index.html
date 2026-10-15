@@ -1006,6 +1006,11 @@
                   title="Plan the print (routing, lifts, islands, time estimates) from the CURRENT generated Wall Systems — the geometry generated in the Wall Systems workspace; nothing is regenerated here.">Plan Print</button>
         </div>
         <div class="prop-row">
+          <button class="tool-btn" id="sim-export-job" onclick="simExportJob()" disabled
+                  title="Export Print Job (.mudjob): the finished machine job for the printer controller, made from the CURRENT print plan. (Save Project, .muddesign, is for continuing to design.)">Export Print Job</button>
+        </div>
+        <div class="asm-calc" id="sim-export-note"></div>
+        <div class="prop-row">
           <button class="tool-btn" id="sim-rebuild" onclick="simRebuild()"
                   title="Plan the print again from the current Designer and Assembly (recovery: drops the cached plan and routes). Keeps the project, camera, layer and playhead.">↻ Rebuild Simulation</button>
         </div>

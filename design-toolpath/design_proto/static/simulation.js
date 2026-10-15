@@ -863,6 +863,7 @@ async function simRefresh(opts) {
         const P = _simPlace();
         sim.data = simIngest(r);
         sim.cache = null;
+        sim.exportNote = null;                   // (a note about the previous plan's export)
         _simRestorePlace(P);                     // camera untouched; layer / playhead kept where practical
       }
       sim.key = K.key; sim.speedsKey = K.speedsKey;
@@ -883,6 +884,36 @@ async function simRefresh(opts) {
   return R.promise;
 }
 
+// EXPORT PRINT JOB (2026-10-14): the CURRENT plan as a .mudjob machine job —
+// the only thing handed to the printer controller (contracts/mudjob). The
+// server serializes the plan it already made for exactly this request; it
+// never plans. Save Project (.muddesign) stays the authoring file.
+async function simExportJob() {
+  if (!sim.data || simOutdated() || sim.loading) return;
+  let K;
+  try { K = await _simKeys(); } catch (e) { sim.exportNote = 'Export failed: ' + e.message; simRenderPanels(); return; }
+  if (K.key !== sim.key) {
+    sim.exportNote = 'The design changed after this plan was made — plan the print again, then export.';
+    simRenderPanels(); return;
+  }
+  const name = (typeof project !== 'undefined' && project.name) || '';
+  let r;
+  try {
+    const res = await fetch('/api/assembly/print_job', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assembly: K.assembly, designs: K.designs, wall_systems: K.wall_systems, name }) });
+    r = await res.json();
+    if (r.error) throw new Error(r.error);
+  } catch (e) { sim.exportNote = 'Export failed: ' + e.message; simRenderPanels(); return; }
+  _downloadText(r.filename, JSON.stringify(r.job, null, 1) + '\n');
+  const n = r.job.lifts.length;
+  sim.exportNote = `Exported ${r.filename} — ${n} lift${n === 1 ? '' : 's'}.` + (r.executable ? '' :
+    ` NOT EXECUTABLE yet: ${r.unresolved.length} machine decision${r.unresolved.length === 1 ? '' : 's'} unresolved ` +
+    `(${r.unresolved.map(u => u.id).join(', ')}). The printer interface shows its lifts but will not run it.`);
+  if (typeof setStatus === 'function') setStatus(sim.exportNote);
+  simRenderPanels();
+  return r;
+}
+
 // RECOVERY: plan again from scratch (the server drops its cached plan +
 // routes) — no page reload; project, camera, layer and playhead kept
 function simRebuild() {
@@ -898,7 +929,7 @@ function simReset() {
   sim.raf = null;
   _simCancelInflight();
   sim.reqGen++;
-  Object.assign(sim, { data: null, key: null, speedsKey: null, error: null, paramError: null, wsBlocked: null, N: 0, V: 0, t: 0, mode: '3d',
+  Object.assign(sim, { data: null, key: null, speedsKey: null, error: null, paramError: null, wsBlocked: null, exportNote: null, N: 0, V: 0, t: 0, mode: '3d',
                        selLayer: 0, selRun: null, selSection: null, selLift: null, selStage: null, open: {}, cache: null,
                        drag: null, scrubbing: false });
   sim.view = { yaw: -Math.PI / 4, pitch: 0.55, zoom: 1, px: 0, py: 0 };
@@ -986,6 +1017,10 @@ function simRenderPanels() {
     gb.textContent = sim.loading ? 'Planning…' : (D && simOutdated() ? 'Plan Print Again' : 'Plan Print');
     gb.disabled = !!sim.loading;
   }
+  const xb = el('sim-export-job');
+  if (xb) xb.disabled = !(D && !simOutdated() && !sim.loading && !sim.error);
+  const xn = el('sim-export-note');
+  if (xn) xn.textContent = sim.exportNote || (D && !simOutdated() ? '' : 'Export Print Job needs a current print plan.');
   const play = el('sim-play');
   if (play) play.textContent = sim.playing ? '⏸' : '▶';
   const rate = el('sim-rate');
@@ -1236,4 +1271,4 @@ if (window.Designer) {
   window.Designer.onWorkspaceShow('simulation', () => simShow());
   if (window.Designer.onWorkspaceHide) window.Designer.onWorkspaceHide('simulation', () => simHide());
 }
-window.SimulationProject = { reset: simReset, noteState: simNoteState };
+window.SimulationProject = { reset: simReset, noteState: simNoteState, exportJob: simExportJob };

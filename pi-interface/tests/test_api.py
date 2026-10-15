@@ -172,7 +172,9 @@ class TestJogConfiguration:
 # Building jobs and synchronized clients                               #
 # ------------------------------------------------------------------ #
 
-FIXTURE = Path(__file__).parent / "fixtures" / "sample_building.mudjob"
+CONTRACT_FIXTURES = Path(__file__).resolve().parents[2] / "contracts" / "mudjob" / "fixtures"
+FIXTURE = CONTRACT_FIXTURES / "executable-3-lifts.mudjob"
+EXPORTED = CONTRACT_FIXTURES / "designer-export-3-lifts.mudjob"
 
 
 def receive_state_until(ws, predicate, max_messages: int = 40) -> dict:
@@ -217,14 +219,36 @@ class TestBuildingJobUpload:
         assert job["awaiting_lift"] is None
         assert job["lifts"][1]["reposition_before"]["rise"] == 18
 
+    def test_upload_designer_export(self, client):
+        data = client.post(
+            "/upload",
+            files={"file": ("house.mudjob", EXPORTED.read_bytes(), "application/json")},
+        ).json()
+        assert data["success"] is True
+        assert data["kind"] == "building" and data["executable"] is False
+        assert data["total_lifts"] == 3 and data["total_lines"] == 0
+        assert {u["id"] for u in data["unresolved"]} >= {"z_within_lift", "machine_units"}
+        job = client.get("/api/state").json()["job"]
+        assert job["executable"] is False
+        assert [l["index"] for l in job["lifts"]] == [0, 1, 2]
+        assert job["lifts"][2]["layers"] == {"first": 4, "last": 5, "count": 2}
+
+    def test_muddesign_upload_refused(self, client):
+        project = json.dumps({"format": "mud-printer-project", "schema_version": 4, "project": {}})
+        data = client.post("/upload", files={"file": ("house.muddesign", io.BytesIO(project.encode()),
+                                                      "application/json")}).json()
+        assert data["success"] is False
+        assert ".muddesign" in data["error"] and "Export Print Job" in data["error"]
+        assert http_module._current_job is None
+
     def test_flat_upload_reports_one_lift(self, client):
         data = client.post("/upload", files={"file": ("a.nc", io.BytesIO(b"G0 X0\n"), "text/plain")}).json()
         assert data["kind"] == "gcode"
         assert data["total_lifts"] == 1
 
     def test_invalid_building_job_rejected(self, client):
-        bad = json.dumps({"format": "mudprinter-job", "version": 1,
-                          "lifts": [{"gcode": ["G1 X1", "M0"]}]})
+        bad = json.dumps({"format": "mudprinter-job", "version": 1, "executable": True,
+                          "lifts": [{"index": 0, "gcode": ["G1 X1", "M0"]}]})
         data = client.post("/upload", files={"file": ("bad.mudjob", io.BytesIO(bad.encode()), "application/json")}).json()
         assert data["success"] is False
         assert "M0" in data["error"]

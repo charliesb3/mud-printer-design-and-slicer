@@ -499,6 +499,13 @@ def _tag_designer_openings(report, res, assembly, presults, targets, bead, openi
 _PLANS: OrderedDict = OrderedDict()        # stack request (without speeds) → planned stack
 
 
+def _plan_key(data) -> str:
+    """The plan cache key: everything that changes the ORDERED GEOMETRY (not the speeds)."""
+    asm = dict(data['assembly'])
+    asm.pop('print_speeds', None)
+    return json.dumps([asm, data.get('designs'), data.get('wall_systems'), data.get('start')], sort_keys=True)
+
+
 def _planned(data, cancelled=None):
     """(plan, resolved stack, extras) for this request, cached by everything
     that changes the ORDERED GEOMETRY — not the speeds (a speed edit only
@@ -506,9 +513,7 @@ def _planned(data, cancelled=None):
     routes first (the Simulation's recovery control). Caller holds
     _STACK_LOCK."""
     from .print_plan import build_plan
-    asm = dict(data['assembly'])
-    asm.pop('print_speeds', None)
-    key = json.dumps([asm, data.get('designs'), data.get('wall_systems'), data.get('start')], sort_keys=True)
+    key = _plan_key(data)
     if data.get('rebuild'):
         _PLANS.pop(key, None)
         ws_ = data.get('wall_systems')
@@ -892,6 +897,33 @@ def api_print_plan():
     except (AssemblyError, ProfileError, PlanError, KeyError, ValueError, TypeError) as e:
         return jsonify({'error': str(e)}), 400
     return jsonify(out)
+
+
+@bp.route('/api/assembly/print_job', methods=['POST'])
+def api_print_job():
+    """EXPORT PRINT JOB (2026-10-14): the CURRENT planned print as a `.mudjob`
+    machine job (machine_job.py; contract: contracts/mudjob/README.md).
+    Body: the same request that planned it (/api/assembly/print_plan:
+    `assembly`, `designs`, `wall_systems`, `start`) + `name` (project name).
+    Exports ONLY a plan already made for exactly this request (Plan Print) —
+    it never plans, routes or re-derives anything; otherwise 409 `outdated`.
+    → {job: <.mudjob document>, filename, executable, unresolved}."""
+    from .machine_job import ExportError, export_job, job_filename
+    data = request.get_json(force=True)
+    try:
+        if not data.get('designs') or not isinstance(data.get('assembly'), dict):
+            raise AssemblyError('a print job needs the planned Layer Designs and Assembly')
+        with _STACK_LOCK:
+            cached = _PLANS.get(_plan_key(data))
+        if cached is None:
+            return jsonify({'error': 'There is no current print plan for this design — plan the print '
+                                     '(Plan Print) and export again.', 'outdated': True}), 409
+        name = data.get('name') if isinstance(data.get('name'), str) else None
+        doc = export_job(cached[0], name=(name or '').strip() or None)
+    except (AssemblyError, ExportError, KeyError, ValueError, TypeError) as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'job': doc, 'filename': job_filename(name), 'executable': doc['executable'],
+                    'unresolved': doc.get('unresolved', [])})
 
 
 @bp.route('/api/assembly/print_plan/cancel', methods=['POST'])

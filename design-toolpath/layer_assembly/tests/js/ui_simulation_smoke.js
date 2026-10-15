@@ -136,6 +136,23 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   check(Math.abs(D.total - D.res.estimate.total_time) < 1e-3, 'the playback clock ends at the planner estimate (same timing rule)');
   check(sim.t === D.total, 'opened on the finished building');
 
+  // ---- EXPORT PRINT JOB (.mudjob): the current plan, a file separate from the project ----
+  check(!el('sim-export-job').disabled, 'Export Print Job is offered for the current, successfully planned print');
+  const _dl = _downloadText, nPlans = plans();
+  let job = null;
+  _downloadText = (name, text) => { job = { name, text }; };
+  project.name = 'Smoke job';
+  await simExportJob();
+  const J = JSON.parse(job.text);
+  check(job.name === 'Smoke job.mudjob' && J.format === 'mudprinter-job' && J.version === 1 && J.name === 'Smoke job' &&
+        J.lifts.length === D.res.plan.lifts.length && J.lifts.every((L, i) => L.index === i) &&
+        J.lifts[J.lifts.length - 1].layers.last === 6 && plans() === nPlans,
+        'Export Print Job downloads <project>.mudjob: the lifts of the plan in order, nothing re-planned');
+  check(J.executable === false && J.unresolved.length === 5 && J.lifts.every(L => !('gcode' in L)) &&
+        /NOT EXECUTABLE/.test(txt('sim-export-note')) && /machine_units/.test(txt('sim-export-note')),
+        'unresolved machine decisions are reported (file + note); no G-code is produced');
+  _downloadText = _dl; project.name = '';
+
   // ---- playback ordering ----
   let ordered = true, schedule = true, liftsUp = true;
   for (let i = 1; i < D.N; i++) {
@@ -313,6 +330,7 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   await simShow();
   check(plans('stream') === n0 && simOutdated() && sim.data.res.plan.layers.length === 7 && /OUTDATED/.test(txt('sim-status')),
         'an Assembly change (layer height) → the shown paths are OUTDATED (labelled), nothing planned');
+  check(el('sim-export-job').disabled, 'an OUTDATED plan cannot be exported');
   await wsysGenerate(); await simGenerate();
   check(plans('stream') === n0 + 1 && sim.data.res.plan.layers.length === 11 && !simOutdated(),
         'Generate Wall Systems + Plan Print → the new plan (11 layers), current');

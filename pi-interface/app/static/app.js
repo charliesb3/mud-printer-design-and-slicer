@@ -235,9 +235,10 @@ function renderJobSection(s) {
     progressWrap.classList.remove("visible");
   }
 
-  // Start button
+  // Start button (never for a non-executable job: the server refuses it too)
   const canStart = s.connected
     && s.grbl_state === "Idle"
+    && job.executable !== false
     && ["ready", "stopped", "completed", "error"].includes(jobState);
   startBtn.disabled = !canStart;
 }
@@ -255,6 +256,9 @@ function renderLifts(s) {
   const panel = document.getElementById("reposition-panel");
 
   badge.hidden = summary.hidden = strip.hidden = !isBuilding;
+  document.getElementById("lift-details").hidden = !isBuilding;
+  renderNotExecutable(isBuilding && job.executable === false ? job : null);
+  if (isBuilding) renderLiftList(job);
   const awaiting = isBuilding && job.state === "awaiting_reposition" && job.awaiting_lift != null;
   panel.hidden = !awaiting;
   if (!awaiting) cancelConfirmHold();
@@ -271,7 +275,9 @@ function renderLifts(s) {
   badge.classList.toggle("awaiting", awaiting);
 
   // Summary line
-  if (!started) {
+  if (job.executable === false) {
+    summary.textContent = `${total} lifts — building structure only (not executable)`;
+  } else if (!started) {
     summary.textContent = `${total} lifts — starts with lift 1`;
   } else if (awaiting) {
     summary.textContent = `${liftLabel(cur, total)} complete — waiting for frame reposition before lift ${job.awaiting_lift + 1}`;
@@ -323,6 +329,45 @@ function renderLifts(s) {
   blockedEl.textContent = idle ? ""
     : (s.connected ? `GRBL is ${s.grbl_state}; it must be Idle to continue.` : "Not connected to GRBL.");
   if (!idle) cancelConfirmHold();
+}
+
+function renderNotExecutable(job) {
+  const box = document.getElementById("job-blocked");
+  box.hidden = !job;
+  if (!job) return;
+  const list = document.getElementById("job-unresolved");
+  list.innerHTML = "";
+  (job.unresolved || []).forEach(u => {
+    const li = document.createElement("li");
+    li.textContent = u.summary;
+    li.title = u.id;
+    list.appendChild(li);
+  });
+}
+
+function fmtNum(v) {
+  return typeof v === "number" ? String(Math.round(v * 1000) / 1000) : "";
+}
+
+// One row per lift, exactly as the job file defines it (display only)
+function renderLiftList(job) {
+  const list = document.getElementById("lift-list");
+  const unit = job.units ? " " + job.units : "";
+  list.innerHTML = "";
+  job.lifts.forEach((lift, i) => {
+    const parts = [`Lift ${i + 1}`];
+    if (lift.layers) parts.push(`layers ${lift.layers.first + 1}–${lift.layers.last + 1}`);
+    if (typeof lift.z_bottom === "number" && typeof lift.z_top === "number")
+      parts.push(`Z ${fmtNum(lift.z_bottom)}–${fmtNum(lift.z_top)}${unit}`);
+    const r = lift.reposition_before;
+    if (r) parts.push(typeof r.rise === "number" ? `frame +${fmtNum(r.rise)}${unit} before` : "frame reposition before");
+    if (job.executable !== false) parts.push(`${lift.total_lines} lines`);
+    const row = document.createElement("div");
+    row.className = "lift-row";
+    row.textContent = parts.join(" · ");
+    if (lift.description) row.title = lift.description;
+    list.appendChild(row);
+  });
 }
 
 function fmtDuration(secs) {
@@ -518,9 +563,11 @@ function attachFileUpload() {
       const resp = await fetch("/upload", { method: "POST", body: form });
       const data = await resp.json();
       if (data.success) {
-        statusEl.textContent = data.kind === "building"
-          ? `Uploaded: ${data.filename} (${data.total_lifts} lifts, ${data.total_lines} lines)`
-          : `Uploaded: ${data.filename} (${data.total_lines} lines)`;
+        statusEl.textContent = data.kind !== "building"
+          ? `Uploaded: ${data.filename} (${data.total_lines} lines)`
+          : data.executable === false
+            ? `Uploaded: ${data.filename} (${data.total_lifts} lifts) — not executable: structure only`
+            : `Uploaded: ${data.filename} (${data.total_lifts} lifts, ${data.total_lines} lines)`;
         statusEl.className = "upload-ok";
       } else {
         statusEl.textContent = `Upload failed: ${data.error}`;

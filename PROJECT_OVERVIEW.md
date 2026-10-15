@@ -84,7 +84,7 @@ The machine has approximately 18 inches of usable Z travel. A building is printe
 
 The print plan (Design + Toolpath) divides the stack into lifts of whole layers, completes each lift (independent islands built upward one after another, merged geometry after its parts) and represents each frame repositioning as an explicit event between lifts. Physical frame-lifting control is not yet designed.
 
-Decided 2026-10-14 (Design + Toolpath ↔ Pi interface): a whole building is sent to the Pi as ONE print job made of an ordered sequence of first-class LIFTS taken from the PrintPlan; the Pi never recalculates lift boundaries. After each lift, progression stops until the operator repositions the frame and explicitly confirms. GRBL still receives ordinary G-code underneath. The Pi side is implemented (job format `pi-interface/docs/job-format.md`); the PrintPlan → job exporter and Z handling within a lift are not yet decided/implemented — see `pi-interface/PROJECT_MEMORY.md`.
+Decided 2026-10-14 (Design + Toolpath ↔ Pi interface): a whole building is sent to the Pi as ONE print job made of an ordered sequence of first-class LIFTS taken from the PrintPlan; the Pi never recalculates lift boundaries. After each lift, progression stops until the operator repositions the frame and explicitly confirms. GRBL still receives ordinary G-code underneath. Implemented 2026-10-14: the Pi runs executable `.mudjob` jobs lift by lift (P1/P2) and the Designer exports the PrintPlan as a `.mudjob` (P3) — currently NON-EXECUTABLE (structure only, no G-code) because Z within a lift, travel with the pump, XY origin, machine units and physical frame-reposition behaviour are undecided; see `contracts/mudjob/README.md`.
 
 ---
 
@@ -138,9 +138,10 @@ Design + Toolpath
   ordered (runs, travels, layer transitions, source identities) + time estimates —
   the ONE representation simulation, G-code export and machine execution consume
   (Print Simulation workspace: playback of it, 2026-10-09)
-        ↓
-machine instructions / G-code
-        ↓
+        ↓ "Export Print Job" (layer_assembly/machine_job.py)
+.mudjob FILE — the ONLY boundary between the two applications
+  (contract: contracts/mudjob/README.md; copied by USB / email / network)
+        ↓ upload (parsed + validated independently)
 Raspberry Pi / Printer Interface
         ↓
 USB / serial communication
@@ -161,10 +162,14 @@ Project persistence (Design + Toolpath, 2026-10-09):
 the whole editable project (every Layer Design + the Assembly) is saved / opened
 as ONE versioned JSON project file (`.muddesign`, format "mud-printer-project",
 schema_version) holding AUTHORING state only — resolved geometry, routes and
-support results are regenerated. It is NOT machine output: G-code export is a
-separate, future artifact derived from a project.
+support results are regenerated. It is NOT machine output and is never uploaded
+to the Pi: the machine job is the separate `.mudjob` export (2026-10-14).
 
 These subproject boundaries are useful organizational and architectural boundaries.
+
+EXCEPTION (decided 2026-10-14): Design + Toolpath and the Pi interface ARE
+independent applications whose only integration is the `.mudjob` file — see
+"Design + Toolpath and the Pi interface are independent applications" below.
 
 They do not require the components to become separate repositories or completely independent applicat boundaries may evolve if the actual architecture develops differently.
 
@@ -332,6 +337,12 @@ Do not modify GRBL merely to avoid generating appropriate G-code in the higher-l
 
 Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release (schema 2 since 2026-10-11: Wall Groups in the designs + the project's Wall Systems; schema 3 the same day: the default Maximum Overhang became 1 in — older projects without a value keep 1.5; schema 4 on 2026-10-14: the default Opening Alignment became Vertical / Plumb — older projects get their effective alignment written explicitly). Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
 
+### Design + Toolpath and the Pi interface are independent applications (2026-10-14)
+
+Their ONLY integration boundary is the `.mudjob` file: a small, documented, versioned interchange contract (`contracts/mudjob/README.md` + example fixtures, version 1). Neither imports code from the other, shares runtime modules with it, calls its API, requires it to be installed or running, or couples to its internal data model. Design + Toolpath serializes its authoritative PrintPlan into the contract (`layer_assembly/machine_job.py`); the Pi parses and validates it independently (`pi-interface/app/jobs/current_job.py`). A `.mudjob` exported on one computer must open on an independent Raspberry Pi with no knowledge of the Designer. Interoperability is tested with contract fixture FILES read by each subsystem's own tests — never by cross-importing code.
+
+File roles: `.muddesign` = editable AUTHORING project (Designer Save / Open), never a print job (the Pi refuses it); `.mudjob` = MACHINE JOB, one whole-building print as ordered first-class lifts from the PrintPlan (the Pi never recalculates lift boundaries); plain G-code = a less-rich external input the Pi still accepts (third-party G-code preflight: later). Undecided machine semantics are never chosen silently: an export that cannot be executable says so (`executable: false` + `unresolved`).
+
 ### One authoritative print plan feeds simulation, G-code and machine execution
 
 The whole-print plan (ordered layers → continuous runs, travels and layer transitions in world coordinates, with source identities) is produced once by the Design + Toolpath subsystem from the exact geometry the designer sees. Print Simulation, G-code export and any machine-controller execution consume that plan (and its timeline) instead of re-deriving order, starts or timing. Time figures from it are estimates (constant speeds), not machine timing. Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "Print plan".
@@ -418,6 +429,11 @@ The Raspberry Pi Printer Interface Milestone 1 has been fully implemented
 in software and is passing all tests on Mac.
 
 The software is ready for Pi deployment and physical machine testing.
+
+2026-10-14: lift-aware building jobs (P1/P2: drain + operator-confirmed frame
+reposition between lifts, one responsive UI with synchronized clients) and
+`.mudjob` import of the Designer's export (P3: non-executable jobs displayed,
+never run). Not yet tested on hardware.
 
 See `pi-interface/PROJECT_MEMORY.md` for full details.
 
@@ -581,6 +597,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-14 (P3)
+
+`.mudjob` interchange established (Pi P3): contract `contracts/mudjob/`; Designer "Export Print Job" (Print Simulation) serializes the current PrintPlan — non-executable until the machine semantics are decided; the Pi validates / displays it and refuses to run it; `.muddesign` refused by the Pi. New decision "Design + Toolpath and the Pi interface are independent applications". Pi P1/P2 (lift-aware jobs, reposition UI) committed earlier the same day.
 
 2026-10-14
 

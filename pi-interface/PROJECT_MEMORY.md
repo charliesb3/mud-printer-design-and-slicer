@@ -118,12 +118,10 @@ pi-interface/
 │   ├── test_parser.py      # 34 tests
 │   ├── test_communicator.py # 18 tests
 │   ├── test_runner.py      # 13 tests
-│   ├── test_lifts.py       # 53 tests (format, sequencing, handler rules)
-│   ├── test_api.py         # 21 tests (incl. building upload, synced clients)
-│   └── fixtures/sample_building.mudjob  # 3-lift reference job
+│   ├── test_lifts.py       # 66 tests (contract, fixtures, sequencing, handler rules)
+│   └── test_api.py         # 23 tests (incl. building/export upload, .muddesign refusal, synced clients)
 ├── docs/
 │   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
-│   ├── job-format.md              # Building job (.mudjob) format v1 — exporter contract
 │   ├── deployment.md              # Pi OS, systemd, kiosk, networking
 │   └── acceptance-test.md         # Physical machine acceptance criteria
 ├── .env.example
@@ -131,6 +129,11 @@ pi-interface/
 ├── requirements-dev.txt
 └── pytest.ini
 ```
+
+The `.mudjob` contract lives OUTSIDE this subsystem, at the repository root:
+`contracts/mudjob/README.md` (spec) + `contracts/mudjob/fixtures/` (example
+files; tests read them as data). Moved there from `docs/job-format.md` /
+`tests/fixtures/` in P3.
 
 ---
 
@@ -164,12 +167,21 @@ All settings in `.env`. Key values:
   operator performs the physical frame reposition and explicitly confirms it.
 - Underneath, GRBL still receives ordinary machine G-code.
 
-Implemented 2026-10-14 (P1 + P2):
-- Boundary: versioned JSON job file `.mudjob` defined by the Pi —
-  `docs/job-format.md` (v1) + `tests/fixtures/sample_building.mudjob`. The
-  future Design + Toolpath exporter (P3) builds it from `PrintPlan.items()`
-  (lift/stage/pass per move, `FrameMove` per later lift); the Pi never imports
-  design-toolpath code. Plain G-code uploads remain valid as a one-lift job.
+Implemented 2026-10-14 (P1 + P2, contract finalized in P3):
+- Boundary: the versioned `.mudjob` file — `contracts/mudjob/README.md`
+  (version 1). Plain G-code uploads remain valid as a one-lift job.
+- P3: `executable` (required) + `unresolved` [{id, summary}]; `index`
+  required = position; `reposition_before` required on every later lift
+  (forbidden on the first); display-only lift metadata passed through
+  (`layers`, `z_bottom`, `z_top`, stages / passes / runs / lengths); unknown
+  keys ignored. The P1 draft of version 1 (gcode only) was superseded before
+  any exporter existed.
+- NON-EXECUTABLE job: loaded and displayed (lift list, unresolved items, amber
+  "structure only" block); START disabled and `job_start` refused by the
+  server with a notice. Never run.
+- `.muddesign` (Designer project file, by extension or its format
+  "mud-printer-project") is refused at upload with a message pointing to
+  Export Print Job.
 - `reposition_before` / `units` / `name` are display-only: the Pi shows them
   and interprets nothing (no unit conversion, no Z, no origin handling).
 - Lift end: GRBL `ok` means buffered, not executed — the runner drains with
@@ -182,8 +194,18 @@ Implemented 2026-10-14 (P1 + P2):
   revisit if the operator must jog or re-zero between lifts).
 - GRBL disconnect/reset while awaiting → job error (position untrusted; no
   resume-at-lift yet).
-- Design + Toolpath still has no G-code export. PrintPlan units are inches,
-  world coordinates, Z = building Z of the layer top.
+- Design + Toolpath exports `.mudjob` (P3) but no G-code: every export is
+  non-executable until the machine semantics are decided.
+
+### Independent of Design + Toolpath — the `.mudjob` file is the only boundary (decided 2026-10-14)
+The Pi interface never imports Design + Toolpath code, shares no runtime
+modules with it, never calls its API and must run without it installed. It
+parses and validates `.mudjob` files itself; a job exported elsewhere is
+copied (USB / email / network) to an independent Pi. Interoperability is
+tested with the contract fixture FILES (`contracts/mudjob/fixtures/`, incl.
+the Designer's real export `designer-export-3-lifts.mudjob`), never by
+cross-importing. (The tests read `../contracts`; on a Pi with only
+`pi-interface/` deployed those tests need the contract folder copied too.)
 
 ### One responsive UI, synchronized clients (decided 2026-10-14)
 There is ONE web UI — not separate desktop and touchscreen interfaces.
@@ -262,8 +284,8 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-139 tests total, all passing on Python 3.9 (Mac development environment):
-the 78 M1 tests unchanged + 61 lift/building-job tests. `MockTransport` can
+154 tests total, all passing on Python 3.9 (Mac development environment):
+the 78 M1 tests unchanged + 76 lift / building-job / contract tests. `MockTransport` can
 answer `?` polls with a settable `status_reply` (used to simulate Run→Idle
 around a lift drain). API tests that need machine state set directly patch
 out `main._connection_loop` (`offline_client` fixture).
@@ -292,6 +314,12 @@ Also exercised end to end against a throwaway fake-GRBL server with two
 websocket clients (3-lift fixture: boundaries, cross-client confirm, stale
 confirm refused, reconnect mid-job). NOT yet visually reviewed in a browser
 or on the touchscreen, and not run on hardware.
+
+**`.mudjob` import of the Designer's export (P3), 2026-10-14:** finalized
+contract validation, non-executable jobs displayed but never run, `.muddesign`
+refused, lift-details list in the UI. Verified end to end over HTTP only
+(Designer on :5051 plans + exports → uploaded to the Pi on :8765 → lifts
+0–2 / 3–5 / 6–7 shown as exported, start refused). 154 tests pass.
 
 **Not yet complete:**
 - Physical machine testing on the Pi (hardware not yet available)
@@ -355,9 +383,11 @@ Lift-aware job work:
 - Manual visual review of the lift UI in a browser (laptop) and later on the
   Pi touchscreen kiosk; adjust layout if needed.
 - Decide the per-line timeout risk above before the first real print.
-- P3: Design + Toolpath exporter PrintPlan → `.mudjob` (blocked on Z /
-  travel / origin / units decisions above); round-trip test against
-  `load_job_from_file` and `docs/job-format.md`.
+- ~~P3~~ done 2026-10-14: `.mudjob` interchange (non-executable exports).
+- Executable export: blocked on the machine decisions (Z within a lift,
+  travel with the pump, XY origin, machine units, frame-reposition
+  behaviour); then the Designer adds `gcode` per lift + `executable: true`.
+- Third-party G-code compatibility / preflight (later, not started).
 - P4 (optional): persist progress at lift boundaries; start at lift N.
 - Add a lift-boundary step to docs/acceptance-test.md once hardware testing
   of lifts is planned.
@@ -374,7 +404,9 @@ Lift-aware job work:
 - Server-owned job runner implemented and tested
 - Full test suite: 78 tests passing
 - 2026-10-14: lift-aware building jobs (P1 model/runner/format, P2 UI);
-  139 tests passing
+  139 tests passing (commit 08cc8d0, pushed)
+- 2026-10-14: P3 `.mudjob` contract finalized + Designer export import;
+  154 tests passing
 - Deployment documentation written
 - GRBL capture checklist written
 - Acceptance test procedure written
@@ -382,6 +414,13 @@ Lift-aware job work:
 ---
 
 ## Last Updated
+
+2026-10-14 (P3)
+
+`.mudjob` interchange with Design + Toolpath established: contract moved to
+`contracts/mudjob/`, finalized (executable / unresolved), non-executable
+Designer exports displayed and refused at start, `.muddesign` refused.
+Independence decision recorded. 154 tests passing.
 
 2026-10-14
 

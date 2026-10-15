@@ -209,26 +209,32 @@ async def _stop_jog() -> None:
 # Job management                                                       #
 # ------------------------------------------------------------------ #
 
-async def _start_job() -> None:
+async def _start_job() -> Optional[str]:
+    """Start the current job. Returns a refusal reason, or None when started."""
     global _current_job, _runner_task
 
     if _current_job is None:
         log.warning("job_start: no current job")
-        return
+        return "No job loaded."
+    if not _current_job.executable:
+        log.warning("job_start: job is not executable")
+        return ("This job is not executable — it describes the building and its lifts only "
+                "(unresolved: " + ", ".join(u["id"] for u in _current_job.unresolved) + ").")
     if _current_job.is_active:
         log.warning("job_start: job already running")
-        return
+        return "The job is already running."
     if _state and not _state.connected:
         log.warning("job_start: not connected to GRBL")
-        return
+        return "Not connected to GRBL."
     if _state and _state.grbl_state not in ("Idle",):
         log.warning("job_start: GRBL state is %s — must be Idle", _state.grbl_state)
-        return
+        return f"GRBL must be Idle to start (it is {_state.grbl_state})."
 
     assert _comm is not None
     _current_job.reset_progress()
     runner = JobRunner(_comm, _current_job)
     _runner_task = asyncio.create_task(runner.run(), name="job-runner")
+    return None
 
 
 async def _stop_job() -> None:
@@ -318,7 +324,9 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
         await _stop_job()
 
     elif msg_type == "job_start":
-        await _start_job()
+        refusal = await _start_job()
+        if refusal:
+            await _notify(ws, refusal)
 
     elif msg_type == "confirm_reposition":
         refusal = _confirm_reposition(data.get("lift"))
@@ -397,7 +405,7 @@ async def upload_gcode(file: UploadFile = File(...)):
     try:
         job = load_job_from_file(destination)
     except JobFormatError as exc:
-        return {"success": False, "error": f"Invalid building job: {exc}"}
+        return {"success": False, "error": f"Not a valid print job: {exc}"}
     except Exception as exc:
         return {"success": False, "error": f"Could not parse file: {exc}"}
 
@@ -410,6 +418,8 @@ async def upload_gcode(file: UploadFile = File(...)):
         "success": True,
         "filename": job.filename,
         "kind": job.kind,
+        "executable": job.executable,
+        "unresolved": list(job.unresolved),
         "total_lines": job.total_lines,
         "total_lifts": job.total_lifts,
     }

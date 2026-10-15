@@ -4,13 +4,19 @@ Represents the one currently-loaded job.
 Exactly one job is loaded at a time. Uploading a new file replaces the
 current job when safe to do so.
 
-A job is an ordered sequence of LIFTS (see docs/job-format.md):
+A job is an ordered sequence of LIFTS. The `.mudjob` file is the only
+interface to Design + Toolpath — contract: contracts/mudjob/README.md at the
+repository root. Nothing here imports or knows the Designer.
 - A building job (.mudjob JSON) carries its lifts explicitly. The lifts are
   decided upstream by the authoritative PrintPlan; the Pi never recalculates
   them. Between lifts the runner stops and waits for the operator to confirm
   the physical frame reposition.
+- A NON-EXECUTABLE building job (`executable: false`) describes the building
+  and its lifts but carries no G-code and names what is unresolved: it is
+  displayed, never run.
 - An ordinary flat G-code file is a job with exactly one lift, so it runs
   exactly as in Milestone 1.
+- A Designer project file (.muddesign) is authoring state, never a job.
 
 Underneath, every lift is ordinary GRBL G-code.
 """
@@ -32,6 +38,14 @@ JOB_FORMAT_VERSION = 1
 ACTIVE_STATES = {"running", "held", "awaiting_reposition"}
 
 
+# Display-only lift metadata passed through to clients (never interpreted).
+LIFT_META_KEYS = ("layers", "z_bottom", "z_top", "stages", "passes", "runs", "print_length", "travel_length")
+
+# A Designer project file, recognised only to refuse it with a clear message.
+PROJECT_FILE_SUFFIX = ".muddesign"
+PROJECT_FILE_FORMAT = "mud-printer-project"
+
+
 class JobFormatError(ValueError):
     """The uploaded building job is not a valid job file."""
 
@@ -42,6 +56,7 @@ class JobLift:
     lines: list[str]                             # sendable lines (comments stripped)
     description: Optional[str] = None
     reposition_before: Optional[dict] = None     # shown to the operator, never interpreted
+    meta: dict = field(default_factory=dict)     # LIFT_META_KEYS, display only
 
     def to_dict(self) -> dict:
         d: dict = {"index": self.index, "total_lines": len(self.lines)}
@@ -49,6 +64,7 @@ class JobLift:
             d["description"] = self.description
         if self.reposition_before:
             d["reposition_before"] = self.reposition_before
+        d.update(self.meta)
         return d
 
 
@@ -61,6 +77,8 @@ class CurrentJob:
     kind: str = "gcode"   # gcode (flat file, one lift) | building (.mudjob)
     name: Optional[str] = None
     units: Optional[str] = None   # informational only — never converted
+    executable: bool = True       # False: structure only (no G-code) — displayed, never run
+    unresolved: list = field(default_factory=list)   # [{id, summary}] why not executable
     state: str = "ready"  # ready | running | held | awaiting_reposition | stopped | completed | error
     current_line: int = 0         # lines acknowledged, across the whole job
     current_lift: int = 0         # the lift being (or last) streamed
@@ -120,6 +138,8 @@ class CurrentJob:
         d: dict = {
             "filename": self.filename,
             "kind": self.kind,
+            "executable": self.executable,
+            "unresolved": list(self.unresolved),
             "name": self.name,
             "units": self.units,
             "total_lines": self.total_lines,
@@ -148,28 +168,56 @@ def _clean_lines(raw_lines) -> list[str]:
 
 
 def is_building_job(filename: str, text: str) -> bool:
-    """A .mudjob/.json file, or any upload whose content is a JSON object."""
+    """A .mudjob/.json/.muddesign file, or any upload whose content is a JSON object."""
     suffix = Path(filename).suffix.lower()
-    return suffix in (".mudjob", ".json") or text.lstrip().startswith("{")
+    return suffix in (".mudjob", ".json", PROJECT_FILE_SUFFIX) or text.lstrip().startswith("{")
 
 
-def parse_building_job(text: str) -> dict:
+_PROJECT_FILE_MESSAGE = (
+    "this is a Designer project file (.muddesign): authoring state, not a print job. "
+    "In the Designer, plan the print and use Export Print Job to create a .mudjob."
+)
+
+
+def _string_list(v) -> bool:
+    return isinstance(v, list) and all(isinstance(g, str) for g in v)
+
+
+def parse_building_job(text: str, filename: str = "") -> dict:
     """
-    Validate a building job document and return its normalised content:
-    {name, units, lifts: [JobLift…]}. Raises JobFormatError.
+    Validate a `.mudjob` document (contracts/mudjob/README.md, version 1) and
+    return its normalised content: {name, units, executable, unresolved,
+    lifts: [JobLift…]}. Raises JobFormatError.
     """
+    if Path(filename).suffix.lower() == PROJECT_FILE_SUFFIX:
+        raise JobFormatError(_PROJECT_FILE_MESSAGE)
     try:
         doc = json.loads(text)
     except json.JSONDecodeError as exc:
         raise JobFormatError(f"not valid JSON: {exc}") from exc
     if not isinstance(doc, dict):
         raise JobFormatError("job must be a JSON object")
+    if doc.get("format") == PROJECT_FILE_FORMAT:
+        raise JobFormatError(_PROJECT_FILE_MESSAGE)
     if doc.get("format") != JOB_FORMAT:
         raise JobFormatError(f"'format' must be '{JOB_FORMAT}'")
     if doc.get("version") != JOB_FORMAT_VERSION:
         raise JobFormatError(
             f"unsupported job version {doc.get('version')!r} (this interface reads version {JOB_FORMAT_VERSION})"
         )
+    executable = doc.get("executable")
+    if not isinstance(executable, bool):
+        raise JobFormatError("'executable' must be true or false")
+    unresolved = doc.get("unresolved") or []
+    if not isinstance(unresolved, list) or not all(
+        isinstance(u, dict) and isinstance(u.get("id"), str) and isinstance(u.get("summary"), str)
+        for u in unresolved
+    ):
+        raise JobFormatError("'unresolved' must be a list of {id, summary} strings")
+    if executable and unresolved:
+        raise JobFormatError("an executable job cannot list unresolved items")
+    if not executable and not unresolved:
+        raise JobFormatError("a non-executable job must say what is unresolved")
     raw_lifts = doc.get("lifts")
     if not isinstance(raw_lifts, list) or not raw_lifts:
         raise JobFormatError("'lifts' must be a non-empty list")
@@ -179,36 +227,42 @@ def parse_building_job(text: str) -> dict:
         where = f"lift {pos + 1}"
         if not isinstance(raw, dict):
             raise JobFormatError(f"{where}: must be an object")
-        if "index" in raw and raw["index"] != pos:
+        if raw.get("index") != pos or isinstance(raw.get("index"), bool):
             raise JobFormatError(
-                f"{where}: 'index' is {raw['index']!r} but lifts must be listed in order (expected {pos})"
+                f"{where}: 'index' is {raw.get('index')!r} but lifts must be listed in order (expected {pos})"
             )
-        gcode = raw.get("gcode")
-        if not isinstance(gcode, list) or not all(isinstance(g, str) for g in gcode):
-            raise JobFormatError(f"{where}: 'gcode' must be a list of strings")
-        lines = _clean_lines(gcode)
-        if not lines:
-            raise JobFormatError(f"{where}: contains no sendable G-code")
-        for n, line in enumerate(lines, start=1):
-            reason = program_control_reason(line)
-            if reason:
-                raise JobFormatError(f"{where}, line {n} ({line}): {reason} is not allowed inside a lift")
+        lines: list[str] = []
+        if executable:
+            gcode = raw.get("gcode")
+            if not _string_list(gcode):
+                raise JobFormatError(f"{where}: 'gcode' must be a list of strings")
+            lines = _clean_lines(gcode)
+            if not lines:
+                raise JobFormatError(f"{where}: contains no sendable G-code")
+            for n, line in enumerate(lines, start=1):
+                reason = program_control_reason(line)
+                if reason:
+                    raise JobFormatError(f"{where}, line {n} ({line}): {reason} is not allowed inside a lift")
+        elif "gcode" in raw:
+            raise JobFormatError(f"{where}: a non-executable job carries no 'gcode'")
         repo = raw.get("reposition_before")
-        if repo is not None:
-            if pos == 0:
-                raise JobFormatError("lift 1: 'reposition_before' is only valid for later lifts")
-            if not isinstance(repo, dict):
-                raise JobFormatError(f"{where}: 'reposition_before' must be an object")
+        if pos == 0 and repo is not None:
+            raise JobFormatError("lift 1: 'reposition_before' is only valid for later lifts")
+        if pos > 0 and not isinstance(repo, dict):
+            raise JobFormatError(f"{where}: 'reposition_before' (the frame reposition before it) must be an object")
         desc = raw.get("description")
         if desc is not None and not isinstance(desc, str):
             raise JobFormatError(f"{where}: 'description' must be a string")
-        lifts.append(JobLift(index=pos, lines=lines, description=desc, reposition_before=repo))
+        meta = {k: raw[k] for k in LIFT_META_KEYS if k in raw}
+        lifts.append(JobLift(index=pos, lines=lines, description=desc, reposition_before=repo, meta=meta))
 
     name = doc.get("name")
     units = doc.get("units")
     return {
         "name": name if isinstance(name, str) else None,
         "units": units if isinstance(units, str) else None,
+        "executable": executable,
+        "unresolved": [{"id": u["id"], "summary": u["summary"]} for u in unresolved],
         "lifts": lifts,
     }
 
@@ -217,7 +271,7 @@ def load_job_from_file(filepath: Path) -> CurrentJob:
     """Read a flat G-code file or a building job and return a CurrentJob."""
     raw = filepath.read_text(encoding="utf-8", errors="replace")
     if is_building_job(filepath.name, raw):
-        parsed = parse_building_job(raw)
+        parsed = parse_building_job(raw, filepath.name)
         return CurrentJob(
             filename=filepath.name,
             filepath=filepath,
@@ -225,6 +279,8 @@ def load_job_from_file(filepath: Path) -> CurrentJob:
             kind="building",
             name=parsed["name"],
             units=parsed["units"],
+            executable=parsed["executable"],
+            unresolved=parsed["unresolved"],
         )
     return CurrentJob(
         filename=filepath.name,

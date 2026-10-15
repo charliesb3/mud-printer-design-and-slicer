@@ -37,13 +37,24 @@ from .mock_transport import (
     wait_for,
 )
 
-FIXTURE = Path(__file__).parent / "fixtures" / "sample_building.mudjob"
+# The .mudjob contract (spec + fixtures) — shared as DATA with Design + Toolpath.
+CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "mudjob"
+FIXTURE = CONTRACT / "fixtures" / "executable-3-lifts.mudjob"
+EXPORTED = CONTRACT / "fixtures" / "designer-export-3-lifts.mudjob"
 
 
-def job_doc(lifts, **extra) -> str:
-    doc = {"format": "mudprinter-job", "version": 1, "lifts": lifts}
+def job_doc(lifts, auto=True, **extra) -> str:
+    """An executable job document; `auto` fills each lift's index and the
+    reposition_before required on later lifts (unless given)."""
+    if auto:
+        lifts = [{"index": i, **({"reposition_before": {"rise": 1}} if i else {}), **l}
+                 for i, l in enumerate(lifts)]
+    doc = {"format": "mudprinter-job", "version": 1, "executable": True, "lifts": lifts}
     doc.update(extra)
     return json.dumps(doc)
+
+
+UNRESOLVED = [{"id": "machine_units", "summary": "not decided"}]
 
 
 def building_job(*lift_lines: list[str]) -> CurrentJob:
@@ -81,6 +92,8 @@ class TestJobFormat:
         assert job.lines == [line for l in job.lifts for line in l.lines]
         assert job.lifts[1].reposition_before["rise"] == 18
         assert job.units == "in"
+        assert job.executable is True and job.unresolved == []
+        assert job.lifts[2].meta["layers"] == {"first": 4, "last": 5, "count": 2}
 
     def test_flat_gcode_is_one_lift(self, tmp_path):
         f = tmp_path / "flat.nc"
@@ -104,8 +117,17 @@ class TestJobFormat:
         (job_doc([{"gcode": "G1 X1"}]), "list of strings"),
         (job_doc([{"gcode": ["; only a comment"]}]), "no sendable"),
         (job_doc([{"index": 1, "gcode": ["G1 X1"]}]), "in order"),
+        (job_doc([{"gcode": ["G1 X1"]}], auto=False), "in order"),             # index is required
         (job_doc([{"gcode": ["G1 X1"], "reposition_before": {"rise": 1}}]), "later lifts"),
         (job_doc([{"gcode": ["G1 X1"]}, {"gcode": ["G1 X2"], "reposition_before": 5}]), "must be an object"),
+        (job_doc([{"index": 0, "gcode": ["G1 X1"]}, {"index": 1, "gcode": ["G1 X2"]}], auto=False),
+         "frame reposition"),                                                     # later lift without one
+        (job_doc([{"gcode": ["G1 X1"]}], executable="yes"), "'executable'"),
+        (job_doc([{"gcode": ["G1 X1"]}], unresolved=UNRESOLVED), "cannot list unresolved"),
+        (job_doc([{}], executable=False), "must say what is unresolved"),
+        (job_doc([{"gcode": ["G1 X1"]}], executable=False, unresolved=UNRESOLVED), "carries no 'gcode'"),
+        (job_doc([{}], executable=False, unresolved=[{"id": "x"}]), "'unresolved'"),
+        (json.dumps({"format": "mud-printer-project", "schema_version": 4, "project": {}}), ".muddesign"),
     ])
     def test_invalid_documents_rejected(self, doc, message):
         with pytest.raises(JobFormatError, match=message):
@@ -119,6 +141,44 @@ class TestJobFormat:
     @pytest.mark.parametrize("line", ["G1 X10 F100", "M3", "M5", "M10", "G4 P1", "G1 X1 ; M0 in comment"])
     def test_ordinary_lines_allowed(self, line):
         assert program_control_reason(line) is None
+
+    def test_muddesign_file_refused_by_extension(self, tmp_path):
+        f = tmp_path / "house.muddesign"
+        f.write_text(json.dumps({"format": "mud-printer-project", "project": {}}))
+        with pytest.raises(JobFormatError, match="Export Print Job"):
+            load_job_from_file(f)
+
+    def test_unknown_keys_ignored(self):
+        parsed = parse_building_job(job_doc([{"gcode": ["G1 X1"], "future_field": 1}], future_top_level={"a": 1}))
+        assert parsed["executable"] is True and len(parsed["lifts"]) == 1
+
+
+class TestContractFixtures:
+    """The shared contract fixtures (data only — no Design + Toolpath code)."""
+
+    def test_designer_export_loads_as_non_executable_building(self):
+        job = load_job_from_file(EXPORTED)
+        doc = json.loads(EXPORTED.read_text(encoding="utf-8"))
+        assert job.kind == "building"
+        assert job.executable is False
+        assert [u["id"] for u in job.unresolved] == [u["id"] for u in doc["unresolved"]]
+        assert job.total_lifts == len(doc["lifts"]) == 3
+        assert job.total_lines == 0 and all(not l.lines for l in job.lifts)
+        # lift identities, order and boundaries exactly as exported (never recalculated)
+        for lift, raw in zip(job.lifts, doc["lifts"]):
+            assert lift.index == raw["index"]
+            assert lift.meta["layers"] == raw["layers"]
+            assert (lift.meta["z_bottom"], lift.meta["z_top"]) == (raw["z_bottom"], raw["z_top"])
+            assert lift.reposition_before == raw.get("reposition_before")
+            assert lift.description == raw["description"]
+        d = job.to_dict()
+        assert d["executable"] is False and d["unresolved"] == job.unresolved
+        assert [l["layers"]["first"] for l in d["lifts"]] == [0, 2, 4]
+        assert d["lifts"][1]["reposition_before"]["rise"] == 3.0
+
+    def test_executable_fixture_runs_lift_by_lift(self):
+        job = load_job_from_file(FIXTURE)
+        assert job.executable and job.total_lifts == 3
 
 
 # ------------------------------------------------------------------ #
@@ -384,3 +444,23 @@ class TestHandlerRules:
         assert job.state == "stopped"
         assert b"\x18" in transport.raw_sent
         assert "G1 X2" not in transport.sent_lines
+
+
+class TestNonExecutableJob:
+    async def test_start_refused_with_notice_nothing_sent(self, env):
+        comm, transport, state = env
+        await wait_for(lambda: state.grbl_state == "Idle", timeout=2.0)
+        http_module.init(state, comm, ConnectionManager())
+        http_module._current_job = load_job_from_file(EXPORTED)
+        http_module._runner_task = None
+        try:
+            ws = FakeWS()
+            await http_module._handle_message({"type": "job_start"}, ws)
+            assert http_module._runner_task is None
+            assert http_module._current_job.state == "ready"
+            assert ws.sent and "not executable" in ws.sent[0]["message"]
+            assert transport.sent_lines == []
+        finally:
+            http_module._current_job = None
+            http_module._state = None
+            http_module._comm = None

@@ -1,0 +1,113 @@
+{
+ "format": "mudprinter-job",
+ "version": 1,
+ "executable": false,
+ "unresolved": [
+  {
+   "id": "z_within_lift",
+   "summary": "Z behaviour within a lift is not decided. The plan changes nozzle height at every layer, can move back down to a lower layer of another island, and rises to clear heights for travel; Z is manual today, so how Z appears in machine instructions is open."
+  },
+  {
+   "id": "travel_with_pump",
+   "summary": "Non-printing travel is not decided. The pump is controlled independently, so whether travel and transitions are plain moves or need operator action is open."
+  },
+  {
+   "id": "xy_origin",
+   "summary": "XY work zero / origin is not decided. Plan coordinates are building-world coordinates; how they map to machine coordinates is open."
+  },
+  {
+   "id": "machine_units",
+   "summary": "Machine units are not decided. The plan is in inches; the units of the machine G-code are open."
+  },
+  {
+   "id": "frame_reposition",
+   "summary": "Physical frame-reposition behaviour is not decided (whether XY registration and the controller position survive a frame raise, and any re-zeroing)."
+  }
+ ],
+ "name": "Two-island test building",
+ "units": "in",
+ "source": {
+  "generator": "Mud Printer Design + Toolpath",
+  "generated_at": "2026-10-14T00:00:00Z",
+  "print_plan_version": 1,
+  "lift_settings": {
+   "max_z_travel": 18.0,
+   "lift_height": 3.0,
+   "head_clearance": 1.0
+  },
+  "layers": 6,
+  "passes": 12
+ },
+ "lifts": [
+  {
+   "index": 0,
+   "description": "Layers 1–2",
+   "layers": {
+    "first": 0,
+    "last": 1,
+    "count": 2
+   },
+   "z_bottom": 0.0,
+   "z_top": 3.0,
+   "stages": 2,
+   "passes": 4,
+   "runs": 4,
+   "print_length": 560.0,
+   "travel_length": 100.0
+  },
+  {
+   "index": 1,
+   "description": "Layers 3–4",
+   "layers": {
+    "first": 2,
+    "last": 3,
+    "count": 2
+   },
+   "z_bottom": 3.0,
+   "z_top": 6.0,
+   "stages": 2,
+   "passes": 4,
+   "runs": 4,
+   "print_length": 560.0,
+   "travel_length": 60.0,
+   "reposition_before": {
+    "from_lift": 0,
+    "rise": 3.0,
+    "frame_z_from": 0.0,
+    "frame_z_to": 3.0,
+    "nozzle_at": [
+     100.0,
+     0.0
+    ],
+    "nozzle_z": 3.0
+   }
+  },
+  {
+   "index": 2,
+   "description": "Layers 5–6",
+   "layers": {
+    "first": 4,
+    "last": 5,
+    "count": 2
+   },
+   "z_bottom": 6.0,
+   "z_top": 9.0,
+   "stages": 2,
+   "passes": 4,
+   "runs": 4,
+   "print_length": 560.0,
+   "travel_length": 60.0,
+   "reposition_before": {
+    "from_lift": 1,
+    "rise": 3.0,
+    "frame_z_from": 3.0,
+    "frame_z_to": 6.0,
+    "nozzle_at": [
+     40.0,
+     0.0
+    ],
+    "nozzle_z": 6.0
+   }
+  }
+ ]
+}

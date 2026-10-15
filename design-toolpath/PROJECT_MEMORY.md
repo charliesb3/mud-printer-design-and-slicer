@@ -178,7 +178,7 @@ Structure: Z range, list of layers, status, notes.
 - Raspberry Pi printer interface (separate subproject, Milestone 1 already built)
 - The separate small clay extrusion / multi-auger project (different machine, do not conflate)
 
-The Design + Toolpath system will eventually produce a job/toolpath representation that the Pi Interface executes. Integration is not required yet.
+The Pi interface is an INDEPENDENT application (decided 2026-10-14): the ONLY integration is the `.mudjob` machine-job FILE (contract: `contracts/mudjob/README.md` at the repo root). Design + Toolpath never imports, calls or requires Pi code; it serializes its authoritative PrintPlan into the contract ("Export Print Job", `layer_assembly/machine_job.py`) and tests that against the contract fixtures. `.muddesign` = authoring (Save / Open), never sent to the Pi; `.mudjob` = the machine job. Details: `layer_assembly/PROJECT_MEMORY.md` → "MACHINE JOB EXPORT".
 
 ---
 
@@ -1355,7 +1355,7 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
 - How should topological transitions (cell count changes, path splits/merges) be represented?
 - How should the lattice generator accept continuity hints without violating geometry/toolpath separation?
 - How should seam position be managed and optimized across layers?
-- What is the right output format for the Pi Interface to consume?
+- ~~What is the right output format for the Pi Interface to consume?~~ (ANSWERED 2026-10-14: the `.mudjob` contract — see "What Is Explicitly Outside This Subproject".) Still open: the machine semantics that block an EXECUTABLE export (Z within a lift, travel with the pump, XY origin, machine units, frame-reposition behaviour).
 - Is retracing (printing a second bead over an existing one) physically acceptable for mud? Now a last resort (wall lattices avoid it by construction; solid infill uses short travel instead); still needs machine testing for the remaining single-bead cases.
 - Bead width / depth: what CLEARANCE_RADIUS (2 in provisional), degree caps and MAX_GENERATED_BEADS make physical sense? What closing threshold?
 - *(ANSWERED by the wall lattice + pass 7: dead-end arms get an interleaved out-and-back at combined target density with a cap V.)* Odd dead-end infilled arms need either a route end or an arm-length edit — is a density-preserving out-and-back pattern preferable?
@@ -1400,6 +1400,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-14 — `.mudjob` EXPORT (Pi P3): "Export Print Job" in the Print Simulation serializes the current PrintPlan into the `.mudjob` contract (non-executable: no G-code until the machine semantics are decided); Designer independence from the Pi recorded. See `layer_assembly/PROJECT_MEMORY.md` → "MACHINE JOB EXPORT".
 
 2026-10-14 — ACTIVE BASELINE = `dd70148` + cleanup (branch `restart/post-print-simulation`; later M3 / M4 / junction work archived, not current). Designer UI: the Wall Geometry panel (junction / end-cap treatment) and junction selection moved to the Wall Systems workspace (`window.Designer.wallGeometry / setWallGeometry / wallJunctions / setJunctionTreatment`); the Extra Offsets control removed (an "older project" list appears only when a design has offsets). Design + Toolpath paused; focus → Raspberry Pi interface. Details: `layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE + CLEANUP PASS".
 

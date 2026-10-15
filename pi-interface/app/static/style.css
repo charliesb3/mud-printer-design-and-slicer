@@ -523,3 +523,25 @@ html, body {
   padding: 6px 12px;
   text-align: center;
 }
+
+/* Non-executable building job (structure only) */
+.job-blocked {
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+  font-size: 0.85em;
+}
+.job-blocked-title {
+  color: var(--amber);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.job-unresolved { margin: 6px 0 0 18px; color: var(--text-muted); }
+.job-unresolved li { margin-bottom: 4px; }
+
+.lift-details { margin-bottom: 10px; font-size: 0.85em; }
+.lift-details summary { cursor: pointer; color: var(--text-muted); padding: 6px 0; min-height: 32px; }
+.lift-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
