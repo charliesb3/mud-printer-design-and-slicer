@@ -4,7 +4,7 @@
 
 Develop a custom software environment for an existing large-scale, house-sized mud 3D printer.
 
-The physical printer is already built and operational. It has successfully moved and printed using an Arduino Mega running GRBL for motion control and Universal G-code Sender (UGS) on a computer as the operator interface and G-code sender.
+The physical printer is already built and operational. It has successfully moved and printed using an Arduino running GRBL (an Uno per the 2026-10-14 control-box baseline; earlier documents said Mega — VERIFY) for motion control and Universal G-code Sender (UGS) on a computer as the operator interface and G-code sender.
 
 The current software/hardware system works.
 
@@ -38,6 +38,8 @@ This software project does NOT need to control the extrusion pump.
 
 Do not assume that extrusion start/stop, extrusion rate, pump pressure, or other extrusion functions are responsibilities of this software unless the project requirements re explicitly changed in the future.
 
+UPDATE 2026-10-14: extrusion remains electrically deferred / undefined and the pump is still independently controlled today, but FUTURE control of the pump is now anticipated; remote and software concepts reserve extrusion pause / resume without any implementation (see `CONTROL_BOX_HARDWARE.md` → Extrusion).
+
 The scale of the machine, behavior of the material, hose, pumping system, and other physical characteristics may eventually impose important constraints on software and toolpath design.
 
 Those constraints should be incorporated as they are experimentally established.
@@ -50,9 +52,14 @@ Do not invent machine constraints based solely on assumptions from conventional 
 
 The machine is Cartesian.
 
+The control-box hardware (controllers, drivers, power, E-stop, Z driver,
+wireless remote, VERIFY items, superseded parts) is documented in
+`CONTROL_BOX_HARDWARE.md` — consult it before any work touching real
+hardware interfaces.
+
 ### X and Y
 
-X and Y motion are currently controlled by the Arduino Mega running GRBL.
+X and Y motion are currently controlled by the Arduino (Uno — see `CONTROL_BOX_HARDWARE.md`; earlier documents said Mega) running GRBL, driving three DM556T drivers (X, Y1, Y2).
 
 This arrangement has already been used successfully to move and print with the machine.
 
@@ -77,6 +84,16 @@ Do not assume that Z must be integrated into GRBL unless that approach is delibe
 The eventual solution may involve GRBL, separate hardware control, the Raspberry Pi, or another architecture.
 
 Treat this as an open architectural question.
+
+DECIDED 2026-10-14 (control-box hardware baseline) — supersedes the open
+question above for the HARDWARE path: Z is commanded by the Raspberry Pi
+alone, through a Cytron MD13S motor driver (Pi 3.3 V GPIO PWM + DIR) driving
+the existing 12 V, 18 in reversible DC actuator. Z is not a GRBL axis. Manual
+Z is through the Pi (UI and the wireless remote's Z UP / Z DOWN); the old
+SRDKG RF Z controller is no longer part of the architecture. Z is open-loop:
+no limits, homing or position feedback yet (actuator internal end stops
+only). Still OPEN: what Z does within a print (`z_within_lift`). Previous
+state: method undecided, GRBL / separate hardware / Pi all possible.
 
 ### Lifts and frame repositioning (stated 2026-10-09)
 
@@ -142,17 +159,18 @@ Design + Toolpath
 .mudjob FILE — the ONLY boundary between the two applications
   (contract: contracts/mudjob/README.md; copied by USB / email / network)
         ↓ upload (parsed + validated independently)
-Raspberry Pi / Printer Interface
-        ↓
-USB / serial communication
-        ↓
-Arduino Mega / GRBL
-        ↓
-X/Y machine motion
+Raspberry Pi 4 / Printer Interface (supervisory: UI, jobs, Z, RF remote inputs)
+        ↓ USB / serial                        ↓ GPIO PWM + DIR
+Arduino Uno / GRBL                      Cytron MD13S (planned)
+        ↓ DM556T ×3 (X, Y1, Y2)               ↓
+X/Y machine motion                      Z: 12 V linear actuator (open-loop)
 
-Z control:
-currently manual
-future automation method TBD
+Handheld RF remote → Kaleinavi receiver (dry contacts) → Pi GPIO (planned)
+Hardwired E-stop (120 VAC side): separate, independent safety layer
+Hardware details: CONTROL_BOX_HARDWARE.md
+
+Z control (2026-10-14): commanded by the Pi via the MD13S; manual Z through
+the Pi UI / remote; automatic use within prints still undecided
 
 Extrusion:
 independently controlled external system
@@ -262,7 +280,7 @@ It should not be assumed to perform timing-critical real-time motion control tha
 
 ## Subproject 3 — Arduino / GRBL Motion Control
 
-The Arduino Mega currently runs GRBL and controls X/Y machine motion.
+The Arduino (Uno per the 2026-10-14 baseline; earlier documents said Mega — VERIFY) currently runs GRBL and controls X/Y machine motion.
 
 This is an existing working system.
 
@@ -293,7 +311,7 @@ Z is not currently controlled through GRBL.
 
 Do not document or treat three-axis GRBL control as an existing feature.
 
-Whether Z should eventually be incorporated into GRBL is an unresolved architectural question.
+Superseded 2026-10-14: Z is Pi-commanded through a Cytron MD13S, not a GRBL axis (see "Current Motion Architecture" → Z and `CONTROL_BOX_HARDWARE.md`). (Previously: whether Z should be incorporated into GRBL was unresolved.)
 
 ---
 
@@ -322,6 +340,19 @@ The Raspberry Pi is intended to handle:
 The Arduino/GRBL system handles timing-critical real-time motion control for the axes under its control.
 
 Do not casually move real-time motion-control responsibilities onto the Raspberry Pi.
+
+The Pi is the SUPERVISORY controller — not the real-time X/Y controller and
+not the safety system: operator / UI / RF remote → Pi → Uno/GRBL (X/Y) and
+MD13S (Z) → machine; the hardwired E-stop is a separate, independent safety
+layer. Z through the Pi (2026-10-14) is a deliberate decision: a DC actuator
+commanded open-loop, not timing-critical coordinated motion.
+
+### The hardwired E-stop is the only safety stop (2026-10-14)
+
+The physical E-stop on the 120 VAC side is independent of the Pi, software
+and the RF remote. The wireless "REMOTE STOP" is a software / operational
+stop, never safety-rated, and must never be presented as an emergency stop.
+Details: `CONTROL_BOX_HARDWARE.md`.
 
 ---
 
@@ -373,6 +404,10 @@ How that automation will work has not yet been decided.
 
 Do not silently convert this goal into an assumption that Z will be controlled through GRBL.
 
+2026-10-14: the Z HARDWARE path is now decided (Pi → Cytron MD13S →
+actuator; not GRBL). How Z is used within a print and whether / how Z
+position becomes known (no feedback yet) remain undecided.
+
 ---
 
 ### Extrusion is outside the software-control scope
@@ -382,6 +417,10 @@ The large external mud/concrete/adobe pumping system is independently controlled
 The Mud Printer Software does not need to command extrusion.
 
 Do not introduce extrusion-control requirements unless the user explicitly changes this project requirement.
+
+2026-10-14: still true today, but future pump control is anticipated
+(mechanism undefined). Extrusion pause / resume is reserved as a remote /
+software concept only — no implementation, signal or wiring is defined.
 
 ---
 
@@ -413,7 +452,7 @@ computer running UGS
         ↓
 USB / serial
         ↓
-Arduino Mega running GRBL
+Arduino (documented as Mega at the time; Uno per the 2026-10-14 baseline) running GRBL
         ↓
 X/Y motion
 
@@ -597,6 +636,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-14 (control box)
+
+Control-box hardware baseline documented in `CONTROL_BOX_HARDWARE.md`: Pi 4 supervisory controller, Arduino Uno / GRBL for X/Y (earlier docs said Mega — VERIFY), Z decided as Pi → Cytron MD13S → 12 V actuator (not GRBL; old SRDKG RF Z controller superseded), planned Kaleinavi RF remote read by Pi GPIO (REMOTE STOP is not an E-stop), hardwired E-stop the only safety stop, future pump control anticipated but undefined.
 
 2026-10-14 (P3)
 

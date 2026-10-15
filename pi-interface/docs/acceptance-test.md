@@ -3,7 +3,8 @@
 Physical machine test procedure for verifying the Pi interface against the
 Milestone 1 acceptance criteria.
 
-Run this test with the Pi connected to the Arduino Mega running GRBL.
+Run this test with the Pi connected to the Arduino (Uno per the 2026-10-14
+baseline; earlier docs said Mega) running GRBL.
 The physical machine should be in a safe, idle state.
 The physical hardwired E-stop must be functional and within reach before any
 motion tests are attempted.

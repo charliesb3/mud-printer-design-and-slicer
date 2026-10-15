@@ -10,6 +10,16 @@ The goal is a simpler, more appropriate interface specifically designed around t
 
 ---
 
+## Hardware
+
+The real control-box interfaces (Pi 4, Arduino Uno / GRBL over USB, planned
+Cytron MD13S for Z on Pi GPIO, planned Kaleinavi RF receiver on Pi GPIO,
+power, E-stop, VERIFY items, superseded parts) are documented in
+`../CONTROL_BOX_HARDWARE.md`. Consult it before writing code that touches
+serial, GPIO, Z, the remote, limits or power-loss behaviour.
+
+---
+
 ## Technology Stack — Decided
 
 - **Runtime**: Python 3.9+ on Raspberry Pi (Mac for development)
@@ -245,6 +255,20 @@ It never sends `$$=` or `$N=` commands. Existing machine settings are preserved.
 Z is a manually controlled linear actuator. No Z commands, no Z jog UI,
 no Z architecture decisions made. Future automatic Z control method is TBD.
 
+2026-10-14 (control-box baseline): the Pi WILL be the sole Z command source —
+GPIO PWM + DIR to a Cytron MD13S driving the 12 V actuator; manual Z from the
+UI and the remote's Z UP / Z DOWN. Open-loop (no limits / homing / position
+feedback), so Z software must be dead-man / time-bounded and never assume a
+known Z height. Not implemented; GPIO pins not assigned (pending the
+touchscreen). The old SRDKG RF Z controller is not part of the architecture.
+
+### Wireless remote = Pi GPIO inputs (planned, 2026-10-14)
+Kaleinavi 6-channel RF receiver dry contacts → Pi GPIO (internal pull-ups,
+active-low, ~1 kΩ series). Tentative functions: REMOTE STOP, Z UP, Z DOWN,
+extrusion pause / resume, two spare — mapping configurable in software.
+REMOTE STOP is an operational software stop, NOT an E-stop; the UI must
+never present it as one. Not implemented.
+
 ### Extrusion is out of scope
 The external pumping system is independently controlled. Not addressed here.
 
@@ -252,6 +276,9 @@ The external pumping system is independently controlled. Not addressed here.
 No homing commands in the UI. No assumption about limit switch configuration.
 
 ### Physical E-stop is the real emergency stop
+(2026-10-14: the E-stop is upstream of every PSU, so it also powers down the
+Pi and the USB-powered Uno — after an E-stop the controller cold-boots and
+in-memory job state is lost; VERIFY. Relevant to job recovery / P4.)
 Software Stop is a convenience. The physical hardwired E-stop is the machine's
 actual safety device. This is explicitly displayed in the UI.
 
@@ -334,6 +361,8 @@ refused, lift-details list in the UI. Verified end to end over HTTP only
 - What is the correct JOG_SPEED_MM_MIN for this machine's scale?
   (Must be established by physical testing before jogging is enabled)
 - What serial port does the Arduino appear as on the Pi (ttyUSB0 or ttyACM0)?
+  (Board recorded as an Uno 2026-10-14: genuine Uno → usually ttyACM0, CH340
+  clone → ttyUSB0. The `.env` default is ttyUSB0.)
 - Is a udev rule needed to assign a stable symlink to the Arduino port?
 - Does the Pi need to act as a Wi-Fi access point for field use?
   If so, hostapd + dnsmasq setup is needed (not yet done).
@@ -388,6 +417,11 @@ Lift-aware job work:
   travel with the pump, XY origin, machine units, frame-reposition
   behaviour); then the Designer adds `gcode` per lift + `executable: true`.
 - Third-party G-code compatibility / preflight (later, not started).
+
+Hardware-facing work (not started; needs `../CONTROL_BOX_HARDWARE.md` VERIFY
+items and the touchscreen pin usage first): Z control via MD13S (dead-man,
+time-bounded), RF remote inputs (debounced, UP+DOWN interlock), REMOTE STOP
+behaviour definition.
 - P4 (optional): persist progress at lift boundaries; start at lift N.
 - Add a lift-boundary step to docs/acceptance-test.md once hardware testing
   of lifts is planned.
@@ -414,6 +448,12 @@ Lift-aware job work:
 ---
 
 ## Last Updated
+
+2026-10-14 (control box)
+
+Hardware baseline cross-referenced (`../CONTROL_BOX_HARDWARE.md`): Pi will
+command Z (MD13S) and read the RF remote; REMOTE STOP ≠ E-stop; E-stop also
+powers down the Pi. No code changed.
 
 2026-10-14 (P3)
 

@@ -8,9 +8,14 @@ Development is done on Mac. The Pi is the runtime target.
 
 ## Hardware
 
-- Raspberry Pi 4B (2 GB RAM or more)
-- Official 7-inch touchscreen (800×480)
-- USB connection to Arduino Mega running GRBL
+- Raspberry Pi 4 Model B (2 GB RAM or more)
+- Touchscreen: already owned, model / interface / power NOT yet confirmed
+  (this guide originally assumed the official 7-inch 800×480 display)
+- USB connection to the Arduino (Uno per the 2026-10-14 baseline) running GRBL;
+  USB also powers the Uno
+
+Full control-box hardware (power, E-stop, Z driver, RF remote, VERIFY items):
+`../../CONTROL_BOX_HARDWARE.md`.
 
 ---
 

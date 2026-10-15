@@ -10,7 +10,8 @@ machine. It must be preserved and never silently overwritten.
 
 ## Step 1 — Connect UGS (existing working setup)
 
-Connect your computer to the Arduino Mega via USB using Universal G-code Sender,
+Connect your computer to the Arduino (Uno per the 2026-10-14 baseline; earlier docs
+said Mega — record which board it actually is) via USB using Universal G-code Sender,
 exactly as you do now for normal printing. Confirm GRBL connects and the machine
 responds.
 
