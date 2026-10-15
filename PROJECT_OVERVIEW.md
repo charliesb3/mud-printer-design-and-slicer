@@ -82,7 +82,9 @@ Treat this as an open architectural question.
 
 The machine has approximately 18 inches of usable Z travel. A building is printed in vertical LIFTS: after a lift is complete, the ENTIRE XY frame is physically raised before the next lift is printed. Frame repositioning is a major, manual operation (not assumed motorized) and must be minimized; printing never returns to a lift below the frame.
 
-The print plan (Design + Toolpath) divides the stack into lifts of whole layers, completes each lift (independent islands built upward one after another, merged geometry after its parts) and represents each frame repositioning as an explicit event between lifts. Physical frame-lifting control, and how the Raspberry Pi interface will guide the operator through it, are not yet designed.
+The print plan (Design + Toolpath) divides the stack into lifts of whole layers, completes each lift (independent islands built upward one after another, merged geometry after its parts) and represents each frame repositioning as an explicit event between lifts. Physical frame-lifting control is not yet designed.
+
+Decided 2026-10-14 (Design + Toolpath ↔ Pi interface): a whole building is sent to the Pi as ONE print job made of an ordered sequence of first-class LIFTS taken from the PrintPlan; the Pi never recalculates lift boundaries. After each lift, progression stops until the operator repositions the frame and explicitly confirms. GRBL still receives ordinary G-code underneath. Job format, exporter and Z handling within a lift: see `pi-interface/PROJECT_MEMORY.md` (not yet implemented).
 
 ---
 

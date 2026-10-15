@@ -137,6 +137,33 @@ All settings in `.env`. Key values:
 
 ## Key Decisions
 
+### Whole-building job with first-class lifts (decided 2026-10-14)
+- The Pi receives a WHOLE BUILDING as ONE print job.
+- The job is an ordered sequence of first-class printable LIFTS, determined
+  upstream by the authoritative PrintPlan (Design + Toolpath,
+  `layer_assembly/print_plan.py`). The Pi never recalculates lift boundaries.
+- Lifts are job structure the Pi understands — not separate G-code files and
+  not merely opaque comments.
+- Completing a lift pauses progression: the next lift cannot run until the
+  operator performs the physical frame reposition and explicitly confirms it.
+- Underneath, GRBL still receives ordinary machine G-code.
+
+Implementation notes from the 2026-10-14 inspection (proposed, not yet built):
+- Boundary: a versioned JSON job container defined by the Pi
+  (`format`, `version`, `units`, `source`, `lifts[]` each with index, z range,
+  layer range, `reposition_before` {rise, frame z from/to, nozzle xy} and
+  plain `gcode` lines), produced by a Design + Toolpath exporter from
+  `PrintPlan.items()` (which already carries lift/stage/pass per move and a
+  `FrameMove` per later lift). Format spec + one shared fixture; the Pi does
+  not import design-toolpath code. Plain `.gcode` uploads stay valid as a
+  one-lift job (M1 behaviour preserved).
+- Lift end: GRBL `ok` means buffered, not executed — the runner must drain
+  (`G4 P0`) and see status Idle before declaring the lift complete.
+- Confirmation must name the lift it confirms (prevents stale/double confirm).
+- M0/M1/M2/M30/% are not allowed inside a lift's G-code; the Pi owns pauses.
+- No G-code export exists yet in Design + Toolpath. PrintPlan units are
+  inches, world coordinates, Z = building Z of the layer top.
+
 ### Dead-man jog — incremental commands + heartbeat timeout
 Jogging uses short incremental `$J=` moves sent in a loop. The loop dies if
 the browser stops sending heartbeats. A separate jog cancel byte (0x85) is sent
@@ -239,7 +266,22 @@ All application code has been written:
 - Will the current GRBL firmware support all required jog and job operations?
   (Expected yes, but unverified on hardware)
 - After a power failure mid-print, should the interface offer job recovery?
-  (Not implemented in Milestone 1 — open question for future milestones)
+  (Not implemented in Milestone 1 — open question for future milestones.
+  Lift boundaries are natural safe restart points: persist progress there
+  and offer "start at lift N"?)
+
+Lift-job questions (2026-10-14, need user decisions before the exporter):
+- Z inside a lift: Z is manual, but layers, back-down moves to another
+  island (dz < 0) and clear-height travels all change Z. XY-only G-code with
+  manual Z, per-layer operator pauses, or other?
+- Travels/transitions with the pump independently running: plain moves or
+  operator pause?
+- Does a frame raise preserve XY registration / GRBL position, or involve
+  power-down / reset / re-zeroing? (Determines whether jog/console must be
+  allowed while awaiting reposition — both are blocked during an active job.)
+- XY work zero: operator-set before start, or an offset in the export?
+  G20 (inches, matching the plan) or convert to G21 mm?
+- Confirmation strength: single hold-to-confirm or a checklist?
 
 ---
 
@@ -252,6 +294,17 @@ All application code has been written:
 4. Validate and set JOG_SPEED_MM_MIN in .env.
 5. If field offline use is needed, configure Wi-Fi access point.
 6. After Milestone 1 is verified on hardware, define Milestone 2.
+
+Lift-aware job work (software, can proceed before hardware; proposed stages):
+- P1: lift-aware `CurrentJob` (keeps flat `lines` view so M1 tests stand),
+  JSON job loader + validation, runner streams per lift, drains + waits Idle
+  at lift end, state `awaiting_reposition`, WS `confirm_reposition {lift}`.
+  Mock-transport tests. Independent of the Z decision.
+- P2: UI — lift list, boundary panel with frame rise, hold-to-confirm,
+  lift/line progress.
+- P3: Design + Toolpath exporter PrintPlan → job (blocked on Z / travel /
+  origin / units decisions above); round-trip test against the Pi loader.
+- P4 (optional): persist progress at lift boundaries; start at lift N.
 
 ---
 
@@ -271,6 +324,12 @@ All application code has been written:
 ---
 
 ## Last Updated
+
+2026-10-14
+
+Decision: whole building = one job of first-class PrintPlan lifts with an
+operator-confirmed frame reposition between lifts. Inspection done; staged
+plan P1–P4 recorded; nothing implemented yet. M1 tests: 78 passing.
 
 2026-10-03
 
