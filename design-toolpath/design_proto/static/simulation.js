@@ -482,6 +482,7 @@ function _simDraw3D(g, W, H, loc) {
     g.stroke();
     if (g.setLineDash) g.setLineDash([]);
   }
+  if (typeof machineProfile === 'function') drawMachineEnvelope(g, simProjector(W, H), machineProfile(), { z: true });
   _simDrawLifts(g, simProjector(W, H), loc);
   _simDrawHeaders(g, simProjector(W, H), loc.layer);
   _simDrawNozzle(g, simProjector(W, H), loc, true);
@@ -549,6 +550,8 @@ function _simDrawNozzle(g, P, loc, threeD) {
 function _simDrawTop(g, W, H, loc) {
   const D = sim.data, L = sim.selLayer, P = simTopProjector(W, H, L);
   if (D.layerFirst[L] < 0) return;
+  if (typeof drawPhysicalGrid === 'function') drawPhysicalGrid(g, (x, y) => P(x, y), W, H);   // 1 ft squares from the print origin
+  if (typeof machineProfile === 'function') drawMachineEnvelope(g, (x, y) => P(x, y), machineProfile(), { z: false });
   const cur = loc.i;                          // items before it are printed (time order)
   const runStart = {}, runEnd = {};
   for (const i of D.layerItems[L]) {
@@ -954,7 +957,8 @@ async function simExportJob() {
   let r;
   try {
     const res = await fetch('/api/assembly/print_job', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ assembly: K.assembly, designs: K.designs, wall_systems: K.wall_systems, name }) });
+      body: JSON.stringify({ assembly: K.assembly, designs: K.designs, wall_systems: K.wall_systems, name,
+                             machine_profile: typeof machineProfile === 'function' ? machineProfile() : undefined }) });
     r = await res.json();
     if (r.error) throw new Error(r.error);
   } catch (e) { sim.exportNote = 'Export failed: ' + e.message; simRenderPanels(); return; }
@@ -962,7 +966,11 @@ async function simExportJob() {
   const n = r.job.lifts.length;
   sim.exportNote = `Exported ${r.filename} — ${n} lift${n === 1 ? '' : 's'}, ${r.lines} lines of XY-only G-code ` +
     `(inches, work coordinates from the print origin; Z and pump stay manual).` +
-    (r.placeholder_speeds ? ' Uses PLACEHOLDER speeds — set measured print / travel speeds before printing.' : '');
+    (r.placeholder_speeds ? ' Uses PLACEHOLDER speeds — set measured print / travel speeds before printing.' : '') +
+    (r.preflight ? (r.preflight.fits ? ` Prepared for printer "${r.job.prepared_for.name}": fits.`
+      : ` Prepared for printer "${r.job.prepared_for.name}": does NOT fit (` +
+        r.preflight.checks.filter(c => c.status === 'fail').map(c => c.id.toUpperCase()).join(', ') +
+        ' exceeded) — exported anyway; the printer controller will check it against the real machine.') : '');
   if (typeof setStatus === 'function') setStatus(sim.exportNote);
   simRenderPanels();
   return r;
@@ -1053,6 +1061,17 @@ function simRenderPanels() {
     if (D) status.appendChild(_el('div', 'asm-calc',
       `${D.res.plan.layers.length} layers · ${D.res.estimate.runs} runs · the authoritative print plan` +
       (simOutdated() ? ' (outdated)' : '')));
+    // MACHINE PREFLIGHT: the plan's own requirements against the project's
+    // printer (recomputed as the profile changes; the plan is never altered)
+    if (D && D.res.requirements && typeof machinePreflight === 'function') {
+      const mp = machineProfile(), pf = machinePreflight(D.res.requirements, mp);
+      const bad = pf.checks.filter(c => c.status === 'fail'), warn = pf.checks.filter(c => c.status === 'warn');
+      status.appendChild(_el('div', bad.length ? 'asm-diff' : 'asm-kv-row',
+        `Printer "${mp.name}": ` + (bad.length ? `does NOT fit — ${bad.length} limit${bad.length === 1 ? '' : 's'} exceeded`
+          : 'fits' + (warn.length ? ` (${warn.length} warning${warn.length === 1 ? '' : 's'})` : '')) +
+        (pf.unchecked.length ? ` · not checked: ${pf.unchecked.join(', ')}` : '') + (simOutdated() ? ' (outdated)' : '')));
+      for (const c of [...bad, ...warn]) status.appendChild(_el('div', 'asm-calc', c.message));
+    }
     const S = D && D.res.support;
     if (S) {                                  // the FINAL bead-level check of these print paths
       const open = S.findings.filter(f => f.status === 'needs_header' || f.status === 'insufficient_support');

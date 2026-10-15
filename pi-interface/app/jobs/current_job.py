@@ -32,6 +32,7 @@ from typing import Optional
 
 from ..grbl.parser import lift_gcode_reason, prepare_gcode_line, program_control_reason
 from .layout import LiftLayout
+from .preflight import job_preflight
 from .motion import analyze
 
 
@@ -112,6 +113,12 @@ class CurrentJob:
     awaiting_lift: Optional[int] = None   # the effective lift waiting for reposition confirmation
     started_at: Optional[float] = None
     error: Optional[str] = None
+    # MACHINE (2026-10-15): what the job SAYS (reported, never trusted over the
+    # controller's own check) and the controller's own profile (authoritative)
+    prepared_for: Optional[dict] = None
+    designer_preflight: Optional[dict] = None
+    declared_requirements: Optional[dict] = None
+    printer: Optional[dict] = None           # THIS controller's machine profile (attached by the server)
     observed_layer: Optional[float] = None   # operator's layer thickness (in) — the physical one; default nominal
     target_lift: Optional[float] = None      # operator's target lift height (in); default lift_plan
     rapid_in_min: Optional[float] = None     # GRBL max rate, for G0 estimates (flat G-code)
@@ -187,6 +194,18 @@ class CurrentJob:
 
     # --- operator-observed layer thickness and lift-boundary adjustment ---
 
+    def max_z_travel(self) -> Optional[float]:
+        """Z travel per frame position: THIS printer's profile when set (it is
+        authoritative), else what the job was planned with."""
+        z = (self.printer or {}).get("z_travel_per_frame")
+        return z if z else (self.lift_plan or {}).get("max_z_travel")
+
+    def motion_bounds(self) -> Optional[dict]:
+        """XY extent of every move of the G-code (work coordinates, inches; cached)."""
+        if not hasattr(self, "_motion_bounds"):
+            self._motion_bounds = self.profile.bounds()
+        return self._motion_bounds
+
     def layer_thickness(self) -> Optional[float]:
         """The thickness used for physical estimates: observed, else nominal."""
         return self.observed_layer or self.layout.nominal_layer
@@ -211,7 +230,7 @@ class CurrentJob:
             return out
         needed = max(1, int(target / thickness + 1e-9))
         out["needed"] = needed
-        mz = (self.lift_plan or {}).get("max_z_travel")
+        mz = self.max_z_travel()
         cands = [c for c in self.end_candidates()
                  if mz is None or c["layers"] * thickness <= mz + 1e-9]
         if not cands:
@@ -242,7 +261,7 @@ class CurrentJob:
         if k is None or lift_index != k:
             return (self.propose_lift_end(target, thickness)["reason"] if k is None
                     else f"The parameters apply to lift {k + 1} now.", None)
-        mz = (self.lift_plan or {}).get("max_z_travel")
+        mz = self.max_z_travel()
         if mz is not None and target > mz + 1e-9:
             return (f"The target lift height cannot exceed the machine's Z travel ({mz:g} in).", None)
         prop = self.propose_lift_end(target, thickness)
@@ -278,7 +297,7 @@ class CurrentJob:
         if self.state == "awaiting_reposition":
             after = self.layout.range_of(k)[1]       # the lift is printed through its current end
         return self.layout.candidates(k, after, self.layer_thickness(),
-                                      lp.get("max_z_travel"), lp.get("target_lift_height"))
+                                      self.max_z_travel(), lp.get("target_lift_height"))
 
     def adjust_lift_end(self, lift_index, at) -> tuple:
         """Move the end of the adjustable lift to clean cut `at`.
@@ -310,7 +329,7 @@ class CurrentJob:
         if k + 1 < self.layout.count:
             nxt = self.layout.layers_in(*self.layout.range_of(k + 1))
             t = self.layer_thickness()
-            mz = (self.lift_plan or {}).get("max_z_travel")
+            mz = self.max_z_travel()
             if t and mz and len(nxt) * t > mz + 1e-9:
                 warning = (f"Lift {k + 2} now holds {len(nxt)} layers ≈ {len(nxt) * t:g} in at {t:g} in/layer — "
                            f"more than the {mz:g} in Z travel: end it early when you reach it.")
@@ -395,7 +414,7 @@ class CurrentJob:
             "observed_layer": self.observed_layer,
             "target_lift_height": self.target_lift_height(),
             "planned_target_lift_height": lp.get("target_lift_height"),
-            "max_z_travel": lp.get("max_z_travel"),
+            "max_z_travel": self.max_z_travel(),
             "layers": len(layers) or None,
             "adjustable": L.adjustable,
         }
@@ -459,6 +478,8 @@ class CurrentJob:
             "current_mark": mark,
             "progress": self.progress(),
             "outline": self.outline(),
+            "preflight": job_preflight(self, self.printer) if self.printer else None,
+            "prepared_for": self.prepared_for,
             "adjust": {"lift": self.adjustable_lift(), "candidates": self.end_candidates()}
             if self.layout.adjustable else None,
         }
@@ -589,7 +610,16 @@ def parse_building_job(text: str, filename: str = "") -> dict:
             if v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
                 raise JobFormatError(f"'lift_plan.{key}' must be a positive number or null")
     machine = doc.get("machine") if isinstance(doc.get("machine"), dict) else None
+    extra = {}
+    for key in ("prepared_for", "preflight", "requirements"):        # optional, reported only
+        v = doc.get(key)
+        if v is not None and not isinstance(v, dict):
+            raise JobFormatError(f"'{key}' must be an object")
+        extra[key] = v
     return {
+        "prepared_for": extra["prepared_for"],
+        "designer_preflight": extra["preflight"],
+        "declared_requirements": extra["requirements"],
         "name": name if isinstance(name, str) else None,
         "units": units if isinstance(units, str) else None,
         "xy_bounds": bounds,
@@ -687,6 +717,9 @@ def load_job_from_file(filepath: Path, rapid_in_min: Optional[float] = None) -> 
             reentry=parsed["reentry"],
             machine=parsed["machine"],
             rapid_in_min=rapid_in_min,
+            prepared_for=parsed["prepared_for"],
+            designer_preflight=parsed["designer_preflight"],
+            declared_requirements=parsed["declared_requirements"],
         )
     return CurrentJob(
         filename=filepath.name,

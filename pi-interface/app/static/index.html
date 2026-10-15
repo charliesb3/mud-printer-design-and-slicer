@@ -16,6 +16,7 @@
       <span class="badge badge-disconnected" id="conn-badge">DISCONNECTED</span>
       <span class="state-badge state-disconnected" id="grbl-state">—</span>
       <span class="state-badge lift-badge" id="lift-badge" hidden></span>
+      <button class="printer-chip" id="printer-chip" title="Machine / Printer settings">Printer: —</button>
     </div>
     <div class="status-right">
       <span class="pos-label">X</span>
@@ -71,6 +72,10 @@
             so it cannot be started. Unresolved:
           </div>
           <ul class="job-unresolved" id="job-unresolved"></ul>
+        </div>
+        <div class="job-preflight" id="job-preflight" hidden>
+          <div class="preflight-title" id="preflight-title"></div>
+          <ul class="preflight-list" id="preflight-list"></ul>
         </div>
         <details class="lift-details" id="lift-details" hidden>
           <summary>Lift details</summary>
@@ -222,6 +227,27 @@
         <div class="est-note" id="view-note">Load a job to see its toolpath.</div>
       </div>
     </div><!-- .col-view -->
+
+    <!-- Machine / Printer settings: THIS controller's profile of the physical printer -->
+    <div class="section span-all" id="printer-section" hidden>
+      <div class="section-title">Machine / Printer settings
+        <button class="small-btn" id="printer-close" style="margin-left:auto">Close</button></div>
+      <p class="est-note">This printer's own profile — authoritative for every job's preflight. Jobs only report
+        the machine they were prepared for; they never change these values. Envelope: X × Y from the print origin.
+        Empty = not set (not checked).</p>
+      <div class="printer-grid">
+        <label for="pp-name">Printer name</label><input id="pp-name" type="text" maxlength="80" />
+        <label for="pp-x">Printable X (in)</label><input id="pp-x" type="number" min="1" step="1" inputmode="decimal" />
+        <label for="pp-y">Printable Y (in)</label><input id="pp-y" type="number" min="1" step="1" inputmode="decimal" />
+        <label for="pp-zmax">Max building Z (in)</label><input id="pp-zmax" type="number" min="1" step="1" inputmode="decimal" />
+        <label for="pp-zframe">Z travel per frame (in)</label><input id="pp-zframe" type="number" min="1" step="0.5" inputmode="decimal" />
+        <label>Units</label><span>inches</span>
+      </div>
+      <div class="controls-row compact">
+        <button class="ctrl-btn btn-setup" id="printer-save">Save printer profile</button>
+      </div>
+      <div class="est-note" id="printer-note"></div>
+    </div>
 
     <!-- Advanced: GRBL diagnostics + console (collapsed by default) -->
     <div class="section span-all">

@@ -128,10 +128,17 @@ def _lift_gcode(plan, items, print_feed, travel_feed):
 
 
 def export_job(plan, speeds, name: str | None = None, generated_at: str | None = None,
-               placeholder_speeds: bool = False) -> dict:
+               placeholder_speeds: bool = False, machine_profile: dict | None = None) -> dict:
     """The executable `.mudjob` document of `plan` (a print_plan.PrintPlan)
     with `speeds` (print_plan.PrintSpeeds, in/s). Pure: the same plan,
-    speeds and `generated_at` give the same document."""
+    speeds and `generated_at` give the same document.
+
+    MACHINE (2026-10-15): `requirements` (what the plan needs: XY bounds of
+    all motion / of extrusion, building height, tallest lift) is always
+    recorded; with the project's `machine_profile`, also `prepared_for` (the
+    profile it was prepared against) and this side's informational
+    `preflight`. Nothing is changed to make the job fit; the controller
+    re-checks against its own profile."""
     from .print_plan import items
     if plan.units != 'in':
         raise ExportError(f'the print plan is in {plan.units!r}; the machine job is written in inches')
@@ -171,6 +178,12 @@ def export_job(plan, speeds, name: str | None = None, generated_at: str | None =
         doc['xy_bounds'] = {'min_x': _r(min(xs), 4), 'min_y': _r(min(ys), 4),
                             'max_x': _r(max(xs), 4), 'max_y': _r(max(ys), 4)}
     hs = {round(L.z_top - L.z_bottom, 9) for L in plan.layers}
+    from machine_profile import prepared_for, preflight, requirements
+    req = requirements(plan)
+    doc['requirements'] = req
+    if machine_profile is not None:
+        doc['prepared_for'] = prepared_for(machine_profile)
+        doc['preflight'] = dict(preflight(req, machine_profile), informational=True)
     doc['lift_plan'] = {'target_lift_height': _r(plan.settings.get('lift_height')) if plan.settings.get('lift_height') else None,
                         'max_z_travel': _r(plan.settings.get('max_z_travel')) if plan.settings.get('max_z_travel') else None,
                         'layer_height': _r(hs.pop()) if len(hs) == 1 else None}

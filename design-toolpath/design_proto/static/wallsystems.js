@@ -456,6 +456,7 @@ function wsysDraw() {
     };
   } else {
     P = (x, y) => [W / 2 + v.px + k * (x - cx), H / 2 + v.py - k * (y - cy)];
+    if (typeof drawPhysicalGrid === 'function') drawPhysicalGrid(g, P, W, H);   // 1 ft squares from the print origin
   }
   const stroke = (list, z, alpha) => {
     for (const it of list) {
@@ -486,6 +487,15 @@ function wsysDraw() {
     g.fill('evenodd');
   }
   stroke(items, i >= 0 ? _wsysZ(i) : 0, 1);
+  // MACHINE: the printer's X × Y envelope at this layer (a reference only)
+  const mp = typeof machineProfile === 'function' ? machineProfile() : null;
+  if (mp) {
+    drawMachineEnvelope(g, P, mp, { z: false, zBase: i >= 0 ? _wsysZ(i) : 0 });
+    const bb = items.length ? _wsysBounds(items) : null;
+    const mw = bb && isFinite(bb[0]) ? machineWarning({ xy_bounds: { min_x: bb[0], min_y: bb[1], max_x: bb[2], max_y: bb[3] } },
+                                                      { ...mp, max_build_z: null, z_travel_per_frame: null }) : '';
+    if (mw) { g.fillStyle = '#ffb366'; g.font = '11px monospace'; g.fillText('⚠ ' + mw, 14, 34); g.font = '12px monospace'; }
+  }
   const selF = _wsysSelected();
   for (const f of _wsysFindings()) {                // support findings of the layer (the span runs)
     const isSel = selF && selF.id === f.id && selF.layer === f.layer;

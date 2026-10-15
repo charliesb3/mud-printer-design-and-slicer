@@ -41,6 +41,9 @@ communicator = GRBLCommunicator(app_state)
 async def lifespan(app: FastAPI):
     # Startup
     http_module.init(app_state, communicator, ws_manager)
+    from . import machine_profile
+    app_state.machine_profile, app_state.machine_profile_problem = machine_profile.load(config.MACHINE_PROFILE_PATH)
+    log.info("Machine profile: %s", app_state.machine_profile.get("name"))
     config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
     asyncio.create_task(_connection_loop(), name="grbl-connection")
     asyncio.create_task(_broadcast_loop(), name="ws-broadcast")

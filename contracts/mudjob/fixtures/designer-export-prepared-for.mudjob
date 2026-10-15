@@ -1,0 +1,410 @@
+{
+ "format": "mudprinter-job",
+ "version": 1,
+ "executable": true,
+ "name": "Prepared-for test",
+ "units": "in",
+ "source": {
+  "generator": "Mud Printer Design + Toolpath",
+  "generated_at": "2026-10-15T00:00:00Z",
+  "print_plan_version": 1,
+  "lift_settings": {
+   "max_z_travel": 18.0,
+   "lift_height": 4.5,
+   "head_clearance": 1.0
+  },
+  "layers": 12,
+  "passes": 12,
+  "speeds_in_s": {
+   "print": 2.0,
+   "travel": 6.0
+  },
+  "placeholder_speeds": false
+ },
+ "machine": {
+  "axes": "XY",
+  "z": "manual",
+  "extrusion": "manual",
+  "coordinates": "work coordinates; origin = the print origin set by the operator",
+  "feeds_in_min": {
+   "print": 120.0,
+   "travel": 360.0
+  }
+ },
+ "xy_bounds": {
+  "min_x": 0.0,
+  "min_y": 0.0,
+  "max_x": 40.0,
+  "max_y": 30.0
+ },
+ "requirements": {
+  "units": "in",
+  "xy_bounds": {
+   "min_x": 0.0,
+   "min_y": 0.0,
+   "max_x": 40.0,
+   "max_y": 30.0
+  },
+  "print_bounds": {
+   "min_x": 0.0,
+   "min_y": 0.0,
+   "max_x": 40.0,
+   "max_y": 30.0
+  },
+  "building_height": 18.0,
+  "max_lift_height": 4.5,
+  "lifts": 4,
+  "layers": 12
+ },
+ "prepared_for": {
+  "name": "Designer assumption",
+  "units": "in",
+  "x_extent": 120.0,
+  "y_extent": 120.0,
+  "max_build_z": 100.0,
+  "z_travel_per_frame": 18.0,
+  "provisional": [],
+  "envelope_origin": "print_origin"
+ },
+ "preflight": {
+  "fits": true,
+  "warnings": 0,
+  "unchecked": [],
+  "checks": [
+   {
+    "id": "x",
+    "status": "ok",
+    "required": 40.0,
+    "limit": 120.0,
+    "message": "X: the job spans 40 of 120 in.",
+    "bounds": [
+     0.0,
+     40.0
+    ]
+   },
+   {
+    "id": "y",
+    "status": "ok",
+    "required": 30.0,
+    "limit": 120.0,
+    "message": "Y: the job spans 30 of 120 in.",
+    "bounds": [
+     0.0,
+     30.0
+    ]
+   },
+   {
+    "id": "z",
+    "status": "ok",
+    "required": 18.0,
+    "limit": 100.0,
+    "message": "Building height 18 of 100 in."
+   },
+   {
+    "id": "lift",
+    "status": "ok",
+    "required": 4.5,
+    "limit": 18.0,
+    "message": "Tallest lift 4.5 of 18 in Z travel per frame."
+   }
+  ],
+  "informational": true
+ },
+ "lift_plan": {
+  "target_lift_height": 4.5,
+  "max_z_travel": 18.0,
+  "layer_height": 1.5
+ },
+ "reentry_marks": true,
+ "lifts": [
+  {
+   "index": 0,
+   "description": "Layers 1–3",
+   "layers": {
+    "first": 0,
+    "last": 2,
+    "count": 3
+   },
+   "z_bottom": 0.0,
+   "z_top": 4.5,
+   "stages": 1,
+   "passes": 3,
+   "runs": 3,
+   "print_length": 420.0,
+   "travel_length": 0.0,
+   "layer_marks": [
+    {
+     "line": 0,
+     "pass": 0,
+     "layer": 0,
+     "z": 1.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 6,
+     "pass": 1,
+     "layer": 1,
+     "z": 3.0,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 12,
+     "pass": 2,
+     "layer": 2,
+     "z": 4.5,
+     "z_in_lift": 4.5
+    }
+   ],
+   "travel_lines": [
+    1,
+    7,
+    13
+   ],
+   "gcode": [
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0"
+   ]
+  },
+  {
+   "index": 1,
+   "description": "Layers 4–6",
+   "layers": {
+    "first": 3,
+    "last": 5,
+    "count": 3
+   },
+   "z_bottom": 4.5,
+   "z_top": 9.0,
+   "stages": 1,
+   "passes": 3,
+   "runs": 3,
+   "print_length": 420.0,
+   "travel_length": 0.0,
+   "reposition_before": {
+    "from_lift": 0,
+    "rise": 4.5,
+    "frame_z_from": 0.0,
+    "frame_z_to": 4.5,
+    "nozzle_at": [
+     0.0,
+     0.0
+    ],
+    "nozzle_z": 4.5
+   },
+   "layer_marks": [
+    {
+     "line": 0,
+     "pass": 3,
+     "layer": 3,
+     "z": 6.0,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 6,
+     "pass": 4,
+     "layer": 4,
+     "z": 7.5,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 12,
+     "pass": 5,
+     "layer": 5,
+     "z": 9.0,
+     "z_in_lift": 4.5
+    }
+   ],
+   "travel_lines": [
+    1,
+    7,
+    13
+   ],
+   "gcode": [
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0"
+   ]
+  },
+  {
+   "index": 2,
+   "description": "Layers 7–9",
+   "layers": {
+    "first": 6,
+    "last": 8,
+    "count": 3
+   },
+   "z_bottom": 9.0,
+   "z_top": 13.5,
+   "stages": 1,
+   "passes": 3,
+   "runs": 3,
+   "print_length": 420.0,
+   "travel_length": 0.0,
+   "reposition_before": {
+    "from_lift": 1,
+    "rise": 4.5,
+    "frame_z_from": 4.5,
+    "frame_z_to": 9.0,
+    "nozzle_at": [
+     0.0,
+     0.0
+    ],
+    "nozzle_z": 9.0
+   },
+   "layer_marks": [
+    {
+     "line": 0,
+     "pass": 6,
+     "layer": 6,
+     "z": 10.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 6,
+     "pass": 7,
+     "layer": 7,
+     "z": 12.0,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 12,
+     "pass": 8,
+     "layer": 8,
+     "z": 13.5,
+     "z_in_lift": 4.5
+    }
+   ],
+   "travel_lines": [
+    1,
+    7,
+    13
+   ],
+   "gcode": [
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0"
+   ]
+  },
+  {
+   "index": 3,
+   "description": "Layers 10–12",
+   "layers": {
+    "first": 9,
+    "last": 11,
+    "count": 3
+   },
+   "z_bottom": 13.5,
+   "z_top": 18.0,
+   "stages": 1,
+   "passes": 3,
+   "runs": 3,
+   "print_length": 420.0,
+   "travel_length": 0.0,
+   "reposition_before": {
+    "from_lift": 2,
+    "rise": 4.5,
+    "frame_z_from": 9.0,
+    "frame_z_to": 13.5,
+    "nozzle_at": [
+     0.0,
+     0.0
+    ],
+    "nozzle_z": 13.5
+   },
+   "layer_marks": [
+    {
+     "line": 0,
+     "pass": 9,
+     "layer": 9,
+     "z": 15.0,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 6,
+     "pass": 10,
+     "layer": 10,
+     "z": 16.5,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 12,
+     "pass": 11,
+     "layer": 11,
+     "z": 18.0,
+     "z_in_lift": 4.5
+    }
+   ],
+   "travel_lines": [
+    1,
+    7,
+    13
+   ],
+   "gcode": [
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G20 G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0"
+   ]
+  }
+ ]
+}

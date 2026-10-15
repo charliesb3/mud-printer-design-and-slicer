@@ -42,6 +42,11 @@ COMMAND_TIMEOUT_S: float = 10.0
 # stops answering status polls for this long (unresponsive / link dead).
 GRBL_UNRESPONSIVE_S: float = float(os.getenv("GRBL_UNRESPONSIVE_S", "5.0"))
 
+# This controller's MACHINE PROFILE (the physical printer): a local JSON file,
+# edited in the UI (Machine / Printer settings). Independent of any Designer
+# project — .mudjob files only report what they were prepared for.
+MACHINE_PROFILE_PATH: Path = Path(os.getenv("MACHINE_PROFILE_PATH", "machine_profile.json"))
+
 # Job storage directory (relative to pi-interface/ when running locally)
 JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", "jobs"))
 

@@ -423,6 +423,12 @@ Their ONLY integration boundary is the `.mudjob` file: a small, documented, vers
 
 File roles: `.muddesign` = editable AUTHORING project (Designer Save / Open), never a print job (the Pi refuses it); `.mudjob` = MACHINE JOB, one whole-building print as ordered first-class lifts from the PrintPlan (the Pi never recalculates lift boundaries); plain G-code = a less-rich external input the Pi still accepts (third-party G-code preflight: later). Undecided machine semantics are never chosen silently: an export that cannot be executable says so (`executable: false` + `unresolved`).
 
+### Machine profiles — independent on each side (2026-10-15; manually reviewed, checkpoint 2026-10-15)
+
+Machine profiles are independent configuration on each side. `.mudjob` communicates job assumptions and requirements; it does not synchronize applications.
+
+Each application owns and persists its own profile (name, inches, printable X / Y extents, maximum total building Z, Z travel per frame position — distinct constraints; forward-compatible, unknown keys kept). Design + Toolpath: the profile the PROJECT is designed for (`.muddesign` schema 5), a reference envelope and an informational check — designs are never clipped, snapped or resized. Pi interface: the profile of the PHYSICAL machine (local `machine_profile.json`), AUTHORITATIVE — it recomputes every job's needs from the job itself and never trusts the Designer's `preflight`; a native `.mudjob` exceeding a configured limit cannot Start. Envelope convention (provisional): [0, X] × [0, Y] from the print origin; a job larger than an extent fails, one that fits but lies outside it only warns. Real dimensions are not yet recorded: the Designer default (120 × 120 in, from "approximately 10 ft × 10 ft or larger") is marked provisional; maximum building Z is unknown (unset = unchecked); Z travel per frame defaults to the documented ~18 in.
+
 ### One authoritative print plan feeds simulation, G-code and machine execution
 
 The whole-print plan (ordered layers → continuous runs, travels and layer transitions in world coordinates, with source identities) is produced once by the Design + Toolpath subsystem from the exact geometry the designer sees. Print Simulation, G-code export and any machine-controller execution consume that plan (and its timeline) instead of re-deriving order, starts or timing. Time figures from it are estimates (constant speeds), not machine timing. Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "Print plan".
@@ -634,7 +640,7 @@ Important unresolved questions currently include:
 - Is stacked 2D vector geometry the correct fundamental representation?
 - How should transformations and keyframes be represented?
 - What mud/adobe-specific printability rules should the software understand?
-- What constraints arise from the physical scale of the machine?
+- What constraints arise from the physical scale of the machine? (Machine profiles exist from 2026-10-15; the real printable X / Y and maximum building Z are still unmeasured, and where the print origin sits relative to the frame's printable area — the envelope convention — is provisional.)
 - What constraints arise from material behavior and the hose-fed printing process?
 - What should the boundary between design and toolpath generation ultimately be?
 

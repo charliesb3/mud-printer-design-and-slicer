@@ -308,6 +308,13 @@
     #sidebar-material { flex-shrink: 0; border-bottom: 1px solid var(--border); }
     .material-panel { padding: 10px 12px 12px; }
     #sidebar-print { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .machine-panel { position: absolute; right: 10px; top: 46px; z-index: 50; width: 330px; background: #1e1e1e;
+                     border: 1px solid #444; border-radius: 6px; padding: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+    .machine-head { font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .machine-head .tool-btn { margin-left: auto; }
+    .machine-sub { color: #888; font-weight: 400; font-size: 11px; }
+    .machine-grid { display: grid; grid-template-columns: 1fr 140px; gap: 4px 8px; align-items: center; font-size: 12px; }
+    .machine-note { color: #999; font-size: 11px; margin-top: 8px; line-height: 1.35; }
     .sidebar-head {
       padding: 7px 12px;
       font-size: 10px;
@@ -584,6 +591,8 @@
   <!-- PROJECT FILE: the whole project (every Layer Design + the Assembly),
        shared by both workspaces — a .muddesign JSON file (project_file.py) -->
   <div class="project-btns" id="project-btns">
+    <button class="ws-tab" id="btn-machine" onclick="toggleMachinePanel()"
+            title="The printer this project is designed for: printable X / Y, maximum building Z, Z travel per frame (a reference and a check — designs are never changed to fit)">Printer</button>
     <button class="ws-tab" id="btn-project-new" onclick="newProject()"
             title="Start over: discard every Layer Design and the whole Assembly (asks first). Saved .muddesign files are not affected.">New Project</button>
     <button class="ws-tab" id="btn-project-open" onclick="openProjectDialog()"
@@ -594,6 +603,23 @@
            onchange="openProjectFile(this.files && this.files[0])">
   </div>
 </header>
+
+<!-- MACHINE PROFILE (2026-10-15): the project's printer — a reference envelope and a check -->
+<div class="machine-panel" id="machine-panel" style="display:none">
+  <div class="machine-head">Printer / machine profile <span class="machine-sub">(this project · inches)</span>
+    <button class="tool-btn" onclick="toggleMachinePanel()" title="Close">✕</button></div>
+  <div class="machine-grid">
+    <label for="mp-name">Name</label><input class="prop-input" id="mp-name" onchange="setMachineField('name', this.value)">
+    <label for="mp-x">Printable X</label><input type="number" class="prop-input" id="mp-x" min="1" step="1" onchange="setMachineField('x_extent', this.value)">
+    <label for="mp-y">Printable Y</label><input type="number" class="prop-input" id="mp-y" min="1" step="1" onchange="setMachineField('y_extent', this.value)">
+    <label for="mp-zmax">Max building Z</label><input type="number" class="prop-input" id="mp-zmax" min="1" step="1" placeholder="not set" onchange="setMachineField('max_build_z', this.value)">
+    <label for="mp-zframe">Z travel per frame</label><input type="number" class="prop-input" id="mp-zframe" min="1" step="0.5" onchange="setMachineField('z_travel_per_frame', this.value)">
+  </div>
+  <div class="machine-note" id="mp-prov"></div>
+  <div class="machine-note">A reference envelope (dashed, from the print origin) and a check —
+    designs are never clipped or resized to fit. Z travel per frame is the planner's maximum Z travel
+    (lift planning). The printer controller checks every job against its own profile of the real machine.</div>
+</div>
 
 <div class="workspace" id="ws-designer">
 <div class="toolbar">

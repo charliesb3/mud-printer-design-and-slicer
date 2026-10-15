@@ -887,6 +887,12 @@ def api_print_plan():
         detail = data.get('detail') or 'summary'
         if detail == 'stream':
             out = {'stream': stream(plan, speeds), 'plan': plan.to_dict('summary'), 'estimate': est, **extras}
+            # MACHINE (2026-10-15): what the plan needs + the check against the
+            # project's machine profile (informational; the plan is never changed)
+            from machine_profile import requirements as _req, preflight as _pf
+            out['requirements'] = _req(plan)
+            if isinstance(data.get('machine_profile'), dict):
+                out['preflight'] = _pf(out['requirements'], data['machine_profile'])
         elif detail == 'times':
             t0, dt = item_times(plan, speeds)
             out = {'t0': [round(v, 6) for v in t0], 'dt': [round(v, 6) for v in dt], 'estimate': est}
@@ -925,11 +931,12 @@ def api_print_job():
         given = data.get('speeds') or (data['assembly'].get('print_speeds') or {})
         placeholder = not (given.get('print') and given.get('travel'))
         doc = export_job(cached[0], PrintSpeeds.from_dict(given), name=(name or '').strip() or None,
-                         placeholder_speeds=placeholder)
-    except (AssemblyError, ExportError, PlanError, KeyError, ValueError, TypeError) as e:
+                         placeholder_speeds=placeholder, machine_profile=data.get('machine_profile'))
+    except (AssemblyError, ExportError, PlanError, KeyError, ValueError, TypeError) as e:   # (incl. a bad machine profile)
         return jsonify({'error': str(e)}), 400
     return jsonify({'job': doc, 'filename': job_filename(name), 'executable': doc['executable'],
-                    'lines': sum(len(L['gcode']) for L in doc['lifts']), 'placeholder_speeds': placeholder})
+                    'lines': sum(len(L['gcode']) for L in doc['lifts']), 'placeholder_speeds': placeholder,
+                    'preflight': doc.get('preflight'), 'requirements': doc['requirements']})
 
 
 @bp.route('/api/assembly/print_plan/cancel', methods=['POST'])

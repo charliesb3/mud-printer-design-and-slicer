@@ -711,3 +711,22 @@ html, body {
 .override-row { margin: 6px 0 4px; }
 .override-value { font-size: 1.5em; min-width: 90px; }
 .override-buttons .ctrl-btn { min-height: 44px; padding: 6px 2px; }
+
+/* Machine / Printer profile (2026-10-15) */
+.printer-chip { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 12px;
+                font-size: 0.75em; padding: 3px 10px; cursor: pointer; min-height: 28px; }
+.printer-chip.unset { color: var(--amber); }
+.printer-grid { display: grid; grid-template-columns: 180px 160px; gap: 6px 10px; align-items: center; font-size: 0.88em; margin: 8px 0; }
+.printer-grid input { min-height: 38px; background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+                      border-radius: 6px; padding: 4px 8px; font-size: 1em; }
+.job-preflight { border-radius: 6px; padding: 8px 10px; margin: 6px 0; font-size: 0.84em; border: 1px solid var(--border); }
+.job-preflight.ok { border-color: #14532d; }
+.job-preflight.block { border: 2px solid var(--red); background: #2a0f0f; }
+.job-preflight.warn { border-color: var(--amber); }
+.preflight-title { font-weight: 800; }
+.job-preflight.block .preflight-title { color: var(--red); text-transform: uppercase; }
+.job-preflight.ok .preflight-title { color: var(--green); }
+.job-preflight.warn .preflight-title { color: var(--amber); }
+.preflight-list { margin: 4px 0 0 16px; }
+.preflight-list li.fail { color: var(--red); } .preflight-list li.warn { color: var(--amber); }
+.preflight-list li.note { color: var(--text-muted); list-style: '— '; }

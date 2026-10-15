@@ -99,7 +99,7 @@ function resizeCanvas() {
   const size = Math.min(wrap.clientWidth - 32, wrap.clientHeight - 32, 800);
   canvas.width = size;
   canvas.height = size;
-  repaint();
+  if (view.home) viewReset(); else repaint();
 }
 window.addEventListener('resize', resizeCanvas);
 
@@ -112,8 +112,11 @@ const WORLD = 400;
 
 // VIEW (zoom / pan) — part of the world ↔ canvas transform, so every hit
 // test, drag and snap works at any zoom. View only: never geometry.
-// zoom 1, offset 0 = "100 %" (the whole 400 in workspace fits the canvas).
-const view = { z: 1, px: 0, py: 0 };
+// zoom 1, offset 0 = the whole 400 in workspace fits the canvas. The HOME
+// view ("100 %", 2026-10-15) frames the project's printer envelope instead
+// (_homeView); the zoom readout is relative to it. `home` = still there (it
+// follows canvas resizes and printer-profile changes).
+const view = { z: 1, px: 0, py: 0, home: false };
 const VIEW_MIN = 0.25, VIEW_MAX = 24;
 
 function _viewScale() { return canvas.width / WORLD * view.z; }     // px per inch
@@ -136,11 +139,24 @@ function _applyViewTolerances() {
 
 function setView(z, px, py) {
   view.z = Math.max(VIEW_MIN, Math.min(VIEW_MAX, z));
-  view.px = px; view.py = py;
+  view.px = px; view.py = py; view.home = false;
   _applyViewTolerances();
   const el = document.getElementById('zoom-readout');
-  if (el) el.textContent = Math.round(view.z * 100) + '%';
+  if (el) el.textContent = Math.round(view.z / _homeView().z * 100) + '%';
   repaint();
+}
+
+// the home view: the printer envelope [0, X] × [0, Y] (from the print
+// origin) centred with an 8 % margin; the whole workspace if no extents
+const HOME_MARGIN = 0.08;
+function _homeView() {
+  const p = typeof machineProfile === 'function' ? machineProfile() : null;
+  if (!(p && p.x_extent > 0 && p.y_extent > 0)) return { z: 1, px: 0, py: 0 };
+  const s0 = canvas.width / WORLD;
+  const z = Math.max(VIEW_MIN, Math.min(VIEW_MAX, Math.min(canvas.width * (1 - 2 * HOME_MARGIN) / (p.x_extent * s0),
+                                                           canvas.height * (1 - 2 * HOME_MARGIN) / (p.y_extent * s0))));
+  const s = s0 * z;
+  return { z, px: canvas.width / 2 - p.x_extent / 2 * s, py: canvas.height / 2 - (WORLD - p.y_extent / 2) * s };
 }
 
 // zoom by `factor` keeping the world point under canvas point (cx, cy) fixed
@@ -153,7 +169,11 @@ function zoomAt(cx, cy, factor) {
 
 function panBy(dx, dy) { setView(view.z, view.px + dx, view.py + dy); }
 
-function viewReset() { setView(1, 0, 0); }        // "100 %"
+function viewReset() {                            // "100 %" = home: the printer envelope
+  const h = _homeView();
+  setView(h.z, h.px, h.py);
+  view.home = true;
+}
 
 // Fit: frame the current print / design geometry
 function viewFit() {
@@ -475,12 +495,181 @@ function drawHandle(wx, wy, shape) {
 }
 
 // ---------------------------------------------------------------------------
+// MACHINE PROFILE (2026-10-15) — the printer this PROJECT is designed for
+// (authoring state, saved in the .muddesign; design_proto/machine_profile.py
+// is the server side). A REFERENCE envelope and a CHECK, never a constraint:
+// nothing is clipped, snapped or resized; designs may exceed it and are
+// warned. The printer controller keeps its OWN profile of the physical
+// machine — the .mudjob only carries what this one assumed.
+// Envelope = [0, X] × [0, Y] from the print origin (provisional convention:
+// only the job's SIZE fails; its placement relative to the origin warns).
+// Z travel per frame is ONE value with the Assembly's planning setting
+// (machine.max_z_travel): read and written through it.
+// ---------------------------------------------------------------------------
+const MACHINE_DIMENSIONS = ['x_extent', 'y_extent', 'max_build_z', 'z_travel_per_frame'];
+const MACHINE_ENVELOPE_COLOR = 'rgba(170,176,186,0.55)';
+function machineDefaultProfile(z) {
+  return { version: 1, name: 'Mud printer (provisional)', units: 'in', x_extent: 120, y_extent: 120,
+           max_build_z: null, z_travel_per_frame: z || 18, provisional: ['x_extent', 'y_extent'],
+           envelope_origin: 'print_origin' };
+}
+// the project's profile, its Z travel per frame = the Assembly's maximum Z travel
+function machineProfile() {
+  const base = (typeof project !== 'undefined' && project.machine_profile) || machineDefaultProfile();
+  const z = typeof _asmMachine === 'function' ? _asmMachine().max_z_travel : base.z_travel_per_frame;
+  return { ...base, z_travel_per_frame: z };
+}
+function setMachineField(field, v) {
+  if (field === 'name') { project.machine_profile = { ...machineProfile(), name: String(v || '').trim() }; return _machineChanged(); }
+  const x = v === '' || v === null ? null : parseFloat(v);
+  if (x !== null && !(isFinite(x) && x > 0)) { setStatus('Machine profile: values must be positive numbers (or empty = not set).'); return _machineChanged(); }
+  if (field === 'z_travel_per_frame') {                     // the Assembly's planning setting (undoable, replans)
+    if (x === null) { setStatus('Z travel per frame cannot be empty (the planner needs it).'); return _machineChanged(); }
+    if (typeof asmSetMachine === 'function') asmSetMachine('max_z_travel', x);
+  }
+  const p = { ...machineProfile(), [field]: x };
+  p.provisional = (p.provisional || []).filter(k => k !== field);   // an entered value is no longer a placeholder
+  project.machine_profile = p;
+  _machineChanged();
+}
+function _machineChanged() {
+  renderMachinePanel();
+  if (view.home) viewReset(); else repaint();     // the home view follows the envelope
+  if (typeof asmRender === 'function' && typeof currentWorkspace !== 'undefined' && currentWorkspace === 'assembly') asmRender();
+  if (typeof wsysRender === 'function' && typeof currentWorkspace !== 'undefined' && currentWorkspace === 'wallsystems') wsysRender();
+  if (typeof simRenderPanels === 'function' && typeof sim !== 'undefined' && sim.data) { simRenderPanels(); simDraw(); }
+}
+
+// the envelope as 3D segments (world, inches): the X × Y rectangle at
+// zBase, and with `withZ` the maximum building Z box
+function machineEnvelopeSegments(p, withZ, zBase) {
+  if (!(p && p.x_extent > 0 && p.y_extent > 0)) return [];
+  const X = p.x_extent, Y = p.y_extent, z0 = zBase || 0;
+  const rect = z => [[[0, 0, z], [X, 0, z]], [[X, 0, z], [X, Y, z]], [[X, Y, z], [0, Y, z]], [[0, Y, z], [0, 0, z]]];
+  const segs = rect(z0);
+  if (withZ && p.max_build_z > 0) {
+    segs.push(...rect(p.max_build_z));
+    for (const [x, y] of [[0, 0], [X, 0], [X, Y], [0, Y]]) segs.push([[x, y, 0], [x, y, p.max_build_z]]);
+  }
+  return segs;
+}
+// draw it on context g through projector P(x, y, z) — subtle, dashed, labelled
+function drawMachineEnvelope(g, P, p, opts) {
+  opts = opts || {};
+  const segs = machineEnvelopeSegments(p, !!opts.z, opts.zBase);
+  if (!segs.length) return;
+  g.save();
+  g.strokeStyle = MACHINE_ENVELOPE_COLOR;
+  g.lineWidth = 1;
+  if (g.setLineDash) g.setLineDash([3, 6]);
+  g.beginPath();
+  for (const [a, b] of segs) {
+    const qa = P(a[0], a[1], a[2]), qb = P(b[0], b[1], b[2]);
+    g.moveTo(qa[0], qa[1]); g.lineTo(qb[0], qb[1]);
+  }
+  g.stroke();
+  if (g.setLineDash) g.setLineDash([]);
+  if (opts.label !== false) {
+    const q = P(p.x_extent, p.y_extent, opts.zBase || 0);
+    const prov = (p.provisional || []).length ? ' (provisional)' : '';
+    g.fillStyle = 'rgba(170,176,186,0.75)'; g.font = '10px monospace';
+    g.fillText(`printer ${p.x_extent}×${p.y_extent} in${p.max_build_z ? ` · max Z ${p.max_build_z}` : ''}${prov}`, q[0] + 4, q[1] - 4);
+  }
+  g.restore();
+}
+
+// THE CHECK (same rules as machine_profile.preflight on the server): the
+// job's SIZE against the extents fails; placement outside [0, X] × [0, Y]
+// warns; building Z and the tallest lift fail; unset values are unchecked
+function machinePreflight(req, p) {
+  const TOL = 1e-4, prov = new Set(p.provisional || []), checks = [];
+  const tag = k => (prov.has(k) ? ' (provisional machine value)' : '');
+  const b = req && req.xy_bounds;
+  for (const [axis, ext] of [['x', 'x_extent'], ['y', 'y_extent']]) {
+    if (!b) continue;
+    const lim = p[ext], lo = b['min_' + axis], hi = b['max_' + axis], size = Math.round((hi - lo) * 1e4) / 1e4;
+    const A = axis.toUpperCase();
+    if (lim == null) { checks.push({ id: axis, status: 'unchecked', required: size, limit: null, message: `${A} extent: not set in the machine profile — not checked.` }); continue; }
+    if (size > lim + TOL) checks.push({ id: axis, status: 'fail', required: size, limit: lim, message: `Exceeds ${A}: the job spans ${size} in, the printer ${lim} in.` + tag(ext) });
+    else if (lo < -TOL || hi > lim + TOL)
+      checks.push({ id: axis, status: 'warn', required: size, limit: lim, message: `${A}: the job fits (${size} of ${lim} in) but lies at ${lo} – ${hi} in from the print origin, outside the envelope placed there — set the origin so that it fits.` });
+    else checks.push({ id: axis, status: 'ok', required: size, limit: lim, message: `${A}: the job spans ${size} of ${lim} in.` + tag(ext) });
+  }
+  const zc = (id, req0, lim, k, fail, ok, unset) => {
+    if (lim == null) return { id, status: 'unchecked', required: req0, limit: null, message: `${unset}: not set in the machine profile — not checked.` };
+    return req0 > lim + TOL ? { id, status: 'fail', required: req0, limit: lim, message: fail + tag(k) }
+                           : { id, status: 'ok', required: req0, limit: lim, message: ok + tag(k) };
+  };
+  const H = (req && req.building_height) || 0, Lh = (req && req.max_lift_height) || 0;
+  checks.push(zc('z', H, p.max_build_z, 'max_build_z', `Exceeds the maximum building Z: the building is ${H} in tall, the printer allows ${p.max_build_z} in.`,
+                 `Building height ${H} of ${p.max_build_z} in.`, 'Maximum building Z'));
+  checks.push(zc('lift', Lh, p.z_travel_per_frame, 'z_travel_per_frame', `A lift needs ${Lh} in of Z travel; one frame position gives ${p.z_travel_per_frame} in.`,
+                 `Tallest lift ${Lh} of ${p.z_travel_per_frame} in Z travel per frame.`, 'Z travel per frame'));
+  return { fits: !checks.some(c => c.status === 'fail'), warnings: checks.filter(c => c.status === 'warn').length,
+           unchecked: checks.filter(c => c.status === 'unchecked').map(c => c.id), checks };
+}
+function _boundsOf(lists) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const pts of lists) for (const q of pts || []) {
+    if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];
+  }
+  return isFinite(x0) ? { min_x: x0, min_y: y0, max_x: x1, max_y: y1 } : null;
+}
+// the Designer's own geometry (the design being edited, design coordinates)
+function designerBounds() {
+  const lists = [];
+  for (const c of printable || []) lists.push(c.pts);
+  for (const e of envelopeLines || []) lists.push(e.pts);
+  for (const sp of layer.source_paths || []) lists.push(sp.points);
+  return _boundsOf(lists);
+}
+// a one-line warning for a view, or '' when it fits / nothing is set
+function machineWarning(req, p) {
+  const pf = machinePreflight(req, p);
+  const bad = pf.checks.filter(c => c.status === 'fail' || c.status === 'warn');
+  return bad.length ? bad.map(c => c.message).join(' · ') : '';
+}
+function _drawDesignerMachine() {
+  const p = machineProfile();
+  drawMachineEnvelope(ctx, (x, y) => worldToCanvas(x, y), p, { z: false });
+  const b = designerBounds();
+  const w = b ? machineWarning({ xy_bounds: b }, { ...p, max_build_z: null, z_travel_per_frame: null }) : '';
+  if (w) {
+    ctx.save(); ctx.font = '11px monospace'; ctx.fillStyle = '#ffb366';
+    ctx.fillText('⚠ ' + w, 10, canvas.height - 12);
+    ctx.restore();
+  }
+}
+
+// the Printer panel (header): edit the project's machine profile
+function toggleMachinePanel() {
+  const el = document.getElementById('machine-panel');
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  renderMachinePanel();
+}
+function renderMachinePanel() {
+  const p = machineProfile();
+  const btn = document.getElementById('btn-machine');
+  if (btn) btn.textContent = `Printer: ${p.name || 'unnamed'}`;
+  const el = document.getElementById('machine-panel');
+  if (!el || el.style.display === 'none') return;
+  const set = (id, v) => { const f = document.getElementById(id); if (f && document.activeElement !== f) f.value = v == null ? '' : v; };
+  set('mp-name', p.name); set('mp-x', p.x_extent); set('mp-y', p.y_extent);
+  set('mp-zmax', p.max_build_z); set('mp-zframe', p.z_travel_per_frame);
+  const prov = document.getElementById('mp-prov');
+  if (prov) prov.textContent = (p.provisional || []).length
+    ? 'Provisional (placeholders, not measured): ' + p.provisional.map(k => k.replace(/_/g, ' ')).join(', ') + '.' : '';
+}
+
+// ---------------------------------------------------------------------------
 // Repaint
 // ---------------------------------------------------------------------------
 
 function repaint() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawGrid();
+  _drawDesignerMachine();
   // while a geometry edit is resolving, the previous result is drawn DIMMED
   // (immediate acknowledgement: what is shown is not yet the new value)
   const stale = _geomPending;
@@ -513,26 +702,56 @@ function repaint() {
 
 const STALE_ALPHA = 0.4;
 
+// PHYSICAL GRID (2026-10-15): aligned to the print origin (world 0, 0);
+// one major square = 12 in = 1 ft (a 120 in envelope = 10 × 10 squares).
+// Zoomed out, the major step grows in whole feet (2, 5, 10, 20, 50 ft);
+// zoomed in, faint subdivisions of the foot (6, 3, 1 in) appear. View only.
+const GRID_COLOR = '#252525', GRID_MINOR_COLOR = '#1f1f1f';
+const GRID_MAJORS = [12, 24, 60, 120, 240, 600], GRID_MINORS = [1, 3, 6];
+function gridSteps(ppi) {                         // ppi = screen px per inch
+  const major = GRID_MAJORS.find(m => m * ppi >= 28) || GRID_MAJORS[GRID_MAJORS.length - 1];
+  const minor = major === 12 ? (GRID_MINORS.find(m => m * ppi >= 22) || null) : (12 * ppi >= 9 ? 12 : null);
+  return { major, minor };
+}
+function gridLabel(inches) { return inches % 12 === 0 ? `${inches / 12} ft` : `${inches} in`; }
+// draw it on context g for an axis-aligned 2D projector P(x, y) → [px, py]
+// over the W × H canvas; returns the steps used
+function drawPhysicalGrid(g, P, W, H, opts) {
+  opts = opts || {};
+  const o = P(0, 0), ax = P(1, 0)[0] - o[0], ay = P(0, 1)[1] - o[1];
+  if (!(Math.abs(ax) > 1e-9 && Math.abs(ay) > 1e-9)) return null;
+  const ppi = Math.abs(ax), st = gridSteps(ppi);
+  const xa = (0 - o[0]) / ax, xb = (W - o[0]) / ax, ya = (0 - o[1]) / ay, yb = (H - o[1]) / ay;
+  const x0 = Math.min(xa, xb), x1 = Math.max(xa, xb), y0 = Math.min(ya, yb), y1 = Math.max(ya, yb);
+  const lines = (step, color) => {
+    if ((x1 - x0) / step + (y1 - y0) / step > 600) return;
+    g.strokeStyle = color;
+    g.beginPath();
+    for (let wx = Math.ceil(x0 / step) * step; wx <= x1; wx += step) {
+      if (color === GRID_MINOR_COLOR && wx % st.major === 0) continue;
+      const cx = Math.round(o[0] + wx * ax) + 0.5; g.moveTo(cx, 0); g.lineTo(cx, H);
+    }
+    for (let wy = Math.ceil(y0 / step) * step; wy <= y1; wy += step) {
+      if (color === GRID_MINOR_COLOR && wy % st.major === 0) continue;
+      const cy = Math.round(o[1] + wy * ay) + 0.5; g.moveTo(0, cy); g.lineTo(W, cy);
+    }
+    g.stroke();
+  };
+  g.save();
+  g.lineWidth = 1;
+  if (g.setLineDash) g.setLineDash([]);
+  if (st.minor) lines(st.minor, GRID_MINOR_COLOR);
+  lines(st.major, GRID_COLOR);
+  if (opts.label !== false) {                    // the scale, bottom right
+    g.fillStyle = '#6a6a6a'; g.font = '10px monospace'; g.textAlign = 'right';
+    g.fillText(`grid ${gridLabel(st.major)}` + (st.minor ? ` · ${gridLabel(st.minor)}` : ''), W - 8, H - 8);
+  }
+  g.restore();
+  return st;
+}
+
 function drawGrid() {
-  const step = 40;
-  ctx.save();
-  ctx.strokeStyle = '#252525';
-  ctx.lineWidth = 1;
-  for (let wx = 0; wx <= WORLD; wx += step) {
-    const [cx] = worldToCanvas(wx, 0);
-    ctx.beginPath();
-    ctx.moveTo(cx, 0);
-    ctx.lineTo(cx, canvas.height);
-    ctx.stroke();
-  }
-  for (let wy = 0; wy <= WORLD; wy += step) {
-    const [, cy] = worldToCanvas(0, wy);
-    ctx.beginPath();
-    ctx.moveTo(0, cy);
-    ctx.lineTo(canvas.width, cy);
-    ctx.stroke();
-  }
-  ctx.restore();
+  drawPhysicalGrid(ctx, worldToCanvas, canvas.width, canvas.height);
 }
 
 function _pathCanvasPts(path) {
@@ -6077,6 +6296,7 @@ const project = {
   hist: {},                 // design id → its undo history
   name: '',                 // the project's name (project file)
   wall_systems: [],         // the PROJECT's printable constructions (Wall Systems workspace; wall_groups.py)
+  machine_profile: null,    // the project's printer (MACHINE PROFILE; null = the provisional default)
 };
 let _designCounter = 1;
 
@@ -6354,6 +6574,7 @@ async function projectState() {
                 id_counter: _idCounter, design_counter: _designCounter },
     assembly: window.AssemblyProject ? window.AssemblyProject.exportState() : null,
     wall_systems: JSON.parse(JSON.stringify(project.wall_systems || [])),   // (printable construction)
+    machine_profile: machineProfile(),                                       // (schema 5)
   };
 }
 
@@ -6453,6 +6674,7 @@ function applyProject(res, fileName) {
   project.active = D.active_design;
   project.hist = {};
   project.wall_systems = clone(P.wall_systems || []);      // the PROJECT's printable constructions
+  project.machine_profile = clone(P.machine_profile || machineDefaultProfile());   // the project's printer
   project.name = P.name || (fileName || '').replace(/\.[^.]*$/, '');
   _idCounter = D.id_counter;
   _designCounter = D.design_counter;
@@ -6484,6 +6706,7 @@ function applyProject(res, fileName) {
   if (window.WallSystemsProject) window.WallSystemsProject.reset();   // generation / history / selection go
   if (window.SimulationProject) window.SimulationProject.reset();     // the old plan / playback / selection go
   _fitAfterOpen = true;
+  renderMachinePanel();
   _histRestoring = true;                   // (the opened state is consistent as saved)
   try { scheduleRefresh({ supersede: true }); } finally { _histRestoring = false; }
   repaint();
@@ -6517,7 +6740,8 @@ function newProject() {
     name: '',
     designer: { designs: [{ id: 'base', name: 'Base', parent: null, document: JSON.parse(_PRISTINE_LAYER) }],
                 active_design: 'base', id_counter: 1, design_counter: 1 },
-    assembly: window.AssemblyProject ? window.AssemblyProject.pristine() : null, wall_systems: [] } }, '');
+    assembly: window.AssemblyProject ? window.AssemblyProject.pristine() : null, wall_systems: [],
+    machine_profile: machineDefaultProfile() } }, '');
   _fitAfterOpen = false;
   viewReset();
   if (currentWorkspace !== 'designer') setWorkspace('designer');
@@ -6575,6 +6799,8 @@ function _syncDesignerMode() {
 }
 
 async function init() {
+  renderMachinePanel();
+  view.home = true;                        // open on the printer envelope
   resizeCanvas();
   _syncDesignerMode();
 

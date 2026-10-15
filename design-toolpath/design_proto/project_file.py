@@ -22,8 +22,12 @@ AUTHORING state of the Design + Assembly application:
           "header_counter": 2
         },
         "wall_systems": [{id, name, type, params, web,        # schema 2: the printable
-                          members, groups, designs}]          # constructions (wall_groups.py);
-      }                                                       # the designs hold Wall GROUPS
+                          members, groups, designs}],         # constructions (wall_groups.py);
+                                                              # the designs hold Wall GROUPS
+        "machine_profile": {name, units, x_extent, y_extent,  # schema 5: the machine this
+                            max_build_z, z_travel_per_frame,  # project is designed for
+                            provisional, …}                   # (machine_profile.py)
+      }
     }
 
 What is stored are the AUTHORITATIVE EDITABLE INPUTS, in the forms the
@@ -58,7 +62,7 @@ import re
 from datetime import datetime, timezone
 
 FORMAT = 'mud-printer-project'
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 EXTENSION = '.muddesign'
 GENERATOR = 'design_proto'
 MAX_BYTES = 200 * 1024 * 1024          # (a sanity bound, far above real projects)
@@ -128,7 +132,22 @@ def _v3_to_v4(data: dict) -> dict:
     return data
 
 
-MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
+def _v4_to_v5(data: dict) -> dict:
+    """Schema 5 (2026-10-15): the project's MACHINE PROFILE. Older projects get
+    the provisional default profile, its Z travel per frame taken from the
+    Assembly's planning setting (`machine.max_z_travel`, 18 in when unset)."""
+    from machine_profile import default_profile
+    P = data.get('project')
+    if not isinstance(P, dict):
+        return data                       # (damaged: validation reports it)
+    if not isinstance(P.get('machine_profile'), dict):
+        st = (P.get('assembly') or {}).get('state') or {}
+        z = (st.get('machine') or {}).get('max_z_travel') if isinstance(st, dict) else None
+        P['machine_profile'] = default_profile(z if isinstance(z, (int, float)) and z > 0 else 18.0)
+    return data
+
+
+MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5}
 
 
 def migrate(data: dict) -> tuple[dict, int]:
@@ -308,6 +327,29 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
     header_counter = max(_counter(A.get('header_counter'), 'header_counter'),
                          _num_suffix_max([getattr(o, 'id', '') for o in asm.objects], 'h'))
     P['assembly'] = {'state': st, 'header_counter': header_counter}
+
+    # ---- Machine profile (schema 5) -------------------------------------------------
+    # ONE Z-travel-per-frame value: the Assembly's planning setting
+    # (machine.max_z_travel) and the profile's z_travel_per_frame are the same
+    # quantity — the Assembly value wins (it is what the planner used).
+    from machine_profile import MachineProfileError, default_profile, validate as _vmp
+    mp = P.get('machine_profile')
+    asm_z = asm.machine.get('max_z_travel') if isinstance(asm.machine, dict) else None
+    if mp is None:
+        mp = default_profile(asm_z or 18.0)
+    try:
+        mp = _vmp(mp)
+    except MachineProfileError as e:
+        raise ProjectFileError(f'The machine profile cannot be read: {e}')
+    if asm_z and mp['z_travel_per_frame'] is not None and abs(mp['z_travel_per_frame'] - asm_z) > 1e-9:
+        warnings.append(f'The machine profile Z travel per frame ({mp["z_travel_per_frame"]:g} in) differed '
+                        f'from the Assembly\'s maximum Z travel ({asm_z:g} in); the Assembly value is used.')
+        mp['z_travel_per_frame'] = float(asm_z)
+    elif not asm_z and mp['z_travel_per_frame'] is not None and abs(mp['z_travel_per_frame'] - 18.0) > 1e-9:
+        # the Assembly relied on the planner default (18 in): it takes the profile's value
+        st['machine'] = {**(st.get('machine') or {}), 'max_z_travel': mp['z_travel_per_frame']}
+        P['assembly']['state'] = st
+    P['machine_profile'] = mp
     P['name'] = name
     return P, docs, warnings
 

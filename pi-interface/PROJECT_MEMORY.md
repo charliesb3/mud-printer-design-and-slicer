@@ -358,6 +358,35 @@ the Designer's real export `designer-export-3-lifts.mudjob`), never by
 cross-importing. (The tests read `../contracts`; on a Pi with only
 `pi-interface/` deployed those tests need the contract folder copied too.)
 
+### Machine profile + job preflight (2026-10-15; manually reviewed, checkpoint 2026-10-15)
+Machine profiles are independent configuration on each side. `.mudjob` communicates job assumptions and requirements; it does not synchronize applications.
+
+- THIS controller's profile of the physical printer: `app/machine_profile.py`,
+  saved to `MACHINE_PROFILE_PATH` (default `machine_profile.json`,
+  gitignored; atomic write; a damaged file → defaults + a reported problem).
+  Defaults: name "Unconfigured printer", inches, X / Y / max building Z
+  unset (not checked), Z travel per frame 18 in. Edited in the Machine /
+  Printer settings section (opened from the status-bar printer chip, not in
+  the operating columns) via WS `set_machine_profile`; refused while a job
+  runs / holds / awaits a reposition.
+- Preflight (`app/jobs/preflight.py`, per job, recomputed on change): XY
+  from ALL G-code motion, building Z from lift / layer metadata, lift need
+  from the effective lifts (layers × layer thickness); size > extent =
+  fail, placement outside [0, X] × [0, Y] from the origin = warn, unset =
+  unchecked. The job's `prepared_for` / `preflight` / `requirements` are
+  parsed (must be objects) and only REPORTED: notes for a Designer "fits"
+  that this check contradicts, prepared-for dimensions differing > 0.5 in,
+  declared bounds differing from the G-code.
+- Blocking: a native executable `.mudjob` with any failing configured check
+  cannot Start (Start disabled with the reason; server refuses too) until
+  the job or this profile changes. External G-code: informational only.
+- Adaptive lift ends use this profile's Z travel per frame when set
+  (`CurrentJob.max_z_travel()`), else the job's planned value.
+- View: the envelope dashed (Fit frames it); a job reaching outside it gets
+  a red dashed bounds box + "JOB OUTSIDE THE PRINTER ENVELOPE"; the path is
+  never altered. Z stays XY-only / manual. Older `.mudjob` files load as
+  before. Tests: `tests/test_machine.py` (contract fixture files only).
+
 ### One responsive UI, synchronized clients (decided 2026-10-14)
 There is ONE web UI — not separate desktop and touchscreen interfaces.
 Developed/tested on the computer first; later the Pi touchscreen shows the
@@ -528,6 +557,11 @@ with waits separated). UI checked only headlessly (render code under Node).
 
 ## Open Questions
 
+- Envelope convention: [0, X] × [0, Y] from the print origin is provisional
+  (where the operator sets the origin on the frame is undecided); should
+  placement outside it block, or only size? (Currently: size blocks,
+  placement warns.) Real printable X / Y and max building Z: unmeasured.
+
 - What is the correct JOG_SPEED_MM_MIN for this machine's scale?
   (Must be established by physical testing before jogging is enabled)
 - What serial port does the Arduino appear as on the Pi (ttyUSB0 or ttyACM0)?
@@ -664,6 +698,8 @@ Lift-aware job work:
   consider using `Bf:` ($10 buffer reporting) to correct progress for the
   planner lead.
 - Third-party G-code compatibility / preflight (later, not started).
+- Enter the real machine dimensions in Machine / Printer settings once
+  measured (max building Z unknown); machine-profile pass reviewed 2026-10-15.
 
 Hardware-facing work (not started; needs `../CONTROL_BOX_HARDWARE.md` VERIFY
 items and the touchscreen pin usage first): Z control via MD13S (dead-man,
@@ -698,6 +734,10 @@ behaviour definition.
 ---
 
 ## Last Updated
+
+2026-10-15 — machine profile + job preflight (manually reviewed,
+checkpoint 2026-10-15): this printer's own persisted profile, authoritative preflight,
+incompatible native jobs cannot Start, envelope in the view. 289 tests.
 
 2026-10-15 — diagnosed: the Pi top view (and the Designer Simulation's drag
 LOD) cut corners by stride-decimating vertices; PrintPlan → .mudjob and the

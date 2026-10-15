@@ -218,6 +218,7 @@ class TestOperatorProject:
         doc = export_job(plan4, PrintSpeeds.from_dict({}), name='test 3', placeholder_speeds=True)
         job = json.loads(TEST4_JOB.read_text())
         doc['source'].pop('generated_at'); job['source'].pop('generated_at')
+        doc.pop('requirements')            # (added to every export 2026-10-15, after test 4 was exported)
         assert doc == job
 
     @pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')

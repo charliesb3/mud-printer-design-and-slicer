@@ -16,6 +16,7 @@ from . import config
 from .grbl.parser import StatusReport
 
 from .grbl.codes import PINS, SETTINGS, describe_alarm
+from . import machine_profile as _mp
 
 if TYPE_CHECKING:
     from .jobs.current_job import CurrentJob
@@ -99,6 +100,10 @@ class AppState:
         self.offsets: dict[str, str] = {}             # $# → [G54:…] … [PRB:…]
         self.events: deque = deque(maxlen=30)         # alarms, errors, resets, messages
         self.setup = MachineSetup()
+        # THIS controller's machine profile (loaded from MACHINE_PROFILE_PATH at
+        # startup; authoritative for job preflight) + a load problem, if any
+        self.machine_profile: dict = _mp.default_profile()
+        self.machine_profile_problem: Optional[str] = None
         self._console: deque = deque(maxlen=config.CONSOLE_MAX_LINES)
 
     # --- GRBL state updates ---
@@ -221,6 +226,8 @@ class AppState:
             "jog_warning": jog_warning,
             "job": self.job.to_dict() if self.job else None,
             "setup": self._setup_dict(),
+            "machine": {"profile": self.machine_profile, "envelope": _mp.envelope(self.machine_profile),
+                        "problem": self.machine_profile_problem},
             "grbl": {
                 "overrides": ({"feed": self.overrides[0], "rapid": self.overrides[1], "spindle": self.overrides[2]}
                               if self.overrides else None),

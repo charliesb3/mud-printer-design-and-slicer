@@ -3024,6 +3024,26 @@ function asmProjector(stack, W, H) {
   return (x, y, z) => { const [a, b] = rot(x, y, z); return [W / 2 + a * s + px, H / 2 - b * s + py]; };
 }
 
+// the placed stack's XY bounds (each design's bbox under each instance
+// transform — what asmProjector fits) and its height: for the machine check
+function _asmStackRequirements(stack) {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  const bb = {};
+  for (const L of stack) {
+    const gk = L.geometry_key || L.design_id;
+    if (!(gk in bb)) bb[gk] = _asmBBox(L.basePolylines || L.polylines);
+    const b = bb[gk];
+    if (!b) continue;
+    for (const T of [L.transform, ...Object.values(L.parts || {})])
+      for (const [x, y] of [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]) {
+        const [px, py] = _asmPlace(T, x, y);
+        x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+      }
+  }
+  return { xy_bounds: isFinite(x0) ? { min_x: x0, min_y: y0, max_x: x1, max_y: y1 } : null,
+           building_height: stack.length ? stack[stack.length - 1].z_top : 0, max_lift_height: 0 };
+}
+
 function asmDrawPreview() {
   const cv = document.getElementById('asm-canvas');
   const wrap = document.getElementById('asm-preview-wrap');
@@ -3106,6 +3126,9 @@ function asmDrawPreview() {
   _asmDrawSupport(g, P);
   _asmDrawCenters(g, P, stack);
   _asmDrawProfiles(g, P);
+  // MACHINE: the printer envelope (a reference — the stack is never changed to fit)
+  const mp = typeof machineProfile === 'function' ? machineProfile() : null;
+  if (mp) drawMachineEnvelope(g, P, mp, { z: true });
   // Z ruler: section boundaries with their Z and design
   g.font = '10px monospace';
   g.textAlign = 'left';
@@ -3124,6 +3147,15 @@ function asmDrawPreview() {
   }
   g.fillStyle = '#888';
   g.fillText('z 0', lx + 14, bar(0) + 3);
+  if (mp && mp.max_build_z > 0) {                  // the printer's maximum building Z on the ruler
+    const zm = Math.min(mp.max_build_z, zTop * 1.02), over = zTop > mp.max_build_z + 1e-4;
+    g.strokeStyle = over ? '#ff6b6b' : 'rgba(170,176,186,0.75)';
+    g.beginPath(); g.moveTo(lx, bar(zm)); g.lineTo(lx + 12, bar(zm)); g.stroke();
+    g.fillStyle = over ? '#ff6b6b' : '#999';
+    g.fillText(`max Z ${_fmt(mp.max_build_z)}${mp.max_build_z < zTop ? '' : ' (above)'}`, lx + 14, bar(zm) - 6);
+  }
+  const mw = mp ? machineWarning(_asmStackRequirements(stack), { ...mp, z_travel_per_frame: null }) : '';
+  if (mw) { g.fillStyle = '#ffb366'; g.fillText('⚠ ' + mw, 14, 32); }
   g.fillText(`${asm.resolved.total_layers} layers · ${_fmt(zTop)} in · layer ${asm.state.layer_height} in` +
              (asm.resolved.geometry === 'envelope' ? ' · wall envelopes (print paths: Print Simulation)' : '') +
              (asm.busy ? ' · building…' : '') +

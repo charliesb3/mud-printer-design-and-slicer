@@ -26,6 +26,8 @@ WebSocket (/ws):
                    height + layer thickness → the safe lift end (Hold to Apply)
     restore_planned_lifts {}
     read_grbl      {what: "settings"|"parser"|"offsets"}  — read-only $$ / $G / $#
+    set_machine_profile {profile}  — THIS printer's machine profile (saved locally;
+                   not while a job runs / holds / awaits a reposition)
     console_send   {command: str}
 
   Server → Client message types:
@@ -73,6 +75,7 @@ from .. import config
 from ..grbl.communicator import GRBLCommunicator
 from ..jobs.current_job import CurrentJob, JobFormatError, load_job_from_file
 from ..jobs.motion import path_payload
+from .. import machine_profile as machine_profile_mod
 from ..jobs.runner import DRAIN_COMMAND, JobRunner
 from ..state import AppState
 from .ws import ConnectionManager
@@ -253,6 +256,11 @@ async def _start_job() -> Optional[str]:
         return f"GRBL must be Idle to start (it is {_state.grbl_state})."
     if _state and _state.setup.moving:
         return "A positioning move is in progress."
+    pf = _current_job.to_dict().get("preflight") if _current_job.printer else None
+    if pf and pf.get("blocking"):
+        # this printer's own check (authoritative) — whatever the job claims
+        why = "; ".join(c["message"] for c in pf["checks"] if c["status"] == "fail")
+        return f"This job does not fit printer \"{pf.get('profile_name')}\": {why} Fix the job or this printer's profile."
     origin_feed = None
     if _current_job.kind == "building":
         # A building job is in work coordinates from the print origin and
@@ -599,7 +607,26 @@ async def broadcast_state() -> None:
 # ------------------------------------------------------------------ #
 
 # Messages that change machine/job state: broadcast to all clients right after.
-_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition",
+def _set_machine_profile(profile) -> Optional[str]:
+    """Save THIS printer's profile (authoritative for job preflight)."""
+    if _state is None:
+        return "Not ready."
+    if _current_job and _current_job.is_active:
+        return "The printer profile cannot change while a job is running, held or awaiting a reposition."
+    try:
+        p = machine_profile_mod.save(config.MACHINE_PROFILE_PATH, profile)
+    except machine_profile_mod.MachineProfileError as exc:
+        return str(exc)
+    except OSError as exc:
+        return f"The profile could not be saved: {exc}"
+    _state.machine_profile, _state.machine_profile_problem = p, None
+    if _current_job:
+        _current_job.printer = p
+    log.info("Machine profile saved: %s", p)
+    return None
+
+
+_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition", "set_machine_profile",
                    "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
                    "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
                    "apply_lift_parameters"}
@@ -647,6 +674,13 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
         refusal = await _feed_override(data.get("step"))
         if refusal:
             await _notify(ws, refusal)
+
+    elif msg_type == "set_machine_profile":
+        refusal = _set_machine_profile(data.get("profile"))
+        if refusal:
+            await _notify(ws, refusal)
+        else:
+            await _notify(ws, f"Printer profile saved: {_state.machine_profile['name']}.", level="info")
 
     elif msg_type == "read_grbl":
         refusal = await _read_grbl(data.get("what"))
@@ -760,6 +794,7 @@ async def upload_gcode(file: UploadFile = File(...)):
     except Exception as exc:
         return {"success": False, "error": f"Could not parse file: {exc}"}
 
+    job.printer = _state.machine_profile if _state else None      # this controller's profile (authoritative)
     _current_job = job
     await broadcast_state()
 

@@ -27,7 +27,9 @@ executable lifts must set units + distance mode before motion and carry no Z
 (display-only, within version 1). Controller feature pass (2026-10-14):
 optional `lift_plan`, `reentry_marks` and per-lift `travel_lines` added
 (within version 1; older files stay valid — a controller simply offers no
-lift-boundary adjustment without `reentry_marks`).
+lift-boundary adjustment without `reentry_marks`). Machine profile pass
+(2026-10-15): optional `requirements`, `prepared_for` and `preflight`
+(within version 1; informational — see "Machine assumptions").
 
 ## Document
 
@@ -74,6 +76,9 @@ UTF-8 JSON, extension `.mudjob`.
 | `machine` | no | what the job assumes, display only (current exports: `axes` "XY", `z` "manual", `extrusion` "manual", `feeds_in_min`) |
 | `xy_bounds` | no | `{min_x, min_y, max_x, max_y}` of every move, in work coordinates (`units`) — shown to the operator; the controller's Outline traces it |
 | `lift_plan` | no | `{target_lift_height, max_z_travel, layer_height}` — the planning targets (`units`; `layer_height` = the nominal thickness when uniform, else null). Display, progress and the controller's lift-height checks |
+| `requirements` | no | what the job needs (`units`): `xy_bounds` (all motion), `print_bounds` (extrusion), `building_height` (highest layer top), `max_lift_height` (tallest lift = Z travel per frame needed), `lifts`, `layers` |
+| `prepared_for` | no | the producer's machine profile the job was prepared against: `name`, `units`, `x_extent`, `y_extent`, `max_build_z`, `z_travel_per_frame` (null = not set), `provisional` (placeholder values), `envelope_origin` |
+| `preflight` | no | the producer's check of `requirements` against `prepared_for`: `fits`, `checks` [{id x / y / z / lift, status ok / warn / fail / unchecked, required, limit, message}], `informational: true` |
 | `reentry_marks` | no | `true`: every `layer_marks` line begins a RE-ENTRY segment (see below), so a controller may pause before any pass |
 
 ### Lift
@@ -106,6 +111,20 @@ version; readers reject versions they do not know.
 - Extrusion is manual and independent: no pump / extrusion commands, and
   travel is not altered for it.
 - Priming is controller operation, never part of the job's toolpath.
+
+### Machine assumptions (2026-10-15)
+
+Machine profiles are independent configuration on each side. `.mudjob`
+communicates job assumptions and requirements; it does not synchronize
+applications. The producer records what it assumed (`prepared_for`), what
+the job needs (`requirements`) and its own informational `preflight`; a
+consumer controlling a physical machine checks the job against ITS OWN
+profile, which is authoritative — it must never treat a producer's
+`preflight.fits` as permission, and it computes the job's needs from the
+job itself (G-code motion, lift / layer Z), using `requirements` only to
+report discrepancies. Envelope convention (provisional): [0, X] × [0, Y]
+from the print origin; a job larger than an extent fails, a job that fits
+but lies outside the envelope placed at the origin warns.
 
 ### Re-entry segments and adjustable lift boundaries
 
@@ -176,6 +195,8 @@ producer that cannot (yet) produce machine instructions.
    reposition, continue the lift into more layers) — same lines, same order.
 4. Progress / time estimates, the 2D path view and Outline (trace
    `xy_bounds`) are derived from the job's own G-code and metadata.
+5. Machine preflight against the controller's own profile; a native job
+   that exceeds a configured limit cannot start (see "Machine assumptions").
 
 ## Fixtures
 
@@ -186,6 +207,10 @@ producer that cannot (yet) produce machine instructions.
   each lift → clean cuts only at the exported boundaries).
 - `fixtures/designer-export-single-wall.mudjob` — a single connected wall,
   12 layers in 4 lifts of 3 (every layer boundary is a clean cut).
+- `fixtures/designer-export-prepared-for.mudjob` — the same wall exported
+  with a machine profile (`prepared_for` "Designer assumption" 120 × 120 in,
+  max building Z 100 in; its `preflight` says it fits): the controller's
+  own, possibly different, profile must decide.
   Both are Design + Toolpath golden tests and Pi import / execution tests. Regenerate with
   `MUDJOB_UPDATE_FIXTURE=1 design_proto/.venv/bin/python -m pytest layer_assembly/tests/test_machine_job.py`
   (from `design-toolpath/`).

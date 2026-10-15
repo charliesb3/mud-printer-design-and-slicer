@@ -37,6 +37,25 @@
   "max_x": 140.0,
   "max_y": 30.0
  },
+ "requirements": {
+  "units": "in",
+  "xy_bounds": {
+   "min_x": 0.0,
+   "min_y": 0.0,
+   "max_x": 140.0,
+   "max_y": 30.0
+  },
+  "print_bounds": {
+   "min_x": 0.0,
+   "min_y": 0.0,
+   "max_x": 140.0,
+   "max_y": 30.0
+  },
+  "building_height": 9.0,
+  "max_lift_height": 3.0,
+  "lifts": 3,
+  "layers": 6
+ },
  "lift_plan": {
   "target_lift_height": 3.0,
   "max_z_travel": 18.0,

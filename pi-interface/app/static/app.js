@@ -162,6 +162,8 @@ function handleState(s) {
   renderProgress(s);
   renderSpeed(s);
   renderParams(s);
+  renderPrinter(s);
+  renderPreflight(s);
   renderView(s);
   renderDiagnostics(s);
 }
@@ -248,7 +250,10 @@ function renderJobSection(s) {
   const building = job.kind === "building";
   const startable = ["ready", "stopped", "completed", "error"].includes(jobState);
   let startWhy = "";
-  if (startable && job.executable !== false && building) {
+  const pfj = job.preflight;
+  if (startable && pfj && pfj.blocking) {
+    startWhy = `Does not fit printer "${pfj.profile_name}" — see Current Job. Fix the job or this printer's profile.`;
+  } else if (startable && job.executable !== false && building) {
     if (!setup.origin_set) startWhy = "Set the print origin first (jog to it, then hold Set origin here).";
     else if (!setup.positioning_enabled) startWhy = "Start returns to the origin at jog speed — jogging is disabled.";
   }
@@ -647,6 +652,59 @@ function renderParams(s) {
     !job.lifts_adjusted || ["running", "held", "awaiting_reposition"].includes(job.state);
 }
 
+// ---- Machine / Printer: THIS controller's profile (authoritative) and job preflight
+function renderPrinter(s) {
+  const m = s.machine || {}, p = m.profile || {};
+  const chip = document.getElementById("printer-chip");
+  const unset = !(p.x_extent && p.y_extent);
+  chip.textContent = `Printer: ${p.name || "—"}${unset ? " (extents not set)" : ""}`;
+  chip.className = "printer-chip" + (unset ? " unset" : "");
+  const sec = document.getElementById("printer-section");
+  if (sec.hidden) return;
+  const set = (id, v) => { const f = document.getElementById(id); if (document.activeElement !== f) f.value = v == null ? "" : v; };
+  set("pp-name", p.name); set("pp-x", p.x_extent); set("pp-y", p.y_extent);
+  set("pp-zmax", p.max_build_z); set("pp-zframe", p.z_travel_per_frame);
+  const busy = !!(s.job && ["running", "held", "awaiting_reposition"].includes(s.job.state));
+  document.getElementById("printer-save").disabled = busy;
+  document.getElementById("printer-note").textContent = m.problem ||
+    (busy ? "The printer profile cannot change while a job is running, held or awaiting a reposition." : "");
+}
+
+function renderPreflight(s) {
+  const job = s.job, box = document.getElementById("job-preflight");
+  const pf = job && job.preflight;
+  box.hidden = !pf || job.executable === false;
+  if (box.hidden) return;
+  const fails = pf.checks.filter(c => c.status === "fail"), warns = pf.checks.filter(c => c.status === "warn");
+  const unchecked = pf.checks.filter(c => c.status === "unchecked");
+  box.className = "job-preflight " + (pf.blocking ? "block" : (fails.length || warns.length || pf.notes.length ? "warn" : "ok"));
+  document.getElementById("preflight-title").textContent = pf.blocking
+    ? `Incompatible with printer "${pf.profile_name}" — cannot start`
+    : fails.length ? `Exceeds printer "${pf.profile_name}" (external G-code: informational)`
+    : `Fits printer "${pf.profile_name}"` + (warns.length ? " — with warnings" : "") +
+      (unchecked.length ? ` · not checked: ${unchecked.map(c => c.id).join(", ")}` : "");
+  const list = document.getElementById("preflight-list");
+  list.innerHTML = "";
+  const add = (cls, text) => { const li = document.createElement("li"); li.className = cls; li.textContent = text; list.appendChild(li); };
+  fails.forEach(c => add("fail", c.message));
+  warns.forEach(c => add("warn", c.message));
+  pf.notes.forEach(n => add("note", n));
+}
+
+function attachPrinter() {
+  const sec = document.getElementById("printer-section");
+  const toggle = () => { sec.hidden = !sec.hidden; renderPrinter(lastState); };
+  document.getElementById("printer-chip").addEventListener("click", toggle);
+  document.getElementById("printer-close").addEventListener("click", toggle);
+  document.getElementById("printer-save").addEventListener("click", () => {
+    const num = (id) => { const v = document.getElementById(id).value.trim(); return v === "" ? null : parseFloat(v); };
+    const cur = (lastState.machine && lastState.machine.profile) || {};
+    send({ type: "set_machine_profile", profile: { ...cur, name: document.getElementById("pp-name").value,
+      x_extent: num("pp-x"), y_extent: num("pp-y"), max_build_z: num("pp-zmax"), z_travel_per_frame: num("pp-zframe"),
+      units: "in" } });
+  });
+}
+
 function stepParam(name, delta) {
   const lf = (lastState.job && lastState.job.progress && lastState.job.progress.lift) || {};
   const maxZ = lf.max_z_travel || 1000;
@@ -741,6 +799,8 @@ function fitView(s) {
     x0 = Math.min(x0, P.x[i]); x1 = Math.max(x1, P.x[i]); y0 = Math.min(y0, P.y[i]); y1 = Math.max(y1, P.y[i]);
   }
   if (!isFinite(x0)) return;
+  const env = s.machine && s.machine.envelope;            // the printer envelope is framed too
+  if (env) { x0 = Math.min(x0, env.min_x); y0 = Math.min(y0, env.min_y); x1 = Math.max(x1, env.max_x); y1 = Math.max(y1, env.max_y); }
   const w = Math.max(x1 - x0, 1), h = Math.max(y1 - y0, 1);
   view.scale = 0.9 * Math.min(canvas.width / w, canvas.height / h);
   view.cx = (x0 + x1) / 2; view.cy = (y0 + y1) / 2; view.fitted = true;
@@ -778,6 +838,24 @@ function renderView(s, force) {
     ctx.stroke();
   }
   ctx.setLineDash([]);
+  // THIS printer's physical X × Y envelope (from the print origin) — a reference;
+  // a job reaching outside it is outlined in red. The path itself is never changed.
+  const env = s.machine && s.machine.envelope;
+  if (env) {
+    ctx.strokeStyle = "rgba(170,176,186,0.7)"; ctx.lineWidth = 1; ctx.setLineDash([4, 6]);
+    ctx.strokeRect(X(env.min_x), Y(env.max_y), X(env.max_x) - X(env.min_x), Y(env.min_y) - Y(env.max_y));
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(170,176,186,0.85)"; ctx.font = "11px monospace";
+    ctx.fillText(`printer ${fmtNum(env.max_x)}×${fmtNum(env.max_y)} in`, X(env.max_x) - 120, Y(env.max_y) - 6);
+    const jb = job.preflight && job.preflight.requirements && job.preflight.requirements.xy_bounds;
+    if (jb && (jb.min_x < env.min_x - 1e-4 || jb.min_y < env.min_y - 1e-4 || jb.max_x > env.max_x + 1e-4 || jb.max_y > env.max_y + 1e-4)) {
+      ctx.strokeStyle = "#f87171"; ctx.lineWidth = 2; ctx.setLineDash([8, 5]);
+      ctx.strokeRect(X(jb.min_x), Y(jb.max_y), X(jb.max_x) - X(jb.min_x), Y(jb.min_y) - Y(jb.max_y));
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#f87171"; ctx.font = "bold 12px monospace";
+      ctx.fillText("JOB OUTSIDE THE PRINTER ENVELOPE", X(jb.min_x) + 4, Y(jb.max_y) - 8);
+    }
+  }
   // work origin
   ctx.strokeStyle = "#60a5fa"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(X(0) - 8, Y(0)); ctx.lineTo(X(0) + 8, Y(0)); ctx.moveTo(X(0), Y(0) - 8); ctx.lineTo(X(0), Y(0) + 8); ctx.stroke();
@@ -1103,6 +1181,7 @@ document.addEventListener("DOMContentLoaded", () => {
   attachSetupButtons();
   attachFeatureControls();
   attachView();
+  attachPrinter();
 
   // Attach other controls
   attachControls();

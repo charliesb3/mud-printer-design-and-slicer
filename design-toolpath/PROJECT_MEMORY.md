@@ -362,6 +362,45 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 **Summary (2026-10-06):** the Designer is checkpointed (5ed967d). On top of it, an UNCOMMITTED Z-phase batch adds Layer Designs (inheritance, shared lineage lattice, project bead width), semantic transforms for the Layer Assembly, and the Assembly subsystem (`layer_assembly/`, own memory). Start with "Z PHASE — CURRENT ARCHITECTURE" below; known open problem: transformed-junction lattice coherence (support findings at moving junctions). Testing tiers: same section → "Testing workflow".
 
+### MACHINE PROFILE — the project's printer (2026-10-15; manually reviewed, checkpoint 2026-10-15)
+
+Machine profiles are independent configuration on each side. `.mudjob` communicates job assumptions and requirements; it does not synchronize applications.
+
+- Model: `design_proto/machine_profile.py` (version 1; name, units "in",
+  x_extent, y_extent, max_build_z, z_travel_per_frame — None = not set /
+  not checked; `provisional` lists placeholder values; `envelope_origin`
+  "print_origin"; unknown keys kept). Default: 120 × 120 in PROVISIONAL
+  (from "approximately 10 ft × 10 ft or larger" — not measured), max
+  building Z unset, Z per frame 18.
+- Saved in `.muddesign` (schema 5; v4 migrates with Z from the Assembly).
+  ONE Z-per-frame value: the Assembly's `machine.max_z_travel` (planner);
+  the profile mirrors it and the Assembly wins on load.
+- Reference + check, never a constraint: dashed envelope in the Designer
+  top view, Assembly (with the max-building-Z box and ruler mark), Wall
+  Systems and Print Simulation (3D + top); warnings when exceeded; the
+  PrintPlan / G-code are identical with any profile.
+- Preflight (server `preflight()` and the `machinePreflight` mirror in
+  app.js, kept consistent by a node test): job SIZE > extent = fail,
+  placement outside [0, X] × [0, Y] from the origin = warn, building height
+  > max building Z = fail, tallest lift > Z per frame = fail.
+- `.mudjob` (contract v1, optional fields): `requirements` always;
+  `prepared_for` + informational `preflight` when exported with a profile.
+  Fixture `designer-export-prepared-for.mudjob`
+  (`MUDJOB_UPDATE_FIXTURE=1` regenerates). Tests:
+  `layer_assembly/tests/test_machine_profile.py`.
+- UI: "Printer" button in the header → compact panel (name, X, Y, max
+  building Z, Z per frame; editing a value clears its provisional mark).
+- PHYSICAL GRID + HOME VIEW (view only): Designer, Wall Systems top and
+  Simulation top draw `drawPhysicalGrid` (app.js) aligned to the print
+  origin — major square = 12 in (1 ft; a 120 in envelope = 10 × 10), whole-
+  foot majors when zoomed out (2 / 5 / 10 / 20 / 50 ft), faint 6 / 3 / 1 in
+  subdivisions zoomed in, scale label bottom right. The Designer's "100 %"
+  = HOME frames the envelope (8 % margin; follows resizes and profile
+  changes while at home); the zoom readout is relative to it. Coordinates /
+  `.muddesign` unchanged. Assembly (3D only) has no grid. Known: new
+  primitives are still created around (200, 200) — outside a 120 in
+  envelope (not changed: design coordinates).
+
 ### Phase 2 — Toolpath / Graph Prototype — COMPLETE
 
 Location: `design-toolpath/toolpath_proto/`. 90 tests passing.
@@ -1400,6 +1439,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-15 — MACHINE PROFILE (manually reviewed, checkpoint 2026-10-15): project printer profile in `.muddesign` schema 5, envelope in every view, preflight, `.mudjob` requirements / prepared_for / preflight. See Current State → "MACHINE PROFILE".
 
 2026-10-14 — EXECUTABLE `.mudjob` export (XY-only G-code in inches; Z / pump manual). See `layer_assembly/PROJECT_MEMORY.md` → "MACHINE JOB EXPORT".
 

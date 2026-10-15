@@ -18,3 +18,6 @@ venv/
 # Editor
 .vscode/
 .idea/
+
+# this controller's machine profile (local configuration, not source)
+machine_profile.json

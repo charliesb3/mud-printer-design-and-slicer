@@ -97,7 +97,7 @@ eval(src + `
   const key = (type, k) => (listeners[type] || []).forEach(f => f({ key: k, preventDefault() {} }));
 
   // ---- transform ----
-  check(view.z === 1 && view.px === 0 && view.py === 0, 'default view = 100 %');
+  check(view.z === 1 && view.px === 0 && view.py === 0, 'unframed view = the whole workspace');
   for (const [z, px, py] of [[1, 0, 0], [3.7, -120, 55], [0.4, 300, -20]]) {
     setView(z, px, py);
     const [cx, cy] = worldToCanvas(123.4, 56.7);
@@ -105,11 +105,12 @@ eval(src + `
     check(near(wx, 123.4) && near(wy, 56.7), 'world ↔ canvas round trip at zoom ' + z);
   }
   viewReset();
+  const zh = view.z;
   const [w0x, w0y] = canvasToWorld(310, 450);
   zoomAt(310, 450, 2.5);
   const [w1x, w1y] = canvasToWorld(310, 450);
-  check(near(view.z, 2.5) && near(w0x, w1x) && near(w0y, w1y), 'zoom keeps the world point under the cursor');
-  check(near(HIT_DIST, 10 / 2.5) && near(SNAP_RADIUS, 12 / 2.5), 'hit / snap tolerances stay constant on screen');
+  check(near(view.z, zh * 2.5) && near(w0x, w1x) && near(w0y, w1y), 'zoom keeps the world point under the cursor');
+  check(near(HIT_DIST, 10 / view.z) && near(SNAP_RADIUS, 12 / view.z), 'hit / snap tolerances stay constant on screen');
   const before = worldToCanvas(100, 100);
   panBy(40, -25);
   const after = worldToCanvas(100, 100);
@@ -117,7 +118,47 @@ eval(src + `
   zoomAt(400, 400, 1000); check(view.z === VIEW_MAX, 'zoom clamped (max)');
   zoomAt(400, 400, 1e-6); check(view.z === VIEW_MIN, 'zoom clamped (min)');
   viewReset();
-  check(view.z === 1 && view.px === 0 && view.py === 0, '100% restores the default view');
+  const H0 = _homeView();
+  check(view.home && view.z === H0.z && view.px === H0.px && view.py === H0.py, '100% restores the home view');
+
+  // ---- HOME + PHYSICAL GRID (2026-10-15): the printer envelope fills the view; 1 ft squares ----
+  const mp = machineProfile();
+  check(mp.x_extent === 120 && mp.y_extent === 120, 'default printer envelope 120 × 120 in');
+  const e0 = worldToCanvas(0, 0), e1 = worldToCanvas(120, 120);
+  check(near(e0[0], 800 - e1[0]) && near(e1[1], 800 - e0[1]), 'home: the envelope is centred');
+  check(near(e1[0] - e0[0], 0.84 * 800), 'home: the envelope fills the canvas (8 % margin)');
+  check(document.getElementById('zoom-readout').textContent === '100%', 'home reads 100 %');
+  const ppi = _viewScale();
+  const gs = gridSteps(ppi);
+  check(gs.major === 12 && near(12 * ppi * 10, e1[0] - e0[0]), 'one major square = 12 in: the envelope spans 10 × 10 squares');
+  mainRec.length = 0; repaint();
+  const gridX = mainRec.filter(r => r.op === 'stroke' && r.strokeStyle === GRID_COLOR);
+  check(gridX.length === 1, 'grid drawn (major lines in one stroke)');
+  check(mainRec.some(r => r.op === 'fillText' && r.args[0] === 'grid 1 ft · 6 in'), 'grid scale label: 1 ft with 6 in subdivisions');
+  // a grid line on each envelope edge (aligned to the print origin)
+  const lx = [], ly = [];
+  const cap = { moveTo(x, y) { lx.push(x); ly.push(y); }, lineTo() {}, beginPath() {}, stroke() {}, save() {}, restore() {},
+                fillText() {}, set strokeStyle(v) {}, set lineWidth(v) {}, set fillStyle(v) {}, set font(v) {}, set textAlign(v) {} };
+  drawPhysicalGrid(cap, worldToCanvas, 800, 800, { label: false });
+  check([0, 120].every(w => lx.some(x => Math.abs(x - worldToCanvas(w, 0)[0]) <= 1)), 'grid lines on the envelope edges (X)');
+  check([0, 120].every(w => ly.some(y => Math.abs(y - worldToCanvas(0, w)[1]) <= 1)), 'grid lines on the envelope edges (Y)');
+  // zoomed out the major step stays physical (whole feet); zoomed in, finer subdivisions
+  check(gridSteps(1).major === 60 && gridSteps(1).minor === 12, 'zoomed out: 5 ft majors, 1 ft minors');
+  check(gridSteps(0.5).minor === null, 'minor lines dropped before they get dense');
+  check(gridSteps(0.05).major === 600, 'far out: 50 ft majors');
+  check(gridSteps(30).major === 12 && gridSteps(30).minor === 1, 'zoomed in: 1 ft majors, 1 in minors');
+  check(gridLabel(12) === '1 ft' && gridLabel(60) === '5 ft' && gridLabel(6) === '6 in', 'grid labels in feet / inches');
+  // a different printer re-frames the home view; geometry never moves
+  const before0 = JSON.stringify(layer.source_paths);
+  project.machine_profile = { ...mp, x_extent: 240, y_extent: 120 };
+  _machineChanged();
+  const f0 = worldToCanvas(0, 0), f1 = worldToCanvas(240, 120);
+  check(view.home && near(f1[0] - f0[0], 0.84 * 800), 'home follows the printer profile');
+  check(JSON.stringify(layer.source_paths) === before0, 'framing never moves geometry');
+  zoomAt(400, 400, 2);
+  check(!view.home && document.getElementById('zoom-readout').textContent === '200%', 'zoom readout relative to home');
+  project.machine_profile = null;
+  viewReset();
 
   // ---- wheel / Space-drag / middle-drag ----
   const [a0x, a0y] = canvasToWorld(200, 600);
@@ -205,7 +246,8 @@ eval(src + `
   const st = mainRec.filter(r => r.op === 'stroke');
   const blue = st.filter(r => r.strokeStyle === MOVE_COLORS.print);
   check(blue.length === 2 && blue.every(r => r.lineWidth <= 2.0), 'Beads OFF: one thin blue line per printable centreline');
-  check(!st.some(r => r.strokeStyle !== MOVE_COLORS.print && r.strokeStyle !== '#252525'),
+  check(!st.some(r => r.strokeStyle !== MOVE_COLORS.print && r.strokeStyle !== GRID_COLOR && r.strokeStyle !== GRID_MINOR_COLOR &&
+                     r.strokeStyle !== MACHINE_ENVELOPE_COLOR),   // (the dashed printer envelope: a reference)
         'Beads OFF: nothing layered under / over it (no sandwich)');
   check(rec.filter(r => r.op === 'stroke').length === 0, 'Beads OFF: no bead layer');
   toggleBeads(true);

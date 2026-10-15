@@ -134,3 +134,15 @@ def test_browser_preview_matches_the_server_rule():
         if srv["reason"]:
             # same message apart from number formatting (JS 1 vs Python 1.0)
             assert g["reason"].split("—")[0].split(" ")[0] == srv["reason"].split("—")[0].split(" ")[0]
+
+
+class TestPrinterSettings:
+    def test_settings_are_not_in_the_operating_columns(self, tree):
+        for el in ("printer-section", "pp-name", "pp-x", "pp-y", "pp-zmax", "pp-zframe", "printer-save"):
+            assert el in tree.where, el
+        for col in ("col-left", "col-mid", "col-view"):
+            assert not _inside(tree, "printer-section", col)
+        assert "printer-chip" in tree.where                        # opened from the status bar
+
+    def test_preflight_is_shown_with_the_job(self, tree):
+        assert _inside_id(tree, "job-preflight", "job-section")

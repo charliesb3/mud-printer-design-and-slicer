@@ -577,7 +577,7 @@ eval(src + `
   _downloadText = (name, text) => { saved = { name, text }; };
   await saveProject();
   const F = JSON.parse(saved.text);
-  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 4 &&
+  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 5 &&
         saved.text.indexOf('"schema_version"') < saved.text.indexOf('"project"'),
         'Save Project downloads Smoke house.muddesign: format id + schema version first, human-readable JSON');
   const FD = F.project.designer;
