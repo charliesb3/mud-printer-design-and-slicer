@@ -43,9 +43,13 @@ FIXTURE = CONTRACT / "fixtures" / "executable-3-lifts.mudjob"
 EXPORTED = CONTRACT / "fixtures" / "designer-export-3-lifts.mudjob"
 
 
-def job_doc(lifts, auto=True, **extra) -> str:
+def job_doc(lifts, auto=True, units=True, **extra) -> str:
     """An executable job document; `auto` fills each lift's index and the
-    reposition_before required on later lifts (unless given)."""
+    reposition_before required on later lifts (unless given); `units`
+    prefixes each lift's G-code with G20 + G90 (required before XY motion)."""
+    if units:
+        lifts = [{**l, "gcode": ["G20", "G90", *l["gcode"]]} if isinstance(l.get("gcode"), list) else l
+                 for l in lifts]
     if auto:
         lifts = [{"index": i, **({"reposition_before": {"rise": 1}} if i else {}), **l}
                  for i, l in enumerate(lifts)]
@@ -87,8 +91,8 @@ class TestJobFormat:
         job = load_job_from_file(FIXTURE)
         assert job.kind == "building"
         assert job.total_lifts == 3
-        assert [len(l.lines) for l in job.lifts] == [6, 4, 3]   # "; lift 1" comment stripped
-        assert job.total_lines == 13
+        assert [len(l.lines) for l in job.lifts] == [7, 6, 5]   # "; lift 1" comment stripped
+        assert job.total_lines == 18
         assert job.lines == [line for l in job.lifts for line in l.lines]
         assert job.lifts[1].reposition_before["rise"] == 18
         assert job.units == "in"
@@ -115,7 +119,7 @@ class TestJobFormat:
         (json.dumps({"format": "mudprinter-job", "version": 2, "lifts": []}), "version"),
         (job_doc([]), "non-empty"),
         (job_doc([{"gcode": "G1 X1"}]), "list of strings"),
-        (job_doc([{"gcode": ["; only a comment"]}]), "no sendable"),
+        (job_doc([{"gcode": ["; only a comment"]}], units=False), "no sendable"),
         (job_doc([{"index": 1, "gcode": ["G1 X1"]}]), "in order"),
         (job_doc([{"gcode": ["G1 X1"]}], auto=False), "in order"),             # index is required
         (job_doc([{"gcode": ["G1 X1"], "reposition_before": {"rise": 1}}]), "later lifts"),
@@ -142,6 +146,41 @@ class TestJobFormat:
     def test_ordinary_lines_allowed(self, line):
         assert program_control_reason(line) is None
 
+    @pytest.mark.parametrize("gcode, message", [
+        (["G20", "G90", "G1 X1 Z2"], "Z words"),
+        (["G20", "G90", "G1 Z1"], "Z words"),
+        (["G20", "G90", "G10 L20 P1 X0 Y0"], "G10 / G92"),
+        (["G20", "G90", "G92 X0 Y0"], "G10 / G92"),
+        (["G90", "G1 X1 Y1"], "units"),
+        (["G20", "G1 X1 Y1"], "distance mode"),
+        (["G1 X1 Y1", "G20", "G90"], "before the lift sets"),
+    ])
+    def test_current_machine_lift_rules(self, gcode, message):
+        with pytest.raises(JobFormatError, match=message):
+            parse_building_job(job_doc([{"gcode": gcode}], units=False))
+
+    @pytest.mark.parametrize("gcode", [["G21", "G90", "G1 X1 Y1"], ["G20 G90", "G1 X1 Y1 F120"],
+                                       ["G20", "G91", "G1 X1"], ["G20", "G90", "G4 P1", "G1 X0.5 Y2"]])
+    def test_current_machine_lifts_accepted(self, gcode):
+        assert parse_building_job(job_doc([{"gcode": gcode}], units=False))["executable"] is True
+
+    def test_layer_marks_map_to_sendable_lines(self):
+        doc = job_doc([{"gcode": ["; c", "G1 X1 Y1", "; c", "G1 X2 Y2", "G1 X3 Y3"],
+                        "layer_marks": [{"line": 0, "layer": 0, "z": 1.5, "z_in_lift": 1.5},
+                                        {"line": 5, "layer": 1, "z": 3.0, "z_in_lift": 3.0}]}], units=False)
+        doc = json.loads(doc)
+        doc["lifts"][0]["gcode"] = ["G20", "G90"] + doc["lifts"][0]["gcode"]   # raw indices shift by 2
+        doc["lifts"][0]["layer_marks"] = [{"line": 2, "layer": 0, "z": 1.5, "z_in_lift": 1.5},
+                                          {"line": 5, "layer": 1, "z": 3.0, "z_in_lift": 3.0}]
+        lift = parse_building_job(json.dumps(doc))["lifts"][0]
+        assert lift.lines == ["G20", "G90", "G1 X1 Y1", "G1 X2 Y2", "G1 X3 Y3"]
+        assert [m["line"] for m in lift.marks] == [2, 3]          # comments are not sendable lines
+        assert lift.mark_at(0)["layer"] == 0 and lift.mark_at(3)["layer"] == 1 and lift.mark_at(5)["z"] == 3.0
+
+    def test_bad_layer_marks_rejected(self):
+        with pytest.raises(JobFormatError, match="layer_marks"):
+            parse_building_job(job_doc([{"gcode": ["G1 X1"], "layer_marks": [{"line": 99}]}]))
+
     def test_muddesign_file_refused_by_extension(self, tmp_path):
         f = tmp_path / "house.muddesign"
         f.write_text(json.dumps({"format": "mud-printer-project", "project": {}}))
@@ -156,29 +195,48 @@ class TestJobFormat:
 class TestContractFixtures:
     """The shared contract fixtures (data only — no Design + Toolpath code)."""
 
-    def test_designer_export_loads_as_non_executable_building(self):
+    def test_designer_export_loads_as_executable_building(self):
         job = load_job_from_file(EXPORTED)
         doc = json.loads(EXPORTED.read_text(encoding="utf-8"))
-        assert job.kind == "building"
-        assert job.executable is False
-        assert [u["id"] for u in job.unresolved] == [u["id"] for u in doc["unresolved"]]
+        assert job.kind == "building" and job.executable is True and job.unresolved == []
         assert job.total_lifts == len(doc["lifts"]) == 3
-        assert job.total_lines == 0 and all(not l.lines for l in job.lifts)
-        # lift identities, order and boundaries exactly as exported (never recalculated)
+        # lift identities, order, boundaries and G-code exactly as exported (never recalculated)
         for lift, raw in zip(job.lifts, doc["lifts"]):
             assert lift.index == raw["index"]
+            assert lift.lines == raw["gcode"]                     # the exporter writes no comments
+            assert lift.lines[:2] == ["G20", "G90"]
+            assert not any("Z" in l for l in lift.lines)
             assert lift.meta["layers"] == raw["layers"]
             assert (lift.meta["z_bottom"], lift.meta["z_top"]) == (raw["z_bottom"], raw["z_top"])
             assert lift.reposition_before == raw.get("reposition_before")
-            assert lift.description == raw["description"]
+            assert [m["line"] for m in lift.marks] == [m["line"] for m in raw["layer_marks"]]
         d = job.to_dict()
-        assert d["executable"] is False and d["unresolved"] == job.unresolved
+        assert d["xy_bounds"] == doc["xy_bounds"]
         assert [l["layers"]["first"] for l in d["lifts"]] == [0, 2, 4]
-        assert d["lifts"][1]["reposition_before"]["rise"] == 3.0
+        assert d["current_mark"]["layer"] == 0 and d["current_mark"]["z"] == 1.5
 
-    def test_executable_fixture_runs_lift_by_lift(self):
+    def test_executable_fixture_loads(self):
         job = load_job_from_file(FIXTURE)
         assert job.executable and job.total_lifts == 3
+
+    async def test_designer_export_executes_lift_by_lift(self, env):
+        comm, transport, state = env
+        job = load_job_from_file(EXPORTED)
+        task = asyncio.create_task(JobRunner(comm, job, origin_feed_in_min=40.0).run())
+        doc = json.loads(EXPORTED.read_text(encoding="utf-8"))
+        for i in (1, 2):
+            await wait_for(lambda: job.awaiting_lift == i, timeout=3.0)
+            assert job.current_mark if hasattr(job, "current_mark") else True
+            assert job.confirm_reposition(i) is None
+        await asyncio.wait_for(task, timeout=3.0)
+        assert job.state == "completed"
+        expected = ["G54 G20 G90 G1 X0 Y0 F40.0"]
+        for i, L in enumerate(doc["lifts"]):
+            if i:
+                expected.append(DRAIN_COMMAND)
+            expected += L["gcode"]
+        assert transport.sent_lines == expected
+        assert not any("Z" in l for l in transport.sent_lines)
 
 
 # ------------------------------------------------------------------ #
@@ -388,6 +446,7 @@ async def handler_env(env, monkeypatch):
 class TestHandlerRules:
     async def test_confirm_via_message_runs_next_lift(self, handler_env):
         comm, transport, state, job = handler_env
+        state.setup.origin_set = True
         ws = FakeWS()
         await http_module._handle_message({"type": "confirm_reposition", "lift": 1}, ws)
         await asyncio.wait_for(http_module._runner_task, timeout=2.0)
@@ -418,13 +477,22 @@ class TestHandlerRules:
         assert job.state == "awaiting_reposition"
         assert "Idle" in ws.sent[0]["message"]
 
-    async def test_jog_blocked_while_awaiting(self, handler_env, monkeypatch):
+    async def test_jog_allowed_while_awaiting_in_mm(self, handler_env, monkeypatch):
+        """The operator may jog (to re-zero) during a frame reposition; jog lines carry G21."""
         comm, transport, state, job = handler_env
         monkeypatch.setattr(config, "JOG_SPEED_MM_MIN", 100.0)
         await http_module._handle_message({"type": "jog_start", "axis": "X", "direction": 1}, FakeWS())
-        await asyncio.sleep(0.1)
-        assert not any(l.startswith("$J=") for l in transport.sent_lines)
+        await wait_for(lambda: any(l.startswith("$J=") for l in transport.sent_lines), timeout=2.0)
         await http_module._stop_jog()
+        jogs = [l for l in transport.sent_lines if l.startswith("$J=")]
+        assert jogs[0].startswith("$J=G21 G91 X")
+        assert job.state == "awaiting_reposition" and "G1 X2" not in transport.sent_lines
+
+    async def test_confirm_needs_origin_for_building_job(self, handler_env):
+        comm, transport, state, job = handler_env
+        ws = FakeWS()
+        await http_module._handle_message({"type": "confirm_reposition", "lift": 1}, ws)
+        assert job.state == "awaiting_reposition" and "origin" in ws.sent[0]["message"]
 
     async def test_console_blocked_while_awaiting(self, handler_env):
         comm, transport, state, job = handler_env
@@ -447,11 +515,15 @@ class TestHandlerRules:
 
 
 class TestNonExecutableJob:
-    async def test_start_refused_with_notice_nothing_sent(self, env):
+    async def test_start_refused_with_notice_nothing_sent(self, env, tmp_path):
         comm, transport, state = env
         await wait_for(lambda: state.grbl_state == "Idle", timeout=2.0)
         http_module.init(state, comm, ConnectionManager())
-        http_module._current_job = load_job_from_file(EXPORTED)
+        f = tmp_path / "structure.mudjob"
+        f.write_text(json.dumps({"format": "mudprinter-job", "version": 1, "executable": False,
+                                 "unresolved": UNRESOLVED,
+                                 "lifts": [{"index": 0}, {"index": 1, "reposition_before": {"rise": 3}}]}))
+        http_module._current_job = load_job_from_file(f)
         http_module._runner_task = None
         try:
             ws = FakeWS()

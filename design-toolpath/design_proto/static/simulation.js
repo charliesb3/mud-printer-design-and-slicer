@@ -884,10 +884,11 @@ async function simRefresh(opts) {
   return R.promise;
 }
 
-// EXPORT PRINT JOB (2026-10-14): the CURRENT plan as a .mudjob machine job —
-// the only thing handed to the printer controller (contracts/mudjob). The
-// server serializes the plan it already made for exactly this request; it
-// never plans. Save Project (.muddesign) stays the authoring file.
+// EXPORT PRINT JOB (2026-10-14): the CURRENT plan as an executable .mudjob
+// (XY-only G-code in inches; Z and pump manual) — the only thing handed to
+// the printer controller (contracts/mudjob). The server serializes the plan
+// it already made for exactly this request; it never plans. Save Project
+// (.muddesign) stays the authoring file.
 async function simExportJob() {
   if (!sim.data || simOutdated() || sim.loading) return;
   let K;
@@ -906,9 +907,9 @@ async function simExportJob() {
   } catch (e) { sim.exportNote = 'Export failed: ' + e.message; simRenderPanels(); return; }
   _downloadText(r.filename, JSON.stringify(r.job, null, 1) + '\n');
   const n = r.job.lifts.length;
-  sim.exportNote = `Exported ${r.filename} — ${n} lift${n === 1 ? '' : 's'}.` + (r.executable ? '' :
-    ` NOT EXECUTABLE yet: ${r.unresolved.length} machine decision${r.unresolved.length === 1 ? '' : 's'} unresolved ` +
-    `(${r.unresolved.map(u => u.id).join(', ')}). The printer interface shows its lifts but will not run it.`);
+  sim.exportNote = `Exported ${r.filename} — ${n} lift${n === 1 ? '' : 's'}, ${r.lines} lines of XY-only G-code ` +
+    `(inches, work coordinates from the print origin; Z and pump stay manual).` +
+    (r.placeholder_speeds ? ' Uses PLACEHOLDER speeds — set measured print / travel speeds before printing.' : '');
   if (typeof setStatus === 'function') setStatus(sim.exportNote);
   simRenderPanels();
   return r;

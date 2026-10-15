@@ -4,16 +4,23 @@
   "executable": true,
   "name": "Sample building (3 lifts) — hand-written test fixture, not a real print",
   "units": "in",
-  "source": {"generator": "hand-written fixture"},
+  "source": {
+    "generator": "hand-written fixture"
+  },
   "lifts": [
     {
       "index": 0,
       "description": "Layers 1–2",
-      "layers": {"first": 0, "last": 1, "count": 2},
+      "layers": {
+        "first": 0,
+        "last": 1,
+        "count": 2
+      },
       "z_bottom": 0,
       "z_top": 18,
       "gcode": [
         "; lift 1",
+        "G20",
         "G90",
         "G1 X0 Y0 F120",
         "G1 X10 Y0",
@@ -25,11 +32,22 @@
     {
       "index": 1,
       "description": "Layers 3–4",
-      "layers": {"first": 2, "last": 3, "count": 2},
+      "layers": {
+        "first": 2,
+        "last": 3,
+        "count": 2
+      },
       "z_bottom": 18,
       "z_top": 36,
-      "reposition_before": {"rise": 18, "frame_z_from": 0, "frame_z_to": 18, "note": "Raise the frame one lift."},
+      "reposition_before": {
+        "rise": 18,
+        "frame_z_from": 0,
+        "frame_z_to": 18,
+        "note": "Raise the frame one lift."
+      },
       "gcode": [
+        "G20",
+        "G90",
         "G1 X0 Y0 F120",
         "G1 X10 Y0",
         "G1 X10 Y10",
@@ -39,15 +57,30 @@
     {
       "index": 2,
       "description": "Layers 5–6",
-      "layers": {"first": 4, "last": 5, "count": 2},
+      "layers": {
+        "first": 4,
+        "last": 5,
+        "count": 2
+      },
       "z_bottom": 36,
       "z_top": 54,
-      "reposition_before": {"rise": 18, "frame_z_from": 18, "frame_z_to": 36},
+      "reposition_before": {
+        "rise": 18,
+        "frame_z_from": 18,
+        "frame_z_to": 36
+      },
       "gcode": [
+        "G20",
+        "G90",
         "G1 X0 Y0 F120",
         "G1 X10 Y10",
         "G1 X0 Y0"
       ]
     }
-  ]
+  ],
+  "machine": {
+    "axes": "XY",
+    "z": "manual",
+    "extrusion": "manual"
+  }
 }

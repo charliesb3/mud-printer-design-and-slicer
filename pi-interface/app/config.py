@@ -36,10 +36,11 @@ RECONNECT_INTERVAL_S: float = 5.0
 # Timeout waiting for GRBL to acknowledge a normal command
 COMMAND_TIMEOUT_S: float = 10.0
 
-# Timeout for draining GRBL at the end of a lift (G4 P0 waits until every
-# buffered move has finished). 0 = no limit: on a machine this size the moves
-# still buffered can take minutes. Disconnect / reset / alarm still end the wait.
-LIFT_DRAIN_TIMEOUT_S: float = float(os.getenv("LIFT_DRAIN_TIMEOUT_S", "0"))
+# Job lines, lift drains and positioning moves wait for GRBL's `ok` WITHOUT a
+# fixed time limit (GRBL withholds `ok` while its planner buffer is full or a
+# feed hold is active — minutes on this machine). They fail only when GRBL
+# stops answering status polls for this long (unresponsive / link dead).
+GRBL_UNRESPONSIVE_S: float = float(os.getenv("GRBL_UNRESPONSIVE_S", "5.0"))
 
 # Job storage directory (relative to pi-interface/ when running locally)
 JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", "jobs"))

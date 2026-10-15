@@ -21,6 +21,12 @@
  *   pressing and holding Confirm (2 s). The message names the lift being
  *   confirmed, so a stale screen or a second tap cannot skip a lift.
  *
+ * Print origin / prime (machine setup, never part of the job): Set origin
+ *   (hold 1.5 s) = work XY zero here; Set prime here; Prime (hold 1 s) moves
+ *   to the prime position at jog speed. A building job needs the origin and
+ *   returns to it on Start. While a job awaits a frame reposition the operator
+ *   may jog / Set origin / Prime before confirming.
+ *
  * One UI for every screen: all clients render the same server-owned state;
  * any client's action is broadcast to all. Touch, mouse and keyboard
  * (Space/Enter held on a focused hold button) all work.
@@ -148,15 +154,20 @@ function handleState(s) {
 
   // Lifts + frame reposition panel
   renderLifts(s);
+
+  // Print origin + prime position
+  renderSetup(s);
 }
 
 function renderJogSection(s) {
   const warn = document.getElementById("jog-warning");
   const btns = document.querySelectorAll(".jog-btn");
+  const awaiting = !!(s.job && s.job.state === "awaiting_reposition");
   const canJog = s.connected
     && s.jog_enabled
     && ["Idle", "Jog"].includes(s.grbl_state)
-    && !jobActive(s);   // the server also refuses jogging while a job is active
+    && (!jobActive(s) || awaiting)           // jog / re-zero allowed during a frame reposition
+    && !(s.setup && s.setup.moving);        // the server applies the same rules
 
   if (s.jog_warning) {
     warn.textContent = s.jog_warning;
@@ -235,12 +246,25 @@ function renderJobSection(s) {
     progressWrap.classList.remove("visible");
   }
 
-  // Start button (never for a non-executable job: the server refuses it too)
+  // Start button (never for a non-executable job: the server refuses it too).
+  // A building job needs the print origin and returns to it first.
+  const setup = s.setup || {};
+  const building = job.kind === "building";
+  const startable = ["ready", "stopped", "completed", "error"].includes(jobState);
+  let startWhy = "";
+  if (startable && job.executable !== false && building) {
+    if (!setup.origin_set) startWhy = "Set the print origin first (jog to it, then hold Set origin here).";
+    else if (!setup.positioning_enabled) startWhy = "Start returns to the origin at jog speed — jogging is disabled.";
+  }
   const canStart = s.connected
     && s.grbl_state === "Idle"
     && job.executable !== false
-    && ["ready", "stopped", "completed", "error"].includes(jobState);
+    && startable
+    && !startWhy
+    && !setup.moving;
   startBtn.disabled = !canStart;
+  startBtn.textContent = building && job.executable !== false ? "START (returns to origin first)" : "START JOB";
+  document.getElementById("start-note").textContent = startWhy;
 }
 
 function liftLabel(i, total) {
@@ -275,7 +299,19 @@ function renderLifts(s) {
   badge.classList.toggle("awaiting", awaiting);
 
   // Summary line
-  if (job.executable === false) {
+  const markEl = document.getElementById("mark-line");
+  const mk = job.current_mark;
+  markEl.hidden = !(mk && ["running", "held"].includes(job.state));
+  if (mk) {
+    const u = job.units ? " " + job.units : "";
+    markEl.textContent = `Layer ${mk.layer + 1} · nozzle Z ${fmtNum(mk.z)}${u}` +
+      (typeof mk.z_in_lift === "number" ? ` (${fmtNum(mk.z_in_lift)}${u} above the frame base)` : "") +
+      " — Z is manual";
+  }
+
+  if (job.phase === "origin") {
+    summary.textContent = "Returning to the print origin…";
+  } else if (job.executable === false) {
     summary.textContent = `${total} lifts — building structure only (not executable)`;
   } else if (!started) {
     summary.textContent = `${total} lifts — starts with lift 1`;
@@ -322,13 +358,47 @@ function renderLifts(s) {
   const btn = document.getElementById("btn-confirm");
   const blockedEl = document.getElementById("reposition-blocked");
   const idle = s.connected && s.grbl_state === "Idle";
-  btn.disabled = !idle;
+  const st = s.setup || {};
+  let blocked = "";
+  if (!s.connected) blocked = "Not connected to GRBL.";
+  else if (!idle) blocked = `GRBL is ${s.grbl_state}; it must be Idle to continue.`;
+  else if (st.moving) blocked = "Wait until the machine has stopped moving.";
+  else if (!st.origin_set) blocked = "The print origin is not established — Set origin before continuing.";
+  btn.disabled = !!blocked;
   btn.dataset.lift = String(next);
   document.getElementById("btn-confirm-label").textContent =
     `Hold to confirm — start lift ${next + 1}`;
-  blockedEl.textContent = idle ? ""
-    : (s.connected ? `GRBL is ${s.grbl_state}; it must be Idle to continue.` : "Not connected to GRBL.");
-  if (!idle) cancelConfirmHold();
+  blockedEl.textContent = blocked;
+  if (blocked) cancelConfirmHold();
+}
+
+function renderSetup(s) {
+  const st = s.setup || {};
+  const u = "in";
+  const originEl = document.getElementById("origin-status");
+  originEl.textContent = st.origin_set ? "Set — work X0 Y0" : "Not set";
+  originEl.className = st.origin_set ? "ok" : "missing";
+  document.getElementById("work-pos").textContent =
+    st.work_x != null ? `${fmtNum(st.work_x)} / ${fmtNum(st.work_y)} ${u}` : "—";
+  const primeEl = document.getElementById("prime-status");
+  primeEl.textContent = st.prime
+    ? `X ${fmtNum(st.prime[0])} Y ${fmtNum(st.prime[1])} ${u} (from origin)` + (st.origin_set ? "" : " — needs the origin")
+    : "Not set";
+  primeEl.className = st.prime_ready ? "ok" : "missing";
+
+  // same rules as the server: idle machine, no running job (a frame reposition is fine)
+  const running = !!(s.job && ["running", "held"].includes(s.job.state));
+  const ready = s.connected && s.grbl_state === "Idle" && !running && !st.moving;
+  document.getElementById("btn-set-origin").disabled = !ready;
+  document.getElementById("btn-set-prime").disabled = !(ready && st.origin_set);
+  document.getElementById("btn-prime").disabled = !(ready && st.prime_ready && st.positioning_enabled);
+
+  let note = st.note || "";
+  if (st.moving === "prime") note = "Moving to the prime position… (HOLD / STOP available)";
+  else if (!note && st.prime_ready && !st.positioning_enabled) note = "Prime uses the jog speed — jogging is disabled.";
+  else if (!note && s.job && s.job.state === "awaiting_reposition")
+    note = "Frame reposition: you may jog and Set origin again before confirming.";
+  document.getElementById("setup-note").textContent = note;
 }
 
 function renderNotExecutable(job) {
@@ -509,6 +579,17 @@ function attachHoldButton(btn, ms, onComplete, onBegin = () => undefined) {
   return endHold;
 }
 
+const SET_ORIGIN_HOLD_MS = 1500;
+const PRIME_HOLD_MS = 1000;
+
+function attachSetupButtons() {
+  attachHoldButton(document.getElementById("btn-set-origin"), SET_ORIGIN_HOLD_MS,
+    () => send({ type: "set_origin" }));
+  attachHoldButton(document.getElementById("btn-prime"), PRIME_HOLD_MS,
+    () => send({ type: "prime" }));
+  document.getElementById("btn-set-prime").addEventListener("click", () => send({ type: "set_prime" }));
+}
+
 let cancelConfirmHold = () => {};
 
 function attachStopButton() {
@@ -645,6 +726,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Attach stop and reposition-confirm press-and-hold buttons
   attachStopButton();
   attachConfirmButton();
+  attachSetupButtons();
 
   // Attach other controls
   attachControls();

@@ -32,6 +32,7 @@ from .parser import (
     is_end_of_program,
     is_welcome_message,
     parse_grbl_version,
+    parse_setting,
     parse_status_report,
 )
 from .transport import GRBLTransport
@@ -84,16 +85,26 @@ class GRBLCommunicator:
     # Sending                                                              #
     # ------------------------------------------------------------------ #
 
-    async def send_command(self, command: str, timeout: float | None = None) -> str:
+    async def send_command(self, command: str, timeout: float | None = None, *, live: bool = False) -> str:
         """
         Send a normal GRBL command and wait for the ok or error response.
 
         Returns the raw response string: "ok" or "error:N".
-        Raises asyncio.TimeoutError if GRBL does not respond within timeout.
-        A timeout <= 0 waits without limit (the future is still rejected on
-        disconnect, reset, or alarm).
         Raises RuntimeError if not connected.
         May raise asyncio.CancelledError if the calling task is cancelled.
+
+        Two ways of bounding the wait:
+        - default: a fixed `timeout` (COMMAND_TIMEOUT_S) — console, jog,
+          setup commands, which GRBL acknowledges promptly;
+        - `live=True` (job lines, lift drains, positioning moves): no fixed
+          limit while GRBL is demonstrably alive. GRBL withholds `ok` while
+          its planner buffer is full (until the oldest block finishes — on
+          this machine one long, slow move can take minutes) and during a
+          feed hold, so a fixed timeout would wrongly fail a healthy job. The
+          wait fails only if NO status report arrives for GRBL_UNRESPONSIVE_S
+          (status polls are real-time and answered even while GRBL blocks).
+          A disconnect, reset or alarm still rejects the wait at once.
+        A non-live timeout <= 0 waits without limit.
         """
         if self._transport is None or not self._transport.is_open():
             raise RuntimeError("Not connected to GRBL")
@@ -105,11 +116,14 @@ class GRBLCommunicator:
         async with self._send_lock:
             loop = asyncio.get_running_loop()
             self._pending_future = loop.create_future()
+            future = self._pending_future
             try:
                 await self._transport.write_line(command)
                 self._state.console_add("tx", command.strip())
+                if live:
+                    return await self._await_live(future, command)
                 result = await asyncio.wait_for(
-                    asyncio.shield(self._pending_future),
+                    asyncio.shield(future),
                     timeout=effective_timeout,
                 )
                 return result
@@ -118,6 +132,23 @@ class GRBLCommunicator:
                 raise
             finally:
                 self._pending_future = None
+
+    async def _await_live(self, future: "asyncio.Future[str]", command: str) -> str:
+        """Wait for `future` as long as GRBL keeps answering status polls."""
+        loop = asyncio.get_running_loop()
+        limit = config.GRBL_UNRESPONSIVE_S
+        seq, since = self._state.status_seq, loop.time()
+        while True:
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=min(0.25, limit))
+            except asyncio.TimeoutError:
+                if self._state.status_seq != seq:
+                    seq, since = self._state.status_seq, loop.time()
+                elif loop.time() - since > limit:
+                    raise asyncio.TimeoutError(
+                        f"GRBL unresponsive: no status report for {limit:g} s "
+                        f"while waiting for 'ok' to: {command.strip()}"
+                    )
 
     async def send_realtime(self, data: bytes) -> None:
         """Send a GRBL real-time command byte immediately, bypassing the command queue."""
@@ -212,10 +243,15 @@ class GRBLCommunicator:
 
         # Alarm
         if line.startswith("ALARM:"):
-            self._state.grbl_state = line  # e.g. "ALARM:1"
+            self._state.note_alarm(line)  # e.g. "ALARM:1" — machine position may be lost
             self._reject_pending(RuntimeError(line))
             self._state.console_add("rx", line)
             return
+
+        # `$N=value` lines of a `$$` listing: remembered (read only)
+        setting = parse_setting(line)
+        if setting:
+            self._state.grbl_settings[setting[0]] = setting[1]
 
         # Everything else (info lines during $ commands, etc.)
         self._state.console_add("rx", line)

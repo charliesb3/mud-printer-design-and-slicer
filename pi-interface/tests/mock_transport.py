@@ -34,8 +34,11 @@ class MockTransport:
                      streaming logic rather than response handling.
             status_reply: if set, every '?' status poll is answered with this
                      status report line (tests may change it at any time).
+        `replies`: {command: [lines]} — lines GRBL "prints" before its ok to
+        that command (e.g. the `$$` settings listing).
         """
         self.status_reply = status_reply
+        self.replies: dict = {}
         self._rx: Optional[asyncio.Queue] = None  # lazy init
         self._tx_lines: list[str] = []
         self._raw_writes: list[bytes] = []
@@ -58,6 +61,8 @@ class MockTransport:
     async def write_line(self, line: str) -> None:
         stripped = line.strip()
         self._tx_lines.append(stripped)
+        for extra in self.replies.get(stripped, []):
+            await self._queue().put(extra)
         if self._auto_ok and stripped and not stripped.startswith("?"):
             # Status polls (?) are not commands — no ok response
             await self._queue().put("ok")

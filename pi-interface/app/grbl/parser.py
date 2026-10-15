@@ -154,3 +154,46 @@ def program_control_reason(line: str) -> str | None:
     if m:
         return f"program pause/end word {m.group(0)}"
     return None
+
+
+# GRBL setting line in a `$$` listing: "$13=0" (optionally followed by a comment).
+_SETTING_RE = re.compile(r'^\$(\d+)=([^\s(]+)')
+
+
+def parse_setting(line: str) -> tuple[int, str] | None:
+    """(number, value) for a GRBL `$N=value` line, else None."""
+    m = _SETTING_RE.match(line.strip())
+    return (int(m.group(1)), m.group(2)) if m else None
+
+
+# Building-job lift G-code rules for the CURRENT machine (XY-only, the
+# controller owns the work coordinate system).
+_Z_WORD_RE = re.compile(r'Z[-+.\d]')
+_XY_WORD_RE = re.compile(r'[XY][-+.\d]')
+_COORD_CHANGE_RE = re.compile(r'G0*(10|92)(?![\d])')
+_UNITS_RE = re.compile(r'G0*2[01](?![\d.])')
+_DISTANCE_RE = re.compile(r'G9[01](?![\d.])')
+
+
+def lift_gcode_reason(lines: list[str]) -> str | None:
+    """
+    Why a building-job lift's (comment-stripped) G-code is not executable on
+    the current machine, or None. Each lift must set units (G20/G21) and
+    distance mode (G90/G91) itself before any XY motion (never relying on the
+    controller's previous modal state — the operator may jog / re-zero
+    between lifts); no Z words (Z is not a GRBL axis); no G10 / G92 (the
+    controller owns the work coordinate system).
+    """
+    units = distance = False
+    for n, line in enumerate(lines, start=1):
+        u = strip_gcode_comment(line).upper().replace(' ', '')
+        if _Z_WORD_RE.search(u):
+            return f"line {n} ({line}): Z words are not allowed (Z is not a GRBL axis on this machine)"
+        if _COORD_CHANGE_RE.search(u):
+            return f"line {n} ({line}): G10 / G92 are not allowed (the controller owns the work coordinates)"
+        units = units or bool(_UNITS_RE.search(u))
+        distance = distance or bool(_DISTANCE_RE.search(u))
+        if _XY_WORD_RE.search(u) and not (units and distance):
+            return (f"line {n} ({line}): XY motion before the lift sets its units (G20/G21) "
+                    f"and distance mode (G90/G91)")
+    return None

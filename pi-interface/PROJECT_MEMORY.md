@@ -65,7 +65,7 @@ End: job.state="completed" when all lines sent or M2/M30/% encountered.
 
 Lifts (2026-10-14): the runner streams `job.lifts` in order (a flat G-code
 file = one lift → identical M1 behaviour). After every non-final lift:
-`G4 P0` drain (no timeout by default, `LIFT_DRAIN_TIMEOUT_S`) → wait for a
+`G4 P0` drain (live ok-wait) → wait for a
 status report newer than the dwell's ok showing Idle (`AppState.status_seq`)
 → `awaiting_reposition` (`awaiting_lift` = next lift) → poll until the
 confirm handler sets `running`. GRBL disconnect or reset (`AppState.reset_seq`)
@@ -85,7 +85,9 @@ before the boundary.
 
 ### Dead-Man Jog
 
-Jog sends incremental `$J=G91 {axis}{step_mm:.3f} F{speed}` commands in a loop.
+Jog sends incremental `$J=G21 G91 {axis}{step_mm:.3f} F{speed}` commands in a loop.
+(`G21` added 2026-10-14: jobs and positioning moves now leave GRBL in G20;
+units in a `$J=` line are non-modal, so jog steps are always millimetres.)
 `step_mm = JOG_SPEED_MM_MIN * JOG_SEND_INTERVAL_S / 60`
 
 The jog loop terminates if:
@@ -128,8 +130,9 @@ pi-interface/
 │   ├── test_parser.py      # 34 tests
 │   ├── test_communicator.py # 18 tests
 │   ├── test_runner.py      # 13 tests
-│   ├── test_lifts.py       # 66 tests (contract, fixtures, sequencing, handler rules)
-│   └── test_api.py         # 23 tests (incl. building/export upload, .muddesign refusal, synced clients)
+│   ├── test_lifts.py       # 82 tests (contract + current-machine lift rules, fixtures incl. executing the Designer export, sequencing, handler rules)
+│   ├── test_setup.py       # 25 tests (live ok-wait, origin / prime, Start returns to origin, reposition re-zero)
+│   └── test_api.py         # 25 tests (building/export upload, .muddesign refusal, synced clients incl. setup)
 ├── docs/
 │   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
 │   ├── deployment.md              # Pi OS, systemd, kiosk, networking
@@ -159,6 +162,7 @@ All settings in `.env`. Key values:
 | `JOG_SEND_INTERVAL_S` | `0.15` | Interval between incremental jog commands |
 | `JOG_TIMEOUT_S` | `0.3` | Dead-man timeout — motion stops if no heartbeat |
 | `STATUS_POLL_INTERVAL_S` | `0.2` | How often `?` is sent to GRBL |
+| `GRBL_UNRESPONSIVE_S` | `5.0` | Job lines / drains / positioning moves fail only after this long WITHOUT any status report (replaced `LIFT_DRAIN_TIMEOUT_S`) |
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `8000` | HTTP port |
 
@@ -199,13 +203,57 @@ Implemented 2026-10-14 (P1 + P2, contract finalized in P3):
 - Confirmation names the lift it confirms (stale/double confirm refused), is
   accepted only while GRBL is Idle, and `resume` never confirms.
 - M0/M1/M2/M30/%/`$` are rejected inside lift G-code; the Pi owns pauses.
-- While `awaiting_reposition` the job is ACTIVE: jog, console, upload and
-  start are refused (conservative until decision on frame raise / re-zeroing;
-  revisit if the operator must jog or re-zero between lifts).
+- While `awaiting_reposition` the job is ACTIVE: console, upload and start are
+  refused; JOG, SET ORIGIN, SET PRIME and PRIME are allowed (changed
+  2026-10-14 with the XY-origin decision — previously jog was refused too).
+  Confirmation additionally requires the origin to be established and no
+  motion in progress.
 - GRBL disconnect/reset while awaiting → job error (position untrusted; no
   resume-at-lift yet).
-- Design + Toolpath exports `.mudjob` (P3) but no G-code: every export is
-  non-executable until the machine semantics are decided.
+- Design + Toolpath exports EXECUTABLE `.mudjob` jobs (current-machine pass):
+  each lift `G20` + `G90` + absolute `G1` XY moves; the Pi validates per lift:
+  units + distance mode before any XY motion, no Z words, no G10 / G92
+  (`parser.lift_gcode_reason`). `layer_marks` (mapped to sendable-line
+  indices) drive the "Layer n · nozzle Z … — Z is manual" cue; `xy_bounds`
+  shown in lift details.
+
+### Print origin, prime position, Start returns to origin (decided 2026-10-14)
+Current machine: XY-only jobs, manual Z, manual pump. The building toolpath
+is in WORK coordinates whose origin the operator establishes (contract:
+`contracts/mudjob/README.md`). Pi-owned `AppState.setup` (`MachineSetup`, in
+memory):
+- **Set Origin** (UI hold 1.5 s; `set_origin`): `$$` (read-only, learns `$13`
+  report units), `G54`, `G10 L20 P1 X0 Y0` (work XY zero = here; Z untouched;
+  G10 stores the G54 offset in GRBL EEPROM). Records the machine position.
+- **Set Prime Position** (`set_prime`): current work XY in inches (from MPos −
+  origin MPos, or WPos if `$10` reports it; converted with `$13`). Stored
+  RELATIVE to the origin, so it follows a re-zero.
+- **Prime** (UI hold 1 s; `prime`): background move `G54 G20 G90 G1 X… Y…`
+  at the jog speed, then `G4 P0` + Idle; `setup.moving = "prime"`; Stop
+  cancels it. The operator runs the pump by hand. Never part of the job.
+- **Start** of a building job requires the origin and a jog speed; the runner
+  first sends `G54 G20 G90 G1 X0 Y0 F<jog speed in/min>` (`job.phase =
+  "origin"`), then the lifts. Flat G-code: no origin needed, no return (M1).
+- Allowed when connected, GRBL Idle, no motion / jog in progress and no job
+  running or held (a job awaiting a frame reposition is fine).
+- Origin INVALIDATED (prime kept, unusable until a new origin) on GRBL
+  disconnect (incl. the Uno's reset on serial reopen) and on any ALARM
+  (status `Alarm` or `ALARM:n`): machine position may be lost. An idle soft
+  reset keeps it. Positioning speed = the validated jog speed (no separate
+  setting; disabled while jogging is disabled).
+- Why G10 L20 / G54 rather than G92 or G28/G30: standard, persists across
+  idle resets, motion stays in G54; G28/G30 store MACHINE positions (prime
+  must follow the origin) and move at the unvalidated rapid rate.
+
+### Live ok-wait instead of a fixed per-line timeout (decided 2026-10-14)
+GRBL withholds `ok` while its 15-block planner buffer is full (until the
+oldest block finishes — one long slow move can take minutes here) and during
+a feed hold, so the M1 10 s per-line timeout would have failed healthy jobs.
+Job lines, lift drains, the origin return and positioning moves use
+`send_command(..., live=True)`: no time limit while status polls keep being
+answered (they are real-time, answered even while GRBL blocks); fail after
+`GRBL_UNRESPONSIVE_S` (5 s) with no status report. Disconnect / reset / alarm
+still reject at once. Console / jog / setup keep the fixed timeout.
 
 ### Independent of Design + Toolpath — the `.mudjob` file is the only boundary (decided 2026-10-14)
 The Pi interface never imports Design + Toolpath code, shares no runtime
@@ -245,7 +293,8 @@ no effect on it. This is a hard requirement from the user.
 ### Conservative streaming (line-at-a-time)
 Send one line, wait for ok, send next. No character-counting buffer. Simpler,
 safe, appropriate for this machine scale. Can revisit if throughput becomes a
-bottleneck (unlikely for large-scale printing with slow moves).
+bottleneck (unlikely for large-scale printing with slow moves). The wait for
+each ok is LIVE (see "Live ok-wait"), not a fixed timeout.
 
 ### GRBL configuration must not be modified
 The Pi interface communicates through the GRBL serial protocol only.
@@ -320,10 +369,11 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-154 tests total, all passing on Python 3.9 (Mac development environment):
-the 78 M1 tests unchanged + 76 lift / building-job / contract tests. `MockTransport` can
-answer `?` polls with a settable `status_reply` (used to simulate Run→Idle
-around a lift drain). API tests that need machine state set directly patch
+196 tests total, all passing on Python 3.9 (Mac development environment):
+the 78 M1 tests unchanged + lift / building-job / contract / setup tests.
+`MockTransport` can answer `?` polls with a settable `status_reply` (used to
+simulate Run→Idle around a lift drain, positions, alarms) and print scripted
+`replies` before an ok (the `$$` listing). API tests that need machine state set directly patch
 out `main._connection_loop` (`offline_client` fixture).
 
 ---
@@ -357,6 +407,15 @@ refused, lift-details list in the UI. Verified end to end over HTTP only
 (Designer on :5051 plans + exports → uploaded to the Pi on :8765 → lifts
 0–2 / 3–5 / 6–7 shown as exported, start refused). 154 tests pass.
 
+**Current-machine execution pass, 2026-10-14:** executable Designer exports
+validated and run; origin / prime / Start-returns-to-origin; jog + re-zero +
+prime during a frame reposition; live ok-waits; jog in G21; layer / Z cue for
+manual Z. 196 tests pass. Verified end to end over HTTP / WebSocket only
+against a throwaway fake GRBL (Designer :5051 export → Pi :8765: Start
+refused without origin → Set Origin → jog → Set Prime → Prime → Start (origin
+return) → lift 1 → jog + re-zero during the reposition → confirm → lift 2 →
+completed). Not yet visually reviewed in a browser; not run on hardware.
+
 **Not yet complete:**
 - Physical machine testing on the Pi (hardware not yet available)
 - Pi deployment and systemd configuration (depends on hardware)
@@ -382,28 +441,21 @@ refused, lift-details list in the UI. Verified end to end over HTTP only
   Lift boundaries are natural safe restart points: persist progress there
   and offer "start at lift N"?)
 
-Lift-job questions (2026-10-14, need user decisions before the exporter):
-- Z inside a lift: layers, back-down moves to another island (dz < 0) and
-  clear-height travels all change Z. Z is (to be) Pi-commanded via the MD13S
-  but open-loop with no position feedback — XY-only G-code with operator /
-  Pi Z steps, per-layer pauses, or other? (`z_within_lift`)
-- Travels/transitions with the pump independently running: plain moves or
-  operator pause?
-- Does a frame raise preserve XY registration / GRBL position, or involve
-  power-down / reset / re-zeroing? (Determines whether jog/console must be
-  allowed while awaiting reposition — both are blocked during an active job.)
-- XY work zero: operator-set before start, or an offset in the export?
-  G20 (inches, matching the plan) or convert to G21 mm?
+Lift-job questions — RESOLVED 2026-10-14 (current-machine decisions): Z
+manual (XY-only jobs); travel = plain moves regardless of the pump; XY origin
+set by the operator on the controller, re-zero allowed between lifts; G20
+inches. Still open:
 - Confirmation strength: single hold-to-confirm (implemented, provisional)
   or a checklist?
 - Is `G4 P0` accepted and does it synchronise as expected on the installed
-  GRBL? (Expected per GRBL 1.1; verify on hardware.)
+  GRBL? Does `G10 L20 P1` behave as expected? (GRBL 1.1; verify on hardware.)
+- Origin / prime are in memory only: lost on a Pi restart (and the E-stop is
+  believed to power the Pi down — `../CONTROL_BOX_HARDWARE.md`).
+- GRBL ALARM during a frame reposition: no Unlock (`$X`) control while a job
+  is active (console blocked) — the operator must Stop the job.
 
-Risk found 2026-10-14 (M1, not yet addressed): line-at-a-time streaming uses
-`COMMAND_TIMEOUT_S` = 10 s per line. GRBL withholds `ok` while its planner
-buffer is full, so on this machine's long, slow moves a single line's ok can
-plausibly exceed 10 s → TimeoutError → job error. Needs a decision/fix before
-real prints (e.g. longer/no per-line timeout while a job runs).
+~~Risk found 2026-10-14: fixed 10 s per-line ok timeout~~ — RESOLVED the same
+day by the live ok-wait (see Key Decisions).
 
 ---
 
@@ -421,11 +473,13 @@ Lift-aware job work:
 - ~~P1~~ / ~~P2~~ done 2026-10-14 (see Current State).
 - Manual visual review of the lift UI in a browser (laptop) and later on the
   Pi touchscreen kiosk; adjust layout if needed.
-- Decide the per-line timeout risk above before the first real print.
-- ~~P3~~ done 2026-10-14: `.mudjob` interchange (non-executable exports).
-- Executable export: blocked on the machine decisions (Z within a lift,
-  travel with the pump, XY origin, machine units, frame-reposition
-  behaviour); then the Designer adds `gcode` per lift + `executable: true`.
+- ~~Decide the per-line timeout risk~~ (live ok-wait, 2026-10-14).
+- ~~P3~~ done 2026-10-14: `.mudjob` interchange; ~~executable export~~ done
+  (current-machine pass, XY-only).
+- Manual browser review of the origin / prime / reposition workflow.
+- Hardware: validate jog speed (also the origin-return / prime speed), check
+  G4 P0, G10 L20 and the `$13` units on the real GRBL, then a first
+  air-print (no material) of an exported job.
 - Third-party G-code compatibility / preflight (later, not started).
 
 Hardware-facing work (not started; needs `../CONTROL_BOX_HARDWARE.md` VERIFY
@@ -451,6 +505,9 @@ behaviour definition.
   139 tests passing (commit 08cc8d0, pushed)
 - 2026-10-14: P3 `.mudjob` contract finalized + Designer export import;
   154 tests passing
+- 2026-10-14: current-machine execution (executable XY-only jobs, origin /
+  prime, Start returns to origin, reposition re-zero, live ok-wait);
+  196 tests passing
 - Deployment documentation written
 - GRBL capture checklist written
 - Acceptance test procedure written
@@ -458,6 +515,12 @@ behaviour definition.
 ---
 
 ## Last Updated
+
+2026-10-14 (current-machine execution)
+
+Executable `.mudjob` jobs run: origin / prime workflow, Start returns to the
+origin, jog / re-zero / prime while awaiting a reposition, live ok-waits
+(fixed 10 s per-line timeout risk resolved), jog in G21. 196 tests passing.
 
 2026-10-14 (control box)
 

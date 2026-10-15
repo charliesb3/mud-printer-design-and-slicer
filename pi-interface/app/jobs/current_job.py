@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..grbl.parser import prepare_gcode_line, program_control_reason
+from ..grbl.parser import lift_gcode_reason, prepare_gcode_line, program_control_reason
 
 
 JOB_FORMAT = "mudprinter-job"
@@ -57,6 +57,19 @@ class JobLift:
     description: Optional[str] = None
     reposition_before: Optional[dict] = None     # shown to the operator, never interpreted
     meta: dict = field(default_factory=dict)     # LIFT_META_KEYS, display only
+    # layer / Z metadata for the operator (manual Z): [{line, layer, z,
+    # z_in_lift, pass}] with `line` = index into `lines` where it begins
+    marks: list = field(default_factory=list)
+
+    def mark_at(self, line: int) -> Optional[dict]:
+        """The layer mark in effect once `line` lines of this lift have been sent."""
+        cur = None
+        for m in self.marks:
+            if m["line"] <= line:
+                cur = m
+            else:
+                break
+        return cur if cur is not None else (self.marks[0] if self.marks else None)
 
     def to_dict(self) -> dict:
         d: dict = {"index": self.index, "total_lines": len(self.lines)}
@@ -78,6 +91,8 @@ class CurrentJob:
     name: Optional[str] = None
     units: Optional[str] = None   # informational only — never converted
     executable: bool = True       # False: structure only (no G-code) — displayed, never run
+    xy_bounds: Optional[dict] = None   # building XY extent in work coordinates (display only)
+    phase: Optional[str] = None        # "origin" while returning to the print origin
     unresolved: list = field(default_factory=list)   # [{id, summary}] why not executable
     state: str = "ready"  # ready | running | held | awaiting_reposition | stopped | completed | error
     current_line: int = 0         # lines acknowledged, across the whole job
@@ -109,6 +124,7 @@ class CurrentJob:
         return sum(len(l.lines) for l in self.lifts[:lift_index])
 
     def reset_progress(self) -> None:
+        self.phase = None
         self.state = "ready"
         self.current_line = 0
         self.current_lift = 0
@@ -152,6 +168,9 @@ class CurrentJob:
             "lift_line": min(lift_line, len(lift.lines)),
             "lift_total_lines": len(lift.lines),
             "lifts": [l.to_dict() for l in self.lifts],
+            "phase": self.phase,
+            "xy_bounds": self.xy_bounds,
+            "current_mark": lift.mark_at(min(lift_line, len(lift.lines))),
         }
         if self.error:
             d["error"] = self.error
@@ -243,6 +262,9 @@ def parse_building_job(text: str, filename: str = "") -> dict:
                 reason = program_control_reason(line)
                 if reason:
                     raise JobFormatError(f"{where}, line {n} ({line}): {reason} is not allowed inside a lift")
+            reason = lift_gcode_reason(lines)
+            if reason:
+                raise JobFormatError(f"{where}, {reason}")
         elif "gcode" in raw:
             raise JobFormatError(f"{where}: a non-executable job carries no 'gcode'")
         repo = raw.get("reposition_before")
@@ -254,17 +276,50 @@ def parse_building_job(text: str, filename: str = "") -> dict:
         if desc is not None and not isinstance(desc, str):
             raise JobFormatError(f"{where}: 'description' must be a string")
         meta = {k: raw[k] for k in LIFT_META_KEYS if k in raw}
-        lifts.append(JobLift(index=pos, lines=lines, description=desc, reposition_before=repo, meta=meta))
+        marks = _layer_marks(raw, where) if executable else []
+        lifts.append(JobLift(index=pos, lines=lines, description=desc, reposition_before=repo, meta=meta,
+                             marks=marks))
 
     name = doc.get("name")
     units = doc.get("units")
+    bounds = doc.get("xy_bounds")
+    if bounds is not None and not (isinstance(bounds, dict) and all(
+            isinstance(bounds.get(k), (int, float)) for k in ("min_x", "min_y", "max_x", "max_y"))):
+        raise JobFormatError("'xy_bounds' must be {min_x, min_y, max_x, max_y} numbers")
     return {
         "name": name if isinstance(name, str) else None,
         "units": units if isinstance(units, str) else None,
+        "xy_bounds": bounds,
         "executable": executable,
         "unresolved": [{"id": u["id"], "summary": u["summary"]} for u in unresolved],
         "lifts": lifts,
     }
+
+
+def _layer_marks(raw: dict, where: str) -> list:
+    """A lift's optional `layer_marks` (display only), with `line` converted
+    from an index into the raw `gcode` list to an index into the sendable
+    (comment-stripped) lines."""
+    marks = raw.get("layer_marks")
+    if marks is None:
+        return []
+    gcode = raw["gcode"]
+    if not isinstance(marks, list) or not all(
+            isinstance(m, dict) and isinstance(m.get("line"), int) and not isinstance(m.get("line"), bool)
+            and 0 <= m["line"] <= len(gcode) for m in marks):
+        raise JobFormatError(f"{where}: 'layer_marks' must be a list of {{line, …}} with line indices into 'gcode'")
+    sendable_before, n = [], 0
+    for g in gcode:
+        sendable_before.append(n)
+        if prepare_gcode_line(g):
+            n += 1
+    sendable_before.append(n)
+    out = []
+    for m in sorted(marks, key=lambda m: m["line"]):
+        d = {k: m[k] for k in ("layer", "pass", "z", "z_in_lift") if isinstance(m.get(k), (int, float))}
+        d["line"] = sendable_before[m["line"]]
+        out.append(d)
+    return out
 
 
 def load_job_from_file(filepath: Path) -> CurrentJob:
@@ -281,6 +336,7 @@ def load_job_from_file(filepath: Path) -> CurrentJob:
             units=parsed["units"],
             executable=parsed["executable"],
             unresolved=parsed["unresolved"],
+            xy_bounds=parsed["xy_bounds"],
         )
     return CurrentJob(
         filename=filepath.name,

@@ -904,11 +904,14 @@ def api_print_job():
     """EXPORT PRINT JOB (2026-10-14): the CURRENT planned print as a `.mudjob`
     machine job (machine_job.py; contract: contracts/mudjob/README.md).
     Body: the same request that planned it (/api/assembly/print_plan:
-    `assembly`, `designs`, `wall_systems`, `start`) + `name` (project name).
-    Exports ONLY a plan already made for exactly this request (Plan Print) —
-    it never plans, routes or re-derives anything; otherwise 409 `outdated`.
-    → {job: <.mudjob document>, filename, executable, unresolved}."""
+    `assembly`, `designs`, `wall_systems`, `start`) + `name` (project name)
+    + `speeds` (optional; default the Assembly's print_speeds — feeds of the
+    G-code). Exports ONLY a plan already made for exactly this request (Plan
+    Print) — it never plans, routes or re-derives anything; otherwise 409
+    `outdated`. → {job: <executable .mudjob document>, filename, executable,
+    lines, placeholder_speeds}."""
     from .machine_job import ExportError, export_job, job_filename
+    from .print_plan import PrintSpeeds, PlanError
     data = request.get_json(force=True)
     try:
         if not data.get('designs') or not isinstance(data.get('assembly'), dict):
@@ -919,11 +922,14 @@ def api_print_job():
             return jsonify({'error': 'There is no current print plan for this design — plan the print '
                                      '(Plan Print) and export again.', 'outdated': True}), 409
         name = data.get('name') if isinstance(data.get('name'), str) else None
-        doc = export_job(cached[0], name=(name or '').strip() or None)
-    except (AssemblyError, ExportError, KeyError, ValueError, TypeError) as e:
+        given = data.get('speeds') or (data['assembly'].get('print_speeds') or {})
+        placeholder = not (given.get('print') and given.get('travel'))
+        doc = export_job(cached[0], PrintSpeeds.from_dict(given), name=(name or '').strip() or None,
+                         placeholder_speeds=placeholder)
+    except (AssemblyError, ExportError, PlanError, KeyError, ValueError, TypeError) as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'job': doc, 'filename': job_filename(name), 'executable': doc['executable'],
-                    'unresolved': doc.get('unresolved', [])})
+                    'lines': sum(len(L['gcode']) for L in doc['lifts']), 'placeholder_speeds': placeholder})
 
 
 @bp.route('/api/assembly/print_plan/cancel', methods=['POST'])

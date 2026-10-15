@@ -101,8 +101,10 @@ Implementation consequences (for coding agents):
   **VERIFY**). UP and DOWN active at the same time — or any contradictory /
   unexpected input combination — resolves to **STOP / no motion**, never to
   either direction. Inputs are debounced.
-- What Z does *within a print* (layer steps etc.) is still the undecided
-  `z_within_lift` machine semantic (`contracts/mudjob/README.md`).
+- Current print jobs are XY-only and Z stays MANUAL during printing (decided
+  2026-10-14, `PROJECT_OVERVIEW.md` → "Current machine execution"); jobs
+  carry layer / Z only as metadata. Using this Z hardware path within prints
+  (automatic Z) is future work.
 
 ## Wireless remote (planned)
 

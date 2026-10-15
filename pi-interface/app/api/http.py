@@ -14,6 +14,9 @@ WebSocket (/ws):
     stop           {}  — terminates the current job + sends GRBL soft reset
     job_start      {}
     confirm_reposition {lift: int}  — 0-based index of the lift about to start
+    set_origin     {}  — print origin = current XY (work XY zero, G54)
+    set_prime      {}  — prime position = current XY (work coordinates)
+    prime          {}  — move to the prime position (operator then runs the pump)
     console_send   {command: str}
 
   Server → Client message types:
@@ -59,7 +62,7 @@ from fastapi import APIRouter, File, UploadFile, WebSocket, WebSocketDisconnect
 from .. import config
 from ..grbl.communicator import GRBLCommunicator
 from ..jobs.current_job import CurrentJob, JobFormatError, load_job_from_file
-from ..jobs.runner import JobRunner
+from ..jobs.runner import DRAIN_COMMAND, JobRunner
 from ..state import AppState
 from .ws import ConnectionManager
 
@@ -82,6 +85,9 @@ _jog_axis: Optional[str] = None
 _jog_direction: int = 1
 _jog_last_heartbeat: float = 0.0
 _jog_task: Optional[asyncio.Task] = None
+
+# Positioning move (Prime) in progress
+_position_task: Optional[asyncio.Task] = None
 
 
 def init(
@@ -142,7 +148,9 @@ async def _jog_loop(axis: str, direction: int) -> None:
                 break
 
             distance = direction * step
-            cmd = f"$J=G91 {axis}{distance:.3f} F{speed:.0f}"
+            # G21 in the jog line (non-modal in GRBL jogging): steps and speed
+            # are millimetres whatever units mode jobs / positioning left active.
+            cmd = f"$J=G21 G91 {axis}{distance:.3f} F{speed:.0f}"
             try:
                 result = await _comm.send_command(cmd, timeout=3.0)  # type: ignore[union-attr]
                 if result.startswith("error:"):
@@ -173,10 +181,13 @@ async def _start_jog(axis: str, direction: int) -> None:
         log.debug("Jog rejected: GRBL state is %s", _state.grbl_state)
         return
 
-    # A job owns the machine while running, held, or awaiting a frame
-    # reposition (GRBL is Idle then, but jogging would move the job's XY).
-    if _current_job and _current_job.is_active:
+    # A job owns the machine while running or held. While it AWAITS a frame
+    # reposition the operator may jog (and re-zero) before confirming.
+    if _current_job and _current_job.state in ("running", "held"):
         log.debug("Jog rejected: job is %s", _current_job.state)
+        return
+    if _state and _state.setup.moving:
+        log.debug("Jog rejected: positioning move in progress")
         return
 
     # Cancel previous jog task if still running
@@ -229,10 +240,22 @@ async def _start_job() -> Optional[str]:
     if _state and _state.grbl_state not in ("Idle",):
         log.warning("job_start: GRBL state is %s — must be Idle", _state.grbl_state)
         return f"GRBL must be Idle to start (it is {_state.grbl_state})."
+    if _state and _state.setup.moving:
+        return "A positioning move is in progress."
+    origin_feed = None
+    if _current_job.kind == "building":
+        # A building job is in work coordinates from the print origin and
+        # starts by returning there.
+        if _state is None or not _state.setup.origin_set:
+            return "Set the print origin first (jog to it, then Set Origin)."
+        origin_feed = _positioning_feed_in_min()
+        if origin_feed is None:
+            return ("Moves to the origin use the jog speed, and jogging is disabled "
+                    "(JOG_SPEED_MM_MIN not set).")
 
     assert _comm is not None
     _current_job.reset_progress()
-    runner = JobRunner(_comm, _current_job)
+    runner = JobRunner(_comm, _current_job, origin_feed_in_min=origin_feed)
     _runner_task = asyncio.create_task(runner.run(), name="job-runner")
     return None
 
@@ -245,6 +268,8 @@ async def _stop_job() -> None:
 
     if _comm:
         await _comm.send_realtime(b"\x18")  # GRBL soft reset
+
+    await _cancel_positioning()
 
     if _runner_task and not _runner_task.done():
         _runner_task.cancel()
@@ -263,9 +288,153 @@ def _confirm_reposition(lift) -> Optional[str]:
         return "Confirmation must name the lift it confirms."
     if _state is None or not _state.connected:
         return "Not connected to GRBL."
-    if _current_job.state == "awaiting_reposition" and _state.grbl_state != "Idle":
-        return f"GRBL must be Idle to continue (it is {_state.grbl_state})."
+    if _current_job.state == "awaiting_reposition":
+        if _state.grbl_state != "Idle":
+            return f"GRBL must be Idle to continue (it is {_state.grbl_state})."
+        if _state.setup.moving or (_jog_task and not _jog_task.done()):
+            return "Wait until the machine has stopped moving."
+        if _current_job.kind == "building" and not _state.setup.origin_set:
+            return "The print origin is not established — Set Origin before continuing."
     return _current_job.confirm_reposition(lift)
+
+
+# ------------------------------------------------------------------ #
+# Print origin / prime position (operator machine setup, 2026-10-14)   #
+# ------------------------------------------------------------------ #
+# Priming is MACHINE OPERATION, never part of the .mudjob toolpath. The
+# operator jogs to the print origin → Set Origin (work XY zero), jogs to a
+# nearby safe spot → Set Prime Position, Prime moves there (the pump is run
+# by hand), Start returns to the origin before the building toolpath. Allowed
+# while no job is running — including while a job AWAITS a frame reposition
+# (re-zero after the frame raise, prime again). Positioning moves use the
+# validated jog speed.
+
+def _positioning_feed_in_min() -> Optional[float]:
+    """Feed (in/min) of Pi positioning moves = the jog speed; None = disabled."""
+    if config.JOG_SPEED_MM_MIN is None:
+        return None
+    return config.JOG_SPEED_MM_MIN / 25.4
+
+
+def _setup_refusal() -> Optional[str]:
+    """Why origin / prime actions are not possible right now (None: they are)."""
+    if _state is None or _comm is None or not _state.connected:
+        return "Not connected to GRBL."
+    if _current_job and _current_job.state in ("running", "held"):
+        return "A job is running — wait for a frame reposition or stop the job."
+    if _state.setup.moving:
+        return "A positioning move is in progress."
+    if _jog_task and not _jog_task.done():
+        return "Release the jog button first."
+    if _state.grbl_state != "Idle":
+        return f"GRBL must be Idle (it is {_state.grbl_state})."
+    return None
+
+
+async def _fresh_status(timeout: float = 2.0) -> bool:
+    """Wait for a status report newer than now."""
+    assert _state is not None
+    seq, deadline = _state.status_seq, time.monotonic() + timeout
+    while _state.status_seq == seq:
+        if time.monotonic() > deadline:
+            return False
+        await asyncio.sleep(0.02)
+    return True
+
+
+async def _set_origin() -> Optional[str]:
+    refusal = _setup_refusal()
+    if refusal:
+        return refusal
+    assert _comm is not None and _state is not None
+    try:
+        await _comm.send_command("$$")          # read-only: learn report units ($13)
+        for cmd in ("G54", "G10 L20 P1 X0 Y0"):  # work XY zero here (Z untouched)
+            result = await _comm.send_command(cmd)
+            if result.startswith("error:"):
+                return f"GRBL refused {cmd}: {result}"
+    except Exception as exc:
+        return f"Set Origin failed: {exc}"
+    if not await _fresh_status():
+        return "No status report from GRBL after setting the origin."
+    setup = _state.setup
+    setup.origin_mpos = (_state.mpos_x, _state.mpos_y) if _state.pos_kind == "mpos" else None
+    setup.origin_set = True
+    setup.note = None
+    log.info("Print origin set at machine XY %s", setup.origin_mpos)
+    return None
+
+
+async def _set_prime() -> Optional[str]:
+    refusal = _setup_refusal()
+    if refusal:
+        return refusal
+    assert _state is not None
+    if not _state.setup.origin_set:
+        return "Set the print origin first — the prime position is stored relative to it."
+    if _state.report_units is None:
+        return "GRBL report units ($13) unknown — Set Origin again."
+    await _fresh_status()
+    work = _state.work_position_in()
+    if work is None:
+        return "The current work position is not known."
+    _state.setup.prime = work
+    _state.setup.note = None
+    log.info("Prime position set at work XY %.4f, %.4f in", *work)
+    return None
+
+
+async def _prime() -> Optional[str]:
+    """Start the move to the prime position (a background task)."""
+    global _position_task
+    refusal = _setup_refusal()
+    if refusal:
+        return refusal
+    assert _state is not None and _comm is not None
+    setup = _state.setup
+    if not setup.origin_set:
+        return "Set the print origin first."
+    if not setup.prime:
+        return "Set a prime position first (jog there, then Set Prime Position)."
+    feed = _positioning_feed_in_min()
+    if feed is None:
+        return "Moves use the jog speed, and jogging is disabled (JOG_SPEED_MM_MIN not set)."
+    line = f"G54 G20 G90 G1 X{setup.prime[0]:.4f} Y{setup.prime[1]:.4f} F{feed:.1f}"
+    setup.moving = "prime"
+    setup.note = None
+    _position_task = asyncio.create_task(_run_positioning(line), name="positioning")
+    return None
+
+
+async def _run_positioning(line: str) -> None:
+    assert _state is not None and _comm is not None
+    setup = _state.setup
+    try:
+        for cmd in (line, DRAIN_COMMAND):        # the move, then wait until it has finished
+            result = await _comm.send_command(cmd, live=True)
+            if result.startswith("error:"):
+                setup.note = f"Move refused by GRBL ({cmd}): {result}"
+                return
+        await _fresh_status()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        setup.note = f"Move failed: {exc}"
+    finally:
+        setup.moving = None
+
+
+async def _cancel_positioning() -> None:
+    global _position_task
+    if _position_task and not _position_task.done():
+        _position_task.cancel()
+        try:
+            await _position_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _position_task = None
+    if _state:
+        _state.setup.moving = None
 
 
 async def _notify(ws: WebSocket, message: str, level: str = "warn") -> None:
@@ -287,7 +456,8 @@ async def broadcast_state() -> None:
 # ------------------------------------------------------------------ #
 
 # Messages that change machine/job state: broadcast to all clients right after.
-_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition"}
+_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition",
+                   "set_origin", "set_prime", "prime"}
 
 
 async def _handle_message(data: dict, ws: WebSocket) -> None:
@@ -326,6 +496,13 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
     elif msg_type == "job_start":
         refusal = await _start_job()
         if refusal:
+            await _notify(ws, refusal)
+
+    elif msg_type in ("set_origin", "set_prime", "prime"):
+        action = {"set_origin": _set_origin, "set_prime": _set_prime, "prime": _prime}[msg_type]
+        refusal = await action()
+        if refusal:
+            log.info("%s refused: %s", msg_type, refusal)
             await _notify(ws, refusal)
 
     elif msg_type == "confirm_reposition":

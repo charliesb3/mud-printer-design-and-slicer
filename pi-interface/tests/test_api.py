@@ -63,7 +63,7 @@ class TestStateEndpoint:
         resp = client.get("/api/state")
         data = resp.json()
         required = ["type", "connected", "grbl_state", "x", "y",
-                    "feed_rate", "jog_enabled", "jog_warning", "job"]
+                    "feed_rate", "jog_enabled", "jog_warning", "job", "setup"]
         for field in required:
             assert field in data, f"Missing field: {field}"
 
@@ -195,6 +195,8 @@ def offline_client(monkeypatch):
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
     main_module.app_state.mark_disconnected()
+    from app.state import MachineSetup
+    main_module.app_state.setup = MachineSetup()
 
 
 def upload_fixture(client):
@@ -210,7 +212,7 @@ class TestBuildingJobUpload:
         assert data["success"] is True
         assert data["kind"] == "building"
         assert data["total_lifts"] == 3
-        assert data["total_lines"] == 13
+        assert data["total_lines"] == 18
 
         job = client.get("/api/state").json()["job"]
         assert job["kind"] == "building"
@@ -225,11 +227,10 @@ class TestBuildingJobUpload:
             files={"file": ("house.mudjob", EXPORTED.read_bytes(), "application/json")},
         ).json()
         assert data["success"] is True
-        assert data["kind"] == "building" and data["executable"] is False
-        assert data["total_lifts"] == 3 and data["total_lines"] == 0
-        assert {u["id"] for u in data["unresolved"]} >= {"z_within_lift", "machine_units"}
+        assert data["kind"] == "building" and data["executable"] is True and data["unresolved"] == []
+        assert data["total_lifts"] == 3 and data["total_lines"] == 60
         job = client.get("/api/state").json()["job"]
-        assert job["executable"] is False
+        assert job["executable"] is True and job["xy_bounds"]["max_x"] == 140.0
         assert [l["index"] for l in job["lifts"]] == [0, 1, 2]
         assert job["lifts"][2]["layers"] == {"first": 4, "last": 5, "count": 2}
 
@@ -269,6 +270,7 @@ class TestSynchronizedClients:
         job.awaiting_lift = 1
         main_module.app_state.connected = True
         main_module.app_state.grbl_state = "Idle"
+        main_module.app_state.setup.origin_set = True
         return job
 
     def test_upload_appears_on_every_client(self, offline_client):
@@ -319,3 +321,25 @@ class TestSynchronizedClients:
             assert s["job"]["state"] == "awaiting_reposition"
             assert s["job"]["awaiting_lift"] == 1
             assert s["job"]["total_lifts"] == 3
+
+    def test_setup_state_is_shared_by_all_clients(self, offline_client):
+        main_module.app_state.connected = True
+        main_module.app_state.grbl_state = "Idle"
+        with offline_client.websocket_connect("/ws") as laptop, offline_client.websocket_connect("/ws") as kiosk:
+            receive_state_until(kiosk, lambda m: "setup" in m)
+            main_module.app_state.setup.origin_set = True
+            main_module.app_state.setup.prime = (1.0, -2.0)
+            laptop.send_json({"type": "hold"})                    # any action broadcasts at once
+            s = receive_state_until(kiosk, lambda m: m["setup"]["origin_set"])
+            assert s["setup"]["prime"] == [1.0, -2.0] and s["setup"]["prime_ready"] is True
+
+    def test_setup_refusal_goes_to_the_requesting_client(self, offline_client):
+        with offline_client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "set_origin"})
+            for _ in range(40):
+                m = ws.receive_json()
+                if m["type"] == "notice":
+                    break
+            else:
+                raise AssertionError("no notice")
+            assert "Not connected" in m["message"]

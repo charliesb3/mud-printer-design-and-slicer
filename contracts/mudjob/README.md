@@ -21,6 +21,10 @@ Version history: version 1 was drafted during Pi P1 (lifts with `gcode`
 only) and finalized in P3 (2026-10-14) — adding `executable` / `unresolved`,
 requiring `index` and later lifts' `reposition_before` — before any exporter
 existed. The P1 draft is superseded; no files in that form were produced.
+Current-machine pass (2026-10-14): the Designer now exports EXECUTABLE jobs;
+executable lifts must set units + distance mode before motion and carry no Z
+/ G10 / G92; optional `machine`, `xy_bounds`, `layer_marks` added
+(display-only, within version 1).
 
 ## Document
 
@@ -30,16 +34,21 @@ UTF-8 JSON, extension `.mudjob`.
 {
   "format": "mudprinter-job",
   "version": 1,
-  "executable": false,
-  "unresolved": [{"id": "machine_units", "summary": "…"}],
+  "executable": true,
   "name": "optional display name",
   "units": "in",
-  "source": {"generator": "…", "generated_at": "…"},
+  "source": {"generator": "…", "generated_at": "…", "speeds_in_s": {"print": 2, "travel": 6},
+             "placeholder_speeds": true},
+  "machine": {"axes": "XY", "z": "manual", "extrusion": "manual",
+              "feeds_in_min": {"print": 120, "travel": 360}},
+  "xy_bounds": {"min_x": 0, "min_y": 0, "max_x": 140, "max_y": 30},
   "lifts": [
     {"index": 0, "description": "Layers 1–12", "layers": {"first": 0, "last": 11, "count": 12},
-     "z_bottom": 0, "z_top": 18},
+     "z_bottom": 0, "z_top": 18,
+     "layer_marks": [{"line": 2, "pass": 0, "layer": 0, "z": 1.5, "z_in_lift": 1.5}],
+     "gcode": ["G20", "G90", "G1 X0 Y0 F360", "G1 X0 Y30 F120", "…"]},
     {"index": 1, "reposition_before": {"rise": 18, "frame_z_from": 0, "frame_z_to": 18},
-     "z_bottom": 18, "z_top": 36}
+     "z_bottom": 18, "z_top": 36, "layer_marks": ["…"], "gcode": ["G20", "G90", "…"]}
   ]
 }
 ```
@@ -55,7 +64,9 @@ UTF-8 JSON, extension `.mudjob`.
 | `lifts` | yes | non-empty list, in print order |
 | `name` | no | display name |
 | `units` | no | unit of every length in the job's METADATA (`z_*`, `rise`, lengths). Display only — consumers convert nothing |
-| `source` | no | provenance (generator, time, planning settings); ignored by the Pi |
+| `source` | no | provenance (generator, time, planning settings, speeds, `placeholder_speeds`); ignored by the Pi |
+| `machine` | no | what the job assumes, display only (current exports: `axes` "XY", `z` "manual", `extrusion` "manual", `feeds_in_min`) |
+| `xy_bounds` | no | `{min_x, min_y, max_x, max_y}` of every move, in work coordinates (`units`) — shown to the operator |
 
 ### Lift
 
@@ -68,41 +79,70 @@ UTF-8 JSON, extension `.mudjob`.
 | `layers` | no | `{first, last, count}` — the PrintPlan's global layer indices (0-based) in this lift |
 | `z_bottom`, `z_top` | no | building Z range of the lift (`units`) |
 | `stages`, `passes`, `runs`, `print_length`, `travel_length` | no | PrintPlan summary numbers, display only |
+| `layer_marks` | no | `[{line, layer, pass, z, z_in_lift}]` — `line` = index into this lift's `gcode` where that layer pass begins; nozzle Z (building, and above the lift's frame base) for the operator / future automatic Z. Display only — never a command |
 
 Unknown keys are ignored (optional, display-only additions are allowed
 within version 1). Any change to a required field or to meaning bumps the
 version; readers reject versions they do not know.
 
+### Coordinates and execution semantics (current machine, 2026-10-14)
+
+- G-code coordinates are WORK coordinates. Their origin (X0 Y0) is the print
+  origin the operator establishes on the machine before printing; the
+  building's own XY (the Designer's world coordinates) is written unchanged —
+  the producer never invents a machine offset. All lifts share the same work
+  coordinate system; the operator may re-establish it between lifts.
+- XY-only: Z is manual (no Z words); Z / layer information travels only as
+  metadata (`layer_marks`, `z_*`).
+- Extrusion is manual and independent: no pump / extrusion commands, and
+  travel is not altered for it.
+- Priming is controller operation, never part of the job's toolpath.
+
 ### Rules for lift G-code (executable jobs)
 
-Ordinary GRBL G-code. The controller owns pauses and the end of the job, so
-a lift may NOT contain `M0`, `M1`, `M2`, `M30` (incl. `M00`…), `%`, or `$`
-system commands.
+Ordinary GRBL G-code. The controller owns pauses, the end of the job and the
+work coordinate system, so a lift may NOT contain `M0`, `M1`, `M2`, `M30`
+(incl. `M00`…), `%`, `$` system commands, `G10` or `G92`, nor any `Z` word.
+Every lift must set its units (`G20` / `G21`) and distance mode (`G90` /
+`G91`) itself before any X/Y motion — it may not rely on modal state left by
+an earlier lift or by the operator's jogging / re-zeroing.
 
 ## Producer: Design + Toolpath (`layer_assembly/machine_job.py`)
 
 "Export Print Job" (Print Simulation workspace) serializes the CURRENT,
 successfully planned PrintPlan: one lift per PrintPlan lift, in order, with
-its layer range, Z range, summary numbers and the PrintPlan's `FrameMove` as
-`reposition_before`. It reconstructs nothing.
+its layer range, Z range, summary numbers, the PrintPlan's `FrameMove` as
+`reposition_before`, and its moves (`print_plan.items()` in print order) as
+G-code. It reconstructs nothing.
 
-Currently every export is `executable: false` with these `unresolved` ids
-(undecided machine semantics — no G-code is generated until they are
-decided): `z_within_lift`, `travel_with_pump`, `xy_origin`,
-`machine_units`, `frame_reposition`.
+Current output (`executable: true`):
+- each lift: `G20`, `G90`, then absolute `G1 X… Y…` moves (4 decimals, F
+  only when it changes): extrusion (print / retrace) at the print speed,
+  travel and layer / island transitions at the travel speed (`G1`, not `G0`:
+  the controller's rapid rate is not validated for this machine);
+- the first move of every lift is a travel to that lift's first point;
+- speeds = the project's print / travel speeds (`source.placeholder_speeds`
+  is true when they are the unmeasured defaults).
+The `unresolved` / non-executable form remains part of the contract for a
+producer that cannot (yet) produce machine instructions.
 
-## Consumer: Pi interface (`app/jobs/current_job.py`)
+## Consumer: Pi interface (`app/jobs/current_job.py`, `runner.py`)
 
-1. Validates the document (rejects `.muddesign` project files explicitly).
+1. Validates the document (rejects `.muddesign` project files explicitly),
+   including the lift G-code rules above.
 2. Non-executable job: shows the building / lift structure and the
    unresolved list; refuses to start.
-3. Executable job: streams lifts in order. After every lift except the last
-   it sends `G4 P0` (acked only when all buffered motion has finished), waits
-   for a fresh `Idle`, enters `awaiting_reposition`, and sends nothing until a
-   client sends `{"type": "confirm_reposition", "lift": <awaiting_lift>}`
-   while GRBL is Idle (stale / wrong lift refused; `resume` never confirms).
-   A GRBL disconnect or reset while awaiting ends the job in `error`.
-   The Pi never recalculates lift boundaries.
+3. Executable job: needs the print origin established on the controller
+   (Set Origin); Start first moves to the origin (`G54 G20 G90 G1 X0 Y0`),
+   then streams lifts in order. After every lift except the last it sends
+   `G4 P0` (acked only when all buffered motion has finished), waits for a
+   fresh `Idle`, enters `awaiting_reposition` — the operator may jog,
+   re-establish the origin and prime — and sends nothing of the next lift
+   until a client sends `{"type": "confirm_reposition", "lift":
+   <awaiting_lift>}` while GRBL is Idle and the origin is established
+   (stale / wrong lift refused; `resume` never confirms). A GRBL disconnect
+   or reset while awaiting ends the job in `error`. The Pi never recalculates
+   lift boundaries.
 
 ## Fixtures
 
@@ -110,6 +150,6 @@ decided): `z_within_lift`, `travel_with_pump`, `xy_origin`,
   execution tests). Not a real print.
 - `fixtures/designer-export-3-lifts.mudjob` — produced by the Designer's
   exporter from a small test building (Design + Toolpath golden test; Pi
-  import tests). Regenerate with
+  import + execution tests). Regenerate with
   `MUDJOB_UPDATE_FIXTURE=1 design_proto/.venv/bin/python -m pytest layer_assembly/tests/test_machine_job.py`
   (from `design-toolpath/`).

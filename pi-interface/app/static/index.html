@@ -39,8 +39,10 @@
       <div class="reposition-text" id="reposition-text"></div>
       <div class="reposition-detail" id="reposition-detail" hidden></div>
       <p class="reposition-note">
-        The print is paused between lifts. Nothing is sent to the machine
+        The print is paused between lifts. Nothing of the next lift is sent
         until the reposition is confirmed here or on any other connected screen.
+        If the frame raise moved the XY registration you may jog and
+        <b>Set origin</b> again (and Prime) before confirming.
       </p>
       <button class="ctrl-btn btn-confirm" id="btn-confirm" title="Press and hold to confirm">
         <span id="btn-confirm-label">Hold to confirm</span>
@@ -64,6 +66,26 @@
         <button class="jog-btn" id="jog-ym" data-axis="Y" data-dir="-1">Y−</button>
         <div></div>
       </div>
+    </div>
+
+    <!-- Print origin + prime position (machine setup; not part of the job) -->
+    <div class="section" id="setup-section">
+      <div class="section-title">Print origin &amp; prime</div>
+      <div class="setup-rows">
+        <div class="setup-row"><span class="setup-label">Origin</span><span id="origin-status">Not set</span></div>
+        <div class="setup-row"><span class="setup-label">Work X / Y</span><span id="work-pos">—</span></div>
+        <div class="setup-row"><span class="setup-label">Prime</span><span id="prime-status">Not set</span></div>
+      </div>
+      <div class="controls-row">
+        <button class="ctrl-btn btn-setup" id="btn-set-origin" title="Press and hold: the current XY becomes the print origin (work X0 Y0)">
+          <span>Set origin here</span><div class="hold-fill"></div>
+        </button>
+        <button class="ctrl-btn btn-setup" id="btn-set-prime" title="The current XY becomes the prime position (relative to the origin)">Set prime here</button>
+        <button class="ctrl-btn btn-prime" id="btn-prime" title="Press and hold: move to the prime position at jog speed">
+          <span>Prime</span><div class="hold-fill"></div>
+        </button>
+      </div>
+      <div class="setup-note" id="setup-note"></div>
     </div>
 
     <!-- Operational controls -->
@@ -91,6 +113,7 @@
       </div>
       <div class="job-meta" id="job-meta"></div>
       <div class="lift-summary" id="lift-summary" hidden></div>
+      <div class="mark-line" id="mark-line" hidden></div>
       <div class="lift-strip" id="lift-strip" hidden></div>
       <div class="job-blocked" id="job-blocked" hidden>
         <div class="job-blocked-title">Not executable — building structure only</div>
@@ -115,6 +138,7 @@
         </label>
         <button class="ctrl-btn btn-start" id="btn-start" disabled>START JOB</button>
       </div>
+      <div class="start-note" id="start-note"></div>
     </div>
 
     <!-- Console (collapsed by default) -->

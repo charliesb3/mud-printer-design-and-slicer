@@ -1355,7 +1355,7 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
 - How should topological transitions (cell count changes, path splits/merges) be represented?
 - How should the lattice generator accept continuity hints without violating geometry/toolpath separation?
 - How should seam position be managed and optimized across layers?
-- ~~What is the right output format for the Pi Interface to consume?~~ (ANSWERED 2026-10-14: the `.mudjob` contract — see "What Is Explicitly Outside This Subproject".) Still open: the machine semantics that block an EXECUTABLE export (Z within a lift, travel with the pump, XY origin, machine units, frame-reposition behaviour).
+- ~~What is the right output format for the Pi Interface to consume?~~ (ANSWERED 2026-10-14: the `.mudjob` contract — see "What Is Explicitly Outside This Subproject".) The current-machine semantics were decided the same day (XY-only, manual Z and pump, G20, operator-set print origin) and exports are executable; automatic Z remains future work.
 - Is retracing (printing a second bead over an existing one) physically acceptable for mud? Now a last resort (wall lattices avoid it by construction; solid infill uses short travel instead); still needs machine testing for the remaining single-bead cases.
 - Bead width / depth: what CLEARANCE_RADIUS (2 in provisional), degree caps and MAX_GENERATED_BEADS make physical sense? What closing threshold?
 - *(ANSWERED by the wall lattice + pass 7: dead-end arms get an interleaved out-and-back at combined target density with a cap V.)* Odd dead-end infilled arms need either a route end or an arm-length edit — is a density-preserving out-and-back pattern preferable?
@@ -1400,6 +1400,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-14 — EXECUTABLE `.mudjob` export (XY-only G-code in inches; Z / pump manual). See `layer_assembly/PROJECT_MEMORY.md` → "MACHINE JOB EXPORT".
 
 2026-10-14 — `.mudjob` EXPORT (Pi P3): "Export Print Job" in the Print Simulation serializes the current PrintPlan into the `.mudjob` contract (non-executable: no G-code until the machine semantics are decided); Designer independence from the Pi recorded. See `layer_assembly/PROJECT_MEMORY.md` → "MACHINE JOB EXPORT".
 

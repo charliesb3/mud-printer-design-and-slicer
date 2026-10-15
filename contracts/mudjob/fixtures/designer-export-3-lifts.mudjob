@@ -1,29 +1,7 @@
 {
  "format": "mudprinter-job",
  "version": 1,
- "executable": false,
- "unresolved": [
-  {
-   "id": "z_within_lift",
-   "summary": "Z behaviour within a lift is not decided. The plan changes nozzle height at every layer, can move back down to a lower layer of another island, and rises to clear heights for travel; Z is manual today, so how Z appears in machine instructions is open."
-  },
-  {
-   "id": "travel_with_pump",
-   "summary": "Non-printing travel is not decided. The pump is controlled independently, so whether travel and transitions are plain moves or need operator action is open."
-  },
-  {
-   "id": "xy_origin",
-   "summary": "XY work zero / origin is not decided. Plan coordinates are building-world coordinates; how they map to machine coordinates is open."
-  },
-  {
-   "id": "machine_units",
-   "summary": "Machine units are not decided. The plan is in inches; the units of the machine G-code are open."
-  },
-  {
-   "id": "frame_reposition",
-   "summary": "Physical frame-reposition behaviour is not decided (whether XY registration and the controller position survive a frame raise, and any re-zeroing)."
-  }
- ],
+ "executable": true,
  "name": "Two-island test building",
  "units": "in",
  "source": {
@@ -36,7 +14,28 @@
    "head_clearance": 1.0
   },
   "layers": 6,
-  "passes": 12
+  "passes": 12,
+  "speeds_in_s": {
+   "print": 2.0,
+   "travel": 6.0
+  },
+  "placeholder_speeds": false
+ },
+ "machine": {
+  "axes": "XY",
+  "z": "manual",
+  "extrusion": "manual",
+  "coordinates": "work coordinates; origin = the print origin set by the operator",
+  "feeds_in_min": {
+   "print": 120.0,
+   "travel": 360.0
+  }
+ },
+ "xy_bounds": {
+  "min_x": 0.0,
+  "min_y": 0.0,
+  "max_x": 140.0,
+  "max_y": 30.0
  },
  "lifts": [
   {
@@ -53,7 +52,59 @@
    "passes": 4,
    "runs": 4,
    "print_length": 560.0,
-   "travel_length": 100.0
+   "travel_length": 100.0,
+   "layer_marks": [
+    {
+     "line": 2,
+     "pass": 0,
+     "layer": 0,
+     "z": 1.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 7,
+     "pass": 1,
+     "layer": 1,
+     "z": 3.0,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 11,
+     "pass": 2,
+     "layer": 0,
+     "z": 1.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 16,
+     "pass": 3,
+     "layer": 1,
+     "z": 3.0,
+     "z_in_lift": 3.0
+    }
+   ],
+   "gcode": [
+    "G20",
+    "G90",
+    "G1 X0 Y0 F360",
+    "G1 X0 Y30 F120",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G1 X0 Y30",
+    "G1 X40 Y30",
+    "G1 X40 Y0",
+    "G1 X0 Y0",
+    "G1 X100 Y0 F360",
+    "G1 X100 Y30 F120",
+    "G1 X140 Y30",
+    "G1 X140 Y0",
+    "G1 X100 Y0",
+    "G1 X100 Y30",
+    "G1 X140 Y30",
+    "G1 X140 Y0",
+    "G1 X100 Y0"
+   ]
   },
   {
    "index": 1,
@@ -80,7 +131,59 @@
      0.0
     ],
     "nozzle_z": 3.0
-   }
+   },
+   "layer_marks": [
+    {
+     "line": 2,
+     "pass": 4,
+     "layer": 2,
+     "z": 4.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 7,
+     "pass": 5,
+     "layer": 3,
+     "z": 6.0,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 11,
+     "pass": 6,
+     "layer": 2,
+     "z": 4.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 16,
+     "pass": 7,
+     "layer": 3,
+     "z": 6.0,
+     "z_in_lift": 3.0
+    }
+   ],
+   "gcode": [
+    "G20",
+    "G90",
+    "G1 X100 Y0 F360",
+    "G1 X100 Y30 F120",
+    "G1 X140 Y30",
+    "G1 X140 Y0",
+    "G1 X100 Y0",
+    "G1 X100 Y30",
+    "G1 X140 Y30",
+    "G1 X140 Y0",
+    "G1 X100 Y0",
+    "G1 X40 Y0 F360",
+    "G1 X40 Y30 F120",
+    "G1 X0 Y30",
+    "G1 X0 Y0",
+    "G1 X40 Y0",
+    "G1 X40 Y30",
+    "G1 X0 Y30",
+    "G1 X0 Y0",
+    "G1 X40 Y0"
+   ]
   },
   {
    "index": 2,
@@ -107,7 +210,59 @@
      0.0
     ],
     "nozzle_z": 6.0
-   }
+   },
+   "layer_marks": [
+    {
+     "line": 2,
+     "pass": 8,
+     "layer": 4,
+     "z": 7.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 7,
+     "pass": 9,
+     "layer": 5,
+     "z": 9.0,
+     "z_in_lift": 3.0
+    },
+    {
+     "line": 11,
+     "pass": 10,
+     "layer": 4,
+     "z": 7.5,
+     "z_in_lift": 1.5
+    },
+    {
+     "line": 16,
+     "pass": 11,
+     "layer": 5,
+     "z": 9.0,
+     "z_in_lift": 3.0
+    }
+   ],
+   "gcode": [
+    "G20",
+    "G90",
+    "G1 X40 Y0 F360",
+    "G1 X40 Y30 F120",
+    "G1 X0 Y30",
+    "G1 X0 Y0",
+    "G1 X40 Y0",
+    "G1 X40 Y30",
+    "G1 X0 Y30",
+    "G1 X0 Y0",
+    "G1 X40 Y0",
+    "G1 X100 Y0 F360",
+    "G1 X100 Y30 F120",
+    "G1 X140 Y30",
+    "G1 X140 Y0",
+    "G1 X100 Y0",
+    "G1 X100 Y30",
+    "G1 X140 Y30",
+    "G1 X140 Y0",
+    "G1 X100 Y0"
+   ]
   }
  ]
 }

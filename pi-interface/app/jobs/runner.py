@@ -8,6 +8,14 @@ a running job.
 Streaming strategy: simple send-line → wait-for-ok → send-next-line.
 This is conservative, easy to reason about, and appropriate for M1.
 The architecture does not preclude upgrading to character-counting later.
+Every job line waits for its ok with the communicator's LIVE wait (no fixed
+time limit while GRBL keeps answering status polls — GRBL withholds ok while
+its planner buffer is full or a feed hold is active; see communicator).
+
+Building jobs (.mudjob) start by RETURNING TO THE PRINT ORIGIN: the runner
+first sends `G54 G20 G90 G1 X0 Y0 F<positioning feed>` (job.phase "origin"),
+then the lifts. The origin itself is established by the operator (Set
+Origin); flat G-code jobs run exactly as in Milestone 1 (no return).
 
 Lifts:
 - A job is an ordered list of lifts (a flat G-code file is one lift, so it
@@ -39,7 +47,6 @@ import asyncio
 import logging
 import time
 
-from .. import config
 from ..grbl.communicator import GRBLCommunicator
 from ..grbl.parser import is_end_of_program
 from .current_job import CurrentJob, JobLift
@@ -53,10 +60,17 @@ _HOLD_POLL_INTERVAL = 0.05
 DRAIN_COMMAND = "G4 P0"
 
 
+def origin_return_line(feed_in_min: float) -> str:
+    """The move to the print origin (work XY 0, G54) before a building job."""
+    return f"G54 G20 G90 G1 X0 Y0 F{feed_in_min:.1f}"
+
+
 class JobRunner:
-    def __init__(self, communicator: GRBLCommunicator, job: CurrentJob) -> None:
+    def __init__(self, communicator: GRBLCommunicator, job: CurrentJob,
+                 origin_feed_in_min: float | None = None) -> None:
         self._comm = communicator
         self._job = job
+        self._origin_feed = origin_feed_in_min
 
     async def run(self) -> None:
         """Stream the job. Designed to be run as an asyncio Task."""
@@ -70,6 +84,9 @@ class JobRunner:
         log.info("Job started: %s (%d lines, %d lifts)", job.filename, job.total_lines, job.total_lifts)
 
         try:
+            if self._origin_feed is not None:
+                if not await self._return_to_origin():
+                    return
             for li, lift in enumerate(job.lifts):
                 job.current_lift = li
                 if not await self._stream_lift(lift):
@@ -88,6 +105,24 @@ class JobRunner:
                 log.info("Job completed: %s", job.filename)
 
     # ------------------------------------------------------------------ #
+
+    async def _return_to_origin(self) -> bool:
+        job = self._job
+        job.phase = "origin"
+        line = origin_return_line(self._origin_feed)
+        log.info("Returning to the print origin: %s", line)
+        try:
+            result = await self._comm.send_command(line, live=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._fail(f"Return to origin: {exc}")
+            return False
+        if result.startswith("error:"):
+            self._fail(f"Return to origin ({line}): {result}")
+            return False
+        job.phase = None
+        return job.state in ("running", "held")
 
     def _fail(self, message: str) -> None:
         self._job.state = "error"
@@ -111,7 +146,7 @@ class JobRunner:
 
             # Send the G-code line and wait for GRBL's acknowledgement
             try:
-                result = await self._comm.send_command(line)
+                result = await self._comm.send_command(line, live=True)
             except asyncio.CancelledError:
                 log.info("Job runner task cancelled at line %d", i)
                 raise
@@ -173,7 +208,7 @@ class JobRunner:
         job = self._job
         state = self._comm.state
         try:
-            result = await self._comm.send_command(DRAIN_COMMAND, timeout=config.LIFT_DRAIN_TIMEOUT_S)
+            result = await self._comm.send_command(DRAIN_COMMAND, live=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

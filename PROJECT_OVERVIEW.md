@@ -77,8 +77,12 @@ consequences: `CONTROL_BOX_HARDWARE.md` → Z axis):
 - Open-loop: no Z limits, homing or position feedback yet (actuator internal
   end-of-travel only); software must not assume a known Z position and Z
   motion must be dead-man / time-bounded with a guaranteed default STOP.
-- Still OPEN: how Z is used within a print (`z_within_lift`) and whether /
-  how Z position ever becomes known.
+- CURRENT MACHINE (decided 2026-10-14): print jobs are XY-only and Z stays
+  MANUAL during printing — the Z hardware path above is for future automatic
+  Z / operator Z control, not used by jobs yet. Layer / Z information travels
+  with each job as metadata only.
+- Still OPEN: automatic Z within prints, and whether / how Z position ever
+  becomes known.
 
 Today, before the new control box is built, Z is still operated manually.
 
@@ -95,7 +99,7 @@ The machine has approximately 18 inches of usable Z travel. A building is printe
 
 The print plan (Design + Toolpath) divides the stack into lifts of whole layers, completes each lift (independent islands built upward one after another, merged geometry after its parts) and represents each frame repositioning as an explicit event between lifts. Physical frame-lifting control is not yet designed.
 
-Decided 2026-10-14 (Design + Toolpath ↔ Pi interface): a whole building is sent to the Pi as ONE print job made of an ordered sequence of first-class LIFTS taken from the PrintPlan; the Pi never recalculates lift boundaries. After each lift, progression stops until the operator repositions the frame and explicitly confirms. GRBL still receives ordinary G-code underneath. Implemented 2026-10-14: the Pi runs executable `.mudjob` jobs lift by lift (P1/P2) and the Designer exports the PrintPlan as a `.mudjob` (P3) — currently NON-EXECUTABLE (structure only, no G-code) because Z within a lift, travel with the pump, XY origin, machine units and physical frame-reposition behaviour are undecided; see `contracts/mudjob/README.md`.
+Decided 2026-10-14 (Design + Toolpath ↔ Pi interface): a whole building is sent to the Pi as ONE print job made of an ordered sequence of first-class LIFTS taken from the PrintPlan; the Pi never recalculates lift boundaries. After each lift, progression stops until the operator repositions the frame and explicitly confirms. GRBL still receives ordinary G-code underneath. Implemented 2026-10-14: the Pi runs `.mudjob` jobs lift by lift (P1/P2); the Designer exports the PrintPlan as a `.mudjob` (P3), EXECUTABLE since the current-machine pass (XY-only G-code in inches, see "Current machine execution"). During the frame reposition the operator may jog and re-establish the XY origin before confirming; all lifts share one work coordinate system.
 
 ---
 
@@ -364,6 +368,29 @@ Do not modify GRBL merely to avoid generating appropriate G-code in the higher-l
 
 Design + Toolpath projects are saved as a JSON project file (`.muddesign`) with an explicit format identifier and schema version from the first release (schema 2 since 2026-10-11: Wall Groups in the designs + the project's Wall Systems; schema 3 the same day: the default Maximum Overhang became 1 in — older projects without a value keep 1.5; schema 4 on 2026-10-14: the default Opening Alignment became Vertical / Plumb — older projects get their effective alignment written explicitly). Files store the editable inputs (Layer Designs, Assembly), not derived geometry or toolpaths. Older files are upgraded on load by a central chain of schema migrations (`design-toolpath/design_proto/project_file.py`); files from a newer schema are refused rather than partially loaded. G-code / machine instructions will be a separate export derived from a project, never the project format itself. Details: `design-toolpath/PROJECT_MEMORY.md` → "PROJECT FILE".
 
+### Current machine execution — XY-only jobs, manual Z and pump (2026-10-14)
+
+- Executable `.mudjob` jobs are XY-only: no Z commands (Z manual; layer / Z
+  kept as metadata for the operator and future automatic Z), no pump /
+  extrusion commands (the pump is manual and independent; travel is never
+  paused or altered for it).
+- Machine-job G-code states its units explicitly: inches (`G20`) and
+  absolute (`G90`) at the start of every lift; it never relies on the
+  controller's previous modal state.
+- XY ORIGIN: the operator jogs to the intended print origin and establishes
+  work XY zero there on the controller; the exported building toolpath is in
+  those work coordinates (the Designer's world XY, no invented machine
+  offset). All lifts use the same work coordinates; if a frame raise disturbs
+  registration the operator re-zeroes before confirming the next lift.
+- PRIME position is a CONTROLLER feature (machine operation, never part of
+  the PrintPlan or `.mudjob`): Set Origin → jog to a nearby safe spot → Set
+  Prime Position (stored relative to the origin) → Prime moves there, the
+  operator runs the pump by hand → Start returns to the origin before the
+  building toolpath. No priming lap, no computed prime location, no pump
+  control.
+- Travel is `G1` at the planned travel speed (not `G0`).
+- Automatic Z and pump control remain future controller capabilities.
+
 ### Design + Toolpath and the Pi interface are independent applications (2026-10-14)
 
 Their ONLY integration boundary is the `.mudjob` file: a small, documented, versioned interchange contract (`contracts/mudjob/README.md` + example fixtures, version 1). Neither imports code from the other, shares runtime modules with it, calls its API, requires it to be installed or running, or couples to its internal data model. Design + Toolpath serializes its authoritative PrintPlan into the contract (`layer_assembly/machine_job.py`); the Pi parses and validates it independently (`pi-interface/app/jobs/current_job.py`). A `.mudjob` exported on one computer must open on an independent Raspberry Pi with no knowledge of the Designer. Interoperability is tested with contract fixture FILES read by each subsystem's own tests — never by cross-importing code.
@@ -396,8 +423,9 @@ Consider modification or replacement only when an actual requirement cannot reas
 
 Z hardware path DECIDED: Pi → Cytron MD13S → 12 V actuator; not a GRBL axis
 (`CONTROL_BOX_HARDWARE.md`). Manual Z remains available through the Pi UI and
-the remote. Automating Z within prints remains a goal whose method is NOT
-decided (`z_within_lift`); Z is open-loop, so do not assume known Z positions.
+the remote. Current jobs keep Z manual (XY-only, 2026-10-14). Automating Z within
+prints remains a goal whose method is NOT decided; Z is open-loop, so do
+not assume known Z positions.
 
 (Previously, until 2026-10-14: "how automation will work has not been
 decided; do not assume Z will be controlled through GRBL" — the GRBL caution
@@ -466,8 +494,11 @@ The software is ready for Pi deployment and physical machine testing.
 
 2026-10-14: lift-aware building jobs (P1/P2: drain + operator-confirmed frame
 reposition between lifts, one responsive UI with synchronized clients) and
-`.mudjob` import of the Designer's export (P3: non-executable jobs displayed,
-never run). Not yet tested on hardware.
+`.mudjob` import of the Designer's export (P3), then the current-machine
+execution pass: executable XY-only jobs, Set Origin / Set Prime / Prime /
+Start-returns-to-origin, jog + re-zero during a frame reposition, and
+"live" ok-waits (no fixed per-line timeout while GRBL answers status polls).
+Not yet tested on hardware.
 
 See `pi-interface/PROJECT_MEMORY.md` for full details.
 
@@ -631,6 +662,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-14 (current-machine execution)
+
+Executable `.mudjob`: XY-only G-code in inches from the PrintPlan (Z and pump manual, layer / Z metadata kept). Pi: print origin + prime position workflow (controller feature, not in the job), Start returns to the origin, jog / re-zero allowed while awaiting a frame reposition, per-line `ok` waits bounded by GRBL liveness instead of a fixed 10 s timeout. New decision "Current machine execution".
 
 2026-10-14 (control box)
 
