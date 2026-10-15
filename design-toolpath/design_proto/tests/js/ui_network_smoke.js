@@ -226,7 +226,9 @@ eval(src + `
   const CC = layer.source_paths[1];
   check(CC.type === 'CirclePath' && Math.abs(CC.radius - 40) < 1e-6 && CC.cx === 300, 'circle: centre then radius');
   setTool('ellipse');
-  onMouseDown(ev(50, 300)); onMouseUp(); onMouseDown(ev(90, 320)); onMouseUp();
+  // (Alt: exact placement — 50 / 90 lie within the grid snap of 48 / 96 at this zoom)
+  onMouseDown(Object.assign(ev(50, 300), { altKey: true })); onMouseUp();
+  onMouseDown(Object.assign(ev(90, 320), { altKey: true })); onMouseUp();
   const EE = layer.source_paths[2];
   check(EE.type === 'EllipsePath' && Math.abs(EE.rx - 40) < 1e-6 && Math.abs(EE.ry - 20) < 1e-6, 'ellipse: centre then corner');
   setTool('line');                                      // press-drag-release

@@ -87,8 +87,8 @@ eval(src + `
   historyCheckpoint();
   btn(list, /New Wall Group with/).onclick();
   const G = layer.wall_groups[0];
-  check(G && G.thickness === 10 && G.align === 'auto' && G.members.join() === A.id && !('type' in G) && !('web' in G),
-        'New Wall Group: 10 in, default alignment, the selected path a member — no construction in it');
+  check(G && G.thickness === 10 && G.align === 'center' && G.members.join() === A.id && !('type' in G) && !('web' in G),
+        'New Wall Group: 10 in, Centered (the default for new groups), the selected path a member — no construction in it');
   check(!(layer.infills || []).some(f => f.owner), 'no construction records in the document (no owned webs)');
   panels();
   check(!row(gPanel, 'Construction') && !row(gPanel, 'Web') && !row(gPanel, 'Pitch') && !row(gPanel, 'Number of Walls'),

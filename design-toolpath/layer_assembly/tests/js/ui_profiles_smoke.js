@@ -468,8 +468,9 @@ async function run() {
             'a drag moves the plane at once (6 pointer moves) and resolves nothing while moving');
       check(!!_asmPlanePreview(), 'while the plane differs from the resolved result the stack is a live PREVIEW');
       const st = asmStack(), top = st[st.length - 1];
-      const npts = pls => pls.reduce((a, q) => a + q.pts.length, 0);
-      check(npts(top.polylines) < npts(asm.geometry[top.design_id].polylines),
+      const plen = pls => pls.reduce((a, q) => a + q.pts.slice(1).reduce((b, v, i) => b + Math.hypot(v[0] - q.pts[i][0], v[1] - q.pts[i][1]), 0)
+                                                 + (q.closed && q.pts.length > 1 ? Math.hypot(q.pts[0][0] - q.pts[q.pts.length - 1][0], q.pts[0][1] - q.pts[q.pts.length - 1][1]) : 0), 0);
+      check(plen(top.polylines) < plen(asm.geometry[top.design_id].polylines) - 1,
             'the preview\'s top layer is the uncut layer with the live plane\'s removed segments left out');
       await asmPlaneDragEnd();
       check(nRes() === n0 + 1 && !_asmPlanePreview() && asm.resolvedPlanes === _asmPlanesKey(),
@@ -500,6 +501,100 @@ async function run() {
     await asmProfileDelete(P2.id);
     check(rep(PL.id).valid && !asm.state.profiles.some(q => q.id === P2.id), 'deleting one plane leaves the other');
     asmProfileEdit(PL.id);
+
+    // ---- 3a. the REMOVED-MATERIAL GHOST is clipped exactly at each layer's cut
+    // (regression 2026-10-15: segments were judged whole by their midpoint, so a
+    // long envelope segment straddling the cut — an out-and-back wall's side, a
+    // rectangle edge — was ghosted far past the cut, over material still printed)
+    {
+      const checkGhost = (P_, label) => {
+        let zc = 0; const segs = [], cur = [];
+        const rec = { moveTo(x, y) { cur.length = 0; cur.push([x, y, zc]); }, lineTo(x, y) { segs.push([cur[0], [x, y, zc]]); },
+                      beginPath() {}, stroke() {}, setLineDash() {}, set strokeStyle(v) {}, set lineWidth(v) {}, set globalAlpha(v) {} };
+        _asmDrawPlaneGhost(rec, (x, y, z) => { zc = z; return [x, y]; }, asmStack(), P_);
+        const [dx, dy] = _asmPlaneDir(P_), h = asm.state.layer_height;
+        const bad = segs.filter(([A, B]) => [A, B].some(([x, y, zt]) => {
+          const tc = _asmPlaneCutT(P_, zt - h / 2);
+          if (tc === 'none') return false;
+          if (tc === 'all') return true;
+          return (x - P_.anchor[0]) * dx + (y - P_.anchor[1]) * dy > tc + 1e-6;
+        }));
+        const straddle = segs.filter(([A, B]) => Math.hypot(B[0] - A[0], B[1] - A[1]) > 0).length;
+        check(segs.length > 0 && bad.length === 0,
+              `${label}: every ghost segment lies on the removed side of its layer's cut (${segs.length} segments, ${bad.length} over kept material)`);
+        return straddle;
+      };
+      checkGhost(PL, 'linear plane ghost');
+      // the clip itself: a segment straddling the cut is split at the cut, not taken whole
+      const zMid = rep(PL.id).layers.find(L => !L.removed_all).z, tc = _asmPlaneCutT(PL, zMid), [dx, dy] = _asmPlaneDir(PL);
+      const base = [PL.anchor[0] + dx * tc, PL.anchor[1] + dy * tc];
+      const r = _asmPlaneRemovedF(PL)(base[0] - dx * 30, base[1] - dy * 30, base[0] + dx * 10, base[1] + dy * 10, zMid);
+      check(r && Math.abs(r[0]) < 1e-12 && Math.abs(r[1] - 0.75) < 1e-9,
+            'a 40 in segment with 30 in on the removed side is removed over exactly its first 75 % (the midpoint rule removed all of it)');
+    }
+
+    // ---- 3b. PROFILE TYPES (2026-10-15): Linear | Stepped | Curved ----
+    {
+      const offs = id => rep(id).layers.filter(L => !L.removed_all).map(L => [L.z, L.offset]);
+      const linOffs = JSON.stringify(offs(PL.id));
+      const hl0 = _asmPlaneHL(PL), u0 = undoN();
+      check((PL.shape || 'linear') === 'linear', 'a plane is Linear by default');
+      await asmPlaneSet(PL.id, 'shape', 'stepped');
+      PL = _asmProfile(PL.id);
+      check(PL.shape === 'stepped' && undoN() === u0 + 1 && rep(PL.id).valid, 'Stepped: one undo step, valid');
+      check(Math.abs(PL.span - hl0.run) < 1e-6 && Math.abs(PL.z_anchor - hl0.low) < 1e-6,
+            'its start / end are the footprint\'s downhill / uphill extremes on the same chord (Z start / Z end)');
+      const st = _asmPlaneSteps(PL);
+      const offS = offs(PL.id);
+      check(offS.length > 0 && offS.every(([, t]) => Math.abs(t - st.tread * Math.round(t / st.tread)) < 1e-3),
+            `every resolved layer cut lies on a riser line (${st.n} risers, treads of ${_fmt(st.tread)} in)`);
+      check(offS.every(([z, t]) => Math.abs(_asmPlaneCutT(PL, z) - t) < 1e-3), 'the page\'s mirror gives the server\'s cut for every layer');
+      const txt = () => flat(el('asm-profiles')).map(n => n.textContent || '').join(' | ');
+      asmRender();
+      check(/lower landing \+ \d+ risers? \+ upper landing · tread/.test(txt()) && /Stepped/.test(txt()) && flat(el('asm-profiles')).some(n => n.dataset && n.dataset.shape === 'curved'),
+            'the card shows the type buttons and the stair (steps · tread · riser ≈ layers)');
+      await asmPlaneSet(PL.id, 'step_run', 18);
+      PL = _asmProfile(PL.id);
+      check(PL.step_run === 18 && rep(PL.id).valid && _asmPlaneSteps(PL).treads === Math.max(2, Math.round(PL.span / 18)),
+            'Step run 18 in: a whole number of treads over the span');
+      asmPlaneView(PL.id, 'slope'); asmDrawPreview();
+      // CURVED
+      await asmPlaneSet(PL.id, 'shape', 'curved');
+      PL = _asmProfile(PL.id);
+      check(PL.shape === 'curved' && JSON.stringify(PL.control) === '[0.5,0.5]' && rep(PL.id).valid,
+            'Curved starts on the chord (control 50 % / 50 %)');
+      const chord = offs(PL.id);
+      await asmPlaneSet(PL.id, 'cu', 80); await asmPlaneSet(PL.id, 'cv', 20);
+      PL = _asmProfile(PL.id);
+      const bow = offs(PL.id);
+      check(JSON.stringify(PL.control) === '[0.8,0.2]' && bow.length >= chord.length &&
+            bow.filter(([z, t]) => { const c = chord.find(q => q[0] === z); return c && t > c[1] + 1e-6; }).length > 0,
+            'control 80 % / 20 %: the curve starts gentle — more is removed than on the chord at mid-height');
+      check(bow.every(([z, t]) => Math.abs(_asmPlaneCutT(PL, z) - t) < 1e-3), 'the mirror matches the server for the curve too');
+      // drag the control point in Slope view
+      asmPlaneView(PL.id, 'slope'); asmDrawPreview();
+      const cp = asm.lastProj.P(..._asmPlaneControlW(PL));
+      const u1 = undoN();
+      check(asmPlaneMouseDown(cp[0], cp[1]) === true && asm.drag.plane === 'control', 'the curve\'s control point is a handle (Slope view)');
+      asmPlaneDragTo(cp[0], cp[1] - 400);                 // far up: clamped inside the start–end box
+      check(_asmProfile(PL.id).control[1] === 1 && _asmProfile(PL.id).control[0] === 0.8, 'dragged up: the rise fraction is clamped at 100 % (monotonic curve)');
+      await asmPlaneDragEnd();
+      PL = _asmProfile(PL.id);
+      check(undoN() === u1 + 1 && rep(PL.id).valid, 'the drag is ONE undo step, resolved at its end');
+      asmDrawPreview();                                    // (the resolved silhouette + intended curve draw)
+      // back to Linear: the plane it was
+      await asmPlaneSet(PL.id, 'shape', 'linear');
+      PL = _asmProfile(PL.id);
+      const back = offs(PL.id);
+      const lin0 = JSON.parse(linOffs);
+      check(back.length === lin0.length && back.every(([z, t], k) => Math.abs(z - lin0[k][0]) < 1e-9 && Math.abs(t - lin0[k][1] - (back[0][1] - lin0[0][1])) < 1e-6),
+            'Linear again: the same plane (the same cut at every layer, measured from its start)');
+      const saved2 = JSON.stringify(asm.state);
+      for (let k = 0; k < 7; k++) await asmUndo();                // shape · step run · shape · cu · cv · drag · shape
+      check(_asmProfile(PL.id).shape === 'linear' || !_asmProfile(PL.id).shape, 'undo walks back to the linear plane');
+      asm.state = JSON.parse(saved2); await asmResolve();
+      PL = _asmProfile(PL.id);
+    }
 
     // Done → result: no overlay; persistence
     asmProfileDone();

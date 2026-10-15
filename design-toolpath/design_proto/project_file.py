@@ -62,7 +62,7 @@ import re
 from datetime import datetime, timezone
 
 FORMAT = 'mud-printer-project'
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 EXTENSION = '.muddesign'
 GENERATOR = 'design_proto'
 MAX_BYTES = 200 * 1024 * 1024          # (a sanity bound, far above real projects)
@@ -147,7 +147,19 @@ def _v4_to_v5(data: dict) -> dict:
     return data
 
 
-MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5}
+def _v5_to_v6(data: dict) -> dict:
+    """Schema 6 (2026-10-15): PLANAR TOP CUT PROFILE TYPES (Linear | Stepped |
+    Curved). Every plane saved before is written explicitly as `shape:
+    'linear'` — exactly the plane it was (identical geometry)."""
+    st = ((data.get('project') or {}).get('assembly') or {}).get('state')
+    if isinstance(st, dict):
+        for p in st.get('profiles') or []:
+            if isinstance(p, dict) and p.get('kind') == 'plane' and not p.get('shape'):
+                p['shape'] = 'linear'
+    return data
+
+
+MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5, 5: _v5_to_v6}
 
 
 def migrate(data: dict) -> tuple[dict, int]:

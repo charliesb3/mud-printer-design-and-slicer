@@ -465,17 +465,51 @@ class PlaneProfile:
     on the one plane. High / low elevations across a footprint and the slope
     angle are VIEWS of these four numbers (plane_from_high_low).
     Selection: `sources` (walls) ∪ the members of `systems` (Wall Systems,
-    resolved per design by the Designer) − `exclude`."""
+    resolved per design by the Designer) − `exclude`.
+
+    PROFILE TYPES (2026-10-15) — the same stage, the same per-layer op: what
+    changes is only WHERE each layer's plan line lies. t = d·(p − anchor) is
+    the run along the uphill direction from the START point (anchor, at
+    z_anchor); the END point lies `span` further, at z_anchor + slope·span
+    (the chord: the plane above IS the chord's plane). Each layer, at its
+    mid-height z, keeps t ≥ cut_t(z) — whole layers, never split.
+      LINEAR  — cut_t(z) = (z − z_anchor) / slope (the original plane;
+                existing projects unchanged — `span` is not used).
+      STEPPED — (revised 2026-10-15 after review: the centred stair spent
+                half a riser at each end) T = max(2, round(span / step_run))
+                treads of span / T: the first is a real LOWER LANDING at the
+                start elevation, the last a real UPPER LANDING at the end
+                elevation, and n = T − 1 risers of rise / n stand between them
+                at runs tread, 2·tread, … A layer whose mid-height lies in
+                riser j's band (z_anchor + (j − 1)·rise/n, z_anchor + j·rise/n]
+                is cut at j·tread (cut_t = tread · ⌈q·n⌉, q = fraction of the
+                rise); layers at / below the start keep everything, above the
+                end nothing of the run. Risers are whole layers (mid-heights
+                decide — deterministic, ±1 layer between risers).
+      CURVED  — a quadratic Bézier in the (t, z) elevation from the start
+                (0, 0) to the end (span, rise) with its control point at
+                (u·span, v·rise), `control` = (u, v) ∈ [0, 1]² — inside the
+                start–end box, so the curve is monotonic in both t and z
+                (a planar cut only removes material as Z rises). v < u: the
+                cut starts gentle and steepens; v > u: starts steep and
+                flattens; u = v: exactly the linear chord. Each layer's
+                cut_t solves the curve at its mid-height (bisection); below
+                the start / above the end the curve continues along its end
+                tangents. Start and end are exact."""
     id: str
     sources: tuple = ()
     systems: tuple = ()
     exclude: tuple = ()
     direction: float = 0.0             # degrees: the uphill direction in plan
-    slope: float = 0.0                 # rise / run (≥ 0)
-    anchor: tuple = (0.0, 0.0)         # a point of the plane's plan (world)
+    slope: float = 0.0                 # rise / run (≥ 0) — of the CHORD for stepped / curved
+    anchor: tuple = (0.0, 0.0)         # a point of the plane's plan (world) — the START for stepped / curved
     z_anchor: float = 0.0              # the plane's Z at the anchor
     label: str = ''
     kind: str = 'plane'
+    shape: str = 'linear'              # 'linear' | 'stepped' | 'curved'
+    span: float = 0.0                  # stepped / curved: the run from the start to the end point (in)
+    step_run: float = 12.0             # stepped: the requested tread (horizontal run per step, in)
+    control: tuple = (0.5, 0.5)        # curved: the control point, fractions of (run, rise)
 
     @property
     def d(self) -> tuple:
@@ -486,14 +520,61 @@ class PlaneProfile:
         dx, dy = self.d
         return self.z_anchor + self.slope * ((x - self.anchor[0]) * dx + (y - self.anchor[1]) * dy)
 
+    @property
+    def steps(self) -> tuple:
+        """STEPPED: (number of risers, tread run, riser height) — treads =
+        risers + 1, the first and last being the lower / upper landings."""
+        T = max(2, math.floor(self.span / max(self.step_run, 1e-9) + 0.5))
+        return T - 1, self.span / T, self.slope * self.span / (T - 1)
+
+    def cut_t(self, z):
+        """The run t (from the anchor, along the uphill direction) of the
+        layer cut at mid-height z — or 'all' (everything kept) / 'none'
+        (everything removed). Non-decreasing in z for every shape."""
+        if self.slope <= 1e-12 or (self.shape != 'linear' and self.span <= 1e-9):
+            return 'all' if z <= self.z_anchor + 1e-9 else 'none'
+        tl = (z - self.z_anchor) / self.slope
+        if self.shape == 'stepped':
+            n, tread, _ = self.steps
+            q = tl / self.span                         # fraction of the rise
+            if q <= 0:
+                return tl                              # at / below the lower landing (nothing of the run)
+            if q > 1:
+                return self.span * q                   # above the upper landing: the whole run removed
+            return tread * math.ceil(q * n - 1e-9)     # riser j's band → the cut at the j-th riser
+        if self.shape == 'curved':
+            u, v = self.control
+            q = tl / self.span                         # fraction of the rise
+            if q < 0:                                  # below the start: along the start tangent
+                return 'all' if v <= 1e-12 else self.span * (u / v) * q
+            if q > 1:                                  # above the end: along the end tangent
+                return 'none' if v >= 1 - 1e-12 else self.span * (1 + (1 - u) / (1 - v) * (q - 1))
+            if q == 0 or q == 1:
+                return self.span * q                   # (the end points, exactly)
+            lo, hi = 0.0, 1.0                          # z(s) = 2v·s(1 − s) + s² is monotonic for v ∈ [0, 1]
+            for _ in range(64):
+                m = 0.5 * (lo + hi)
+                if 2 * v * m * (1 - m) + m * m < q:
+                    lo = m
+                else:
+                    hi = m
+            m = 0.5 * (lo + hi)
+            return self.span * (2 * u * m * (1 - m) + m * m)
+        return tl
+
     def line_at(self, z):
         """(point, normal to the KEPT side) of the plane's plan line at z, or
         'all' (everything kept) / 'none' (everything removed) when level."""
-        if self.slope <= 1e-12:
-            return 'all' if z <= self.z_anchor + 1e-9 else 'none'
+        t = self.cut_t(z)
+        if isinstance(t, str):
+            return t
         dx, dy = self.d
-        t = (z - self.z_anchor) / self.slope
         return ((self.anchor[0] + dx * t, self.anchor[1] + dy * t), (dx, dy))
+
+    def t_of(self, x, y) -> float:
+        """A plan point's run from the anchor along the uphill direction."""
+        dx, dy = self.d
+        return (x - self.anchor[0]) * dx + (y - self.anchor[1]) * dy
 
     def flipped(self) -> 'PlaneProfile':
         """FLIP SLOPE: high and low swap ends, the magnitude and the plane's
@@ -501,20 +582,41 @@ class PlaneProfile:
         return replace(self, direction=(self.direction + 180.0) % 360.0)
 
     def to_dict(self) -> dict:
-        return {'kind': 'plane', 'id': self.id, 'sources': list(self.sources), 'systems': list(self.systems),
-                'exclude': list(self.exclude), 'direction': self.direction, 'slope': self.slope,
-                'anchor': list(self.anchor), 'z_anchor': self.z_anchor, 'label': self.label}
+        out = {'kind': 'plane', 'id': self.id, 'sources': list(self.sources), 'systems': list(self.systems),
+               'exclude': list(self.exclude), 'direction': self.direction, 'slope': self.slope,
+               'anchor': list(self.anchor), 'z_anchor': self.z_anchor, 'label': self.label, 'shape': self.shape}
+        if self.shape != 'linear':
+            out.update(span=self.span, step_run=self.step_run, control=list(self.control))
+        return out
 
     @staticmethod
     def from_dict(d) -> 'PlaneProfile':
+        """(absent `shape` = 'linear': planes saved before 2026-10-15)"""
+        shape = d.get('shape') or 'linear'
+        if shape not in PLANE_SHAPES:
+            raise ProfileError(f"profile {d.get('id')}: unknown planar cut type {shape!r}")
+        ctl = d.get('control') or (0.5, 0.5)
         p = PlaneProfile(str(d['id']), tuple(str(x) for x in d.get('sources') or ()),
                          tuple(str(x) for x in d.get('systems') or ()), tuple(str(x) for x in d.get('exclude') or ()),
                          float(d.get('direction', 0.0)) % 360.0, float(d.get('slope', 0.0)),
                          tuple(float(v) for v in (d.get('anchor') or (0.0, 0.0))), float(d.get('z_anchor', 0.0)),
-                         d.get('label', '') or '')
+                         d.get('label', '') or '', shape=shape, span=float(d.get('span', 0.0) or 0.0),
+                         step_run=float(12.0 if d.get('step_run') is None else d['step_run']),
+                         control=tuple(float(v) for v in ctl))
         if p.slope < 0:
             raise ProfileError(f'profile {p.id}: slope must be ≥ 0 (use the direction to point it the other way)')
+        if shape != 'linear':
+            if not p.span > 0:
+                raise ProfileError(f'profile {p.id}: a {shape} cut needs its start and end (span > 0)')
+            if shape == 'stepped' and not p.step_run > 0:
+                raise ProfileError(f'profile {p.id}: the step run must be > 0')
+            if shape == 'curved' and (len(p.control) != 2 or not all(0.0 <= v <= 1.0 for v in p.control)):
+                raise ProfileError(f'profile {p.id}: the curve control point must lie between the start and end '
+                                   f'(fractions 0–1 of run and rise)')
         return p
+
+
+PLANE_SHAPES = ('linear', 'stepped', 'curved')
 
 
 def plane_from_high_low(pid, direction, extent, z_high, z_low, **kw) -> PlaneProfile:
@@ -1426,13 +1528,22 @@ def _resolve_plane(p, insts, sources, per_layer, res):
         z = _mid(inst)
         T = inst.transform
         pts = [T.apply(x, y) for r in recs for x, y in r.get('points') or ()]
-        zs = [p.z_at(x, y) for x, y in pts] or [math.inf]
-        if z <= min(zs) + 1e-9:
-            continue                                   # below the plane everywhere: untouched
+        if p.shape != 'linear':                        # STEPPED / CURVED: compared along the run t
+            tc = p.cut_t(z)
+            ts = [p.t_of(x, y) for x, y in pts] or [math.inf]
+            if tc == 'all' or (tc != 'none' and tc <= min(ts) + 1e-9):
+                continue                               # nothing of the selection below the cut
+            above = tc == 'none' or tc > max(ts) + 1e-9
+            zs = None
+        else:
+            zs = [p.z_at(x, y) for x, y in pts] or [math.inf]
+            if z <= min(zs) + 1e-9:
+                continue                               # below the plane everywhere: untouched
+            above = None
         ln = p.line_at(z)
         if ln == 'all':
             continue
-        if ln == 'none' or z > max(zs) + 1e-9:
+        if ln == 'none' or (above if above is not None else z > max(zs) + 1e-9):
             op = dict(spec, remove_all=True)
         else:
             (px, py), n = ln
@@ -1443,13 +1554,20 @@ def _resolve_plane(p, insts, sources, per_layer, res):
         per_layer[k].append(('plane', json.dumps(op, sort_keys=True), None, None, None, p.id))
         res.layers.append({'layer': k, 'z': round(z, 4), 'design': inst.design_id,
                            'removed_all': bool(op.get('remove_all')),
-                           'offset': None if ln in ('all', 'none') else round((z - p.z_anchor) / max(p.slope, 1e-12), 4)})
+                           'offset': None if ln in ('all', 'none') else (
+                               round((z - p.z_anchor) / max(p.slope, 1e-12), 4) if p.shape == 'linear'
+                               else round(p.cut_t(z), 4))})
         if not op.get('remove_all'):
             for r in recs:                             # the first layer whose line crosses this wall
                 if r['source'] in firsts:
                     continue
-                zs_r = [p.z_at(*T.apply(x, y)) for x, y in r.get('points') or ()]
-                if zs_r and min(zs_r) < z - 1e-9 < max(zs_r):
+                if p.shape != 'linear':
+                    ts_r = [p.t_of(*T.apply(x, y)) for x, y in r.get('points') or ()]
+                    crosses = bool(ts_r) and min(ts_r) < p.cut_t(z) - 1e-9 < max(ts_r)
+                else:
+                    zs_r = [p.z_at(*T.apply(x, y)) for x, y in r.get('points') or ()]
+                    crosses = bool(zs_r) and min(zs_r) < z - 1e-9 < max(zs_r)
+                if crosses:
                     firsts[r['source']] = dict(op, sources=[r['source']], systems=[], exclude=[])
     res.valid = not res.errors
     if res.valid and firsts:

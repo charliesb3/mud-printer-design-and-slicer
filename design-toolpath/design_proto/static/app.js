@@ -1324,6 +1324,10 @@ let SNAP_RADIUS = 12; // world inches at 100 % (follows the zoom: _applyViewTole
 function drawInProgress() {
   const cpts = drawPts.map(([wx, wy]) => worldToCanvas(wx, wy));
   drawPolyline(cpts, '#4a9eff', 1.5, false, false);
+  if (_mousePosW && cpts.length) {                 // rubber band to where the next click lands
+    const nx = snapHint ? snapHint.pt : _mousePosW;
+    drawPolyline([cpts[cpts.length - 1], worldToCanvas(nx[0], nx[1])], '#4a9eff', 1, true, false);
+  }
   for (const [cx, cy] of cpts) drawDot(cx, cy, 3, '#4a9eff');
 
   // Snap-to-first highlight when mouse is within snap radius and ≥3 pts placed
@@ -1417,40 +1421,56 @@ function drawHandles(pid) {
 // makes the contact exact. Hold Alt to place freely.
 // ---------------------------------------------------------------------------
 
-const SNAP_DIST = 8;            // world inches
-let snapHint = null;            // { pt: [x, y], kind: 'end' | 'edge' } shown on canvas
+// SNAP DISTANCES ARE ON SCREEN (2026-10-15): a target snaps when the cursor
+// is near it ON SCREEN, at any zoom (was 8 world inches — at the 1 ft home
+// view that reached ~45 px: surprising long-distance magnetic snapping).
+// TARGETS are the EFFECTIVE geometry only — exactly what is drawn: a
+// trimmed source contributes its surviving sections (`_visibleSourcePolys`,
+// the same sections rendering / hit-testing use), never the trimmed-away
+// parametric path. Hold Alt / Option to place freely; hold Shift to lock
+// the direction to 0 / 45 / 90 … ° (drawing).
+const SNAP_PX = { end: 12, edge: 9, grid: 7 };
+const SNAP_ANGLE_DEG = 4;          // gentle angle snap: within this many degrees of a multiple of …
+const SNAP_ANGLE_STEP = 45;        // … 45° (0, 45, 90, 135, 180 …)
+const SNAP_ANGLE_MIN_PX = 24;      // not on very short segments (the angle is meaningless there)
+let snapHint = null;   // { pt, kind: 'end'|'junction'|'edge'|'grid'|'angle'|'lock', label, anchor? } shown on canvas
+
+function _snapWorld(px) { return px / _viewScale(); }
+
+function _onPolys(q, polys) { return _distToPolys(q[0], q[1], polys) < 1e-6; }
 
 function _snapTargets(excludeId) {
-  const out = [];
+  const out = [], points = [];
   for (const p of layer.source_paths) {
     if (!p.visible || p.id === excludeId) continue;
-    const pts = p.points || [];
-    if (pts.length < 2) continue;
-    out.push({ pts, closed: !!p.closed,
-               ends: p.closed ? [] : [pts[0], pts[pts.length - 1]] });
+    const full = p.points || [];
+    if (full.length < 2) continue;
+    const trimmed = _isTrimmedSource(p);
+    const polys = _visibleSourcePolys(p);
+    for (const v of polys) if (v.pts.length >= 2) out.push({ pts: v.pts, closed: !!v.closed });
+    // an open path's own ends — only where they survive a trim
+    if (!p.closed) for (const e of [full[0], full[full.length - 1]])
+      if (!trimmed || _onPolys(e, polys)) points.push({ pt: e, kind: 'end' });
+    // a trimmed source's surviving sections end where they meet the wall that trims them
+    if (trimmed) for (const v of polys) if (v.pts.length >= 2)
+      for (const e of [v.pts[0], v.pts[v.pts.length - 1]]) points.push({ pt: e, kind: 'junction' });
   }
   // Visible wall faces of other systems (offsets, caps, network pieces).
   for (const d of derivedPaths) {
     if (d.role === 'lattice' || d.source_id === excludeId) continue;
     const pts = d.points || [];
-    if (pts.length >= 2) out.push({ pts, closed: !!d.closed, ends: [] });
+    if (pts.length >= 2) out.push({ pts, closed: !!d.closed });
   }
-  return out;
+  // junction markers (◆) of the current network
+  if (networkInfo && !_draggedPathId())
+    for (const jn of networkInfo.junctions || []) points.push({ pt: [jn.x, jn.y], kind: 'junction' });
+  return { lines: out, points };
 }
 
-// Snap target for a world point, or null. Ends win over edges.
-function findSnap(wx, wy, excludeId, altKey) {
-  if (altKey) return null;
-  const targets = _snapTargets(excludeId);
+// Nearest foot on a target line within `rad` world units, or null.
+function _nearestEdge(lines, wx, wy, rad) {
   let best = null;
-  for (const t of targets) {
-    for (const e of t.ends) {
-      const d = Math.hypot(wx - e[0], wy - e[1]);
-      if (d < SNAP_DIST && (!best || d < best.d)) best = { pt: [e[0], e[1]], kind: 'end', d };
-    }
-  }
-  if (best) return best;
-  for (const t of targets) {
+  for (const t of lines) {
     const n = t.pts.length;
     for (let i = 0; i < (t.closed ? n : n - 1); i++) {
       const a = t.pts[i], b = t.pts[(i + 1) % n];
@@ -1458,36 +1478,166 @@ function findSnap(wx, wy, excludeId, altKey) {
       const u = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((wx - a[0]) * dx + (wy - a[1]) * dy) / L2));
       const pt = [a[0] + u * dx, a[1] + u * dy];
       const d = Math.hypot(wx - pt[0], wy - pt[1]);
-      if (d < SNAP_DIST && (!best || d < best.d)) best = { pt, kind: 'edge', d };
+      if (d < rad && (!best || d < best.d)) best = { pt, kind: 'edge', d };
     }
   }
   return best;
 }
 
+// GEOMETRY snap target for a world point, or null: path ends / junctions
+// first, then the nearest point on a visible wall line.
+function findSnap(wx, wy, excludeId, altKey) {
+  if (altKey) return null;
+  const T = _snapTargets(excludeId);
+  let best = null;
+  const rEnd = _snapWorld(SNAP_PX.end);
+  for (const q of T.points) {
+    const d = Math.hypot(wx - q.pt[0], wy - q.pt[1]);
+    if (d < rEnd && (!best || d < best.d - 1e-9 || (Math.abs(d - best.d) <= 1e-9 && q.kind === 'end')))
+      best = { pt: [q.pt[0], q.pt[1]], kind: q.kind, d };
+  }
+  if (best) return best;
+  return _nearestEdge(T.lines, wx, wy, _snapWorld(SNAP_PX.edge));
+}
+
+// the direction from `anchor` to `p` locked to the nearest 45° multiple —
+// only when within SNAP_ANGLE_DEG of it, unless `force` (Shift)
+function _angleLock(anchor, p, force) {
+  const dx = p[0] - anchor[0], dy = p[1] - anchor[1], len = Math.hypot(dx, dy);
+  if (len < 1e-9 || (!force && len * _viewScale() < SNAP_ANGLE_MIN_PX)) return null;
+  const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+  const near = Math.round(ang / SNAP_ANGLE_STEP) * SNAP_ANGLE_STEP;
+  if (!force && Math.abs(ang - near) > SNAP_ANGLE_DEG) return null;
+  const r = near * Math.PI / 180, dir = [Math.cos(r), Math.sin(r)];
+  if (Math.abs(dir[0]) < 1e-12) dir[0] = 0;
+  if (Math.abs(dir[1]) < 1e-12) dir[1] = 0;
+  const s = dx * dir[0] + dy * dir[1];
+  return { dir, deg: ((near % 360) + 360) % 360, pt: [anchor[0] + dir[0] * s, anchor[1] + dir[1] * s] };
+}
+
+// where the ray anchor + s·dir (s > 0) meets visible geometry near `raw`
+// (an end / junction ON the ray, or a wall line crossing it), or null
+function _rayHit(anchor, dir, raw, excludeId) {
+  const T = _snapTargets(excludeId), rad = _snapWorld(SNAP_PX.end), tolOn = _snapWorld(0.5);
+  let best = null;
+  const consider = (pt, kind) => {
+    const s = (pt[0] - anchor[0]) * dir[0] + (pt[1] - anchor[1]) * dir[1];
+    if (s <= 1e-9) return;
+    const d = Math.hypot(pt[0] - raw[0], pt[1] - raw[1]);
+    if (d < rad && (!best || d < best.d)) best = { pt, kind, d };
+  };
+  for (const q of T.points) {
+    const ox = q.pt[0] - anchor[0], oy = q.pt[1] - anchor[1];
+    if (Math.abs(ox * dir[1] - oy * dir[0]) <= tolOn) consider([q.pt[0], q.pt[1]], q.kind);
+  }
+  if (best) return best;
+  for (const t of T.lines) {
+    const n = t.pts.length;
+    for (let i = 0; i < (t.closed ? n : n - 1); i++) {
+      const a = t.pts[i], b = t.pts[(i + 1) % n];
+      const ex = b[0] - a[0], ey = b[1] - a[1], den = dir[0] * ey - dir[1] * ex;
+      if (Math.abs(den) < 1e-12) continue;                       // parallel
+      const ax = a[0] - anchor[0], ay = a[1] - anchor[1];
+      const s = (ax * ey - ay * ex) / den, u = (ax * dir[1] - ay * dir[0]) / den;
+      if (u < -1e-9 || u > 1 + 1e-9) continue;
+      consider([anchor[0] + dir[0] * s, anchor[1] + dir[1] * s], 'edge');
+    }
+  }
+  return best;
+}
+
+// the grid step snapped to: the finest grid currently drawn (physical, 1 ft majors)
+function _gridSnapStep() { const st = gridSteps(_viewScale()); return st.minor || st.major; }
+
+// along an axis-aligned ray: its free coordinate on the grid (if near), else null
+function _gridAlongRay(anchor, dir, pt) {
+  const step = _gridSnapStep(), rad = _snapWorld(SNAP_PX.grid);
+  const ax = Math.abs(dir[1]) < 1e-12 ? 0 : (Math.abs(dir[0]) < 1e-12 ? 1 : -1);
+  if (ax < 0) return null;
+  const v = Math.round(pt[ax] / step) * step;
+  if (Math.abs(v - pt[ax]) > rad) return null;
+  const q = pt.slice(); q[ax] = v;
+  return q;
+}
+
+// THE drawing snap (Line / Draw / Curve / shapes): ends + junctions, then
+// visible wall lines (where a near-architectural angle meets them), then
+// the architectural angle from `anchor` (gentle; never a constraint), then
+// grid points. Alt: no snapping at all. Shift: the angle is LOCKED (the
+// nearest 45° multiple) — still meeting a wall / the grid along that ray.
+// opts: { angle: false (no anchor angle), grid: false, excludeId }
+function snapDrawPoint(wx, wy, anchor, e, opts) {
+  opts = opts || {};
+  if (e && e.altKey) return null;
+  const raw = [wx, wy], useAngle = !!anchor && opts.angle !== false;
+  if (useAngle && e && e.shiftKey) {
+    const lk = _angleLock(anchor, raw, true);
+    if (lk) {
+      const h = _rayHit(anchor, lk.dir, lk.pt, opts.excludeId);
+      if (h) return { pt: h.pt, kind: h.kind, label: `${h.kind === 'edge' ? 'connect' : h.kind === 'end' ? 'join end' : 'junction'} · ${lk.deg}° lock`, anchor };
+      return { pt: _gridAlongRay(anchor, lk.dir, lk.pt) || lk.pt, kind: 'lock', label: `${lk.deg}° lock`, anchor };
+    }
+  }
+  const g = findSnap(wx, wy, opts.excludeId, false);
+  if (g && g.kind !== 'edge') return { pt: g.pt, kind: g.kind, label: g.kind === 'end' ? 'join end' : 'junction' };
+  const lk = useAngle ? _angleLock(anchor, raw, false) : null;
+  if (lk && g) {
+    const h = _rayHit(anchor, lk.dir, lk.pt, opts.excludeId);       // the wall, at this angle
+    if (h) return { pt: h.pt, kind: h.kind, label: `connect · ${lk.deg}°`, anchor };
+  }
+  if (g) return { pt: g.pt, kind: 'edge', label: 'connect' };
+  if (lk) return { pt: _gridAlongRay(anchor, lk.dir, lk.pt) || lk.pt, kind: 'angle', label: `${lk.deg}°`, anchor };
+  if (opts.grid !== false) {
+    const step = _gridSnapStep(), q = [Math.round(wx / step) * step, Math.round(wy / step) * step];
+    if (Math.hypot(q[0] - wx, q[1] - wy) <= _snapWorld(SNAP_PX.grid)) return { pt: q, kind: 'grid', label: 'grid' };
+  }
+  return null;
+}
+
 function drawSnapHint() {
   if (!snapHint) return;
   const [cx, cy] = worldToCanvas(snapHint.pt[0], snapHint.pt[1]);
+  const geo = ['end', 'junction', 'edge'].includes(snapHint.kind);
+  const col = geo ? JUNCTION_COLOR : SNAP_GUIDE_COLOR;
   ctx.save();
-  ctx.strokeStyle = JUNCTION_COLOR;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = JUNCTION_COLOR;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-  ctx.fill();
+  if (snapHint.anchor && (snapHint.kind === 'angle' || snapHint.kind === 'lock' || /°/.test(snapHint.label || ''))) {
+    // the architectural direction: a faint guide through the anchor
+    const [ax, ay] = worldToCanvas(snapHint.anchor[0], snapHint.anchor[1]);
+    const dx = cx - ax, dy = cy - ay, l = Math.hypot(dx, dy) || 1, R = canvas.width + canvas.height;
+    ctx.strokeStyle = SNAP_GUIDE_COLOR; ctx.lineWidth = 1; ctx.globalAlpha = 0.45;
+    if (ctx.setLineDash) ctx.setLineDash([2, 4]);
+    ctx.beginPath(); ctx.moveTo(ax - dx / l * R, ay - dy / l * R); ctx.lineTo(ax + dx / l * R, ay + dy / l * R); ctx.stroke();
+    if (ctx.setLineDash) ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+  ctx.strokeStyle = col;
+  ctx.fillStyle = col;
+  if (snapHint.kind === 'grid') {                  // a small cross on the grid point
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(cx - 5, cy); ctx.lineTo(cx + 5, cy); ctx.moveTo(cx, cy - 5); ctx.lineTo(cx, cy + 5); ctx.stroke();
+  } else if (geo) {
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.font = '10px monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
-  const label = snapHint.kind === 'end' ? 'join end' : 'connect';
+  const label = snapHint.label || (snapHint.kind === 'end' ? 'join end' : snapHint.kind === 'junction' ? 'junction' : 'connect');
   const w = label.length * 6 + 6;
   ctx.fillStyle = 'rgba(10,30,20,0.85)';
   ctx.fillRect(cx + 10, cy - 22, w, 14);
-  ctx.fillStyle = JUNCTION_COLOR;
+  ctx.fillStyle = col;
   ctx.fillText(label, cx + 13, cy - 9);
   ctx.restore();
 }
+const SNAP_GUIDE_COLOR = '#8fb3d9';
 
 // Handles that are path ENDS (or any drawn-path point) may snap.
 function _snappableHandle(path, key) {
@@ -2310,7 +2460,7 @@ function onMouseDown(e) {
         return;
       }
     }
-    const s = findSnap(wx, wy, null, e.altKey);
+    const s = snapDrawPoint(wx, wy, drawPts.length ? drawPts[drawPts.length - 1] : null, e);
     drawPts.push(s ? s.pt : [wx, wy]);
     repaint();
     return;
@@ -2318,7 +2468,7 @@ function onMouseDown(e) {
 
   if (tool === 'curve') {
     // Start and end snap onto walls; the bend (3rd click) never does.
-    const s = drawPts.length < 2 ? findSnap(wx, wy, null, e.altKey) : null;
+    const s = drawPts.length < 2 ? snapDrawPoint(wx, wy, drawPts.length ? drawPts[0] : null, e) : null;
     drawPts.push(s ? s.pt : [wx, wy]);
     if (drawPts.length === 3) {
       finishCurve();
@@ -2343,7 +2493,7 @@ function onMouseDown(e) {
 
   if (SHAPE_TOOLS[tool]) {
     _mousePosW = [wx, wy];
-    const pt = _shapePoint(wx, wy, e.altKey);
+    const pt = _shapePoint(wx, wy, e);
     if (drawPts.length === 0) {
       drawPts = [pt];
       _shapeDown = pt;
@@ -2516,18 +2666,29 @@ function onMouseMove(e) {
     return;
   }
   // Shape tools: live preview + snap indicator.
-  if (SHAPE_TOOLS[tool]) {
-    snapHint = findSnap(_mousePosW[0], _mousePosW[1], null, e.altKey);
-    repaint();
-    return;
+  if (SHAPE_TOOLS[tool] || tool === 'draw' || tool === 'curve') {
+    _snapMods = { altKey: !!e.altKey, shiftKey: !!e.shiftKey };
+    _refreshDrawSnap();
   }
-  // Draw / curve: preview where the next click would snap (and repaint
-  // for the close-path and live-curve previews).
-  if (tool === 'draw' || tool === 'curve') {
+}
+
+// the drawing tools' snap preview at the pointer (also on Shift / Alt
+// press / release, without moving the mouse)
+let _snapMods = { altKey: false, shiftKey: false };
+function _drawSnapAnchor() {
+  if (tool === 'draw') return drawPts.length ? drawPts[drawPts.length - 1] : null;
+  if (tool === 'curve') return drawPts.length === 1 ? drawPts[0] : null;
+  if (SHAPE_TOOLS[tool] === 'LinePath') return drawPts.length === 1 ? drawPts[0] : null;
+  return null;
+}
+function _refreshDrawSnap() {
+  if (!_mousePosW) return;
+  if (SHAPE_TOOLS[tool]) snapHint = _shapeSnap(_mousePosW[0], _mousePosW[1], _snapMods);
+  else if (tool === 'draw' || tool === 'curve')
     snapHint = (tool === 'draw' || drawPts.length < 2)
-      ? findSnap(_mousePosW[0], _mousePosW[1], null, e.altKey) : null;
-    repaint();
-  }
+      ? snapDrawPoint(_mousePosW[0], _mousePosW[1], _drawSnapAnchor(), _snapMods) : null;
+  else return;
+  repaint();
 }
 
 function onMouseUp(e) {
@@ -2535,7 +2696,7 @@ function onMouseUp(e) {
   const up = (e && e.clientX !== undefined) ? canvasFromEvent(e) : _mousePosW;
   if (SHAPE_TOOLS[tool] && drawPts.length === 1 && _shapeDown && up &&
       Math.hypot(up[0] - _shapeDown[0], up[1] - _shapeDown[1]) > 3) {
-    const pt = _shapePoint(up[0], up[1], e && e.altKey);
+    const pt = _shapePoint(up[0], up[1], e);
     _shapeDown = null;
     createShape(SHAPE_TOOLS[tool], drawPts[0], pt);
     return;
@@ -2566,10 +2727,16 @@ function _isTyping() {
 
 document.addEventListener('keyup', e => {
   if (e.key === ' ') { spaceDown = false; canvas.style.cursor = ''; }
+  if (e.key === 'Shift' || e.key === 'Alt') { _snapMods = { altKey: !!e.altKey, shiftKey: !!e.shiftKey }; _refreshDrawSnap(); }
 });
 
 document.addEventListener('keydown', e => {
   if (currentWorkspace !== 'designer') return;     // Designer shortcuts only in the Designer
+  if ((e.key === 'Shift' || e.key === 'Alt') && !_isTyping()) {
+    _snapMods = { altKey: !!e.altKey || e.key === 'Alt', shiftKey: !!e.shiftKey || e.key === 'Shift' };
+    _refreshDrawSnap();
+    return;
+  }
   if (e.key === ' ' && !_isTyping()) {             // Space held: pan mode
     if (e.preventDefault) e.preventDefault();
     spaceDown = true;
@@ -2850,8 +3017,14 @@ function createShape(type, a, b) {
   return path;
 }
 
-function _shapePoint(wx, wy, altKey) {
-  const s = findSnap(wx, wy, null, altKey);
+// Line: the full drawing snap (incl. architectural angles from its first
+// point); rectangle / circle / ellipse: geometry and grid only
+function _shapeSnap(wx, wy, e) {
+  const line = SHAPE_TOOLS[tool] === 'LinePath';
+  return snapDrawPoint(wx, wy, line && drawPts.length === 1 ? drawPts[0] : null, e, { angle: line });
+}
+function _shapePoint(wx, wy, e) {
+  const s = _shapeSnap(wx, wy, e);
   return s ? s.pt : [wx, wy];
 }
 
@@ -3793,7 +3966,9 @@ function _wgNew(pids = [], thickness = 10) {
   layer.wall_groups = layer.wall_groups || [];
   let k = layer.wall_groups.length + 1;
   while (layer.wall_groups.some(g => g.name === `Wall Group ${k}`)) k++;
-  const g = { id: _newWallGroupId(), name: `Wall Group ${k}`, members: [], thickness, align: 'auto',
+  // NEW groups default to CENTERED (2026-10-15; an authoring default only —
+  // stored alignments, incl. 'auto' in existing projects, are never changed)
+  const g = { id: _newWallGroupId(), name: `Wall Group ${k}`, members: [], thickness, align: 'center',
               print_reference: false };
   layer.wall_groups.push(g);
   for (const pid of pids) _wgSetMember(pid, g);

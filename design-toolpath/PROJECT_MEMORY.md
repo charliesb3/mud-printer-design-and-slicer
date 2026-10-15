@@ -362,6 +362,58 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 **Summary (2026-10-06):** the Designer is checkpointed (5ed967d). On top of it, an UNCOMMITTED Z-phase batch adds Layer Designs (inheritance, shared lineage lattice, project bead width), semantic transforms for the Layer Assembly, and the Assembly subsystem (`layer_assembly/`, own memory). Start with "Z PHASE — CURRENT ARCHITECTURE" below; known open problem: transformed-junction lattice coherence (support findings at moving junctions). Testing tiers: same section → "Testing workflow".
 
+### DRAWING CORRECTNESS + ARCHITECTURAL SNAP UX (Pass 1, 2026-10-15; manually reviewed, checkpoint 2026-10-15)
+
+- **Bug fixed — trimmed geometry was a snap target.** `_snapTargets` used every
+  source's full parametric `points`, so a Trim's removed section (invisible)
+  still pulled the cursor. Snap targets are now the EFFECTIVE geometry —
+  `_visibleSourcePolys` (the same sections rendering / hit-testing / handles
+  use): visible sections, an open path's ends only where they survive, the
+  visible section ends where a trim cut a wall (kind 'junction'), the network
+  junction markers, visible derived faces. Regression:
+  `tests/test_trim_ghost.py` (fails on the old code).
+- **DEFERRED, documented (not fixed): attaching new geometry to a trimmed-away
+  section brings it back.** A Trim is a topological signature (bounding
+  sources + inside-which-closed-source); a new wall ending ON a removed
+  section adds a contact, the trim becomes 'unresolved' and the section
+  reappears (ending on the removed rectangle edge of the circle + rectangle
+  case un-resolves BOTH trims); attaching to visible geometry keeps every
+  trim. The snap fix removes the UI invitation, an Alt-placed / crossing
+  wall still triggers it. Strict-xfail regression
+  `test_trim_ghost.py::test_attaching_to_a_removed_section_keeps_trims`;
+  belongs to the deferred junction / trim topology architecture.
+- **Snap engine** (`snapDrawPoint`, app.js; Line / Draw / Curve ends / shape
+  corners; handle + body drags keep geometry-only `findSnap`): radii in
+  SCREEN px (ends / junctions 12, wall lines 9, grid 7 — was 8 world inches
+  ≈ 45 px at the home view); priority: ends / junctions → wall lines (where a
+  near-architectural angle meets the wall, exactly at that angle) → gentle
+  angle from the previous point (within 4° of a 45° multiple, segments ≥ 24
+  px; along 0 / 90° the length lands on the grid) → grid points (the finest
+  grid drawn: 1 ft majors, 6 / 3 / 1 in subdivisions as zoomed). Alt / Option
+  = no snapping at all (existing convention kept); Shift = the angle LOCKED to
+  the nearest 45° multiple (still meeting a wall / the grid along the ray).
+  Rectangle / circle / ellipse: geometry + grid, no angles. Cue: snap marker
+  + label ("join end", "junction", "connect · 0°", "45° lock", "grid") and a
+  faint guide line through the anchor for angle snaps; Draw shows a rubber
+  band; Shift / Alt refresh the cue without moving the mouse. Tests:
+  `tests/test_snapping.py` (`js/ui_snap_smoke.js`). Some older UI tests now
+  click with Alt where they need exact free coordinates near grid points.
+- **New Wall Groups default to Centered** (`_wgNew` align 'center', was
+  'auto' = inside for closed paths). Authoring default only — stored
+  alignments (incl. 'auto') unchanged; not a junction fix.
+- **Transform centres are displayed "Center n"** (Assembly list, selector,
+  preview label, assign banner; was "Cn", read like "Circle 1"); ids c1, c2 …
+  unchanged; the backend's internal warning still names ids.
+
+### PLANAR TOP CUT PROFILE TYPES (Pass 2, 2026-10-15; manually reviewed + corrected, checkpoint 2026-10-15)
+
+Linear (unchanged) | Stepped (whole-layer risers + treads, n = round(span /
+step run), the linear cut snapped to the nearest tread line) | Curved
+(quadratic Bézier start → end, draggable control point inside the start–end
+box). Same stage as the plane — one plan line per layer, never splitting a
+layer; `.muddesign` schema 6 (older planes = Linear). Details:
+`layer_assembly/PROJECT_MEMORY.md` → "PLANAR TOP CUT PROFILE TYPES".
+
 ### MACHINE PROFILE — the project's printer (2026-10-15; manually reviewed, checkpoint 2026-10-15)
 
 Machine profiles are independent configuration on each side. `.mudjob` communicates job assumptions and requirements; it does not synchronize applications.
@@ -1422,6 +1474,15 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
 
 ## Next Steps
 
+**2026-10-15:** (a) Pass 1 + Planar Top Cut profile types reviewed and
+checkpointed; (b) the deferred GEOMETRY-ARCHITECTURE investigation, together with the user,
+as ONE problem: junction ownership / topology, branches at existing
+junctions, inner-vs-outer thick-wall face attachment, multiple-centre
+transform junction failures, corner / junction / end-cap architecture, Wall
+Geometry ownership / scope — incl. the trim-topology observation (a contact
+on a removed section un-resolves the Trim; strict-xfail case in
+`design_proto/tests/test_trim_ghost.py`).
+
 Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its correction checkpoint, 2026-10-08; Wall Systems, canonical corner motifs and Adaptive Truss manually reviewed and accepted):
 
 0a. **Manual review of the Chained Loop parameter / responsiveness pass and the corner + junction motifs** (2026-10-09; see the Wall Systems subsection): ring and reflex corners, doubled-lap corners (inner hook), T / partition eyes, the oblique-end and round-junction fallbacks.
@@ -1439,6 +1500,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-15 — Pass 1 (trim-aware snapping, architectural snap UX, Centered default for new Wall Groups, "Center n" labels) and Pass 2 (planar top cut Linear / Stepped / Curved, schema 6) — manually reviewed; after review the Stepped rule got real landings and the planar-cut ghost exact clipping; checkpointed. Machine Profile + 1 ft grid checkpoint 8c51d8a.
 
 2026-10-15 — MACHINE PROFILE (manually reviewed, checkpoint 2026-10-15): project printer profile in `.muddesign` schema 5, envelope in every view, preflight, `.mudjob` requirements / prepared_for / preflight. See Current State → "MACHINE PROFILE".
 

@@ -361,6 +361,8 @@ eval(src + `
   const [m1, m2] = asm.state.centers.slice(1);
   check(asm.state.centers.length === 3 && !m1.sources.length && !m2.sources.length && m1.id !== m2.id && m1.id !== g1.id &&
         asm.selCenter === m2.id, 'two manual groups added (stable, distinct ids; the new one selected)');
+  check(txtOf('asm-assembly-tf').includes('Center 3') && !/\bC[0-9]\b/.test(txtOf('asm-assembly-tf')) && /^c[0-9]+$/.test(m2.id),
+        'transform centres are shown as "Center n" (never "Cn", which reads like a path name); ids unchanged');
   check(asm.resolved.instances.every(L => Object.keys(L.parts).join() === g1.id) &&
         txtOf('asm-assembly-tf').includes('no walls assigned yet'), 'groups without walls move nothing (no nearest-centre rule)');
   check(txtOf('asm-assembly-tf').includes('Walls → transform group') && txtOf('asm-assembly-tf').includes('Rect'),
@@ -577,7 +579,7 @@ eval(src + `
   _downloadText = (name, text) => { saved = { name, text }; };
   await saveProject();
   const F = JSON.parse(saved.text);
-  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 5 &&
+  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 6 &&
         saved.text.indexOf('"schema_version"') < saved.text.indexOf('"project"'),
         'Save Project downloads Smoke house.muddesign: format id + schema version first, human-readable JSON');
   const FD = F.project.designer;

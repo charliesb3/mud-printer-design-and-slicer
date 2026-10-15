@@ -84,7 +84,7 @@ def test_existing_projects_keep_their_maximum_overhang():
     import project_file as PF
     from app import _deserialise_layer
     implicit = PF.load(json.dumps(_v2_file()), _deserialise_layer)
-    assert implicit['migrated_from'] == 2 and implicit['schema_version'] == 5
+    assert implicit['migrated_from'] == 2 and implicit['schema_version'] == 6
     assert implicit['project']['assembly']['state']['max_overhang'] == 1.5          # what it was designed with
     explicit = PF.load(json.dumps(_v2_file(2.25)), _deserialise_layer)
     assert explicit['project']['assembly']['state']['max_overhang'] == 2.25         # untouched

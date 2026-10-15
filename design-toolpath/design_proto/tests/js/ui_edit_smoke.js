@@ -53,8 +53,9 @@ eval(src + `
 
   // ===== 1. Extra Offset sources =========================================
   setTool('rect'); onMouseDown(ev(100, 140)); onMouseDown(ev(300, 260));
-  setTool('line'); onMouseDown(ev(50, 50)); onMouseDown(ev(150, 50));
-  setTool('line'); onMouseDown(ev(50, 350)); onMouseDown(ev(150, 350));
+  // (Alt: placed exactly where clicked — 50 / 350 lie within the 1 ft grid snap at this zoom)
+  setTool('line'); onMouseDown(ev(50, 50, { altKey: true })); onMouseDown(ev(150, 50, { altKey: true }));
+  setTool('line'); onMouseDown(ev(50, 350, { altKey: true })); onMouseDown(ev(150, 350, { altKey: true }));
   const [R, L1, L2] = layer.source_paths;
   check(R.label === 'Rect 1' && L1.label === 'Line 1' && L2.label === 'Line 2', 'Rect 1, Line 1, Line 2 drawn');
   selectedId = L1.id; addOffset();
@@ -402,6 +403,13 @@ eval(src + `
   WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
   check(buildPayload().source_paths[0].wall.thickness === 10, 'Wall Thickness kept in the payload');
   WO.wall = null;
+  // NEW Wall Groups default to CENTERED (2026-10-15); a stored alignment is never rewritten
+  const gNew = _wgNew([WO.id]);
+  check(gNew.align === 'center', 'a new Wall Group defaults to Centered alignment');
+  layer.wall_groups = [{ ...gNew, id: 'WGold', align: 'auto' }];
+  check(JSON.parse(JSON.stringify(layer)).wall_groups[0].align === 'auto' && buildPayload().wall_groups[0].align === 'auto',
+        "an existing group's stored alignment (auto) is kept as it is");
+  layer.wall_groups = [];
   _wgNew([WO.id]).align = 'inside';
   nodes = panelNodes();
   check(nodes.some(n => typeof n.textContent === 'string' && /^Wall Group 1 · 10 in$/.test(n.textContent)),

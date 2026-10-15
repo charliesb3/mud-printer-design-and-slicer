@@ -105,6 +105,45 @@ eval(src + `
   undo();
   check(layer.source_paths.find(q => q.id === 'R').x === x0, 'undo the move');
 
+  // ---- SNAPPING uses the EFFECTIVE geometry (2026-10-15 regression): a
+  // trimmed-away section is no invisible snap target ----
+  const onRemoved = (q, sec) => _distToPolys(q[0], q[1], [{ pts: sec.pts, closed: false }]) < 0.5;
+  const geoKinds = ['end', 'junction', 'edge'];
+  const removedC = DATA.trim_sections.filter(q => q.source === 'C' && q.trimmed_by)[0];
+  const cm = removedC.pts[Math.floor(removedC.pts.length / 2)];   // a point of the circle's trimmed-away arc
+  for (const [name, sec, q] of [['rectangle edge', removed, mid], ['circle arc', removedC, cm]]) {
+    const near = [q[0] - 1.5, q[1] + 1.5];                           // ~4 px from it at this zoom
+    check(!findSnap(near[0], near[1], null, false) || !onRemoved(findSnap(near[0], near[1], null, false).pt, sec),
+          'findSnap: no snap onto the trimmed-away ' + name);
+    setTool('line');
+    onMouseMove(ev(near[0], near[1]));
+    check(!snapHint || !geoKinds.includes(snapHint.kind) || !onRemoved(snapHint.pt, sec),
+          'Line tool hover near the trimmed-away ' + name + ': no invisible snap (' + (snapHint ? snapHint.kind : 'none') + ')');
+    onMouseDown(ev(near[0], near[1]));
+    check(drawPts.length === 1 && !onRemoved(drawPts[0], sec), 'clicking there does not land on the removed ' + name);
+    setTool('edit');
+    setTool('draw');
+    onMouseDown(ev(near[0], near[1]));
+    check(drawPts.length === 1 && !onRemoved(drawPts[0], sec), 'Draw tool: no snap onto the removed ' + name);
+    drawPts = []; setTool('edit');
+  }
+  // legitimate visible geometry still snaps: a surviving edge, a section end where the trim cut it
+  const vEdge = findSnap(220, 101.5, null, false);
+  check(vEdge && vEdge.kind === 'edge' && Math.abs(vEdge.pt[1] - 100) < 1e-9, 'a visible rectangle edge still snaps');
+  const keep = DATA.trim_sections.filter(q => q.source === 'R' && !q.trimmed_by);
+  const jEnd = keep[0].pts[keep[0].pts.length - 1];
+  const js = findSnap(jEnd[0] + 1, jEnd[1] - 1, null, false);
+  check(js && ['junction', 'end'].includes(js.kind) && Math.hypot(js.pt[0] - jEnd[0], js.pt[1] - jEnd[1]) < 1e-6,
+        'where a trim cut the wall, the visible section end is a junction snap');
+  check(findSnap(near0(removed)[0], near0(removed)[1], null, true) === null, 'Alt: nothing snaps');
+  function near0(sec) { const q = sec.pts[0]; return [q[0] + 1, q[1] + 1]; }
+  // without the trims the same point snaps onto the (now present) edge — the check above is not vacuous
+  const savedNet = networkInfo;
+  networkInfo = { trim_sections: DATA.all_sections, modified_sources: [], trims: {}, junctions: [] };
+  const back = findSnap(mid[0] - 1.5, mid[1] + 1.5, null, false);
+  check(back && onRemoved(back.pt, removed), 'untrimmed, the same hover DOES snap onto that edge');
+  networkInfo = savedNet;
+
   // ---- restoring the trims restores the full representation ----
   layer.trims = [];
   networkInfo = { trim_sections: DATA.all_sections, modified_sources: [], trims: {}, junctions: [] };

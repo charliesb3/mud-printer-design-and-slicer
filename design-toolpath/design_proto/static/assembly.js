@@ -302,6 +302,9 @@ function asmSetCenterMode(mode) {
 function _asmCenter(id) { return asm.state.centers.find(c => c.id === id); }
 
 function _asmNewCenterId() { return 'c' + (++asm.state.center_counter); }
+// the DISPLAY name of a transform centre: "Center n" (2026-10-15; was "Cn",
+// easily confused with path names such as "Circle 1"). Ids (c1, c2 …) unchanged.
+function _asmCenterName(n) { return `Center ${n + 1}`; }
 
 // a manual group (no walls yet) near the middle of the stack's footprint; selected
 function asmAddCenter() {
@@ -915,7 +918,7 @@ function asmRender() {
       row.dataset.center = c.id;
       const sw = _el('span', 'asm-swatch'); sw.style.background = _asmGroupColor(c.id);
       row.appendChild(sw);
-      const pick = _el('button', 'mini-btn' + (asm.selCenter === c.id ? ' active' : ''), `C${n + 1}`);
+      const pick = _el('button', 'mini-btn' + (asm.selCenter === c.id ? ' active' : ''), _asmCenterName(n));
       pick.title = 'Select this transform group (to assign walls to it)';
       pick.onclick = () => asmSelectCenter(c.id);
       row.appendChild(pick);
@@ -956,7 +959,7 @@ function asmRender() {
         row.appendChild(_el('span', 'prop-label', S[src].label));
         const sel = _el('select', 'prop-input');
         const none = _el('option', null, '— none (whole footprint)'); none.value = ''; sel.appendChild(none);
-        asm.state.centers.forEach((c, n) => { const o = _el('option', null, `C${n + 1}`); o.value = c.id; sel.appendChild(o); });
+        asm.state.centers.forEach((c, n) => { const o = _el('option', null, _asmCenterName(n)); o.value = c.id; sel.appendChild(o); });
         sel.value = _asmGroupOf(src) || '';
         sel.onchange = () => asmAssignSource(src, sel.value || null);
         row.appendChild(sel);
@@ -2052,6 +2055,96 @@ function _asmPlaneZf(p) {
   return (x, y) => z0 + k * ((x - ax) * dx + (y - ay) * dy);
 }
 
+// PROFILE TYPES (2026-10-15) — LINEAR (the plane) | STEPPED | CURVED. The
+// mirror of profiles.PlaneProfile.cut_t (the server is authoritative; the
+// page uses this for the live preview, the ghost and the drawn silhouette):
+// each layer keeps the run t ≥ cut_t(its mid-height) — whole layers only.
+// Stepped / curved run from the START (anchor, z_anchor) to the END `span`
+// further along the uphill direction at the chord's height; for them the
+// start / end are kept at the selected footprint's downhill / uphill
+// extremes (_asmPlaneNorm), i.e. the "Z downhill / uphill edge" values.
+function _asmPlaneShape(p) { return p.shape || 'linear'; }
+// STEPPED (revised 2026-10-15): T treads of equal run — the first is the LOWER
+// LANDING at the start elevation, the last the UPPER LANDING at the end
+// elevation — and n = T − 1 risers between them (mirror of PlaneProfile.steps)
+function _asmPlaneSteps(p) {
+  const T = Math.max(2, Math.floor((p.span || 0) / Math.max(p.step_run || 12, 1e-9) + 0.5));
+  return { n: T - 1, treads: T, tread: (p.span || 0) / T, riser: p.slope * (p.span || 0) / (T - 1) };
+}
+function _asmPlaneCutT(p, z) {
+  const sh = _asmPlaneShape(p);
+  if (!(p.slope > 1e-12) || (sh !== 'linear' && !(p.span > 1e-9))) return z <= p.z_anchor + 1e-9 ? 'all' : 'none';
+  const tl = (z - p.z_anchor) / p.slope;
+  if (sh === 'stepped') {
+    const { n, tread } = _asmPlaneSteps(p), q = tl / p.span;           // fraction of the rise
+    if (q <= 0) return tl;                                          // at / below the lower landing: as the chord (nothing in the run)
+    if (q > 1) return p.span + (q - 1) * p.span;                    // above the upper landing: everything of the run removed
+    return tread * Math.ceil(q * n - 1e-9);                         // riser j's band → cut at the j-th riser
+  }
+  if (sh === 'curved') {
+    const [u, v] = p.control || [0.5, 0.5], q = tl / p.span;
+    if (q < 0) return v <= 1e-12 ? 'all' : p.span * (u / v) * q;
+    if (q > 1) return v >= 1 - 1e-12 ? 'none' : p.span * (1 + (1 - u) / (1 - v) * (q - 1));
+    if (q === 0 || q === 1) return p.span * q;
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 64; k++) { const m = 0.5 * (lo + hi); if (2 * v * m * (1 - m) + m * m < q) lo = m; else hi = m; }
+    const m = 0.5 * (lo + hi);
+    return p.span * (2 * u * m * (1 - m) + m * m);
+  }
+  return tl;
+}
+// the REMOVED part of a straight world segment a → b at layer mid-height z:
+// null (nothing) or [u0, u1] ⊆ [0, 1]. The run t is linear along a segment and
+// a layer removes t < cut_t(z) — so the removed part is one end of the segment,
+// clipped EXACTLY (2026-10-15: judging a whole segment by its midpoint drew
+// long segments — an out-and-back wall's sides — as removed far past the cut,
+// back to the junction: the reported "stale extension" ghost)
+function _asmPlaneRemovedF(p) {
+  const [dx, dy] = _asmPlaneDir(p), ax0 = p.anchor[0], ay0 = p.anchor[1], memo = new Map();
+  return (ax, ay, bx, by, z) => {
+    let tc = memo.get(z);
+    if (tc === undefined) { tc = _asmPlaneCutT(p, z); memo.set(z, tc); }
+    if (tc === 'all') return null;
+    if (tc === 'none') return [0, 1];
+    const ta = (ax - ax0) * dx + (ay - ay0) * dy, tb = (bx - ax0) * dx + (by - ay0) * dy;
+    const ra = ta < tc, rb = tb < tc;
+    if (ra && rb) return [0, 1];
+    if (!ra && !rb) return null;
+    const uc = (tc - ta) / (tb - ta);
+    return ra ? [0, uc] : [uc, 1];
+  };
+}
+
+// stepped / curved: the start (anchor, z_anchor) and the run `span` follow the
+// selected footprint's downhill / uphill extremes on the CHORD (the plane)
+function _asmPlaneNorm(p) {
+  if (_asmPlaneShape(p) === 'linear') return p;
+  const hl = _asmPlaneHL(p);
+  if (!hl || !(hl.run > 1e-9)) return p;
+  const [dx, dy] = _asmPlaneDir(p);
+  p.anchor = [_asmClean(dx * hl.s0), _asmClean(dy * hl.s0)];
+  p.z_anchor = _asmClean(hl.low);
+  p.span = _asmClean(hl.run);
+  return p;
+}
+// the INTENDED profile in the (t, z) elevation, sampled (drawn while editing)
+function _asmPlaneIntended(p) {
+  const sh = _asmPlaneShape(p), rise = p.slope * (p.span || 0), out = [];
+  if (sh === 'curved') {
+    const [u, v] = p.control || [0.5, 0.5];
+    for (let k = 0; k <= 48; k++) {
+      const s = k / 48;
+      out.push([p.span * (2 * u * s * (1 - s) + s * s), p.z_anchor + rise * (2 * v * s * (1 - s) + s * s)]);
+    }
+  } else if (sh === 'stepped') {
+    const { n, tread, riser } = _asmPlaneSteps(p);  // lower landing, n risers, upper landing
+    out.push([0, p.z_anchor]);
+    for (let j = 1; j <= n; j++) out.push([j * tread, p.z_anchor + riser * (j - 1)], [j * tread, p.z_anchor + riser * j]);
+    out.push([p.span, p.z_anchor + rise]);
+  }
+  return out;
+}
+
 // the selected footprint in WORLD coordinates (each design placed by its first layer)
 function _asmPlaneFootprint(p) {
   const R = asm.resolved, out = [];
@@ -2095,7 +2188,7 @@ function asmPlaneCreate() {
   const id = 'p' + (asm.state.profile_counter = (asm.state.profile_counter || 0) + 1);
   const top = _asmStackTop() || 72;
   const p = { kind: 'plane', id, sources: [], systems: [], exclude: [], direction: 0, slope: 0,
-              anchor: [0, 0], z_anchor: _asmSnapZ(0.75 * top), label: '' };
+              anchor: [0, 0], z_anchor: _asmSnapZ(0.75 * top), label: '', shape: 'linear' };
   asm.profPick = null; asm.profError = null;
   return asmEdit(null, () => {
     _asmProfiles().push(p);
@@ -2117,7 +2210,7 @@ function asmPlaneToggleSource(id, sid) {
       p.exclude = (p.exclude || []).filter(x => x !== sid);
       if (!viaSystem && !(p.sources || []).includes(sid)) p.sources = [...(p.sources || []), sid];
     }
-    _asmPlaneKeepHL(p);
+    _asmPlaneKeepHL(p); _asmPlaneNorm(p);
     return asmResolve();
   });
 }
@@ -2131,7 +2224,7 @@ function asmPlaneToggleSystem(id, sys) {
       const members = new Set(_asmPlaneDesigns().flatMap(d => _asmPlaneSources(d).filter(r => r.system === sys).map(r => r.source)));
       p.exclude = (p.exclude || []).filter(x => !members.has(x));
     }
-    _asmPlaneKeepHL(p);
+    _asmPlaneKeepHL(p); _asmPlaneNorm(p);
     return asmResolve();
   });
 }
@@ -2180,8 +2273,35 @@ function _asmPlaneAbout(p, direction, slope) {
 }
 
 // numeric fields: direction | shift | angle | rise | high | low
+// profile type: shape ('linear' | 'stepped' | 'curved') | step_run | cu / cv (the
+// curve's control point, % of run / rise)
 function asmPlaneSet(id, field, v) {
   const p = _asmProfile(id); if (!p) return;
+  if (field === 'shape') {
+    if (!['linear', 'stepped', 'curved'].includes(v) || _asmPlaneShape(p) === v) { asmRender(); return; }
+    return asmEdit(null, () => {
+      p.shape = v;
+      if (v !== 'linear') {
+        if (!(p.step_run > 0)) p.step_run = 12;
+        if (!Array.isArray(p.control)) p.control = [0.5, 0.5];
+        _asmPlaneNorm(p);
+      }
+      return asmResolve();
+    });
+  }
+  if (field === 'step_run' || field === 'cu' || field === 'cv') {
+    const y = parseFloat(v);
+    if (!isFinite(y)) { asmRender(); return; }
+    return asmEdit(`pp${id}.${field}`, () => {
+      if (field === 'step_run') p.step_run = Math.max(0.5, _asmQ4(y));
+      else {
+        const c = (p.control || [0.5, 0.5]).slice(), k = field === 'cu' ? 0 : 1;
+        c[k] = Math.max(0, Math.min(1, Math.round(y) / 100));
+        p.control = c;
+      }
+      return asmResolve();
+    });
+  }
   const x = parseFloat(v);
   if (!isFinite(x)) { asmRender(); return; }
   const hl = _asmPlaneHL(p) || { high: p.z_anchor, low: p.z_anchor, run: 1 };
@@ -2200,13 +2320,13 @@ function asmPlaneSet(id, field, v) {
   else if (field === 'high') q = _asmPlaneFromHL(p, p.direction, Math.max(_asmSnapZ(x), hl.low), hl.low);
   else if (field === 'low') q = _asmPlaneFromHL(p, p.direction, hl.high, Math.min(_asmSnapZ(x), hl.high));
   else return;
-  return asmEdit(`pp${id}.${field}`, () => { Object.assign(p, q); return asmResolve(); });
+  return asmEdit(`pp${id}.${field}`, () => { Object.assign(p, q); _asmPlaneNorm(p); return asmResolve(); });
 }
 
 // FLIP SLOPE: uphill reversed about the top contour — same slope, same place
 function asmPlaneFlip(id) {
   const p = _asmProfile(id); if (!p) return;
-  return asmEdit(null, () => { Object.assign(p, _asmPlaneAbout(p, (p.direction || 0) + 180, p.slope)); return asmResolve(); });
+  return asmEdit(null, () => { Object.assign(p, _asmPlaneAbout(p, (p.direction || 0) + 180, p.slope)); _asmPlaneNorm(p); return asmResolve(); });
 }
 
 function asmPlaneView(id, which) {
@@ -2263,9 +2383,11 @@ function _asmDrawPlane(g, P, p) {
       g.stroke();
     }
   }
-  // the PLANE over the footprint (its corners at the plane's Z), translucent
+  // the PLANE over the footprint (its corners at the plane's Z), translucent —
+  // or, STEPPED / CURVED, the layer-resolved profile surface + the intended profile
   const pts = _asmPlaneFootprint(p);
-  if (pts.length) {
+  if (pts.length && _asmPlaneShape(p) !== 'linear') _asmDrawPlaneProfile(g, P, p, pts, top);
+  else if (pts.length) {
     const [dx, dy] = _asmPlaneDir(p);
     const us = pts.map(([x, y]) => x * dx + y * dy), vs = pts.map(([x, y]) => -x * dy + y * dx);
     const u0 = Math.min(...us) - 6, u1 = Math.max(...us) + 6, v0 = Math.min(...vs) - 6, v1 = Math.max(...vs) + 6;
@@ -2301,6 +2423,73 @@ function _asmDrawPlane(g, P, p) {
   if (rep && !rep.valid) { g.fillStyle = '#ff6b6b'; g.fillText('P: ' + rep.errors.join(' · '), 14, 34); }
 }
 
+// STEPPED / CURVED: (1) the LAYER-RESOLVED surface — each layer's cut at its
+// run, vertical through the layer, swept across the footprint (what prints:
+// a stepped silhouette for Stepped, the whole-layer approximation of the
+// curve for Curved); (2) the INTENDED profile (the stair / the curve) on the
+// footprint's mid line; (3) Curved: the control polygon and the draggable
+// control point (Slope view)
+function _asmDrawPlaneProfile(g, P, p, pts, top) {
+  const [dx, dy] = _asmPlaneDir(p), sA = p.anchor[0] * dx + p.anchor[1] * dy;
+  const us = pts.map(([x, y]) => x * dx + y * dy), vs = pts.map(([x, y]) => -x * dy + y * dx);
+  const t0 = Math.min(...us) - sA, t1 = Math.max(...us) - sA, v0 = Math.min(...vs) - 6, v1 = Math.max(...vs) + 6;
+  const vm = 0.5 * (v0 + v1);
+  const W = (t, v, z) => { const u = sA + t; return P(u * dx - v * dy, u * dy + v * dx, z); };
+  // the resolved silhouette: the outline of the KEPT material in the (run, Z)
+  // elevation over the cut layers only — from the first layer the cut reaches
+  // into the footprint to the last one that keeps something
+  const R = asm.resolved, sil = [];
+  const inst = ((R && R.instances) || []).slice().sort((a, b) => a.z_bottom - b.z_bottom);
+  for (const i of inst) {
+    const tc = _asmPlaneCutT(p, 0.5 * (i.z_bottom + i.z_top));
+    if (tc === 'all' || (tc !== 'none' && tc <= t0 + 1e-9)) continue;          // not cut yet
+    if (tc === 'none' || tc >= t1 - 1e-9) { if (sil.length) sil.push([t1, i.z_bottom]); break; }   // all removed above
+    if (!sil.length) sil.push([t0, i.z_bottom]);
+    else sil.push([tc, sil[sil.length - 1][1]]);
+    sil.push([tc, i.z_bottom], [tc, i.z_top]);
+  }
+  if (sil.length && sil[sil.length - 1][0] < t1) sil.push([t1, sil[sil.length - 1][1]]);
+  g.fillStyle = ASM_PROFILE_COLOR; g.globalAlpha = 0.10;           // the cut surface across the footprint
+  g.beginPath();
+  for (let k = 0; k + 1 < sil.length; k++) {
+    const [ta, za] = sil[k], [tb, zb] = sil[k + 1];
+    const q = [W(ta, v0, za), W(tb, v0, zb), W(tb, v1, zb), W(ta, v1, za)];
+    q.forEach(([x, y], j) => (j ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath();
+  }
+  g.fill(); g.globalAlpha = 1;
+  g.strokeStyle = ASM_PROFILE_COLOR; g.lineWidth = 2.2;            // the resolved profile (what prints)
+  g.beginPath();
+  sil.forEach(([t, z], j) => { const [x, y] = W(t, vm, z); if (j) g.lineTo(x, y); else g.moveTo(x, y); });
+  g.stroke();
+  const it = _asmPlaneIntended(p);                 // the INTENDED profile (dashed, bright)
+  g.strokeStyle = '#ffd166'; g.lineWidth = 1.6; if (g.setLineDash) g.setLineDash([5, 4]);
+  g.beginPath();
+  it.forEach(([t, z], j) => { const [x, y] = W(t, vm, z); if (j) g.lineTo(x, y); else g.moveTo(x, y); });
+  g.stroke(); if (g.setLineDash) g.setLineDash([]);
+  const rise = p.slope * p.span, z0 = p.z_anchor;
+  const [sx, sy] = W(0, vm, z0), [ex, ey] = W(p.span, vm, z0 + rise);
+  g.fillStyle = '#ffd166'; g.fillRect(sx - 4, sy - 4, 8, 8); g.fillRect(ex - 4, ey - 4, 8, 8);
+  g.font = '10px monospace'; g.fillStyle = '#cccccc';
+  g.fillText('start', sx + 6, sy + 12); g.fillText('end', ex + 6, ey - 6);
+  if (_asmPlaneShape(p) === 'curved') {
+    const c = _asmPlaneControlW(p), [cx, cy] = P(c[0], c[1], c[2]);
+    g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 1; if (g.setLineDash) g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(sx, sy); g.lineTo(cx, cy); g.lineTo(ex, ey); g.stroke();
+    if (g.setLineDash) g.setLineDash([]);
+    g.fillStyle = '#ffffff'; g.beginPath(); g.arc(cx, cy, 5, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#cccccc'; g.fillText('curve', cx + 8, cy - 6);
+  }
+}
+
+// the curve's control point in WORLD (x, y, z), on the footprint's mid line
+function _asmPlaneControlW(p) {
+  const [dx, dy] = _asmPlaneDir(p), sA = p.anchor[0] * dx + p.anchor[1] * dy;
+  const pts = _asmPlaneFootprint(p), vs = pts.length ? pts.map(([x, y]) => -x * dy + y * dx) : [0];
+  const vm = 0.5 * (Math.min(...vs) + Math.max(...vs));
+  const [u, v] = p.control || [0.5, 0.5], uu = sA + u * (p.span || 0);
+  return [uu * dx - vm * dy, uu * dy + vm * dx, p.z_anchor + v * p.slope * (p.span || 0)];
+}
+
 // EDIT mode: the material the plane removes, ghosted (selected walls of each cut layer above the plane)
 function _asmDrawPlaneGhost(g, P, stack, p) {
   // (from the plane AS IT IS NOW — not the last resolved report — so the
@@ -2309,7 +2498,7 @@ function _asmDrawPlaneGhost(g, P, stack, p) {
   g.strokeStyle = '#ff9f43'; g.lineWidth = 1; g.globalAlpha = 0.5;
   if (g.setLineDash) g.setLineDash([3, 3]);
   g.beginPath();                                   // one path: thousands of segments, one stroke
-  const zf = _asmPlaneZf(p), step = asm.drag ? _asmDragStep(stack) : 1;
+  const removed = _asmPlaneRemovedF(p), step = asm.drag ? _asmDragStep(stack) : 1;
   for (const inst of stack) {
     if (inst.index % step) continue;
     const geo = asm.geometry[inst.design_id];
@@ -2321,11 +2510,13 @@ function _asmDrawPlaneGhost(g, P, stack, p) {
       const n = pl.pts.length, segN = pl.closed ? n : n - 1;
       for (let k = 0; k < segN; k++) {
         const s0 = pl.src && pl.src[k];
-        if (s0 && !sel.has(s0)) continue;
+        if (!s0 || !sel.has(s0)) continue;                    // only the SELECTED walls' material
         const a = pl.pts[k], b = pl.pts[(k + 1) % n];
         const ax = sc * a[0] + tx, ay = sc * a[1] + ty, bx = sc * b[0] + tx, by = sc * b[1] + ty;
-        if (zf((ax + bx) / 2, (ay + by) / 2) >= z) continue;
-        const A = P(ax, ay, inst.z_top), B = P(bx, by, inst.z_top);
+        const r = removed(ax, ay, bx, by, z);
+        if (!r) continue;
+        const A = P(ax + (bx - ax) * r[0], ay + (by - ay) * r[0], inst.z_top);
+        const B = P(ax + (bx - ax) * r[1], ay + (by - ay) * r[1], inst.z_top);
         g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]);
       }
     }
@@ -2341,6 +2532,13 @@ function asmPlaneMouseDown(sx, sy) {
   const p = _asmProfile(asm.profSel), L = asm.lastProj;
   if (!p || p.kind !== 'plane' || !L) return false;
   const top = _asmStackTop();
+  if (_asmPlaneShape(p) === 'curved' && p.span > 0) {          // the curve's control point (Slope view)
+    const c = L.P(..._asmPlaneControlW(p));
+    if (Math.abs(c[0] - sx) <= 8 && Math.abs(c[1] - sy) <= 8) {
+      asm.drag = { plane: 'control', before: _asmSnap(), moved: false };
+      return true;
+    }
+  }
   const [tail, tipW] = _asmPlaneArrow(p);
   const tip = L.P(...tipW, top), piv = L.P(...tail, top);
   if (Math.abs(tip[0] - sx) <= 8 && Math.abs(tip[1] - sy) <= 8) {
@@ -2400,6 +2598,24 @@ function asmPlaneDragTo(sx, sy) {
   const p = _asmProfile(asm.profSel), L = asm.lastProj, d = asm.drag;
   if (!p || !L || !d) return;
   const top = _asmStackTop();
+  if (d.plane === 'control') {
+    // the control point moves in the (run, Z) elevation; kept inside the start–end
+    // box (fractions 0–1: the curve stays monotonic — a top cut only removes as Z rises)
+    const c = _asmPlaneControlW(p), q = L.P(c[0], c[1], c[2]);
+    const [dx, dy] = _asmPlaneDir(p);
+    const qt = L.P(c[0] + dx, c[1] + dy, c[2]), qz = L.P(c[0], c[1], c[2] + 1);
+    const et = [qt[0] - q[0], qt[1] - q[1]], ez = [qz[0] - q[0], qz[1] - q[1]];
+    const det = et[0] * ez[1] - et[1] * ez[0];
+    if (Math.abs(det) < 1e-6) return;                          // (plan view: Z is not visible — use Slope view)
+    const r = [sx - q[0], sy - q[1]];
+    const dt = (r[0] * ez[1] - r[1] * ez[0]) / det, dz = (et[0] * r[1] - et[1] * r[0]) / det;
+    const rise = p.slope * p.span, [u, v] = p.control || [0.5, 0.5];
+    p.control = [Math.max(0, Math.min(1, Math.round((u + dt / p.span) * 100) / 100)),
+                 rise > 1e-9 ? Math.max(0, Math.min(1, Math.round((v + dz / rise) * 100) / 100)) : v];
+    d.moved = true;
+    _asmDrawSoon();
+    return;
+  }
   if (d.plane === 'move') {
     // TRANSLATE perpendicular to the plane's line (along the uphill direction), ¼ in
     const w = _asmPlanVector(L, d.anchor0, top, sx, sy, d.x0, d.y0);
@@ -2407,6 +2623,7 @@ function asmPlaneDragTo(sx, sy) {
     const [dx, dy] = _asmPlaneDir(p);
     const t = _asmQ4(w[0] * dx + w[1] * dy);
     p.anchor = [_asmClean(d.anchor0[0] + dx * t), _asmClean(d.anchor0[1] + dy * t)];
+    _asmPlaneNorm(p);
   } else {
     // ROTATE about the top contour's pivot, 5° steps; the slope is kept
     const tail = _asmPlaneArrow(p)[0], c = L.P(tail[0], tail[1], top);
@@ -2414,6 +2631,7 @@ function asmPlaneDragTo(sx, sy) {
     if (!w) return;
     const deg = Math.round(Math.atan2(w[1], w[0]) * 180 / Math.PI / 5) * 5;
     Object.assign(p, _asmPlaneAbout(p, deg, p.slope));
+    _asmPlaneNorm(p);
   }
   d.moved = true;
   _asmDrawSoon();
@@ -2776,7 +2994,8 @@ function _asmPlaneCard(p, n, row, input, sel) {
   card.dataset.profile = p.id;
   card.dataset.mode = editing ? 'edit' : 'result';
   const head = _el('div', 'asm-row');
-  head.appendChild(_el('span', 'asm-support-title', `P${n + 1} · Planar top cut`));
+  const SH = { linear: 'Linear', stepped: 'Stepped', curved: 'Curved' };
+  head.appendChild(_el('span', 'asm-support-title', `P${n + 1} · Planar top cut` + (_asmPlaneShape(p) !== 'linear' ? ` · ${SH[_asmPlaneShape(p)]}` : '')));
   const act = _el('button', editing ? 'mini-btn active' : 'mini-btn', editing ? 'Done' : 'Edit');
   act.dataset.action = editing ? 'done' : 'edit';
   act.onclick = () => (editing ? asmProfileDone() : asmProfileEdit(p.id));
@@ -2826,6 +3045,32 @@ function _asmPlaneCard(p, n, row, input, sel) {
       r.appendChild(inp); r.appendChild(_el('span', 'prop-unit', unit));
       return r;
     };
+    // PROFILE TYPE (2026-10-15): Linear (the plane) | Stepped | Curved
+    const types = row();
+    types.appendChild(_el('span', 'prop-label', 'Profile'));
+    for (const k of ['linear', 'stepped', 'curved']) {
+      const b = _el('button', 'mini-btn' + (_asmPlaneShape(p) === k ? ' active' : ''), SH[k]);
+      b.dataset.shape = k;
+      b.title = { linear: 'a straight slope (one plane)', stepped: 'a stair: whole-layer risers and horizontal treads approximating the slope',
+                  curved: 'a curve from the start to the end, bowed by its control point (drag it in Slope view)' }[k];
+      b.onclick = () => asmPlaneSet(p.id, 'shape', k);
+      types.appendChild(b);
+    }
+    card.appendChild(types);
+    if (_asmPlaneShape(p) === 'stepped') {
+      card.appendChild(num('Step run', p.step_run || 12, 'step_run', 1, 'in', 'the horizontal run of each tread incl. the lower and upper landings (rounded so a whole number of treads spans start → end)'));
+      const st = _asmPlaneSteps(p);
+      card.appendChild(_el('div', 'asm-calc', `lower landing + ${st.n} riser${st.n === 1 ? '' : 's'} + upper landing · tread ${_fmt(st.tread)} in · ` +
+        `riser ${_fmt(st.riser)} in ≈ ${_fmt(st.riser / lh)} layers (whole layers: risers alternate to keep the overall slope)`));
+    }
+    if (_asmPlaneShape(p) === 'curved') {
+      const [cu, cv] = p.control || [0.5, 0.5];
+      card.appendChild(num('Control: run', Math.round(cu * 100), 'cu', 5, '%', 'the control point along the run from the start (0 %) to the end (100 %)'));
+      card.appendChild(num('Control: rise', Math.round(cv * 100), 'cv', 5, '%', 'the control point between the start height (0 %) and the end height (100 %)'));
+      card.appendChild(_el('div', 'asm-calc', (Math.abs(cu - cv) < 0.005 ? 'straight (on the chord)'
+        : cv < cu ? 'starts gentle, steepens toward the end (concave)' : 'starts steep, flattens toward the end (convex)') +
+        ' — drag the white control point in Slope view'));
+    }
     card.appendChild(num('Uphill dir.', p.direction || 0, 'direction', 5, '°', 'horizontal direction in which the plane rises (plan, 0° = +X) — turns about the cut-begins line'));
     const ct = _asmPlaneContour(p);
     card.appendChild(ct ? num('Cut begins', ct.s, 'shift', 1, 'in', 'where the plane meets the stack top: its distance from the selection centre along the uphill direction (moves the plane, slope kept)')
@@ -2833,13 +3078,16 @@ function _asmPlaneCard(p, n, row, input, sel) {
     card.appendChild(num('Slope', ang, 'angle', 1, '°', 'angle above horizontal (turns about the cut-begins line)'));
     card.appendChild(num('Rise / run', p.slope, 'rise', 0.01, '', 'the same slope: rise per inch of run'));
     if (hl) {
-      card.appendChild(num('Z uphill edge', hl.high, 'high', lh, 'in', 'the plane at the uphill extreme of the selected footprint (editing it changes the slope about the downhill edge)'));
-      card.appendChild(num('Z downhill edge', hl.low, 'low', lh, 'in', 'the plane at the downhill extreme of the selected footprint'));
+      const ends = _asmPlaneShape(p) !== 'linear';
+      card.appendChild(num(ends ? 'Z end (uphill)' : 'Z uphill edge', hl.high, 'high', lh, 'in', 'the plane at the uphill extreme of the selected footprint (editing it changes the slope about the downhill edge)' + (ends ? ' — the profile\'s END point' : '')));
+      card.appendChild(num(ends ? 'Z start (downhill)' : 'Z downhill edge', hl.low, 'low', lh, 'in', 'the plane at the downhill extreme of the selected footprint' + (ends ? ' — the profile\'s START point' : '')));
     }
   }
   if (rep) {
     if (!rep.valid) card.appendChild(_el('div', 'asm-diff', 'NOT GENERATED — ' + rep.errors.join(' · ')));
-    else card.appendChild(_el('div', 'asm-calc', `${rep.layers.length} layer${rep.layers.length === 1 ? '' : 's'} cut · a planar top only removes material as it rises (always supported)`));
+    else card.appendChild(_el('div', 'asm-calc', `${rep.layers.length} layer${rep.layers.length === 1 ? '' : 's'} cut · ` +
+      (_asmPlaneShape(p) === 'linear' ? 'a planar top only removes material as it rises (always supported)'
+        : 'whole layers (never split) · only removes material as it rises (always supported)')));
     for (const w of rep.warnings || []) card.appendChild(_el('div', 'asm-calc', '⚠ ' + w));
   }
   return card;
@@ -2959,26 +3207,37 @@ function _asmPlanePreview() {
     const geo = asm.geometry[inst.design_id];
     if (!geo) return [];
     const z = (inst.z_bottom + inst.z_top) / 2, T = inst.transform || { scale: 1, tx: 0, ty: 0 };
-    const act = planes.map(p => [_asmPlaneZf(p), _asmPlaneSel(p, inst.design_id)]).filter(([, sel]) => sel.size);
+    const act = planes.map(p => [_asmPlaneRemovedF(p), _asmPlaneSel(p, inst.design_id)]).filter(([, sel]) => sel.size);
     const mk = inst.design_id + '|' + z + '|' + T.scale + ',' + T.tx + ',' + T.ty;
     if (memo[mk]) return memo[mk];
     const out = [], sc = T.scale, tx = T.tx, ty = T.ty;
     for (const pl of geo.polylines || []) {
       const n = pl.pts.length, segN = pl.closed ? n : n - 1;
-      const gone = k => {
+      // the KEPT part [lo, hi] of segment k (each plane removes one end of it, exactly)
+      const kept = k => {
         const s0 = pl.src && pl.src[k];
-        if (!s0) return false;
+        if (!s0) return [0, 1];
         const a = pl.pts[k], b = pl.pts[(k + 1) % n];
-        const mx = sc * (a[0] + b[0]) / 2 + tx, my = sc * (a[1] + b[1]) / 2 + ty;
-        for (const [zf, sel] of act) if (sel.has(s0) && zf(mx, my) < z) return true;
-        return false;
+        const ax = sc * a[0] + tx, ay = sc * a[1] + ty, bx = sc * b[0] + tx, by = sc * b[1] + ty;
+        let lo = 0, hi = 1;
+        for (const [rf, sel] of act) {
+          if (!sel.has(s0)) continue;
+          const r = rf(ax, ay, bx, by, z);
+          if (!r) continue;
+          if (r[0] <= 1e-12) lo = Math.max(lo, r[1]); else hi = Math.min(hi, r[0]);
+        }
+        return [lo, hi];
       };
       if (!act.length || !pl.src) { out.push(pl); continue; }
+      const at = (k, u) => { const a = pl.pts[k], b = pl.pts[(k + 1) % n]; return u <= 0 ? a : u >= 1 ? b : [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]; };
       let run = null;
       for (let k = 0; k < segN; k++) {
-        if (gone(k)) { run = null; continue; }
-        if (!run) { run = { pts: [pl.pts[k]], closed: false }; out.push(run); }
-        run.pts.push(pl.pts[(k + 1) % n]);
+        const [lo, hi] = kept(k);
+        if (hi - lo <= 1e-9) { run = null; continue; }
+        if (lo > 1e-9) run = null;
+        if (!run) { run = { pts: [at(k, lo)], closed: false }; out.push(run); }
+        run.pts.push(at(k, hi));
+        if (hi < 1 - 1e-9) run = null;
       }
     }
     return (memo[mk] = out);
@@ -3248,12 +3507,12 @@ function _asmDrawCenters(g, P, stack) {
     if (g.setLineDash) g.setLineDash([]);
     g.beginPath(); g.moveTo(cx - 9, cy); g.lineTo(cx + 9, cy); g.moveTo(cx, cy - 9); g.lineTo(cx, cy + 9); g.stroke();
     g.fillStyle = col; g.font = '10px monospace'; g.textAlign = 'left';
-    g.fillText(`C${n + 1}` + (has ? '' : ' (no walls)'), cx + 9, cy - 7);
+    g.fillText(_asmCenterName(n) + (has ? '' : ' (no walls)'), cx + 9, cy - 7);
   });
   if (asm.assigning) {
     g.fillStyle = '#ffffff'; g.font = '11px monospace'; g.textAlign = 'left';
     const n = asm.state.centers.findIndex(c => c.id === asm.selCenter);
-    g.fillText(`ASSIGN GEOMETRY → C${n + 1}: click a wall (click one of its walls again to remove it)`, 14, 34);
+    g.fillText(`ASSIGN GEOMETRY → ${_asmCenterName(n)}: click a wall (click one of its walls again to remove it)`, 14, 34);
   }
 }
 

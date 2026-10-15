@@ -53,3 +53,41 @@ def test_trimmed_source_has_no_ghost_when_selected():
     finally:
         os.unlink(f.name)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# DEFERRED (2026-10-15) — documented, NOT fixed: attaching new geometry to a
+# trimmed-away section brings that trimmed geometry back. A Trim is a
+# topological SIGNATURE (its bounding sources + inside-which-closed-source);
+# a new wall ending on the removed section adds a contact that splits it, the
+# signature no longer resolves ('unresolved') and the section reappears.
+# Attaching to VISIBLE geometry leaves every trim intact. Since the snap fix
+# the UI no longer invites this (removed sections are not snap targets), but
+# an Alt-placed / crossing wall still triggers it. Part of the deferred
+# junction / trim topology architecture — see design-toolpath/PROJECT_MEMORY.md.
+# ---------------------------------------------------------------------------
+
+def _trims_after(extra):
+    flask_app.config['TESTING'] = True
+    with flask_app.test_client() as c:
+        secs = c.post('/api/effective_paths', json=payload()).get_json()['network']['trim_sections']
+        trims = [{'id': 't' + s['source'], 'source_path_id': s['source'], 'start': s['start'], 'end': s['end'],
+                  'inside': s['inside'], 'u_mid': s['u_mid']}
+                 for s in secs if s['inside'].get('C' if s['source'] == 'R' else 'R')]
+        P = payload(trims)
+        P['source_paths'] += extra
+        return c.post('/api/effective_paths', json=P).get_json()['network']['trims']
+
+
+def _line(a, b):
+    return [{'id': 'L', 'type': 'LinePath', 'start': list(a), 'end': list(b), 'closed': False, 'wall': {'thickness': 10}}]
+
+
+def test_attaching_to_visible_geometry_keeps_trims():
+    assert {k: v['status'] for k, v in _trims_after(_line((480, 300), (420, 180))).items()} == {'tC': 'ok', 'tR': 'ok'}
+    assert {k: v['status'] for k, v in _trims_after(_line((200, 30), (200, 100))).items()} == {'tC': 'ok', 'tR': 'ok'}
+
+
+@pytest.mark.xfail(strict=True, reason='DEFERRED: trim topology — a contact on a removed section un-resolves the Trim')
+def test_attaching_to_a_removed_section_keeps_trims():
+    assert {k: v['status'] for k, v in _trims_after(_line((200, 300), (260, 180))).items()} == {'tC': 'ok', 'tR': 'ok'}
