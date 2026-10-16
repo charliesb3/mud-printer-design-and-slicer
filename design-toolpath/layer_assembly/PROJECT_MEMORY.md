@@ -71,6 +71,12 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
   - `junctions_shadow` returns `trims` (`layers: false` option); the Designer has a "Junction identity" inspector.
   - Golden: only the 2 M5 fixtures changed geometry, `real_10xtest1` reason text only.
   - Production junction geometry and M6–M9 untouched. Details: `../WALL_ARCHITECTURE.md` "M5".
+- **M6 + M7 (2026-10-16, manually reviewed and checkpointed (2026-10-16)):**
+  - Source-wall attachment (branch ends derived on the host's band, near side).
+  - Out-and-Back branches into generated hosts are fenced single-strand excursions, resolved per Assembly layer.
+  - Golden changes: `real_test3` / `real_test3b` (M6; the operator's `test 4` export relaxed to structural equality — re-export it), `syn_excursion_*` + `real_test3b` (M7).
+  - Correction pass (after review): through walls = one excursion per side; resolution order-independent and pitch-stable; no crossing-loop fallback for Out-and-Back. Golden unchanged.
+  - Tests: `test_m6_source_attachment.py`, `test_m7_excursions.py`, `test_m7_through_walls.py`.
 - **Shadow junctions** (`design_proto/junctions.py`, `junction_shadow.py`, `POST /api/assembly/junctions_shadow`): project-level `junctions` registry, stable ids, overrides mapped; consistency with production + per-layer presence (ceasing / appearing = valid). Nothing builds from it.
 - Verified: tests below each milestone + golden; production geometry / PrintPlan / `.mudjob` unchanged apart from the reported 10xtest1 divergence.
 

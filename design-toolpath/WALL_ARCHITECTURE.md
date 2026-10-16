@@ -1,6 +1,6 @@
 # Wall / Junction / Construction Architecture — FINAL
 
-**Status:** APPROVED (revision 4, 2026-10-15). **M0–M4 implemented 2026-10-15, manually reviewed (with the correction pass) and checkpointed (`b4ccd16`); golden re-baselined (full hashes) at the checkpoint. M5 implemented 2026-10-15, manually reviewed and checkpointed (`dce9366`); M6 / M7 in progress (2026-10-16).** Revision 4 records the user's FINAL decisions (§F), which supersede the corresponding parts of §5, §6, §9 and §12.
+**Status:** APPROVED (revision 4, 2026-10-15). **M0–M4 implemented 2026-10-15, manually reviewed (with the correction pass) and checkpointed (`b4ccd16`); golden re-baselined (full hashes) at the checkpoint. M5 implemented 2026-10-15, manually reviewed and checkpointed (`dce9366`). M6 + M7 (with the through-wall / Chained Loop correction pass) implemented 2026-10-16, manually reviewed and checkpointed; M8 / M9 and full-wall junction work not started.** Revision 4 records the user's FINAL decisions (§F), which supersede the corresponding parts of §5, §6, §9 and §12.
 
 ## §F. FINAL PRODUCT DECISIONS (2026-10-15, supersede earlier text)
 
@@ -613,6 +613,98 @@ M0–M4 is listed in the M0–M4 implementation notes below.
   - `test_trim_junction_ui.py` + `js/ui_trim_junction_smoke.js` (Designer UI against the real backend: Trim tool, branch, undo / redo, crossing, delete, inspector);
   - the strict xfail flipped to a passing regression;
   - `test_junction_shadow.py` consistency expectations updated.
+
+### M6 — source-wall attachment (2026-10-16; manually reviewed and checkpointed (2026-10-16), with M7)
+
+- **Old first divergence (symptom E):** the first stage where the authored relationship is lost is the wall NETWORK.
+  - A branch's beads (its lanes, or its own faces) were built along its whole source line to the end it was drawn to — the host's SOURCE line — and joined whichever face bead that end touched (`network` face contacts).
+  - For a Centered host the source line is mid-band, so nothing touches. For an Inside / Outside host (incl. legacy Auto = Inside on closed walls) the source line IS a physical face. A branch drawn to the wall from the other side therefore ran through the wall's material and SPLIT THE FAR FACE.
+  - Reproduced on the user's `test 3` / `test 3 (1)`: their interior `Line 1` cut the rectangle's exterior face.
+- **Attachment representation (architectural):** a branch END lying on another wall's source line, where that wall passes THROUGH (not its own open end, not a trimmed-away stretch), is attached to that WALL: `{branch, end, hosts, station (arc position on each host), side}`.
+  - These are exactly the persistent junction's member roles (`start` / `end` × `through`, M4/M5). Never an offset-face id. Incidental crossings (a line passing through a wall) are never attachments.
+  - Derived per resolved layer (Assembly layers re-derive from their own geometry; nothing stored).
+  - Reported as `network['attachments']` only where a physical end was derived.
+- **Physics (derived, `model._attach_branches`, stage 1d of `_build_effective`, after contacts / trims / junctions are found on the authored geometry):**
+  - The branch's printed end = the host's BAND CENTRE at the station, reached along the branch's own direction. The band is the host's face offsets plus its source line when one-sided.
+  - At a junction of several walls: where their band centres meet (the Centered junction point's analogue).
+  - The wall network then meets the face on the branch's OWN side; the far face is never touched.
+  - Derived ONLY where needed: Centered hosts (band centre = source line) and hosts whose source line IS the branch's near face (Inside / Outside with the branch on that side) — the authored end already meets the right face — keep it exactly (byte-identical).
+  - (A first version also moved those ends; harmless for Hollow, but it changed the junction faces of a Skin + Web branch and broke cut-layer lattice coherence in `test_profiles_plane_trim` — caught by the gate, rule refined.)
+  - Grazing (`|cos| < 0.25`) or too-short branches are `kept` and reported.
+  - A moved START shifts the branch's openings / trims by the same arc amount, so they keep their XY place.
+- **Verified:**
+  - Inside / Outside × branch from interior / exterior × thin / 6 in thick: the far face intact, the near face joined.
+  - A branch drawn to the wall prints EXACTLY like the same branch drawn to its near face for Hollow, Skin + Web, Interleaved, Parallel, Chained Loop and Linked.
+  - Curved host (ring centre r 55); circle × rectangle trimmed junction with Inside / Outside hosts, branch inward (exterior ring unchanged) and outward (interior ring unchanged); M5 trims kept.
+  - A branch on a trimmed-away stretch is not attached; Variant-only branch (Base untouched, no Variant physical property); mixed thickness + systems; openings on the branch and the host near the attachment; Save / Open (derived, never stored; the junction record names `B start` × `R through`).
+- **Golden:**
+  - `real_test3`, `real_test3b` (the user's E case): the exterior face is no longer cut. `test3b`'s plan / `.mudjob` change with it: the ring's Interleaved waves are RE-FITTED to the now-intact ring (the generator re-phases a ring on any envelope change; mostly sub-thousandth shifts, up to ~1.3 in in the transformed operator stack), and routes re-plan.
+  - The operator's real `test 4` export (`test_view_fidelity`, dev machine only) predates this. The test now requires everything but the printed path to be identical (lifts, passes, layers, marks, bounds; print / travel length within 2 in — measured +0.13 in of 65,124 in). Re-export that job after review to restore the byte check.
+  - The other 20 cases are byte-identical (`syn_mixed_thickness` is Centered — unchanged).
+- **Not changed:** a branch line that protrudes PAST the wall (an authored crossing) still crosses it. Ends that lie on the true curve but not the sampled host line are not contacts (as before; the editor snaps to the sampled line).
+- **Tests:** `layer_assembly/tests/test_m6_source_attachment.py` (37).
+
+### M7 — continuous Out-and-Back excursions (2026-10-16; manually reviewed and checkpointed (2026-10-16), with M6)
+
+- **Old behaviour:** a thin Out-and-Back branch meeting a GENERATED host (Interleaved / Linked / Parallel / Chained Loop) was extended straight THROUGH the host's paths and capped inside (`wall_systems.extend_through`). It joined the route wherever it crossed anything (the router merges nodes at crossings): any wave, any lobe. No host identity.
+- **Now** (`wall_systems.splice_excursion` on the shared `_splice` core of `connect_branch`; `model._connect_skins`, per built layer):
+  1. **Host strand** = the generated strand BOTH lanes reach first, continuing straight along the branch (`_ray_hits`; both landings on ONE strand, close along it). It is resolved geometrically on THIS layer, never stored (§F3); Assembly layers resolve their own.
+  2. That strand is cut between the landings p1, p2 (the short stretch between them). Its pieces keep its place, so every other strand keeps its id.
+  3. The EXCURSION (p1, lane, U-turn, lane, p2) is its own strand `…x<k>` with `join_group = 'exc:<id>'` and `join_points = [p1, p2]`. The router may enter / leave it only there, so the route is host → excursion → the SAME host, continuing its trajectory. Every incidental crossing (another wave, a chain lobe, the host elsewhere) is a pass-over (the router's existing join-group rule, `toolpath_proto/graph.py`). Nothing global changed in the router.
+  4. Reported per Wall System part: `junctions[] {excursion_from, host_strand, contacts, depth, excursion}`.
+  5. **Fallback** (lanes reaching no single strand): the pre-M7 crossing loop, reported `status: fallback`. None occurred in any tested case. *(Replaced by the correction pass below: no crossing loop for an Out-and-Back; `status: unresolved`.)*
+- **Per construction:**
+  - Interleaved / Linked: the wave first reached.
+  - Parallel: the exposed (innermost) lane only. The three lanes print as one polyline; nothing else of it changes.
+  - Chained Loop: the chain run at the landing; a closed chain cut by two excursions prints as two pieces of that one strand.
+  - Hollow / Skin + Web: the branch already joins the inner skin through the wall network — one circuit with it; unchanged by M7 (no crossings inside the band).
+- **Width:** unchanged thin-wall model: the lanes are W − R apart (the branch 2W − R wide), checked for bead 2.5 / 3.0 / 3.5 and R 0.5 / 0.75 / 1.25.
+- **Crossing is not connection (verified):** Interleaved stations where the excursion physically crosses another wave (x 14 / 20 / 71 …): zero graph nodes shared at its interior, and the crossed wave is BYTE-IDENTICAL to the same construction without the splice. Only the host strand and the old crossing loop differ.
+- **Golden:**
+  - `syn_excursion_interleaved`, `syn_excursion_chain`: excursions spliced and fenced; plan / `.mudjob` changed (route order at the excursions).
+  - `real_test3b` (the user's Interleaved project): Line 1 is now a fenced excursion; 0 travels.
+  - `syn_excursion_skin`, `syn_mixed_systems` are unchanged (Hollow host; no Out-and-Back into a generated host).
+- **Tests:** `layer_assembly/tests/test_m7_excursions.py` (24): every generated construction straight + curved, Parallel exposed lane, Skin + Web / Hollow, crossing ≠ connection (the crossed wave byte-identical), multiple branches, near a corner, near a trimmed junction, Variant-only, bead / R, per-layer host, PrintPlan / `.mudjob`.
+- **Supersedes** the pass-10 (2026-10-07) "meet by crossing, nothing of the host cut" rule for OUT-AND-BACK branches only. Other incoming walls (hollow, generated) still meet by crossing. `test_wall_systems.py::test_t_junction_walls_touch_by_crossing[*-single-*]` now asserts the excursion; the routing assertions (one run, no travel / retrace) are unchanged and pass.
+- **Operator project (`test 4` export):** its Line 1 is an Out-and-Back into the Interleaved host. Each layer's old crossing loop (~12 in) became a short excursion, so the print is ~0.25 % shorter; the relaxed structural fidelity test allows that.
+- **Not done (later milestones):** contact overlap at the landings (M8); transform-junction resolution (M9); excursions for thick (non-thin) incoming walls (unchanged `connect_branch`).
+
+### M7 correction pass after manual review (2026-10-16; manually reviewed and checkpointed (2026-10-16), with M6 + M7)
+
+- **Observed in review:** a thin Out-and-Back running THROUGH a Chained Loop host showed bracket / staple geometry at the crossing; Base and Variant / later layers differed; Chained Loop excursions came and went with the pitch.
+- **The bracket = the pass-10 crossing loop** (`wall_systems.extend_through`): lanes continued past the host's face and capped inside, crossing the host's paths. M7 used it as the fallback whenever the host search failed. Two failures fed it:
+  1. **Sequential splicing.** The arms of one generated part were spliced one after another, each on the geometry the previous ones had cut. A through wall's two arms (the network splits the line at the host) meet the host at the same station from opposite sides. On a Chained Loop both often reach the SAME stretch: the second arm then found only the first arm's cut, failed, and got the crossing loop. Fallback loops were also appended to the geometry later arms searched.
+  2. **The Parallel-kiss guard.** `_splice` refuses any host stretch holding a vertex the strand visits twice. A Chained Loop's necks are such vertices (in multi-ring / junction layouts, e.g. circle × rectangle — 51 in the synthetic case, 48 in the user's `test6`). When a neck fell between the lanes, every candidate was refused.
+- **Why Base / layers / pitch differed:** the loop pattern re-fits to every envelope change: pitch, a Variant opening, an Assembly cut. That moved the necks relative to the branch and changed which stretch each arm reached. The architecture never changed; the old search's outcome did. Reproduced on a copy of `test6` + a vertical line (old code: Base excursion, Variant bracket at pitch 7; the ending branch also failed at pitch 6). The new code gives excursions on Base, the Variant and every Assembly layer.
+- **Now (`wall_systems.splice_excursions`, `model._connect_skins`):**
+  - All Out-and-Back arms of a part are resolved TOGETHER on the unspliced generated geometry (`_resolve_host`, the unchanged host search of `_splice`), so the result is order-independent.
+  - The kiss guard is not applied to excursions. Cutting through a neck is valid: each piece stays one polyline, and the other pass keeps the vertex. `connect_branch` (thick incoming walls) keeps the guard.
+  - Each host strand is cut ONCE for all its landings (`_compose_cuts`): landings sorted along the strand are paired alternately, so every landing keeps exactly one host end. A closed strand uses the pairing that removes less.
+    - One excursion → its short stretch, exactly as before.
+    - Two arms on the same stretch from opposite sides → the stretch between them is KEPT: host → excursion A → back along it → excursion B → host, every bead once. Coincident landings are snapped to one exact point (one routing node).
+    - A nested landing pair (would split the strand) refuses the later arm, reported.
+  - Host pieces keep the old numbering (strand order from the first branch's cut).
+  - An arm with no host is REPORTED (`status: unresolved`) and keeps its own beads. **No crossing loop for an Out-and-Back.**
+- **Through-wall semantics:** a thin wall crossing a host = the architectural crossing (one `cross` junction record: wall through × host through). The wall network already splits the line at the host into two arms, one per side. Each arm is a local excursion of the strand IT reaches first from its side. Interleaved / Linked / Parallel: the innermost and outermost wave / lane (other strands byte-identical). Chained Loop: the one chain strand, twice. Hollow / Skin + Web: the network joins each arm to its side's skin (unchanged). Incidental crossings remain pass-overs.
+- **Legacy rules — audit:**
+  - `extend_through` crossing loop (pass 10): SUPERSEDED for thin Out-and-Back arms. Still used for other incoming skin-type walls (Hollow / thick single) meeting a generated host.
+  - `wall_system_crossing` bridge caps (`~cross`, `_build_effective` skin-part chords): a skin wall BRIDGING generated walls (both ends on a host — a thin partition, or the inner segment of a line crossing a room completely). Not an Out-and-Back (no free end); UNCHANGED, deferred to the wall-to-wall junction work.
+  - Contact staples (`_contact_staples`, generated wall ↔ generated wall, full-wall), `wall_system_mouth` (generated wall into a skin host), `_splice_skins` mouth splice (no straight lanes), the Chained Loop eye check: unchanged, never applied to an excursion-owned arm.
+- **Golden:** no change (all 23 strict-identical to the M6 + M7 baseline). `syn_excursion_chain`'s two excursions on one chain strand are composed in one cut. The pieces keep their numbering, so they are byte-identical.
+- **Tests:** `layer_assembly/tests/test_m7_through_walls.py` (30). It covers:
+  - ending branches;
+  - through walls on every generated construction, straight and curved;
+  - each side taking its own exposed wave;
+  - Hollow / Skin + Web through walls;
+  - Base, Variant and every Assembly layer sharing one topology (pitch 6 / 7 / 9);
+  - Chained Loop pitch sweep (loop counts change; neck-straddling cases included);
+  - Interleaved / Linked parameter sweeps;
+  - crossing a wave and rejoining its own host;
+  - M5 trims, M6 attachment, Variant-only and PrintPlan / `.mudjob`.
+- **Deferred:**
+  - Thin wall-to-wall bridges (above).
+  - Parallel Walls polish: prefer the lane-transition seam away from junctions / corners / openings where practical (not a correctness issue).
+  - Full-wall ↔ full-wall junctions (circle + rectangle both carrying complex systems): separate architecture discussion, never patched with M7 excursions.
 
 ### Before M5 — to decide
 

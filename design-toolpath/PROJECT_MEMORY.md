@@ -1109,7 +1109,7 @@ Read this section for any Layer Design / Assembly-facing Designer work. The Asse
   - **Parallel Walls route (designer decision; SUPERSEDES the pass-8 interior-lane kisses):** lane by lane. Every lane is cut once over a 2-bead window; lane k's end steps diagonally to lane k+1's start (parallel steps); one RETURN diagonal closes the route and crosses the steps (a crossing, never a retrace). All lane changes sit in that ONE seam zone (`_parallel_lanes`). Free ends keep the canonical nested caps (steps use the f0-side lanes of the nested loops); odd N cuts the middle lane too (open route, parity).
   - **Seam zone ↔ Move Start:** route origins now store their position (`pos`); the model passes them as seam hints (`_seam_hints` → `generate(…, seam_hints)`): the seam zone moves to the nearest origin on the wall, and origins resolve by position (`resolve_route_origins`), so the route starts there. Default: middle of the longest straight span.
   - (Generated systems stopping at junctions between their own members — still true after this pass — was RESOLVED in pass 10: walls meet by crossing printed paths.)
-- **Pass 10 (2026-10-07): generated walls meet by CROSSING printed paths (decision).**
+- **Pass 10 (2026-10-07): generated walls meet by CROSSING printed paths (decision).** *SUPERSEDED for OUT-AND-BACK branches by M7 (2026-10-16, WALL_ARCHITECTURE.md "M7"). The branch is now a fenced excursion of the one host strand both lanes reach first: that strand is cut between the landings, and incidental crossings never connect. Reason: crossing-as-contact let an excursion join or switch to whatever wave it crossed. Other incoming walls (hollow / generated) still meet by crossing.*
   - **Rule (designer):** preserve the native Wall System paths → allow real printed-path crossings / contact (a crossing is deposited-material contact, NOT a retrace) → add only the minimum transitions for one printable route → hide them where possible. Never cut or stop a valid generated path because another wall enters its nominal envelope; never deform good architectural geometry to tidy the routing graph. Several runs are acceptable where topology truly needs them; physically disconnected intersecting walls are not.
   - **Root cause of the non-contacting intersections:** a generated system filled a region along its skeleton runs; at every T / X junction the runs END at the junction node, so all walls' lanes stopped there (gaps; V1 "paths stop at junction ends"). The pass-6..9 splices then cut host stretches / opened caps locally.
   - **Representation now:** whenever a region holds more than one generated wall (or skins), EVERY generated wall gets its own band (`partkey`: per source; skin walls together; junction fillets between generated walls (`'__J'`) belong to neither band and are not printed — no pattern bends round them).
@@ -1510,7 +1510,16 @@ junctions are authoritative for TRIM BOUNDARIES.**
 - Trims record their junction ids on save.
 - A Designer "Junction identity" inspector shows the ids.
 - Only the two M5 golden fixtures changed geometry, plus `real_10xtest1`'s dangling-trim reasons (text only).
-- M6+ not started.
+**M6 + M7 IMPLEMENTED 2026-10-16 — manually reviewed (browser) and checkpointed with the correction pass.** Next: the full-wall ↔ full-wall junction architecture discussion, then M8 / M9 (not started).
+- M6 — source-wall attachment: a branch drawn to a wall's source line joins the WALL. Its physical end is derived at the host's band centre on its side, only where the source line is not already its near face (`model._attach_branches`). Fixes the Inside / Auto exterior-face cut (user's `test 3` projects). Centered is byte-identical.
+- M7 — an Out-and-Back into a generated host is a continuous, fenced EXCURSION of the one strand both lanes reach first, per layer (`wall_systems.splice_excursions`, join_group / join_points). Incidental crossings never connect; the crossed waves are byte-identical.
+- Details: `WALL_ARCHITECTURE.md` "M6" / "M7". M8 / M9 not started.
+- M7 correction pass (2026-10-16, after review; reviewed, checkpointed with M6 + M7):
+  - Out-and-Back arms are resolved together on the unspliced geometry (`wall_systems.splice_excursions`), without the Parallel-kiss guard (Chained Loop necks), and each host strand is cut once.
+  - A through wall = two local excursions, one per side.
+  - There is no crossing-loop fallback any more (that was the reviewed bracket); unresolved arms are reported.
+  - Fixes the pitch / Base-vs-layer instability. Golden is unchanged.
+  - Deferred: thin wall-to-wall bridges (`~cross` caps), Parallel seam placement near junctions, full-wall junctions.
 *Earlier text of this proposal (revision 3, before approval):* User decisions applied: remove Wall Groups (walls
 own thickness / alignment / Corner R / caps; THIN state for out-and-back);
 Base / Variants = layout states (may add / remove walls, openings; never wall
@@ -1543,6 +1552,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-16 — WALL ARCHITECTURE M6 + M7 (source-wall attachment; continuous Out-and-Back excursions incl. through walls and the Chained Loop pitch fix) manually reviewed and checkpointed (the git log holds the hash). See WALL_ARCHITECTURE.md "M6" / "M7" / "M7 correction pass".
 
 2026-10-15 — WALL ARCHITECTURE M0–M4 implemented (uncommitted, for manual review): golden suite, ownership write-through, schema 7 without Wall Groups, UI simplification (junction / cap shape back in the Designer — reverses the 2026-10-14 cleanup decision), shadow junction records. See WALL_ARCHITECTURE.md → "M0–M4 implementation notes".
 

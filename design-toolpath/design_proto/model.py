@@ -2802,6 +2802,38 @@ class PrintLayer:
                                                {p.id: bool(p.closed) for p in source_paths_in_order})
         self._trimmed = {pid for pid, iv in trim_removed.items() if iv}
 
+        # 1d) M6 SOURCE-WALL ATTACHMENT (WALL_ARCHITECTURE.md §4 "E"): a branch
+        # whose end lies on another wall's SOURCE line joins that WALL; its
+        # PHYSICAL end is derived from the host's envelope on the branch's
+        # side (`_attach_branches`) — never from whichever offset face its
+        # line happens to touch. The architectural relationship (connectivity
+        # `source_nets`, wall specs) is taken from the authored geometry first.
+        source_nets = self._source_networks(N, source_paths_in_order, processed)
+        wall_offs, ref_only = self._wall_offsets(source_paths_in_order,
+                                                 processed, source_nets)
+        shifts = self._attach_branches(source_paths_in_order, processed, wall_offs, trim_removed)
+        for bid, d in shifts.items():          # (a moved START shifts arc positions on the branch)
+            if bid in trim_removed:
+                trim_removed[bid] = [(a + d, b + d) + tuple(t[2:]) for t in trim_removed[bid]
+                                     for a, b in [t[:2]]]
+        saved_openings = self.openings
+        if shifts:
+            import dataclasses
+            self.openings = [dataclasses.replace(o, center_s=o.center_s + shifts[o.source_path_id])
+                             if o.source_path_id in shifts else o for o in self.openings]
+        try:
+            return self._build_effective_rest(N, result, cls_of, elem_of, processed, source_paths_in_order,
+                                              snapped, trim_secs, trim_removed, trim_status,
+                                              source_nets, wall_offs, ref_only)
+        finally:
+            self.openings = saved_openings
+
+    def _build_effective_rest(self, N, result, cls_of, elem_of, processed, source_paths_in_order,
+                              snapped, trim_secs, trim_removed, trim_status,
+                              source_nets, wall_offs, ref_only):
+        import trim as TR
+        attached = {a['branch'] for a in getattr(self, '_attachments', [])}
+
         # 2) Full (uncut) source geometry = the processed polyline. If
         # rounding (or an end snap) changed it we wrap it in a DerivedPath;
         # otherwise the parametric source path flows through unchanged
@@ -2814,12 +2846,12 @@ class PrintLayer:
         pts_of: dict[int, list[Vec2]] = {}      # id(path) → printed polyline
         for p in source_paths_in_order:
             pts = processed[p.id]
-            if p.id in snapped or (self._corner_r(p) > 0.0 and
-                                   _eligible_for_rounding(p)):
+            if p.id in snapped or p.id in attached or (self._corner_r(p) > 0.0 and
+                                                       _eligible_for_rounding(p)):
                 full_sources[p.id] = DerivedPath(
                     pts, closed=p.closed, id=p.id, role=p.role,
                     label=p.label, source_id=p.id,
-                    treatment_id='snap' if p.id in snapped else 'round')
+                    treatment_id='snap' if p.id in snapped else ('attach' if p.id in attached else 'round'))
                 geom_sources[p.id] = full_sources[p.id]
             else:
                 full_sources[p.id] = p
@@ -2835,9 +2867,6 @@ class PrintLayer:
         offsets_by_source: dict[str, list[tuple[OffsetTreatment, DerivedPath]]] = {}
         all_offsets: list[DerivedPath] = []
         source_of: dict[str, str] = {p.id: p.id for p in source_paths_in_order}
-        source_nets = self._source_networks(N, source_paths_in_order, processed)
-        wall_offs, ref_only = self._wall_offsets(source_paths_in_order,
-                                                 processed, source_nets)
         for ot in list(self.offset_treatments) + wall_offs:
             src = self._path_by_id(ot.source_path_id)
             if src is None or src.id not in processed:
@@ -3152,6 +3181,8 @@ class PrintLayer:
         # trimmable sections (for the Trim tool's hover) and each trim's state
         network['trim_sections'] = [s.to_dict() for secs in trim_secs.values() for s in secs]
         network['trims'] = trim_status
+        if getattr(self, '_attachments', None):          # (M6: only where a physical end was derived)
+            network['attachments'] = [dict(x) for x in self._attachments]
         network['wall_relations'] = dict(getattr(self, '_relation_status', {}))
         network['derived_sources'] = {
             p.id: [[q.x, q.y] for q in p.points]
@@ -3548,6 +3579,7 @@ class PrintLayer:
                                              [c['tip'] for c in part.get('chords', []) if c.get('tip') is not None])
                     self._ws_frames.extend(rep.pop('frames', []))
                     polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
+                    excursions = list(self._excursions_out)
                     for ch in joined:                # the incoming beads are re-emitted, extended
                         drop |= {id(p) for p in members if keyof(msid[id(p)]) is None and
                                  all(min(N.dist_to_polyline(q, ch, False), 1.0) < 0.05 for q in samples[id(p)])}
@@ -3555,7 +3587,8 @@ class PrintLayer:
                                 'system_id': self._wall_system_key.get(sid0),
                                 'shared_with': sorted(sids - set(part['sources'])),
                                 'spliced_skins': spliced, 'junctions': jinfo})
-                    gen.append({'part': part, 'polys': polys, 'rep': rep, 'system': system, 'sid0': sid0})
+                    gen.append({'part': part, 'polys': polys, 'rep': rep, 'system': system, 'sid0': sid0,
+                                'excursions': excursions})
                 self._check_junction_motifs(gen, WS, bead, contact)
                 self._contact_staples(gen, rings, bead, WS)
                 # (pass 10: generated walls meet by PUSHED bands that cross the host's
@@ -3613,6 +3646,17 @@ class PrintLayer:
                         g['rep'].setdefault('junctions', []).append({'crossing_into': host_sid})
                 for pi, g in enumerate(gen):
                     emit(g['polys'], g['system'], k, g['sid0'], tag=f'p{pi}')
+                    for xi, (exc, jp, xr) in enumerate(g.get('excursions') or []):
+                        # M7: the excursion is its OWN strand, fenced — the route
+                        # enters / leaves it only at p1 / p2 on its host strand
+                        eid = f"{g['sid0']}~ws{k}p{pi}.x{xi}"
+                        dp = DerivedPath(list(exc), closed=False, role='wall_system', label=g['system']['type'],
+                                         source_id=xr['excursion_from'], treatment_id='wall_system_path', id=eid)
+                        dp.join_group = f'exc:{eid}'
+                        dp.join_points = [(q.x, q.y) for q in jp]
+                        cls_of[id(dp)] = N.FACE
+                        new.append(dp)
+                        xr['excursion'] = eid
                     network['wall_systems'].append(g['rep'])
                     systems_used.add(g['system']['type'])
                 drop |= {id(p) for p in members if partkey(msid[id(p)]) is not None}
@@ -3683,6 +3727,7 @@ class PrintLayer:
                                      self.wall_system_reference, self._virtual_faces(), keep)
             rep.pop('frames', None)
             polys, spliced, joined, jinfo = self._connect_skins(polys, part, WS, rep.get('envelope') or 10.0)
+            g['excursions'] = list(self._excursions_out)
             rep.update({k: v for k, v in g['rep'].items() if k not in rep})
             rep['junction_motif_fallbacks'] = len(bad)
             g['polys'], g['rep'] = polys, rep
@@ -4263,14 +4308,47 @@ class PrintLayer:
         R = float(self.junction_radius or 0.0) if self.junction_style == 'round' else 0.0
         bead = self.material.bead_width
         joined, infos, fallback = [], [], []
+        self._excursions_out = []              # (excursion polyline, [p1, p2], report) — M7
+        lanes = getattr(self, '_return_lanes', set())
+        rest, oab = [], []
         for sk in part['skins']:
             ch = sk['chain']
             if len(ch) < 3:
-                fallback.append(sk['ends'])
+                rest.append((sk, None, None))
                 continue
             mid = ch[len(ch) // 2]
             d1 = self._junction_dir(sk['sids'][0], ch[0], mid)
             d2 = self._junction_dir(sk['sids'][1], ch[-1], mid)
+            if d1 is not None and d2 is not None and sk['sids'][0] == sk['sids'][1] and sk['sids'][0] in lanes:
+                oab.append((sk, d1, d2))
+            else:
+                rest.append((sk, d1, d2))
+        if oab:
+            # M7 — each OUT-AND-BACK arm at the host (a branch ending there: one;
+            # a wall running THROUGH it: one per side) is a continuous EXCURSION
+            # of ONE host strand (the one its lanes reach first on THIS layer),
+            # fenced so incidental crossings never connect. All arms are resolved
+            # together on the unspliced geometry (wall_systems.splice_excursions).
+            # The pass-10 crossing loop (extend_through) is NOT applied to them:
+            # an arm with no host strand is reported and keeps its own beads.
+            polys, res = WS.splice_excursions(polys, [(sk['chain'], d1, d2) for sk, d1, d2 in oab],
+                                              R, bead, 2.0 * envelope + 2.0 * bead)
+            for (sk, _, _), info in zip(oab, res):
+                if info.get('excursion') is None:
+                    infos.append({'excursion_from': sk['sids'][0], 'status': 'unresolved',
+                                  'reason': info['reason'] + ' — not joined (no crossing loop)'})
+                    continue
+                exc = info['excursion']
+                joined.append(sk['chain'])
+                rep_ = {'excursion_from': sk['sids'][0], 'host_strand': info['host_strand'],
+                        'contacts': [list(c) for c in info['contacts']], 'depth': info['depth']}
+                self._excursions_out.append((exc, [exc[0], exc[-1]], rep_))
+                infos.append(rep_)
+        for sk, d1, d2 in rest:
+            ch = sk['chain']
+            if len(ch) < 3:
+                fallback.append(sk['ends'])
+                continue
             # the lanes run straight THROUGH the host's paths (crossings = contact)
             # and are capped inside the host: nothing of the host is cut
             loop = WS.extend_through(ch, d1, d2, sk['ends'][0], sk['ends'][1],
@@ -4599,6 +4677,162 @@ class PrintLayer:
         self._snap_source_ends(order, processed, N.SNAP_TOL)
         return TR.resolve(self.trims, TR.sections(order, processed), set(processed), processed,
                           {p.id: bool(p.closed) for p in order})[1]
+
+    def _attach_branches(self, sources, processed, wall_offs, trim_removed) -> dict:
+        """M6 — SOURCE-WALL ATTACHMENT (WALL_ARCHITECTURE.md §4, symptom E).
+
+        ARCHITECTURE: a branch END lying on another wall's SOURCE line, where
+        that wall passes through (not at its own open end, not on a trimmed-
+        away stretch), is attached to that WALL: (branch, end, host wall(s),
+        station on the host, side the branch comes from) — the persistent
+        junction's member roles (`start` / `end` × `through`), never an
+        offset-face id.
+
+        PHYSICS, derived here: the branch's printed end is the host's
+        ENVELOPE CENTRE on that station — the middle of the host's band,
+        between its two physical faces (its offset lines, and its source line
+        when the wall is aligned Inside / Outside). The wall-network stage
+        then meets the branch with the face on ITS side and never touches
+        the far face. For a Centered host the band centre IS the source line
+        (nothing moves: identical geometry); for an Inside / Outside host the
+        source line is a physical face — before M6 a branch drawn to the wall
+        from the other side ran through the material and split that far face.
+        At a junction of several hosts the end goes to where their band
+        centres meet.
+
+        Mutates `processed` (only moved branch ends). Returns {branch id:
+        arc shift of its start} for branches whose START moved; records
+        self._attachments (reported in network['attachments'])."""
+        self._attachments = []
+        shifts: dict = {}
+        by_id = {p.id: p for p in sources}
+        faces_of: dict = {}
+        for ot in wall_offs:
+            faces_of.setdefault(ot.source_path_id, []).append(ot)
+        tol = 1e-4
+
+        def nearest(pt, pts, closed):
+            cum = _cum_lengths(pts, closed)
+            s_, d_, q = _project_to_polyline(pt, pts, cum, closed)
+            return s_, d_, q, cum
+
+        def seg_tangent(pts, i):
+            a_, b_ = pts[i % len(pts)], pts[(i + 1) % len(pts)]
+            n_ = math.hypot(b_.x - a_.x, b_.y - a_.y) or 1.0
+            return Vec2((b_.x - a_.x) / n_, (b_.y - a_.y) / n_)
+
+        def removed(h, s_, L):
+            for t in trim_removed.get(h, []):
+                a, b = t[0], t[1]
+                if a + 1e-6 < s_ < b - 1e-6 or (by_id[h].closed and a + 1e-6 < s_ + L < b - 1e-6):
+                    return True                   # (strictly inside: a trim BOUNDARY is a junction, kept)
+            return False
+
+        def tangent_at(h, s_, cum):
+            """the host's direction at the station — at a vertex, the segment on
+            the KEPT side (a trimmed-away neighbour is no wall)"""
+            pts, closed = processed[h], by_id[h].closed
+            n = len(pts)
+            idx = [k for k in range(n if closed else n - 1)
+                   if cum[k] - 1e-6 <= s_ <= cum[k + 1] + 1e-6]
+            best = None
+            for k in idx:
+                mid = (cum[k] + cum[k + 1]) / 2.0
+                if not removed(h, mid, cum[-1]) and best is None:
+                    best = k
+            return seg_tangent(pts, best if best is not None else (idx[0] if idx else 0))
+
+        for p in sources:
+            if p.closed or len(processed.get(p.id, ())) < 2:
+                continue
+            for end in ('start', 'end'):
+                pts = processed[p.id]
+                E = pts[0] if end == 'start' else pts[-1]
+                inner = pts[1] if end == 'start' else pts[-2]
+                dx, dy = E.x - inner.x, E.y - inner.y
+                seg = math.hypot(dx, dy)
+                if seg <= 1e-9:
+                    continue
+                dx, dy = dx / seg, dy / seg           # the branch's own direction, toward its end
+                banded = []
+                for h in sources:
+                    if h.id == p.id or len(processed.get(h.id, ())) < 2:
+                        continue
+                    s_, d_, q, cum = nearest(E, processed[h.id], h.closed)
+                    if d_ > tol:
+                        continue
+                    L = cum[-1]
+                    if not h.closed and (s_ <= tol or s_ >= L - tol):
+                        continue                      # (a corner of two ends — not a through-host)
+                    if removed(h.id, s_, L):
+                        continue                      # (on a trimmed-away stretch: no wall there)
+                    ds = [ot.distance for ot in faces_of.get(h.id, [])]
+                    if not ds:
+                        continue                      # (a single bead: no band)
+                    lo_d = min([0.0] + ds) if len(ds) == 1 else min(ds)
+                    hi_d = max([0.0] + ds) if len(ds) == 1 else max(ds)
+                    oc = (lo_d + hi_d) / 2.0          # band centre: signed offset, left of the host's travel
+                    tang = tangent_at(h.id, s_, cum)
+                    nl = Vec2(-tang.y, tang.x)
+                    banded.append({'host': h.id, 's': s_, 'q': q, 'n': nl, 'oc': oc, 'lo': lo_d, 'hi': hi_d})
+                for x in banded:                      # the side the branch comes from, and its NEAR face
+                    v = (inner.x - x['q'].x) * x['n'].x + (inner.y - x['q'].y) * x['n'].y
+                    x['near'] = x['hi'] if v > 0 else x['lo']
+                if not banded or all(abs(x['oc']) <= 1e-9 or abs(x['near']) <= 1e-9 for x in banded):
+                    # Centered (the source line is the band centre) or the source line IS
+                    # the near face (Inside / Outside, branch on that side): the authored
+                    # end already meets the face on its own side — nothing to derive
+                    continue
+                def inside_band(P, x):
+                    half = (x['hi'] - x['lo']) / 2.0
+                    off = (P.x - x['q'].x) * x['n'].x + (P.y - x['q'].y) * x['n'].y
+                    return half > 1e-6 and x['lo'] + 0.2 * half <= off <= x['hi'] - 0.2 * half
+                if len(banded) >= 2:
+                    # a JUNCTION of several walls: where their band centres meet (the
+                    # junction's material centre — for Centered walls the junction point)
+                    x1, x2 = banded[0], banded[1]
+                    C1 = Vec2(x1['q'].x + x1['n'].x * x1['oc'], x1['q'].y + x1['n'].y * x1['oc'])
+                    C2 = Vec2(x2['q'].x + x2['n'].x * x2['oc'], x2['q'].y + x2['n'].y * x2['oc'])
+                    t1, t2 = Vec2(x1['n'].y, -x1['n'].x), Vec2(x2['n'].y, -x2['n'].x)
+                    den = t1.x * t2.y - t1.y * t2.x
+                    if abs(den) < 1e-6:
+                        En = C1 if C1.dist(C2) <= 1e-6 or C1.dist(E) <= C2.dist(E) else C2
+                    else:
+                        u = ((C2.x - C1.x) * t2.y - (C2.y - C1.y) * t2.x) / den
+                        En = Vec2(C1.x + u * t1.x, C1.y + u * t1.y)
+                    b_ = x1
+                    ok = all(inside_band(En, x) for x in banded[:2]) and En.dist(E) < seg - 1e-6
+                    t = (En.x - E.x) * dx + (En.y - E.y) * dy
+                else:
+                    # one host: along the branch's own direction to its band centre
+                    b_ = banded[0]
+                    dn = dx * b_['n'].x + dy * b_['n'].y
+                    ok = abs(dn) >= 0.25              # (grazing: the branch runs along the host — kept)
+                    if ok:
+                        t = b_['oc'] / dn
+                        En = Vec2(E.x + t * dx, E.y + t * dy)
+                        ok = inside_band(En, b_) and abs(t) < seg - 1e-6
+                if not ok:
+                    self._attachments.append({'branch': p.id, 'end': end, 'hosts': [x['host'] for x in banded],
+                                              'status': 'kept', 'reason': 'too oblique / too short to place inside the host'})
+                    continue
+                new = list(pts)
+                if end == 'start':
+                    new[0] = En
+                    shifts[p.id] = shifts.get(p.id, 0.0) + t   # (the start moved t outward: positions +t)
+                else:
+                    new[-1] = En
+                processed[p.id] = new
+                side = {}
+                for x in banded:
+                    v = (inner.x - x['q'].x) * x['n'].x + (inner.y - x['q'].y) * x['n'].y
+                    side[x['host']] = 'left' if v > 0 else 'right'
+                self._attachments.append({
+                    'branch': p.id, 'end': end, 'hosts': [x['host'] for x in banded], 'via': b_['host'],
+                    'station': {x['host']: round(x['s'], 6) for x in banded}, 'side': side,
+                    'at': [round(E.x, 6), round(E.y, 6)], 'physical_end': [round(En.x, 6), round(En.y, 6)],
+                    'status': 'attached'})
+        return shifts
 
     def _snap_source_ends(self, sources, processed, tol) -> set:
         """Move open source ends lying within tol (but not exactly on)

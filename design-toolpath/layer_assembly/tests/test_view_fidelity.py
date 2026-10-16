@@ -219,7 +219,30 @@ class TestOperatorProject:
         job = json.loads(TEST4_JOB.read_text())
         doc['source'].pop('generated_at'); job['source'].pop('generated_at')
         doc.pop('requirements')            # (added to every export 2026-10-15, after test 4 was exported)
-        assert doc == job
+        # M6 (2026-10-16, WALL_ARCHITECTURE.md "M6"): test 3's Line 1 is drawn to the
+        # rectangle's source line, which for its Auto (= Inside) wall IS the exterior
+        # face — the line used to cut that face; it now joins the interior face, and
+        # the ring's Interleaved waves are re-fitted to the intact ring. The operator's
+        # export predates that intentional change: everything but the printed path is
+        # still identical (lifts, passes, layers, marks, travel, bounds); re-export
+        # test4.mudjob after review to restore the byte-for-byte check.
+        assert {k: v for k, v in doc.items() if k != 'lifts'} == {k: v for k, v in job.items() if k != 'lifts'}
+        assert len(doc['lifts']) == len(job['lifts'])
+        for la, lb in zip(doc['lifts'], job['lifts']):
+            same = ('print_length', 'travel_length', 'layer_marks', 'travel_lines', 'gcode', 'reposition_before')
+            assert {k: v for k, v in la.items() if k not in same} == {k: v for k, v in lb.items() if k not in same}
+            ra, rb = la.get('reposition_before'), lb.get('reposition_before')      # (where the previous lift ENDED: route)
+            assert (ra is None) == (rb is None)
+            if ra:
+                assert {k: v for k, v in ra.items() if k != 'nozzle_at'} == {k: v for k, v in rb.items() if k != 'nozzle_at'}
+                assert math.dist(ra['nozzle_at'], rb['nozzle_at']) < 2.0
+            assert [{k: v for k, v in m.items() if k != 'line'} for m in la['layer_marks']] == \
+                [{k: v for k, v in m.items() if k != 'line'} for m in lb['layer_marks']]
+            # (M7: Line 1 is an Out-and-Back into the Interleaved host — each layer's old
+            # crossing loop, ~12 in, is now a short fenced excursion: ~0.25 % shorter)
+            assert la['print_length'] == pytest.approx(lb['print_length'], rel=0.005)
+            assert la['travel_length'] == pytest.approx(lb['travel_length'], abs=2.0)
+            assert abs(len(la['gcode']) - len(lb['gcode'])) <= 0.005 * len(lb['gcode'])      # (~14 lines / layer: the loop)
 
     @pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')
     def test_traced_corner_in_every_view(self, plan4):

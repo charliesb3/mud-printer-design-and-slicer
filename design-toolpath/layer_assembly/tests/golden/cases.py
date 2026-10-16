@@ -29,9 +29,10 @@ H = 1.5
 # expected-to-change milestones (anything else must stay byte-identical)
 CHANGES_AT = {
     'syn_branch_at_junction': 'M5', 'syn_branch_across_trim': 'M5',
-    'syn_mixed_thickness': 'M6',
-    'syn_mixed_systems': 'M7', 'syn_excursion_interleaved': 'M7', 'syn_excursion_chain': 'M7',
-    'syn_excursion_skin': 'M7',
+    'syn_mixed_thickness': 'M6 (Centered: unchanged at M6)', 'real_test3': 'M6 (Auto = Inside host: Line 1 no longer cuts the exterior face)',
+    'real_test3b': 'M6 (as real_test3); M7 (Line 1 — an Out-and-Back into its Interleaved host — a fenced excursion)',
+    'syn_mixed_systems': 'M7 (no Out-and-Back into a generated host: unchanged)', 'syn_excursion_interleaved': 'M7',
+    'syn_excursion_chain': 'M7', 'syn_excursion_skin': 'M7 (Hollow host: joins the inner skin as before — unchanged)',
     'syn_contact_linked_parallel': 'M8',
     'syn_transform_multi': 'M9',
     'real_10xtest1': 'M2 (reported divergence: Variant 1 junction round r7 → Base); M5 (its 3 dangling trims: reason names the missing junction — geometry identical)',

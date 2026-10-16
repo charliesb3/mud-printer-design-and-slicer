@@ -1834,21 +1834,208 @@ def extend_through(chain, d1, d2, c1, c2, depth_in, bead):
 
 
 def connect_branch(polys, chain, d1, d2, radius, bead, reach):
-    """MIXED-SYSTEM JUNCTION — printed material to printed material.
+    """(see _splice) — the incoming wall and the host joined into one polyline."""
+    r = _splice(polys, chain, d1, d2, radius, bead, reach)
+    if r is None:
+        return None
+    i, keep, inc, info = r
+    return _join(polys[:i] + polys[i + 1:] + keep + [inc]), info
 
-    `chain`: the incoming wall's printed beads as one polyline from its end at
-    the host (chain[0]) round to its other end at the host (chain[-1]) — e.g.
-    a single / out-and-back branch: lane, U-turn, lane. d1 / d2: the
-    ARCHITECTURAL junction direction at each end (the source wall's direction,
-    pointing into the host). The architectural envelope only says where the
-    wall may exist; the lanes therefore do NOT stop at the host's nominal face:
-    each continues STRAIGHT along its direction until it reaches the host
-    system's ACTUAL generated geometry (a wave crest early, a trough deeper).
-    The two contacts are chosen on one host path, close along it (the first
-    such pair); the short host stretch between them is cut out, so branch and
-    host become one circuit. radius > 0 rounds each contact corner (Junction R
-    applied at the real contact — it never pulls the walls apart).
-    Returns (polys, info) or None (no straight lanes / no contact)."""
+
+def splice_excursions(polys, branches, radius, bead, reach):
+    """M7 — CONTINUOUS OUT-AND-BACK EXCURSIONS (WALL_ARCHITECTURE.md §6, §F3).
+
+    `branches`: [(chain, d1, d2)] — each an Out-and-Back branch's printed
+    beads from its end at the host round to its other end there (lane,
+    U-turn, lane), d1 / d2 its direction into the host at each end.
+
+    HOST STRAND of each = the generated strand both its lanes reach first,
+    continuing straight along the branch (_resolve_host) — resolved
+    geometrically on THIS layer, never stored. EVERY branch is resolved
+    against the SAME unspliced geometry, so the result never depends on the
+    order the branches are met in, and a branch can never land on another
+    branch's excursion or cut (before: one after the other — the second arm
+    of a THROUGH wall reached the stretch the first had just cut, failed, and
+    fell back to the pass-10 crossing loop: the bracket).
+
+    The host strand is cut so that each landing keeps ONE host end: along
+    the strand the landings p0 < p1 < … are paired alternately and the
+    stretches (p0, p1), (p2, p3), … are removed (on a closed strand the
+    pairing that removes less). One excursion → its own short stretch (as
+    before). The two arms of a through wall landing on the SAME stretch from
+    opposite sides (a Chained Loop neck) → the stretch between their landings
+    is kept: host → excursion A → back along that stretch → excursion B →
+    host, every bead once. A composition that would split the strand off
+    (nested landings) refuses the later branch, reported.
+
+    A Chained Loop's necks are vertices the strand visits twice; cutting
+    through one is valid here (each piece stays one polyline; the other pass
+    keeps the vertex), so the Parallel-kiss guard of connect_branch is NOT
+    applied — it made the result depend on whether a neck fell between the
+    lanes, i.e. on the pitch.
+
+    Each EXCURSION (p1, lane, U-turn, lane, p2) is returned SEPARATELY so
+    the caller fences it (join_group, join_points = [p1, p2]): the route
+    leaves the host at p1 and rejoins THE SAME host at p2; every incidental
+    crossing is a pass-over. Other strands are untouched; the host's pieces
+    stay in its place.
+    → (polys, [{excursion, contacts, depth, host_strand, host_pieces} or
+    {excursion: None, reason}] per branch, in order)."""
+    out = [None] * len(branches)
+    found = {}
+    for k, (chain, d1, d2) in enumerate(branches):
+        r = _resolve_host(polys, chain, d1, d2, bead, reach, touch_guard=False)
+        if r is None:
+            out[k] = {'excursion': None, 'reason': 'its lanes reach no single host strand'}
+            continue
+        i, A, B, i1, i2 = r
+        found.setdefault(i, []).append((k, A, B, i1, i2))
+    pieces_of = {}
+    for i, recs in sorted(found.items()):
+        pl = polys[i]
+        cum = [0.0]
+        for u, v in zip(pl, pl[1:]):
+            cum.append(cum[-1] + u.dist(v))
+        L = cum[-1]
+        closed = pl[0].dist(pl[-1]) < 1e-6
+        while recs:
+            cut = _compose_cuts(recs, L, closed)
+            if cut is not None:
+                break
+            k = recs.pop()[0]                  # (the latest branch on this strand)
+            out[k] = {'excursion': None, 'reason': 'its landings would split its host strand '
+                                                   '(nested inside another excursion on it)'}
+        if not recs:
+            continue
+        canon = {}                             # (coincident landings — two arms of a through wall —
+        recs = [(k, *[(s, a, canon.setdefault((round(X.x, 6), round(X.y, 6)), X)) for s, a, X in (A, B)], i1, i2)
+                for k, A, B, i1, i2 in recs]   # are ONE exact point: one routing node)
+        keep = []
+        for lo, hi in cut:
+            if hi > L + 1e-9:                  # a closed strand's wrap-round stretch
+                x = _sub(pl, cum, lo, L) + _sub(pl, cum, 0.0, hi - L)[1:]
+            else:
+                x = _sub(pl, cum, lo, hi)
+            if sum(u.dist(v) for u, v in zip(x, x[1:])) > 1e-9:
+                keep.append(x)
+        if closed:
+            # (pieces in strand order from the FIRST branch's cut — as cutting one
+            # branch after another numbered them: piece ids stay where they were)
+            first = (recs[0][1][2], recs[0][2][2])
+            m0 = next((m for m, x in enumerate(keep) if min(x[0].dist(X) for X in first) < 1e-7), 0)
+            keep = keep[m0:] + keep[:m0]
+        land = {}                              # landing point → [branch, …] (two arms may share one)
+        for k, (sA, aA, X1), (sB, aB, X2), i1, i2 in recs:
+            chain = branches[k][0]
+            inc = [X1] + chain[i1:i2 + 1] + [X2]
+            out[k] = {'excursion': inc, 'host_strand': i,
+                      'contacts': [(round(X1.x, 4), round(X1.y, 4)), (round(X2.x, 4), round(X2.y, 4))],
+                      'depth': [round(sA, 3), round(sB, 3)]}
+            for X in (X1, X2):
+                land.setdefault((round(X.x, 6), round(X.y, 6)), []).append(k)
+        for x in keep:                         # exact landing points at the cut ends
+            for end in (0, -1):
+                q = x[end]
+                for k, A, B, _, _ in recs:
+                    for X in (A[2], B[2]):
+                        if q.dist(X) < 1e-7:
+                            x[end] = X
+        if radius > 1e-9:
+            # Junction R at the REAL contact: a tangent blend from the lane into
+            # the host on each side of the cut (only where ONE excursion lands)
+            for k, *_ in recs:
+                inc = out[k]['excursion']
+                for end in (0, -1):
+                    X = inc[end]
+                    if len(land.get((round(X.x, 6), round(X.y, 6)), ())) != 1:
+                        continue
+                    nxt = inc[1] if end == 0 else inc[-2]
+                    ends = [(pk, e) for pk, x in enumerate(keep) for e in (0, -1) if x[e].dist(X) < 1e-9]
+                    if len(ends) != 1:
+                        continue
+                    pk = ends[0][0]
+                    plen = sum(u.dist(v) for u, v in zip(keep[pk], keep[pk][1:]))
+                    dl = min(radius, 0.45 * X.dist(nxt))
+                    dh = min(radius, 0.45 * plen)
+                    if dl < 1e-6 or dh < 1e-6:
+                        continue
+                    keep[pk], Bq = _trim_from(keep[pk], X, dh)
+                    Aq = X + (nxt - X) * (dl / X.dist(nxt))
+                    n = 8
+                    bez = [Bq * ((1 - t) ** 2) + X * (2 * t * (1 - t)) + Aq * (t * t)
+                           for t in (j / n for j in range(n + 1))]
+                    inc = bez + inc[1:] if end == 0 else inc[:-1] + list(reversed(bez))
+                out[k]['excursion'] = inc
+        for k, *_ in recs:
+            out[k]['host_pieces'] = len(keep)
+        pieces_of[i] = keep
+    new = []
+    for i, pl in enumerate(polys):
+        new.extend(pieces_of.get(i, [pl]))
+    for k in range(len(out)):                  # host_strand: the index of its first piece in `new`
+        if out[k].get('excursion') is not None:
+            i = out[k]['host_strand']
+            out[k]['host_strand'] = sum(len(pieces_of.get(j, [None])) for j in range(i))
+    return new, out
+
+
+def _compose_cuts(recs, L, closed):
+    """The KEPT stretches [(lo, hi)] (arc positions; hi may exceed L on a
+    closed strand: wrap-round) of a strand with these excursions' landings,
+    each landing keeping ONE host end, or None if the result would not be one
+    connected circuit (a nested landing pair)."""
+    pts = sorted([(A[1], 2 * j) for j, (_, A, B, _, _) in enumerate(recs)] +
+                 [(B[1], 2 * j + 1) for j, (_, A, B, _, _) in enumerate(recs)])
+    n = len(pts)
+    options = []
+    if closed:
+        rem_a = sum(pts[m + 1][0] - pts[m][0] for m in range(0, n, 2))
+        keep_a = [(pts[m][0], pts[m + 1][0] if m + 1 < n else pts[0][0] + L) for m in range(1, n, 2)]
+        keep_b = [(pts[m][0], pts[m + 1][0]) for m in range(0, n, 2)]
+        options = sorted([(rem_a, keep_a), (L - rem_a, keep_b)], key=lambda o: o[0])
+    else:
+        keep = [(0.0, pts[0][0])] + [(pts[m][0], pts[m + 1][0]) for m in range(1, n - 1, 2)] + [(pts[-1][0], L)]
+        options = [(0.0, keep)]
+    for _, keep in options:
+        # one circuit: the kept stretches and the excursions connect every landing
+        parent = list(range(n + 2))
+
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        def node(arc):
+            a = arc - L if arc > L + 1e-9 else arc
+            if not closed and a <= 1e-9:
+                return n
+            if not closed and a >= L - 1e-9:
+                return n + 1
+            return next(m for m, (p, _) in enumerate(pts) if abs(p - a) < 1e-9)
+        for lo, hi in keep:
+            parent[find(node(lo))] = find(node(hi))
+        for m, (p, _) in enumerate(pts):       # coincident landings are one node
+            for m2 in range(m + 1, n):
+                if abs(pts[m2][0] - p) < 1e-9:
+                    parent[find(m)] = find(m2)
+        for j in range(len(recs)):
+            a_ = next(m for m, (_, t) in enumerate(pts) if t == 2 * j)
+            b_ = next(m for m, (_, t) in enumerate(pts) if t == 2 * j + 1)
+            parent[find(a_)] = find(b_)
+        used = set(range(n)) | (set() if closed else {n, n + 1})
+        if len({find(m) for m in used}) == 1:
+            return keep
+    return None
+
+
+def _resolve_host(polys, chain, d1, d2, bead, reach, touch_guard=True):
+    """The HOST SEARCH of _splice: each lane of `chain` continues straight
+    along its direction (d1 / d2) to the generated geometry; the host is the
+    first pair of hits on ONE path, close along it. `touch_guard`: refuse a
+    stretch holding a vertex the path visits twice (connect_branch: a
+    Parallel Walls kiss). → (path index, (s, arc, X1), (s, arc, X2), i1, i2)
+    or None (no straight lanes / no contact)."""
     s1 = _lane_start(chain, d1, bead)
     s2 = _lane_start(list(reversed(chain)), d2, bead)
     if s1 is None or s2 is None:
@@ -1889,13 +2076,37 @@ def connect_branch(polys, chain, d1, d2, radius, bead, reach):
             gap = abs(a[2] - b[2])
             if (min(gap, L - gap) if closed else gap) > bound or gap < 1e-9:
                 continue
-            if not keeps_touch_points(pl, a[2], b[2], closed, L):
+            if touch_guard and not keeps_touch_points(pl, a[2], b[2], closed, L):
                 continue
             if best is None or a[0] + b[0] < best[0][0] + best[1][0]:
                 best = (a, b)
     if best is None:
         return None
     (sA, i, aA, X1), (sB, _, aB, X2) = best
+    return i, (sA, aA, X1), (sB, aB, X2), i1, i2
+
+
+def _splice(polys, chain, d1, d2, radius, bead, reach):
+    """MIXED-SYSTEM JUNCTION — printed material to printed material.
+
+    `chain`: the incoming wall's printed beads as one polyline from its end at
+    the host (chain[0]) round to its other end at the host (chain[-1]) — e.g.
+    a single / out-and-back branch: lane, U-turn, lane. d1 / d2: the
+    ARCHITECTURAL junction direction at each end (the source wall's direction,
+    pointing into the host). The architectural envelope only says where the
+    wall may exist; the lanes therefore do NOT stop at the host's nominal face:
+    each continues STRAIGHT along its direction until it reaches the host
+    system's ACTUAL generated geometry (a wave crest early, a trough deeper).
+    The two contacts are chosen on one host path, close along it (the first
+    such pair); the short host stretch between them is cut out, so branch and
+    host become one circuit. radius > 0 rounds each contact corner (Junction R
+    applied at the real contact — it never pulls the walls apart).
+    Returns (host index, the host's kept pieces, the incoming polyline from
+    contact to contact, info) or None (no straight lanes / no contact)."""
+    r = _resolve_host(polys, chain, d1, d2, bead, reach)
+    if r is None:
+        return None
+    i, (sA, aA, X1), (sB, aB, X2), i1, i2 = r
     pl = polys[i]
     cum = [0.0]
     for u, v in zip(pl, pl[1:]):
@@ -1941,9 +2152,8 @@ def connect_branch(polys, chain, d1, d2, radius, bead, reach):
                 inc = bez + inc[1:]
             else:
                 inc = inc[:-1] + list(reversed(bez))
-    out = polys[:i] + polys[i + 1:] + keep + [inc]
-    return _join(out), {'contacts': [(round(X1.x, 4), round(X1.y, 4)), (round(X2.x, 4), round(X2.y, 4))],
-                        'depth': [round(sA, 3), round(sB, 3)]}
+    return i, keep, inc, {'contacts': [(round(X1.x, 4), round(X1.y, 4)), (round(X2.x, 4), round(X2.y, 4))],
+                          'depth': [round(sA, 3), round(sB, 3)]}
 
 
 def _simplify(pl, tol=0.01):

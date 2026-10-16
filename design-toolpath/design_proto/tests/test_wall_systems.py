@@ -1325,6 +1325,19 @@ def test_t_junction_walls_touch_by_crossing(host, branch, R):
     p, m, closure, mt = _route(L)
     assert mt['print_runs'] == 1 and mt['travel_distance'] == 0 and mt['retrace_distance'] == 0
     assert not closure['open']
+    if branch == 'single' and host in ('interleaved4', 'linked4', 'chain', 'parallel4'):
+        # M7 (2026-10-16, WALL_ARCHITECTURE.md "M7" — supersedes pass 10 for
+        # OUT-AND-BACK branches): a continuous EXCURSION of the host strand both
+        # lanes reach first — that strand is cut between the two landings, the
+        # excursion is its own strand fenced to them (join_group / join_points):
+        # the route goes host → excursion → the same host; no crossing contact
+        exc = [x for x in p if (getattr(x, 'join_group', None) or '').startswith('exc:')]
+        assert len(exc) == 1 and len(exc[0].join_points) == 2
+        ends = {(round(q.x, 6), round(q.y, 6)) for x in system_paths(p) if x is not exc[0] and not x.closed
+                for q in (x.sample_points()[0], x.sample_points()[-1])}
+        assert all((round(a, 6), round(b_, 6)) in ends for a, b_ in exc[0].join_points), 'landings = the cut host ends'
+        assert max(q.y for q in exc[0].sample_points()) >= 140 + 0.5 * BEAD - 1e-9, 'into the host, to its first strand'
+        return
     sp = system_paths(p)
     closed_ = lambda x: x.sample_points() + ([x.sample_points()[0]] if x.closed else [])
     # (a skin branch's extended loop is emitted with the host's paths: classify by place)
