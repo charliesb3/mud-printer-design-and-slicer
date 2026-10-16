@@ -2798,7 +2798,8 @@ class PrintLayer:
         # pieces with FREE ends) and it no longer bounds a closed region.
         import trim as TR
         trim_secs = TR.sections(source_paths_in_order, processed)
-        trim_removed, trim_status = TR.resolve(self.trims, trim_secs, set(processed))
+        trim_removed, trim_status = TR.resolve(self.trims, trim_secs, set(processed), processed,
+                                               {p.id: bool(p.closed) for p in source_paths_in_order})
         self._trimmed = {pid for pid, iv in trim_removed.items() if iv}
 
         # 2) Full (uncut) source geometry = the processed polyline. If
@@ -4596,7 +4597,8 @@ class PrintLayer:
             processed[p.id] = _processed_source_pts(p, self._corner_r(p))
             order.append(p)
         self._snap_source_ends(order, processed, N.SNAP_TOL)
-        return TR.resolve(self.trims, TR.sections(order, processed), set(processed))[1]
+        return TR.resolve(self.trims, TR.sections(order, processed), set(processed), processed,
+                          {p.id: bool(p.closed) for p in order})[1]
 
     def _snap_source_ends(self, sources, processed, tol) -> set:
         """Move open source ends lying within tol (but not exactly on)

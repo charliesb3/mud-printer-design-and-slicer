@@ -679,6 +679,7 @@ function repaint() {
   drawEffectivePaths();
   drawOpenings();
   drawJunctions();
+  drawJunctionIds();
   drawTrimHover();
   if (showToolpath && routeResult) {
     if (stale) { ctx.save(); ctx.globalAlpha = STALE_ALPHA; }
@@ -4217,6 +4218,51 @@ function _buildArchControls(box, { prefix, wrap, after }) {
   if (!cw.length) _addNote(box, 'No wall with corners (rectangles, polylines).');
   _addNote(box, 'Architecture of every layout state (Base and its Variants): junction defaults are the project’s; ' +
                 'an end cap or Corner R belongs to its wall; a junction’s own treatment to that junction.');
+  if (prefix === 'walls') _addJunctionInspector(box);
+}
+
+// JUNCTION IDENTITY (diagnostics, M5 — manual review): the persistent junction
+// records (ids kept while walls join / leave a junction) of the design being
+// edited, labelled on the canvas, and the junctions each trim is bounded by.
+// On demand (Inspect); the returned registry is kept so ids carry to Save.
+let junctionInspect = null;     // { design, at, list: [{id, x, y, walls}], trims: {id: …} }
+async function inspectJunctions() {
+  const P = await projectState();
+  const r = await _post('/api/assembly/junctions_shadow', { project: P, layers: false });
+  project.junctions = r.registry;
+  const did = project.active, c = (r.consistency || {})[did] || {};
+  junctionInspect = { design: did, at: _histState(),
+                      list: [...(c.agree || []), ...(c.shadow_only || [])].filter(j => j.id),
+                      trims: (r.trims || {})[did] || {} };
+  updateWallGeometrySection(); repaint();
+  return junctionInspect;
+}
+function _addJunctionInspector(box) {
+  _addSubTitle(box, 'Junction identity');
+  const JI = junctionInspect && junctionInspect.design === project.active ? junctionInspect : null;
+  _addButton(box, JI ? 'Inspect again' : 'Inspect junction identity', () => inspectJunctions().catch(e => setStatus('Inspect failed: ' + e.message)));
+  if (!JI) { _addNote(box, 'Shows each persistent junction’s id on the canvas, its member walls, and the junctions each trim is bounded by.'); return; }
+  if (JI.at !== _histState()) _addNote(box, '(edited since — Inspect again)');
+  for (const j of [...JI.list].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })))
+    _addNote(box, `${j.id}: ${j.walls.map(_pathName).join(' + ')}`);
+  for (const [tid, t] of Object.entries(JI.trims)) {
+    const js = (t.junctions || []).map(x => x || 'open end').join(' ↔ ');
+    _addNote(box, `Trim of ${_pathName(t.source)}: ${js || '—'} · ${t.status}${t.via ? ' (by junctions)' : ''}` +
+                  (t.reason ? ` — ${t.reason}` : ''));
+  }
+}
+function drawJunctionIds() {
+  const JI = junctionInspect;
+  if (!JI || JI.design !== project.active || currentWorkspace !== 'designer') return;
+  ctx.save();
+  ctx.font = 'bold 11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  for (const j of JI.list) {
+    const [cx, cy] = worldToCanvas(j.x, j.y);
+    const w = j.id.length * 7 + 8;
+    ctx.fillStyle = 'rgba(20,20,30,0.85)'; ctx.fillRect(cx + 7, cy - 18, w, 15);
+    ctx.fillStyle = JUNCTION_COLOR; ctx.fillText(j.id, cx + 11, cy - 10);
+  }
+  ctx.restore();
 }
 // (older callers)
 function updateWallGroupSection() { updateWallGeometrySection(); }

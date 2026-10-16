@@ -68,7 +68,7 @@ def test_two_wall_tee_and_hub_junctions_by_member_walls_and_roles():
         assert all(0.0 <= m['s'] < 1.0 for m in r['members'] if m['at'] == 'through'), 'through members carry an arc HINT'
         assert all('s' not in m for m in r['members'] if m['at'] != 'through')
         assert r['owner'] == 'base' and r['states'] == ['base'] and r['shape'] == 'inherit'
-    assert P['junctions']['mode'] == 'shadow'
+    assert P['junctions']['mode'] == 'trims'          # (M5: authoritative for trim boundaries)
 
 
 def test_two_walls_meeting_twice_are_two_junctions_told_apart_by_their_hints():
@@ -167,15 +167,22 @@ def test_shadow_records_agree_with_production_topology(name):
     """Every shadow junction has production nodes of its walls. Production
     contacts WITHOUT a source-line contact are the known face-contact cases
     (bands overlapping where the circle runs inside the rectangle's wall);
-    no shadow junction is ever missing in production."""
+    a shadow junction is missing in production only where it lies on a
+    trimmed-away stretch (M5)."""
     P = _golden(name)
     lib = DesignLibrary(P['designer']['designs'], P.get('wall_systems') or [], True)
     for d in P['designer']['designs']:
         c = J.consistency(lib.document(d['id']), P['junctions']['records'], d['id'])
-        assert not c['shadow_only'], (d['id'], c['shadow_only'])
+        # (M5) a wall CROSSING a trimmed-away stretch meets the circle / rectangle
+        # SOURCE lines there — architectural junctions — but the material is
+        # removed, so production has no node: valid, and the trims stay
+        shadow = {'syn_branch_across_trim': [['C', 'L'], ['L', 'R']],
+                  'syn_branch_at_junction': [['C', 'L']]}.get(name, [])     # (its far end lands on C's removed arc)
+        assert sorted(x['walls'] for x in c['shadow_only']) == shadow, (d['id'], c['shadow_only'])
         assert all(e['id'] for e in c['agree']), 'every observed junction is a stored record'
-        expected = {'syn_branch_at_junction': [['C', 'R']], 'syn_branch_across_trim': [['C', 'R']]}.get(name, [])
-        assert [x['walls'] for x in c['production_only']] == expected, (d['id'], c['production_only'])
+        # (M4 found C × R band-overlap nodes in the two branch cases: they were
+        # the overlap of the UNRESOLVED trims — M5 resolves them, none remain)
+        assert not c['production_only'], (d['id'], c['production_only'])
 
 
 # ---- through Z: moving, ceasing, appearing (valid topology) ---------------------------------
@@ -231,7 +238,7 @@ def test_planar_cut_removing_a_wall_ends_its_junction_in_the_real_project():
 def test_the_registry_changes_no_document_and_no_geometry():
     P = _golden('syn_branch_at_junction')
     Q = copy.deepcopy(P)
-    Q['junctions'] = {'mode': 'shadow', 'counter': 99, 'records': []}
+    Q['junctions'] = {'mode': 'trims', 'counter': 99, 'records': []}
     a, b = _doc(P), _doc(Q)
     assert a == b and 'junctions' not in a
     from app import _deserialise_layer

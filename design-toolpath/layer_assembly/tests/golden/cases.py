@@ -34,7 +34,7 @@ CHANGES_AT = {
     'syn_excursion_skin': 'M7',
     'syn_contact_linked_parallel': 'M8',
     'syn_transform_multi': 'M9',
-    'real_10xtest1': 'M2 (reported divergence: Variant 1 junction round r7 → Base)',
+    'real_10xtest1': 'M2 (reported divergence: Variant 1 junction round r7 → Base); M5 (its 3 dangling trims: reason names the missing junction — geometry identical)',
 }
 
 

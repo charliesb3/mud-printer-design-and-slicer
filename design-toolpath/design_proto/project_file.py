@@ -328,15 +328,20 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
                          _num_suffix_max(ids, 'd') + 1, 1)
     P['designer'] = {'designs': [_design_out(d) for d in designs], 'active_design': active,
                      'id_counter': id_counter, 'design_counter': design_counter}
-    # ---- PERSISTENT JUNCTIONS — SHADOW MODE (M4, junctions.py): detected from the
-    # designs, ids kept from the stored registry; nothing builds from them yet.
+    # ---- PERSISTENT JUNCTIONS (junctions.py; M4 shadow, M5 trim boundaries):
+    # detected from the designs, ids kept from the stored registry (members may
+    # join / leave a junction without renaming it); each trim records the
+    # junction ids it is bounded by (`junctions`). Trims RESOLVE by the same
+    # identity rule in the Designer (trim.py), so this never changes geometry.
     # Never blocks opening / saving: on failure the stored registry is kept.
     prev = P.get('junctions') if isinstance(P.get('junctions'), dict) else None
     try:
-        from junctions import build_registry
+        from junctions import build_registry, trim_links, annotate_trims
         P['junctions'] = build_registry(P['designer']['designs'], systems, prev)[0]
-    except Exception as e:                              # (shadow only: report, keep going)
-        warnings.append(f'Junction records (shadow) could not be updated: {type(e).__name__}: {e}')
+        annotate_trims(P['designer']['designs'],
+                       trim_links(P['designer']['designs'], systems, P['junctions']['records']))
+    except Exception as e:                              # (report, keep going)
+        warnings.append(f'Junction records could not be updated: {type(e).__name__}: {e}')
         if prev is None:
             P.pop('junctions', None)
 

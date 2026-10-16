@@ -379,9 +379,10 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
   reappears (ending on the removed rectangle edge of the circle + rectangle
   case un-resolves BOTH trims); attaching to visible geometry keeps every
   trim. The snap fix removes the UI invitation, an Alt-placed / crossing
-  wall still triggers it. Strict-xfail regression
-  `test_trim_ghost.py::test_attaching_to_a_removed_section_keeps_trims`;
-  belongs to the deferred junction / trim topology architecture.
+  wall still triggers it. *FIXED by M5 (2026-10-15, uncommitted): trims are
+  bounded by persistent junctions — the former strict xfail
+  `test_trim_ghost.py::test_attaching_to_a_removed_section_keeps_trims` is a
+  passing regression (WALL_ARCHITECTURE.md "M5").*
 - **Snap engine** (`snapDrawPoint`, app.js; Line / Draw / Curve ends / shape
   corners; handle + body drags keep geometry-only `findSnap`): radii in
   SCREEN px (ends / junctions 12, wall lines 9, grid 7 — was 8 world inches
@@ -1496,12 +1497,20 @@ reader); Designer "Junctions & ends" + row thickness + multi-select; Wall
 Systems per-wall checklist; persistent junction records in SHADOW mode
 (`junctions.py`, project-level registry, nothing builds from it). Production
 geometry unchanged except `real_10xtest1`'s reported Variant junction r 7.
-Correction pass after the user's manual review (2026-10-15, uncommitted):
+Correction pass after the user's manual review (2026-10-15; in checkpoint `b4ccd16`, pushed):
 - readable Path thickness control;
 - the THIN → explicit thickness rule (first 0.5 in step at or above 2W − R; never below THIN);
 - "Junctions, Ends & Corners" (per-owner: project junction default, per-junction, per-wall cap and Corner R);
 - the same controls in Wall Systems on the same state (OUTDATED on edit).
-Junction generation untouched; M5 not started.
+Junction generation untouched.
+**M5 IMPLEMENTED 2026-10-15 (uncommitted, awaiting manual review): persistent
+junctions are authoritative for TRIM BOUNDARIES.**
+- A trim not matching its section exactly is resolved by its boundary junctions (`trim._by_junctions`). Members may join or leave a junction (`junctions.compatible`), and a wall crossing a removed stretch neither splits nor resurrects it.
+- Junction ids survive membership changes.
+- Trims record their junction ids on save.
+- A Designer "Junction identity" inspector shows the ids.
+- Only the two M5 golden fixtures changed geometry, plus `real_10xtest1`'s dangling-trim reasons (text only).
+- M6+ not started.
 *Earlier text of this proposal (revision 3, before approval):* User decisions applied: remove Wall Groups (walls
 own thickness / alignment / Corner R / caps; THIN state for out-and-back);
 Base / Variants = layout states (may add / remove walls, openings; never wall

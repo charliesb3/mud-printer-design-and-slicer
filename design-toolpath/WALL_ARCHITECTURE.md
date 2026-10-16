@@ -1,6 +1,6 @@
 # Wall / Junction / Construction Architecture — FINAL
 
-**Status:** APPROVED (revision 4, 2026-10-15). **M0–M4 implemented 2026-10-15, manually reviewed (with the correction pass) and checkpointed; golden re-baselined (full hashes) at the checkpoint. M5 in progress.** Revision 4 records the user's FINAL decisions (§F), which supersede the corresponding parts of §5, §6, §9 and §12.
+**Status:** APPROVED (revision 4, 2026-10-15). **M0–M4 implemented 2026-10-15, manually reviewed (with the correction pass) and checkpointed (`b4ccd16`); golden re-baselined (full hashes) at the checkpoint. M5 implemented 2026-10-15, manually reviewed and checkpointed; M6 / M7 in progress (2026-10-16).** Revision 4 records the user's FINAL decisions (§F), which supersede the corresponding parts of §5, §6, §9 and §12.
 
 ## §F. FINAL PRODUCT DECISIONS (2026-10-15, supersede earlier text)
 
@@ -568,11 +568,57 @@ M0–M4 is listed in the M0–M4 implementation notes below.
   - No backend file changed.
   - Golden: 23 passed.
 
+### M5 — persistent junctions authoritative for TRIM BOUNDARIES (2026-10-15; reviewed, checkpointed)
+
+- **Old failure (exact mechanism):** a Trim was a signature: the sorted SET of sources bounding its section at each end, plus the inside flags (`trim.Section.matches`).
+  - A branch drawn to the circle × rectangle junction turned the boundary set `[R]` into `[L, R]`.
+  - A wall crossing the removed stretch split it into two sections bounded by `[R]` / `[L]`.
+  - Either way no section matched, the trim went `unresolved`, and the removed geometry reappeared (`syn_branch_at_junction`, `syn_branch_across_trim`, the old strict xfail, and the user's own `real_10xtest1` history: its trims p9 / p10 / p11 were re-made around such a branch).
+- **Junction identity rule** (`junctions.compatible` / `_diff`): two member sets are the same junction when they share ≥ 2 walls (registry; equal roles) and one contains the other.
+  - A member JOINING (a branch) or LEAVING (deleted, absent in a layout state) keeps the junction's id.
+  - Exact matches are preferred, then the fewest changed members, then the nearest arc hint.
+  - The registry (`build_registry` id keeping, per-state matching) uses this rule. Records accumulate members across states (a Variant-only wall is a member, restricted away in states without it). Registry mode is now `'trims'`.
+- **Trim resolution** (`trim.resolve`):
+  - The EXACT match runs first, so every trim that resolved before M5 is byte-identical.
+  - Otherwise `_by_junctions` takes over. Each boundary is a contact on the source whose walls are `compatible` with the walls recorded at that boundary (restricted to the walls present). The removed interval runs between two such boundary junctions, with no other junction of those walls inside, whatever other walls touch or cross it; the `inside` flags pick the arc, and `u_mid` breaks ties.
+  - Every current section inside the interval is marked trimmed (the UI greys them).
+  - Status `ok` + `via: 'junctions'`.
+- **Reporting:**
+  - `inactive` — a boundary's recorded walls are all absent from the design (deleted / this Variant lacks them).
+  - `unresolved` with the missing junction named — the walls are present but no longer meet there.
+  - `ambiguous` — as before.
+  - Nothing is ever re-attached elsewhere.
+- **Persistent references:**
+  - On save, each trim records its boundary junction ids (`trim.junctions = [J_a, J_b]`, from its owner state; `junctions.trim_links` / `annotate_trims`).
+  - Resolution itself uses the identity rule, so a Designer resolve needs no registry, and the registry keeps ids by the same rule; they cannot disagree.
+  - Records stay PROJECT-level ("Before M5" item 3 stays open).
+- **Variants:**
+  - A Variant-only branch joining a Base junction makes it a 3-member junction in that Variant: ONE record owned by Base. The inherited trims resolve there by junction; Base is unchanged; no Variant physical properties.
+  - A Variant removing a member leaves a 2-member junction, the same record.
+  - A Variant removing the trim's bounding wall makes the trim `inactive` there.
+- **Topology through Z:** untouched. Assembly layers still use trims pinned to the authored resolution (`profile_cuts._pin_trims`); no M9 behaviour.
+- **Production junction geometry:** untouched. Network junctions, motifs and construction are as before; only which source stretches are removed changes.
+- **Diagnostics:**
+  - `POST /api/assembly/junctions_shadow` now returns `trims` (per state: status, via, junction ids, members); `layers: false` skips the stack resolve.
+  - The Designer has a "Junction identity" inspector (Junctions, Ends & Corners → Inspect): ids on the canvas, members, and each trim's junctions.
+- **Consistency findings changed:**
+  - The M4 C × R band-overlap `production_only` nodes in the two branch fixtures were the overlap of the UNRESOLVED trims; they are gone ("Before M5" item 1 no longer arises in any golden case).
+  - Crossings ON a removed stretch are `shadow_only` (architectural junctions with no material — valid).
+- **Golden (reviewed diffs, re-baselined):**
+  - `syn_branch_at_junction`, `syn_branch_across_trim`: both trims now `ok`; the overlap removed (one perimeter); plan / `.mudjob` changed: the 18-layer job prints about 2,700 in less (14,598 → 11,888 in; 15,384 → 12,940 in).
+  - `real_10xtest1`: ONLY the reason text of its 3 dangling trims (p10, p11: "its boundary junction with p5 no longer exists"; p9: its junctions no longer bound a matching stretch — p5 moved below the circle, and resolving would cut the real rectangle). Plan / `.mudjob` identical.
+  - The other 19 cases are byte-identical.
+- **Tests:**
+  - `layer_assembly/tests/test_m5_trim_junctions.py` (11);
+  - `test_trim_junction_ui.py` + `js/ui_trim_junction_smoke.js` (Designer UI against the real backend: Trim tool, branch, undo / redo, crossing, delete, inspector);
+  - the strict xfail flipped to a passing regression;
+  - `test_junction_shadow.py` consistency expectations updated.
+
 ### Before M5 — to decide
 
-1. **Band-overlap contacts** (production_only above): with source-line junctions, bands that overlap without their source lines touching are NOT a junction. Should M5 treat them as plain material union (no junction, no corner treatment), or keep a junction there?
+1. *(M5: no longer arises in any golden case — those nodes were the unresolved trims' overlap; still open for genuine band overlaps without trims.)* **Band-overlap contacts** (production_only above): with source-line junctions, bands that overlap without their source lines touching are NOT a junction. Should M5 treat them as plain material union (no junction, no corner treatment), or keep a junction there?
 2. **Per-corner shapes:** §4 has one `shape` per junction; legacy overrides are per corner (no real project uses any). Is one shape per junction enough? M4 keeps the per-corner list.
-3. **Record storage:** move the records into the lineage-owned documents in M5 (as §4) — confirm.
+3. **Record storage:** move the records into the lineage-owned documents (as §4) — confirm. *(M5 did not need it: trims resolve by the identity rule and record the ids; records stay project-level.)*
 4. ~~Re-baseline full golden hashes~~ — DONE at the M0–M4 checkpoint after the user's review. Before it, every strict difference was a full hash only; the label-stripped `geom` hashes and `.mudjob` were equal. `GOLDEN_STRICT=1` now passes 23/23.
 5. **Junctions that APPEAR only on transformed layers** stay unnamed (per-layer topology, §F1) — confirm that no record or treatment is wanted for them.
 

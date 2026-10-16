@@ -951,11 +951,12 @@ def api_print_plan_cancel():
 
 @bp.route('/api/assembly/junctions_shadow', methods=['POST'])
 def api_junctions_shadow():
-    """PERSISTENT JUNCTIONS — SHADOW report (M4, read only): body {project}
-    (current schema). The registry (stored ids kept), per Layer Design the
-    consistency with the production topology, and per resolved layer which
-    junctions exist (ceasing / appearing = valid topology). Nothing built
-    for printing reads this."""
+    """PERSISTENT JUNCTIONS report (M4; M5 trims; read only): body {project}
+    (current schema). The registry (stored ids kept — members may join /
+    leave a junction), per Layer Design the consistency with the production
+    topology, per resolved layer which junctions exist (ceasing / appearing
+    = valid topology), and per layout state each trim's status and the
+    junction ids it is bounded by (`trims`)."""
     import junctions as J
     from .junction_shadow import presence
     P = (request.get_json(force=True) or {}).get('project') or {}
@@ -964,7 +965,10 @@ def api_junctions_shadow():
         ws = P.get('wall_systems') or []
         reg, rep = J.build_registry(designs, ws, P.get('junctions'))
         cons = J.consistency_all(designs, ws, reg['records'])
-        layers = presence(dict(P, junctions=reg), reg)['layers']
+        # (`layers: false` — the Designer's inspector: no stack resolve)
+        layers = presence(dict(P, junctions=reg), reg)['layers'] \
+            if (request.get_json(force=True) or {}).get('layers', True) else None
+        trims = J.trim_links(designs, ws, reg['records'])
     except (KeyError, TypeError, ValueError, AssemblyError, ProfileError) as e:
         return jsonify({'error': f'{type(e).__name__}: {e}'}), 400
-    return jsonify({'registry': reg, 'report': rep, 'consistency': cons, 'layers': layers})
+    return jsonify({'registry': reg, 'report': rep, 'consistency': cons, 'layers': layers, 'trims': trims})

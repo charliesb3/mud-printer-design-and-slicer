@@ -381,8 +381,8 @@ eval(src + `
         "Open: Wall Systems and every wall's own thickness restored; nothing generated yet");
   // (M4) the persistent junction records (shadow) travel opaquely: their ids survive Save / Open / Save
   const J0 = saved.file.project.junctions;
-  check(J0 && J0.mode === 'shadow' && JSON.stringify(project.junctions) === JSON.stringify(J0),
-        'Open: the junction records (shadow) are kept as saved');
+  check(J0 && J0.mode === 'trims' && JSON.stringify(project.junctions) === JSON.stringify(J0),
+        'Open: the junction records are kept as saved');
   const saved2 = await _post('/api/project/save', { project: await projectState() });
   check(JSON.stringify(saved2.file.project.junctions.records.map(r => r.id)) === JSON.stringify(J0.records.map(r => r.id)),
         'Save again: the same junction ids');

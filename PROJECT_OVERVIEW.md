@@ -643,7 +643,7 @@ Important unresolved questions currently include:
 - What constraints arise from the physical scale of the machine? (Machine profiles exist from 2026-10-15; the real printable X / Y and maximum building Z are still unmeasured, and where the print origin sits relative to the frame's printable area — the envelope convention — is provisional.)
 - What constraints arise from material behavior and the hose-fed printing process?
 - What should the boundary between design and toolpath generation ultimately be?
-- Wall / junction / corner / cap ownership: `design-toolpath/WALL_ARCHITECTURE.md` approved (revision 4, §F final decisions); milestones M0–M4 implemented 2026-10-15, manually reviewed and checkpointed — walls own their properties, no Wall Groups, persistent junction records in shadow mode. M5+ (junction geometry changes) not started; open points in "Before M5 — to decide".
+- Wall / junction / corner / cap ownership: `design-toolpath/WALL_ARCHITECTURE.md` approved (revision 4, §F final decisions); milestones M0–M4 implemented 2026-10-15, manually reviewed and checkpointed (`b4ccd16`); M5 (trims bounded by persistent junctions — a branch joining a junction or crossing a removed section no longer resurrects trimmed geometry) implemented, awaiting review — walls own their properties, no Wall Groups, persistent junction records (authoritative for trim boundaries since M5, otherwise shadow). M6+ not started; open points in "Before M5 — to decide".
 
 ### Raspberry Pi / Printer Interface
 

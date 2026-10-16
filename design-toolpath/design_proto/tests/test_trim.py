@@ -210,12 +210,14 @@ class TestResolution:
         assert [p.id for p in src_pieces(paths, 'C')] == ['C']     # shown untrimmed
         assert 'C' not in meta['network']['modified_sources']
 
-    def test_unresolved_when_a_bounding_path_is_deleted(self):
+    def test_inactive_when_a_bounding_path_is_deleted(self):
+        # (M5: was 'unresolved' — the boundary junction's wall is gone; reported, nothing removed)
         t = pick(circle_rect(), 'C', inside_R)
         lay = circle_rect(trims=[t])
         lay.source_paths = [p for p in lay.source_paths if p.id != 'R']
         _, meta = build(lay)
-        assert meta['network']['trims']['t1']['status'] == 'unresolved'
+        st = meta['network']['trims']['t1']
+        assert st['status'] == 'inactive' and 'R' in st['reason']
 
     def test_missing_source(self):
         t = pick(circle_rect(), 'C', inside_R)

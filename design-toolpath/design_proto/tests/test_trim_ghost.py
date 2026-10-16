@@ -56,15 +56,12 @@ def test_trimmed_source_has_no_ghost_when_selected():
 
 
 # ---------------------------------------------------------------------------
-# DEFERRED (2026-10-15) — documented, NOT fixed: attaching new geometry to a
-# trimmed-away section brings that trimmed geometry back. A Trim is a
-# topological SIGNATURE (its bounding sources + inside-which-closed-source);
-# a new wall ending on the removed section adds a contact that splits it, the
-# signature no longer resolves ('unresolved') and the section reappears.
-# Attaching to VISIBLE geometry leaves every trim intact. Since the snap fix
-# the UI no longer invites this (removed sections are not snap targets), but
-# an Alt-placed / crossing wall still triggers it. Part of the deferred
-# junction / trim topology architecture — see design-toolpath/PROJECT_MEMORY.md.
+# Was DEFERRED (strict xfail, 2026-10-15), FIXED by M5 (WALL_ARCHITECTURE.md):
+# attaching new geometry to a trimmed-away section used to bring it back —
+# the new contact split the section and the trim's signature (its bounding
+# sources) no longer matched. A trim's boundaries are now persistent
+# JUNCTIONS: a wall touching / crossing the removed stretch neither splits
+# nor resurrects it (trim._by_junctions).
 # ---------------------------------------------------------------------------
 
 def _trims_after(extra):
@@ -88,6 +85,7 @@ def test_attaching_to_visible_geometry_keeps_trims():
     assert {k: v['status'] for k, v in _trims_after(_line((200, 30), (200, 100))).items()} == {'tC': 'ok', 'tR': 'ok'}
 
 
-@pytest.mark.xfail(strict=True, reason='DEFERRED: trim topology — a contact on a removed section un-resolves the Trim')
 def test_attaching_to_a_removed_section_keeps_trims():
-    assert {k: v['status'] for k, v in _trims_after(_line((200, 300), (260, 180))).items()} == {'tC': 'ok', 'tR': 'ok'}
+    st = _trims_after(_line((200, 300), (260, 180)))
+    assert {k: v['status'] for k, v in st.items()} == {'tC': 'ok', 'tR': 'ok'}
+    assert st['tC'].get('via') == 'junctions'      # (the circle's: resolved by junction identity, M5)

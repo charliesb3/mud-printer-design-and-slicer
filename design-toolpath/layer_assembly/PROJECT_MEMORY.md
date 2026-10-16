@@ -63,6 +63,14 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
   - The Designer's "Junctions, Ends & Corners": junction treatment / R, default + per-wall end caps, per-wall Corner treatment / R.
   - Wall Systems gets an "Architecture · shared with Designer" section built by the same Designer code on the same canonical state (undoable there, makes the generation OUTDATED, no Variant copies).
   - No geometry change; see `../WALL_ARCHITECTURE.md` "Correction pass".
+- **M5 (2026-10-15, uncommitted, awaiting review): junctions are authoritative for TRIM BOUNDARIES.**
+  - Junction identity survives members joining / leaving (`junctions.compatible`).
+  - Trims that no longer match exactly resolve between their boundary junctions (`trim._by_junctions`; exact match first, so byte-identical where they resolved before).
+  - Status `inactive` / `unresolved` names the missing junction.
+  - Trims record their junction ids on save.
+  - `junctions_shadow` returns `trims` (`layers: false` option); the Designer has a "Junction identity" inspector.
+  - Golden: only the 2 M5 fixtures changed geometry, `real_10xtest1` reason text only.
+  - Production junction geometry and M6–M9 untouched. Details: `../WALL_ARCHITECTURE.md` "M5".
 - **Shadow junctions** (`design_proto/junctions.py`, `junction_shadow.py`, `POST /api/assembly/junctions_shadow`): project-level `junctions` registry, stable ids, overrides mapped; consistency with production + per-layer presence (ceasing / appearing = valid). Nothing builds from it.
 - Verified: tests below each milestone + golden; production geometry / PrintPlan / `.mudjob` unchanged apart from the reported 10xtest1 divergence.
 

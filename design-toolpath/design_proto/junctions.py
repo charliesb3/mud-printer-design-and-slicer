@@ -1,6 +1,16 @@
 """
-PERSISTENT JUNCTION RECORDS — SHADOW MODE (M4, 2026-10-15;
-design-toolpath/WALL_ARCHITECTURE.md §4, §F).
+PERSISTENT JUNCTION RECORDS (M4 shadow, 2026-10-15; M5: AUTHORITATIVE FOR
+TRIM BOUNDARIES — design-toolpath/WALL_ARCHITECTURE.md §4, §10, §F).
+
+M5: a junction keeps its identity while members JOIN or LEAVE it (`compatible`
+/ `_diff`: the same junction when the member sets share ≥ 2 walls with equal
+roles and one contains the other) — a branch drawn to the circle × rectangle
+junction makes it a 3-member junction, never a new one. Trims are bounded by
+junctions under the same rule (trim.py `_by_junctions`); `trim_links` names,
+per layout state, the junction records each trim is bounded by (written onto
+the trims on save: `trim.junctions = [J_a, J_b]`). Registry mode 'trims'.
+Everything else below is still SHADOW (production junction geometry comes
+from the wall-network face contacts).
 
 A junction is a RELATIONSHIP of walls in the authored architecture: the set
 of member walls (stable source ids) and each member's role there —
@@ -21,7 +31,7 @@ junction may cease / appear where transformed walls stop / start
 intersecting (§F1: valid topology, never an error).
 
 Registry (project['junctions']):
-  {'mode': 'shadow', 'counter': n, 'records': [
+  {'mode': 'trims', 'counter': n, 'records': [
      {'id': 'J3', 'members': [{'wall': 'p1', 'at': 'through', 's': 0.25},
                               {'wall': 'p5', 'at': 'end'}],
       'kind': 'cross' | 'tee' | 'corner' | 'hub',
@@ -149,20 +159,44 @@ def _as_members(obs) -> list:
     return [{'wall': w, **v} for w, v in sorted(obs['members'].items())]
 
 
+def compatible(a, b) -> bool:
+    """THE JUNCTION IDENTITY RULE for wall sets (M5): two member sets name the
+    same junction when they share a wall and one contains the other — a
+    member JOINING (a branch drawn to the junction) or LEAVING (deleted,
+    absent from a layout state) never re-keys it. Used by the registry
+    (below, with roles) and by trim boundaries (trim.py)."""
+    a, b = set(a), set(b)
+    return bool(a & b) and (a <= b or b <= a)
+
+
+def _diff(sig_a, sig_b):
+    """Members differing between two (wall, role) signatures when they are the
+    same junction (≥ 2 shared walls, equal roles, one set contains the other
+    — `compatible`), else None."""
+    A, B = dict(sig_a), dict(sig_b)
+    shared = set(A) & set(B)
+    if len(shared) < 2 or any(A[w] != B[w] for w in shared) or not compatible(A, B):
+        return None
+    return len(set(A) ^ set(B))
+
+
 def _match(obs_list, records, present):
     """[(observation, record or None)] — each observation matched to the
-    record with the same (restricted) signature and the nearest hints; one
-    record per observation."""
+    record naming the same junction: the same (restricted) signature first,
+    else a compatible one (members joined / left, `_diff`), then the nearest
+    hints; one record per observation."""
     taken, out = set(), []
     pairs = []
     for oi, o in enumerate(obs_list):
         om = _as_members(o)
         sig = _sig(om)
         for ri, r in enumerate(records):
-            if len(_sig(r['members'], present)) >= 2 and _sig(r['members'], present) == sig:
-                pairs.append((_hint_dist(r['members'], om), oi, ri))
+            rs = _sig(r['members'], present)
+            dn = _diff(rs, sig) if len(rs) >= 2 else None
+            if dn is not None:
+                pairs.append((dn, _hint_dist(r['members'], om), oi, ri))
     got = {}
-    for d, oi, ri in sorted(pairs):
+    for dn, d, oi, ri in sorted(pairs):
         if oi in got or ri in taken:
             continue
         got[oi] = ri
@@ -258,6 +292,11 @@ def build_registry(designs, wall_systems=None, previous=None) -> tuple:
                 fresh.append(r)
                 n_new += 1
             r['states'].append(did)
+            have = {m['wall'] for m in r['members']}
+            new = [m for m in _as_members(o) if m['wall'] not in have]
+            if new:                         # a member joined (another state's wall, a branch)
+                r['members'] = sorted(r['members'] + new, key=lambda m: m['wall'])
+                r['kind'] = kind_of(r['members'])
             if k in mapped and did == r['owner']:
                 ncorners = sum(1 for j in obs.get('production') or []
                                if j.get('corner') and set(j['walls']) <= set(o['members']))
@@ -270,10 +309,11 @@ def build_registry(designs, wall_systems=None, previous=None) -> tuple:
     pairs = []
     for fi, f in enumerate(fresh):
         for pi, p in enumerate(prev):
-            if _sig(p['members']) == _sig(f['members']):
-                pairs.append((_hint_dist(p['members'], f['members']), fi, pi))
+            dn = _diff(_sig(p['members']), _sig(f['members']))
+            if dn is not None:              # (members joined / left: the same junction)
+                pairs.append((dn, _hint_dist(p['members'], f['members']), fi, pi))
     got, used = {}, set()
-    for d, fi, pi in sorted(pairs):
+    for dn, d, fi, pi in sorted(pairs):
         if fi in got or pi in used:
             continue
         got[fi] = pi
@@ -287,8 +327,73 @@ def build_registry(designs, wall_systems=None, previous=None) -> tuple:
             if prev:
                 report['new'].append(f['id'])
     report['retired'] = [p['id'] for pi, p in enumerate(prev) if pi not in used]
-    reg = {'mode': 'shadow', 'counter': counter, 'records': fresh}
+    reg = {'mode': 'trims', 'counter': counter, 'records': fresh}
     return reg, report
+
+
+# ---- trims bounded by junctions (M5) ---------------------------------------------------
+
+def _pkey(p):
+    return None if p is None else (round(float(p[0]), 6), round(float(p[1]), 6))
+
+
+def trim_links(designs, wall_systems, records) -> dict:
+    """{design id: {trim id: {'source', 'status', 'via'?, 'reason'?,
+    'junctions': [J at the section's start | None (open end), J at its end],
+    'members': [[walls of each boundary junction]]}}} — every trim of every
+    layout state resolved as the Designer resolves it, its boundary contacts
+    named by the registry's junction records (`records`)."""
+    from layer_design import DesignLibrary
+    lib = DesignLibrary(designs, wall_systems or [], True)
+    out = {}
+    for did in _state_order(designs):
+        doc = lib.document(did)
+        if not doc.get('trims'):
+            out[did] = {}
+            continue
+        obs = observe(doc)
+        present = set(obs['walls'])
+        cand = [r for r in records if did in r.get('states', [])]
+        at = {}
+        for o, r in _match(obs['junctions'], cand, present):
+            at[_pkey((o['x'], o['y']))] = (r['id'] if r else None, sorted(o['members']))
+        st = _layer_of(doc).resolved_trims()
+        mine = {}
+        for t in doc['trims']:
+            i = st.get(t['id']) or {}
+            e = {'source': t['source_path_id'], 'status': i.get('status')}
+            for k in ('via', 'reason'):
+                if i.get(k):
+                    e[k] = i[k]
+            if i.get('status') == 'ok':
+                ends = [at.get(_pkey(i.get('pa')), (None, [])), at.get(_pkey(i.get('pb')), (None, []))]
+                e['junctions'] = [j for j, _ in ends]
+                e['members'] = [m for _, m in ends]
+            mine[t['id']] = e
+        out[did] = mine
+    return out
+
+
+def annotate_trims(designs, links) -> int:
+    """Write each trim's boundary junction ids (`junctions`, from its OWNER
+    state's resolution — `trim_links`) onto the trim record where it is
+    stored (Base document, or the Variant patch introducing it). Returns the
+    number of trims annotated. A trim not resolved in its owner state keeps
+    the ids it had (the reference it was made with)."""
+    n = 0
+    for d in designs:
+        own = links.get(d['id']) or {}
+        if d.get('parent') is None:
+            recs = (d.get('document') or {}).get('trims') or []
+        else:
+            recs = [r for r in (((d.get('patch') or {}).get('trims')) or {}).values()
+                    if isinstance(r, dict) and r.get('id')]
+        for t in recs:
+            e = own.get(t.get('id'))
+            if e and e.get('junctions') and any(e['junctions']):
+                t['junctions'] = list(e['junctions'])
+                n += 1
+    return n
 
 
 # ---- consistency against the production topology --------------------------------------

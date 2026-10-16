@@ -20,6 +20,21 @@ moved onto an unrelated section.
 
 Sections are always computed from the UNTRIMMED design geometry, so trims
 are independent of each other and of their order.
+
+M5 (2026-10-15, WALL_ARCHITECTURE.md §4 / §10): THE BOUNDARIES OF A TRIM ARE
+PERSISTENT JUNCTIONS. `start` / `end` are the walls at each boundary junction
+when the trim was made. When the section no longer matches exactly — a wall
+JOINED one of its junctions (a branch drawn to it), LEFT it, or a wall now
+CROSSES the removed section — the trim is resolved by junction identity
+(`_by_junctions`): a boundary is the contact on the source whose walls are
+`junctions.compatible` with the recorded ones (they share a wall and one set
+contains the other — the same rule that keeps a junction record's id), and
+the removed interval runs between the two boundary junctions, whatever other
+walls touch it in between (a crossing never splits or resurrects a removed
+section). Exact matches are tried FIRST, so every trim that resolved before
+M5 resolves to exactly the same section. A boundary whose recorded walls are
+all gone from the design (deleted, or absent from this layout state) leaves
+the trim INACTIVE — reported, nothing removed, never re-attached elsewhere.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -175,11 +190,99 @@ def sections(sources, processed) -> dict:
     return out
 
 
-def resolve(trims, secs: dict, source_ids) -> tuple[dict, dict]:
-    """Match each trim to the section it names. Returns
+def _contacts_of(secs, closed) -> list:
+    """[(s, {other walls}, point)] — the contacts of one source, rebuilt from its
+    sections (closed: each section starts at one; open: each but the last
+    ends at one)."""
+    if closed:
+        return [(q.a % q.L, set(q.start), q.pa) for q in secs]
+    return [(q.b, set(q.end), q.pb) for q in secs[:-1]]
+
+
+def _by_junctions(t, secs, present, inside_of):
+    """M5: (removed interval (a, b, pa, pb), covered sections, info) of a trim
+    resolved by its boundary JUNCTIONS (module doc), or (None, None, info)."""
+    from junctions import compatible
+    cores = []
+    for rec in (t.start, t.end):
+        rec = set(rec)
+        core = rec & present
+        if rec and not core:
+            return None, None, {
+                'status': 'inactive',
+                'reason': f'its boundary junction with {" + ".join(sorted(rec))} is not in this design '
+                          f'(that wall was deleted, or this layout state does not have it) — not trimmed'}
+        cores.append(core)
+    if not secs:
+        return None, None, {'status': 'unresolved',
+                            'reason': 'its boundary junctions no longer exist (the walls no longer meet) — not trimmed'}
+    L = secs[0].L
+    closed = not (secs[0].pa is None or secs[-1].pb is None)
+    cons = _contacts_of(secs, closed)
+
+    def ends(core):
+        if not core:                                   # the path's own open end
+            return [] if closed else [(0.0, None), (L, None)]
+        return [(c[0], c[2]) for c in cons if compatible(core, c[1])]
+    ea, eb = ends(cores[0]), ends(cores[1])
+    gone = [' + '.join(sorted(c)) for c, e in zip(cores, (ea, eb)) if c and not e]
+    if gone:
+        return None, None, {'status': 'unresolved',
+                            'reason': f'its boundary junction with {" and with ".join(gone)} no longer exists '
+                                      f'(the walls no longer meet there) — not trimmed'}
+    cands = []
+    for A, B in ((ea, eb), (eb, ea)):
+        for sa, pa in A:
+            for sb, pb in B:
+                if closed:
+                    if abs(sa - sb) <= SPLIT_MERGE:
+                        continue
+                    a, b = sa, sb if sb > sa else sb + L
+                elif sb - sa > SPLIT_MERGE:
+                    a, b = sa, sb
+                else:
+                    continue
+                # the nearest junctions of those walls: none of them inside
+                inner = [c for c in cons if (a + SPLIT_MERGE < c[0] < b - SPLIT_MERGE or
+                                             (closed and a + SPLIT_MERGE < c[0] + L < b - SPLIT_MERGE))]
+                if any(core and compatible(core, c[1]) for c in inner for core in cores):
+                    continue
+                mid = ((a + b) / 2.0) % L if closed else (a + b) / 2.0
+                if inside_of(mid) != {str(k): bool(v) for k, v in (t.inside or {}).items()}:
+                    continue
+                if (a, b) not in [(x[0], x[1]) for x in cands]:
+                    cands.append((a, b, pa, pb))
+    if len(cands) > 1:
+        u = (t.u_mid % 1.0) * L
+
+        def has(c):
+            return c[0] - 1e-9 <= u <= c[1] + 1e-9 or (closed and c[0] - 1e-9 <= u + L <= c[1] + 1e-9)
+        cands = [c for c in cands if has(c)]
+        if len(cands) != 1:
+            return None, None, {'status': 'ambiguous',
+                                'reason': 'several stretches between its junctions match — not trimmed'}
+    if not cands:
+        return None, None, {'status': 'unresolved',
+                            'reason': 'its boundary junctions no longer bound a section here — not trimmed'}
+    a, b, pa, pb = cands[0]
+
+    def covered(s):
+        for off in ((0.0, L) if closed else (0.0,)):
+            if a - 1e-6 <= s.a + off and s.b + off <= b + 1e-6:
+                return True
+        return False
+    return (a, b, pa, pb), [s for s in secs if covered(s)], {'status': 'ok'}
+
+
+def resolve(trims, secs: dict, source_ids, processed=None, closed=None) -> tuple[dict, dict]:
+    """Match each trim to the section it names (exactly; else — M5 — by its
+    boundary junctions, `_by_junctions`). Returns
     ({source id: [(a, b, pa, pb)] removed intervals + exact end points},
-     {trim id: {'status': 'ok' | 'unresolved' | 'ambiguous' | 'missing source',
-                'reason', 'source', 'section'}})."""
+     {trim id: {'status': 'ok' | 'unresolved' | 'ambiguous' | 'inactive' |
+                'missing source', 'reason', 'source', 'section'
+                (+ 'via': 'junctions' when resolved by junction identity)}}).
+    `processed` / `closed` ({id: pts} / {id: bool}): the design geometry the
+    junction resolution checks `inside` on (absent: exact matching only)."""
     removed: dict = {}
     status: dict = {}
     for t in trims:
@@ -208,6 +311,27 @@ def resolve(trims, secs: dict, source_ids) -> tuple[dict, dict]:
                 info.update(status='ambiguous',
                             reason='several sections between the same paths match — not trimmed')
                 continue
+        if not cands and processed is not None:
+            # M5: resolved by its boundary JUNCTIONS (members joined / left, a crossing)
+            def inside_of(s_mid, pid=t.source_path_id):
+                pts = processed[pid]
+                cum = _cum_lengths(pts, bool(closed.get(pid)))
+                mid, _ = _locate_s(pts, cum, s_mid, bool(closed.get(pid)))
+                return {c: _point_in_polygon(mid, processed[c]) for c in sorted(t.inside or {})
+                        if c in processed and closed.get(c) and len(processed[c]) >= 3}
+            iv, covered, why = _by_junctions(t, secs.get(t.source_path_id, []), set(source_ids), inside_of)
+            if iv is None:
+                info.update(why)
+                continue
+            a, b, pa, pb = iv
+            info.update(status='ok', via='junctions',
+                        section=','.join(f'{q.source}:{q.index}' for q in covered) or None, a=a, b=b,
+                        pa=None if pa is None else [pa.x, pa.y], pb=None if pb is None else [pb.x, pb.y])
+            for q in covered:
+                if q.trimmed_by is None:
+                    q.trimmed_by = t.id
+            removed.setdefault(t.source_path_id, []).append((a, b, pa, pb))
+            continue
         if not cands:
             info.update(status='unresolved',
                         reason='the intersections that bounded it no longer exist — not trimmed')
