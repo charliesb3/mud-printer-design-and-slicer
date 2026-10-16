@@ -294,6 +294,8 @@ Sub-memory (Layer Assembly, read for Assembly / stacking work): `design-toolpath
 
 Reference documents: `design-toolpath/WALL_ARCHITECTURE.md` (wall / junction ownership plan — milestones M0–M10, the active plan) and `design-toolpath/DEFERRED_TOOLPATH_ARCHITECTURE.md` (deferred print paths — its own M0–M5 numbering; M0–M2 done, M3+ archived). The two M-numberings are independent.
 
+Tests: `design-toolpath/run_tests.sh fast | integration | golden | browser | full` (cost tiers — `design-toolpath/PROJECT_MEMORY.md` → "Testing workflow — COST TIERS"): focused tests + `fast` while coding, `integration` once stable, `golden` for geometry changes, `browser` for UI changes, `full` at checkpoints.
+
 This subproject concerns the environment for designing printable forms and translating those designs into machine instructions.
 
 It includes, but is not limited to:
