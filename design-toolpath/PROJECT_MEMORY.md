@@ -379,7 +379,7 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
   reappears (ending on the removed rectangle edge of the circle + rectangle
   case un-resolves BOTH trims); attaching to visible geometry keeps every
   trim. The snap fix removes the UI invitation, an Alt-placed / crossing
-  wall still triggers it. *FIXED by M5 (2026-10-15, uncommitted): trims are
+  wall still triggers it. *FIXED by M5 (2026-10-15, checkpointed): trims are
   bounded by persistent junctions — the former strict xfail
   `test_trim_ghost.py::test_attaching_to_a_removed_section_keeps_trims` is a
   passing regression (WALL_ARCHITECTURE.md "M5").*
@@ -1503,7 +1503,7 @@ Correction pass after the user's manual review (2026-10-15; in checkpoint `b4ccd
 - "Junctions, Ends & Corners" (per-owner: project junction default, per-junction, per-wall cap and Corner R);
 - the same controls in Wall Systems on the same state (OUTDATED on edit).
 Junction generation untouched.
-**M5 IMPLEMENTED 2026-10-15 (uncommitted, awaiting manual review): persistent
+**M5 IMPLEMENTED 2026-10-15 (manually reviewed, checkpointed `dce9366`): persistent
 junctions are authoritative for TRIM BOUNDARIES.**
 - A trim not matching its section exactly is resolved by its boundary junctions (`trim._by_junctions`). Members may join or leave a junction (`junctions.compatible`), and a wall crossing a removed stretch neither splits nor resurrects it.
 - Junction ids survive membership changes.

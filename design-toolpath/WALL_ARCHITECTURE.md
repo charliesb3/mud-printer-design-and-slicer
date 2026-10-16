@@ -1,6 +1,6 @@
 # Wall / Junction / Construction Architecture — FINAL
 
-**Status:** APPROVED (revision 4, 2026-10-15). **M0–M4 implemented 2026-10-15, manually reviewed (with the correction pass) and checkpointed (`b4ccd16`); golden re-baselined (full hashes) at the checkpoint. M5 implemented 2026-10-15, manually reviewed and checkpointed; M6 / M7 in progress (2026-10-16).** Revision 4 records the user's FINAL decisions (§F), which supersede the corresponding parts of §5, §6, §9 and §12.
+**Status:** APPROVED (revision 4, 2026-10-15). **M0–M4 implemented 2026-10-15, manually reviewed (with the correction pass) and checkpointed (`b4ccd16`); golden re-baselined (full hashes) at the checkpoint. M5 implemented 2026-10-15, manually reviewed and checkpointed (`dce9366`); M6 / M7 in progress (2026-10-16).** Revision 4 records the user's FINAL decisions (§F), which supersede the corresponding parts of §5, §6, §9 and §12.
 
 ## §F. FINAL PRODUCT DECISIONS (2026-10-15, supersede earlier text)
 

@@ -63,7 +63,7 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
   - The Designer's "Junctions, Ends & Corners": junction treatment / R, default + per-wall end caps, per-wall Corner treatment / R.
   - Wall Systems gets an "Architecture · shared with Designer" section built by the same Designer code on the same canonical state (undoable there, makes the generation OUTDATED, no Variant copies).
   - No geometry change; see `../WALL_ARCHITECTURE.md` "Correction pass".
-- **M5 (2026-10-15, uncommitted, awaiting review): junctions are authoritative for TRIM BOUNDARIES.**
+- **M5 (2026-10-15, reviewed, checkpointed `dce9366`): junctions are authoritative for TRIM BOUNDARIES.**
   - Junction identity survives members joining / leaving (`junctions.compatible`).
   - Trims that no longer match exactly resolve between their boundary junctions (`trim._by_junctions`; exact match first, so byte-identical where they resolved before).
   - Status `inactive` / `unresolved` names the missing junction.
