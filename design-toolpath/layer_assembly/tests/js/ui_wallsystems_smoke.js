@@ -1,8 +1,8 @@
 // UI smoke test of the WALL SYSTEMS workspace (2026-10-11): the real
 // static/app.js + assembly.js + wallsystems.js + simulation.js against the
 // REAL backend, DOM stubbed. Run via layer_assembly/tests/test_wallsystems_ui.py.
-// Wall Groups (Designer) vs Wall Systems (workspace); create / rename /
-// assign / delete; mixed constructions in one group; one construction across
+// walls own thickness (Designer) vs Wall Systems (workspace); create / rename /
+// assign (per-wall checklist) / delete; one construction per wall; one construction across
 // thicknesses; edits generate NOTHING; undo / redo; explicit generation +
 // status NOT GENERATED / GENERATING / CURRENT / OUTDATED; layer-by-layer
 // inspection (Base view, ◀ ▶, number, Top / orbit, Envelope / Generated,
@@ -89,9 +89,11 @@ eval(src + `
          'wsys-show-env', 'wsys-show-gen', 'wsys-prev', 'wsys-next', 'wsys-layer-input', 'wsys-support', 'wsys-undo', 'wsys-redo']
           .every(id => html.includes('id="' + id + '"')) && />Generate Wall Systems</.test(html),
         'the workspace controls: a prominent Generate Wall Systems, the systems, the inspection view');
-  check(html.includes('<div class="sidebar-head">Wall Groups</div>') && !html.includes('id="wallsys-props"'),
-        'the Designer sidebar is Wall Groups (no construction panel there)');
-  // ---- Designer: ARCHITECTURE (Wall Groups) ----
+  check(html.includes('<div class="sidebar-head">Junctions, Ends &amp; Corners</div>') && !html.includes('Wall Groups</div>') &&
+        !html.includes('id="wallsys-props"') && !html.includes('id="wsys-geom"') &&
+        html.includes('id="wsys-arch-section"') && html.includes('Architecture · shared with Designer'),
+        'the Designer sidebar: Junctions, Ends & Corners — no Wall Groups; Wall Systems: an Architecture section shared with the Designer (no Wall-System geometry panel)');
+  // ---- Designer: ARCHITECTURE (each wall its own thickness; 2026-10-15) ----
   addPrimitive('RectanglePath');
   const R = layer.source_paths[0];
   addPrimitive('LinePath');
@@ -101,12 +103,14 @@ eval(src + `
   const Cc = layer.source_paths[2];
   Cc.cx = 420; Cc.cy = 200; _computePrimitivePoints(Cc);
   addPrimitive('LinePath');
-  const U = layer.source_paths[3];                     // an UNGROUPED wall (no Wall Group)
+  const U = layer.source_paths[3];                     // a THIN wall (no thickness yet)
   U.start = [400, 340]; U.end = [520, 340]; _computePrimitivePoints(U);
   layer.material.physical = true;
-  const G1 = _wgNew([R.id, Ln.id], 10), G2 = _wgNew([Cc.id], 12);
+  setWallProps([R.id, Ln.id], { thickness: 10 });
+  setWallProps([Cc.id], { thickness: 12 });
   historyCheckpoint();
-  check(!layer.wall_systems && project.wall_systems.length === 0, 'Wall Groups and Wall Systems are separate structures');
+  check(!layer.wall_systems && project.wall_systems.length === 0 && !('wall_groups' in layer),
+        'walls own their thickness; Wall Systems (construction) are separate');
   asm.state.sections = [{ design_id: 'base', height: 6 }];
   setWorkspace('assembly');
   await asmResolve();
@@ -118,58 +122,64 @@ eval(src + `
   check(wsys.layer === -1 && wsys._base && wsys._base.length > 0 && /Base design/.test(txt('wsys-layer-info')),
         'opens on the envelope of the Base design, from above');
   check(/No Wall System \\(prints Hollow/.test(txt('wsys-list')) && /no thickness \\(a single bead\\): [^|]*Line/.test(txt('wsys-list')),
-        'walls without a Wall System print Hollow; an ungrouped wall without thickness is a single bead (said)');
-  check(_wsysCatalog().walls.length === 4 && _wsysCatalog().walls.find(w => w.id === U.id).group === null,
-        'EVERY architectural wall is listed, the ungrouped one included');
+        'walls without a Wall System print Hollow; a thin wall is a single bead (said)');
+  check(_wsysCatalog().walls.length === 4 && !('groups' in _wsysCatalog()), 'EVERY wall is listed — no groups');
   const n0 = { gen: reqs('/api/wallsystems/generate'), res: reqs('/api/assembly/resolve'), eff: reqs('/api/effective_paths'),
                plan: reqs('/api/assembly/print_plan'), geo: reqs('/api/assembly/geometry') };
-  const S1 = wsysNew('interleaved', { groups: [G1.id] });
-  check(S1.type === 'interleaved' && S1.params.paths === 4 && S1.groups.join() === G1.id && !('thickness' in S1),
-        'a new Wall System assigned to a whole Wall Group (no thickness of its own)');
+  const S1 = wsysNew('interleaved', { members: [R.id, Ln.id] });
+  check(S1.type === 'interleaved' && S1.params.paths === 4 && S1.members.join() === [R.id, Ln.id].join() &&
+        !('thickness' in S1) && !('groups' in S1) && !('designs' in S1),
+        'a new Wall System assigned to WALLS (no thickness of its own, no groups, no design scope)');
   const panel = el('wsys-props');
-  const kids0 = all(panel).map(c => c.textContent);
-  check(!!row(panel, 'Construction') && !!row(panel, 'Add Wall Group…') && !!row(panel, 'Add wall…') && !!row(panel, 'Name') &&
-        !row(panel, 'Wall Alignment') && /Wall Thickness: 10 in/.test(txt('wsys-props')) &&
-        all(panel).some(c => c.className === 'prop-input wsys-thick') &&
-        kids0.indexOf('Add wall…') < kids0.indexOf('Add Wall Group…'),
-        'assignment (individual walls first, Wall Groups as bulk), the walls\u2019 architectural thickness, construction and parameters');
+  const wallRow = id => all(el('wsys-props')).find(c => c.dataset && c.dataset.wall === id);
+  check(!!row(panel, 'Construction') && !!row(panel, 'Name') && !row(panel, 'Wall Alignment') && !row(panel, 'Add Wall Group…') &&
+        /Wall Thickness: 10 in/.test(txt('wsys-props')) && [R, Ln, Cc, U].every(w => wallRow(w.id)) &&
+        all(panel).filter(c => c.className === 'wsys-check').length === 4,
+        'assignment = a CHECKLIST of every wall (with its thickness), then construction and parameters');
   check(row(panel, 'Construction').children[1].children.map(o => o.textContent).join('|') ===
         'Single / Out-and-Back Wall|Hollow / Skins Only|Skin + Web|Parallel Walls|Interleaved Waves|Linked Waves|Chained Loop',
         'the seven constructions');
   const S2 = wsysNew('chain', { members: [Ln.id] });
-  check(wsysSystemOf(Ln.id, G1.id) === S2 && wsysSystemOf(R.id, G1.id) === S1, 'mixed constructions within one Wall Group');
+  check(wsysSystemOf(Ln.id) === S2 && wsysSystemOf(R.id) === S1 && !S1.members.includes(Ln.id),
+        'a wall has ONE construction: assigning it elsewhere moves it');
   wsys.pick = S1.id; wsysRender();
-  const addG = row(el('wsys-props'), 'Add Wall Group…').children[1];
-  addG.value = G2.id; addG.onchange();
-  check(S1.groups.join() === [G1.id, G2.id].join() && /10 in, 12 in/.test(txt('wsys-props')),
-        'one construction across Wall Groups of different thickness');
+  const cbC = wallRow(Cc.id).children[0];
+  cbC.checked = true; cbC.onchange();
+  check(_wsysSys(S1.id).members.includes(Cc.id) && /10 in, 12 in/.test(txt('wsys-props')),
+        'one construction across walls of different thickness (ticked in the checklist)');
   const p6 = row(el('wsys-props'), 'Number of Paths').children[1];
   p6.value = '6'; p6.onchange();
   check(_wsysSys(S1.id).params.paths === 6, 'a construction parameter edited');
-  // UNGROUPED wall: assigned directly (no Wall Group needed); its own thickness edited here
+  // a THIN wall assigned directly; its thickness set here
   const S4 = wsysNew('parallel', { members: [U.id] });
-  check(wsysSystemOf(U.id, null) === S4 && /No thickness \\(single bead\\)/.test(txt('wsys-props')),
-        'an ungrouped wall is assigned directly; without a thickness it is said to stay a single bead');
-  const tU = all(el('wsys-props')).find(c => c.className === 'prop-input wsys-thick');
-  tU.value = '8'; tU.onchange();
+  check(wsysSystemOf(U.id) === S4 && /Thin \\(single bead\\)/.test(txt('wsys-props')),
+        'a thin wall is assigned directly; without a thickness it is said to stay a single bead');
+  const tU = wallRow(U.id).children[2].children[1];       // (the shared thickness control: − value +)
+  check(tU.value === 'THIN' && wallRow(U.id).children[3].textContent === '5.25 in',
+        'the checklist shows a THIN wall as THIN + its physical width');
+  wallRow(U.id).children[2].children[2].onclick();
+  check(U.envelope && U.envelope.thickness === 5.5, '+ from THIN here: the first 0.5 in step at or above the THIN width (5.25 → 5.5)');
+  wallRow(U.id).children[2].children[0].onclick();
+  check(!U.envelope, '− from the minimum: THIN again');
+  wallRow(U.id).children[2].children[1].value = '8'; wallRow(U.id).children[2].children[1].onchange();
   check(U.envelope && U.envelope.thickness === 8 && _effectiveWall(U).wall.thickness === 8 && !U.wall,
-        'its OWN thickness is set upstream (the architectural envelope of the path), not a second value');
+        'its thickness is set upstream (the wall’s own envelope), not a second value');
   const pl0 = await window.Designer.designsForBackend();
-  check(JSON.stringify(pl0).includes('"envelope":{"align":"auto","print_reference":false,"thickness":8}'),
-        'the Designer document carries it (Designer + Assembly geometry follow)');
+  check(JSON.stringify(pl0).includes('"envelope":{"align":"center","print_reference":false,"thickness":8}'),
+        'the Designer document carries it, Centered by default (Designer + Assembly geometry follow)');
   wsysUndo();
-  check(!U.envelope && wsysSystemOf(U.id, null) && wsysSystemOf(U.id, null).id === S4.id, 'undo: the thickness reverts, the assignment stays');
+  check(!U.envelope && wsysSystemOf(U.id) && wsysSystemOf(U.id).id === S4.id, 'undo: the thickness reverts, the assignment stays');
   wsysRedo();
   check(U.envelope && U.envelope.thickness === 8, 'redo');
-  // a GROUPED wall's thickness = its Wall Group's, shared
+  // a wall's thickness is ITS OWN: the other walls of its construction keep theirs
   wsys.pick = S2.id; wsysRender();
-  const tL = all(el('wsys-props')).find(c => c.className === 'prop-input wsys-thick');
+  const tL = wallRow(Ln.id).children[2].children[1];
   tL.value = '10.5'; tL.onchange();
-  check(G1.thickness === 10.5 && _effectiveWall(R).wall.thickness === 10.5 && _effectiveWall(Ln).wall.thickness === 10.5 &&
-        wsysSystemOf(Ln.id, G1.id) === _wsysSys(S2.id) && wsysSystemOf(R.id, G1.id).id === S1.id,
-        'a grouped wall: the Wall Group thickness changes (all its walls); construction assignments preserved');
+  check(Ln.envelope.thickness === 10.5 && R.envelope.thickness === 10 &&
+        wsysSystemOf(Ln.id) === _wsysSys(S2.id) && wsysSystemOf(R.id).id === S1.id,
+        'one wall’s thickness changed (the others keep theirs); construction assignments preserved');
   wsysUndo();
-  check(G1.thickness === 10, 'undo restores the group thickness');
+  check(Ln.envelope.thickness === 10, 'undo restores it');
   wsys.pick = S1.id; wsysRender();
   const nm = row(el('wsys-props'), 'Name').children[1];
   nm.value = 'Waves'; nm.onchange();
@@ -268,16 +278,51 @@ eval(src + `
   setWorkspace('wallsystems');
   await wsysGenerate();
   check(wsysStatus() === 'current' && wsys.gen.layers.length === 6, 'regenerated for the new stack (6 layers)');
+  // ---- ARCHITECTURE edited from this workspace (2026-10-15 correction): the
+  // Designer's own Junctions, Ends & Corners controls on the SAME canonical
+  // state — never Wall-System properties; every edit OUTDATES the generation ----
+  {
+    wsysRender();
+    const arch = () => all(el('wsys-arch'));
+    const ctl = id => arch().find(c => c.id === 'wsys-arch-' + id);
+    check(!!ctl('junction-style') && !!ctl('cap-style') && !!ctl('cap-' + Ln.id) && !!ctl('corner-' + R.id) &&
+          !ctl('corner-' + Cc.id) && !ctl('cap-' + R.id),
+          'Wall Systems: junction treatment, end caps (open walls), corners (walls with corners) — the Designer\u2019s controls');
+    const ws0 = JSON.stringify(project.wall_systems), depth = wsys.hist.undo.length;
+    ctl('junction-style').value = 'round'; ctl('junction-style').onchange();
+    await wsysNoteState();
+    check(layer.junction_style === 'round' && wsysStatus() === 'outdated' && wsys.hist.undo.length === depth + 1,
+          'junction treatment edited here: the canonical document value; the generation is OUTDATED; one undo step');
+    ctl('junction-radius').value = '4'; ctl('junction-radius').onchange();
+    check(layer.junction_radius === 4, 'junction radius');
+    ctl('corner-' + R.id).value = 'round'; ctl('corner-' + R.id).onchange();
+    check(R.corner_radius === 2, 'corner treatment Rounded: the wall\u2019s OWN Corner R (2 in)');
+    ctl('corner-r-' + R.id).value = '3'; ctl('corner-r-' + R.id).onchange();
+    ctl('cap-' + Ln.id).value = 'full_round'; ctl('cap-' + Ln.id).onchange();
+    check(R.corner_radius === 3 && Ln.cap && Ln.cap.style === 'full_round', 'Corner R and a wall\u2019s own end cap');
+    check(JSON.stringify(project.wall_systems) === ws0, 'no Wall-System copy of any architectural value');
+    updatePropPanel();
+    const dg = all(el('walls-geom'));
+    check(dg.find(c => c.id === 'walls-junction-style').value === 'round' && dg.find(c => c.id === 'walls-junction-radius').value === 4 &&
+          dg.find(c => c.id === 'walls-corner-' + R.id).value === 'round' && dg.find(c => c.id === 'walls-cap-' + Ln.id).value === 'full_round',
+          'the Designer\u2019s Junctions, Ends & Corners shows the same values (one state, two editing surfaces)');
+    await wsysNoteState();
+    check(wsysStatus() === 'outdated', 'still OUTDATED until regenerated');
+    for (let k = 0; k < 5; k++) wsysUndo();
+    await wsysNoteState();
+    check(layer.junction_style !== 'round' && !R.corner_radius && !Ln.cap && wsysStatus() === 'current',
+          'undo here restores the architecture — CURRENT again (the same design as generated)');
+  }
   wsysSetThickness(U.id, 9);
   await wsysNoteState();
   check(wsysStatus() === 'outdated' && U.envelope.thickness === 9, 'a thickness edit from this workspace makes the generation OUTDATED');
   wsysSetThickness(U.id, 8);
   await wsysNoteState();
   setWorkspace('designer');
-  G1.thickness = 11; historyCheckpoint();
+  R.envelope.thickness = 11; historyCheckpoint();
   setWorkspace('wallsystems');
   await wsysNoteState();
-  check(wsysStatus() === 'outdated', 'a Designer change (Wall Group thickness): OUTDATED');
+  check(wsysStatus() === 'outdated', 'a Designer change (a wall thickness): OUTDATED');
   // ---- background + cancel ----
   const pc = wsysGenerate();
   check(wsysStatus() === 'generating', 'generating in the background');
@@ -323,19 +368,50 @@ eval(src + `
   setWorkspace('wallsystems'); await wsysShow();
   // ---- SAVE / OPEN ----
   const P = await projectState();
-  check(P.wall_systems.length === 3 && P.wall_systems.some(s => s.name === 'Waves' && s.groups.includes(G2.id)),
+  check(P.wall_systems.length === 3 && P.wall_systems.some(s => s.name === 'Waves' && s.members.includes(Cc.id)),
         'the project state carries the Wall Systems');
   const saved = await _post('/api/project/save', { project: P });
-  check(saved.file.schema_version === 6 && JSON.stringify(saved.file.project.wall_systems) === JSON.stringify(P.wall_systems),
-        'saved (schema 4) with the Wall Systems');
+  check(saved.file.schema_version === 7 && JSON.stringify(saved.file.project.wall_systems) === JSON.stringify(P.wall_systems),
+        'saved (schema 7) with the Wall Systems');
   global.confirm = () => true;
   await openProjectText(JSON.stringify(saved.file), 'ws.muddesign');
-  check(JSON.stringify(project.wall_systems) === JSON.stringify(P.wall_systems) && layer.wall_groups.length === 2 &&
+  check(JSON.stringify(project.wall_systems) === JSON.stringify(P.wall_systems) && !('wall_groups' in layer) && layer.source_paths.find(p => p.id === R.id).envelope.thickness === 11 &&
         layer.source_paths.find(p => p.id === U.id).envelope.thickness === 8 &&
         wsysStatus() === 'not_generated' && !wsys.hist.undo.length,
-        'Open: Wall Systems, Wall Groups and the own wall thickness restored; nothing generated yet');
+        "Open: Wall Systems and every wall's own thickness restored; nothing generated yet");
+  // (M4) the persistent junction records (shadow) travel opaquely: their ids survive Save / Open / Save
+  const J0 = saved.file.project.junctions;
+  check(J0 && J0.mode === 'shadow' && JSON.stringify(project.junctions) === JSON.stringify(J0),
+        'Open: the junction records (shadow) are kept as saved');
+  const saved2 = await _post('/api/project/save', { project: await projectState() });
+  check(JSON.stringify(saved2.file.project.junctions.records.map(r => r.id)) === JSON.stringify(J0.records.map(r => r.id)),
+        'Save again: the same junction ids');
   newProject();
-  check(project.wall_systems.length === 0 && (layer.wall_groups || []).length === 0, 'New Project: no Wall Systems, no Wall Groups');
+  check(project.wall_systems.length === 0 && layer.source_paths.length === 0 && !project.junctions, 'New Project: no Wall Systems, no walls, no junction records');
+  // ---- a VARIANT open: architecture edited from Wall Systems goes to its owner — no Variant copy ----
+  {
+    addPrimitive('RectanglePath'); addPrimitive('LinePath');
+    const [VR, VL] = layer.source_paths;
+    VL.start = [140, 330]; VL.end = [260, 330]; _computePrimitivePoints(VL);
+    setWallProps([VR.id, VL.id], { thickness: 10 });
+    historyCheckpoint();
+    const v1 = createDerivedDesign('V1', 'base');
+    await editDesign(v1);
+    setWorkspace('wallsystems'); await wsysShow();
+    const ctl = id => all(el('wsys-arch')).find(c => c.id === 'wsys-arch-' + id);
+    ctl('cap-' + VL.id).value = 'full_round'; ctl('cap-' + VL.id).onchange();
+    ctl('corner-' + VR.id).value = 'round'; ctl('corner-' + VR.id).onchange();
+    ctl('junction-style').value = 'round'; ctl('junction-style').onchange();
+    await window.Designer.designsForBackend();             // (syncs the open Variant)
+    const B = project.baseDoc, dl = project.deltas[v1] || {};
+    const bp = id => B.source_paths.find(p => p.id === id);
+    check(bp(VL.id).cap && bp(VL.id).cap.style === 'full_round' && bp(VR.id).corner_radius === 2 && B.junction_style === 'round',
+          'Variant open: the cap, Corner R and junction treatment are written to their owner (Base)');
+    check(!JSON.stringify(dl.patch || {}).includes('full_round') && !JSON.stringify(dl.patch || {}).includes('corner_radius') &&
+          !('junction_style' in (dl.settings || {})),
+          '… and the Variant stores no copy of them');
+    await editDesign('base');
+  }
   console.log('UI WALL SYSTEMS SMOKE PASSED');
 })().catch(e => { console.error(e); process.exit(1); });
 `);

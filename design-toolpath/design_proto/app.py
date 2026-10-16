@@ -65,6 +65,8 @@ def _deserialise_path(d: dict):
     # (Assembly profile variants: a ring cut open keeps its ring's wall SIDE —
     # 'left' / 'right' of its own direction — inside its Wall System)
     p.align_override = d.get('align_override') or None
+    # (M3, 2026-10-15: a wall's OWN end-cap shape; absent → the project default)
+    p.cap = dict(d['cap']) if isinstance(d.get('cap'), dict) else None
     return p
 
 
@@ -288,8 +290,8 @@ def _apply_lineage(layer, data):
     if len(designs) < 2 or lin.get('id') is None:
         return
     from layer_design import DesignLibrary
-    from wall_groups import is_grouped
-    grouped = any(is_grouped(d.get('document') or {}) or 'wall_groups' in (d.get('patch') or {}) for d in designs)
+    from walls import is_wall_document
+    grouped = any(is_wall_document(d.get('document')) for d in designs if d.get('parent') is None)
     lib = DesignLibrary(designs, (data.get('project_wall_systems') or []) if grouped else None)
     active = lib.get(lin['id'])
     doc = lin.get('document')
@@ -317,10 +319,10 @@ def _effective_cached(data):
     # WALL GROUP documents (2026-10-11): composed into the build format —
     # with the project's Wall Systems (payload `wall_systems`), or as
     # ARCHITECTURE only for the Designer's envelope view (`envelope`)
-    from wall_groups import compose, is_grouped
+    from walls import compose, is_wall_document
     envelope = bool(data.get('envelope'))
     bdata = data
-    if is_grouped(data):
+    if is_wall_document(data):
         did = (data.get('lineage') or {}).get('id')
         # (the payload IS the document: the project's Wall Systems travel as
         # `project_wall_systems`)

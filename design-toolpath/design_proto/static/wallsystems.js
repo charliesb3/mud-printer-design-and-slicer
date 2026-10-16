@@ -3,18 +3,19 @@
 // Print Simulation.
 //
 // The PROJECT's printable constructions (`project.wall_systems`,
-// design_proto/wall_groups.py):
-//   { id, name, type, params, web, members: [wall ids], groups: [Wall Group ids], designs: null | [ids] }
-// assigned to individual walls (primary — EVERY architectural wall, grouped or
-// not) or whole Wall Groups (bulk). A wall's system: the one listing the wall
-// itself, else the one listing its group, else none (Hollow: its two skins; a
-// wall without thickness stays a single bead). Walls of one group may print
-// differently; one system may span groups of different thickness.
+// design_proto/walls.py — 2026-10-15: Wall Groups removed):
+//   { id, name, type, params, web, members: [wall ids] }
+// assigned to WALLS (a checklist: several at once), the same in every layout
+// state. A wall's system: the one listing it, else none (Hollow: its two
+// skins; a THIN wall stays a single bead). One system may span walls of
+// different thickness.
 //
-// THICKNESS is architecture: edited here it changes the authoritative value
-// upstream — a grouped wall's Wall Group (shared by its walls), an ungrouped
-// wall's own envelope (`path.envelope`) — via window.Designer.setWallThickness;
-// the Designer and Assembly follow, generated geometry becomes OUTDATED.
+// THICKNESS is architecture: edited here it changes the wall's OWN envelope
+// (`path.envelope`, its owner design) via window.Designer.setWallThickness;
+// the Designer and Assembly follow, generated geometry becomes OUTDATED. The
+// same holds for the "Architecture" section (junction / end-cap / corner
+// shape — the Designer's own controls, `_wsysRenderArch`): a second editing
+// surface for the same canonical state, never Wall-System properties.
 //
 // Nothing is generated while editing: "Generate Wall Systems" runs the
 // existing full-resolution pipeline for the whole assembled building
@@ -65,11 +66,9 @@ function _wsysSys(id) { return _wsysList().find(s => s.id === id) || null; }
 function _wsysLabel(s) { return (s && (s.name || s.id)) || ''; }
 function _wsysTypeLabel(t) { return (WALL_SYSTEMS[t] && WALL_SYSTEMS[t].label) || t; }
 
-// the system a wall uses (the backend rule: wall_groups.system_of)
-function wsysSystemOf(wallId, groupId) {
-  const L = _wsysList();
-  return L.find(s => (s.members || []).includes(wallId)) ||
-         L.find(s => groupId && (s.groups || []).includes(groupId)) || null;
+// the system a wall uses (the backend rule: walls.system_of — the first listing it)
+function wsysSystemOf(wallId) {
+  return _wsysList().find(s => (s.members || []).includes(wallId)) || null;
 }
 
 // ---- generation status --------------------------------------------------------------
@@ -140,7 +139,6 @@ function wsysSetThickness(wallId, t) { _wsysEdit(() => window.Designer.setWallTh
 
 function _wsysNewId() {
   const taken = new Set(_wsysList().map(s => s.id));
-  for (const g of _wsysCatalog().groups) taken.add(g.id);
   let k = 1;
   while (taken.has(`S${k}`)) k++;
   return `S${k}`;
@@ -151,28 +149,23 @@ function wsysNew(type = 'skin_web', assign = {}) {
     const L = _wsysList();
     let k = L.length + 1;
     while (L.some(s => s.name === `Wall System ${k}`)) k++;
-    const s = { id: _wsysNewId(), name: `Wall System ${k}`, type: 'skin_web', params: {}, members: [], groups: [],
-                designs: null, web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } };
+    const s = { id: _wsysNewId(), name: `Wall System ${k}`, type: 'skin_web', params: {}, members: [],
+                web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } };
     _wsSetType(s, type);
     L.push(s);
-    for (const g of assign.groups || []) _wsysAssignGroup(s, g);
     for (const w of assign.members || []) _wsysAssignWall(s, w);
     wsys.pick = s.id;
     created = s;
   });
   return created;
 }
-function _wsysAssignGroup(s, gid) {          // a group belongs to at most ONE system
-  for (const x of _wsysList()) x.groups = (x.groups || []).filter(g => g !== gid);
-  if (s && !s.groups.includes(gid)) s.groups.push(gid);
-}
 function _wsysAssignWall(s, wid) {           // a wall is listed by at most ONE system
   for (const x of _wsysList()) x.members = (x.members || []).filter(m => m !== wid);
   if (s && !s.members.includes(wid)) s.members.push(wid);
 }
-function wsysAssignGroup(sid, gid) { _wsysEdit(() => _wsysAssignGroup(_wsysSys(sid), gid)); }
 function wsysAssignWall(sid, wid) { _wsysEdit(() => _wsysAssignWall(_wsysSys(sid), wid)); }
-function wsysUnassignGroup(sid, gid) { _wsysEdit(() => { const s = _wsysSys(sid); if (s) s.groups = s.groups.filter(g => g !== gid); }); }
+// several walls at once (one undo step): the checklist's "all unassigned" etc.
+function wsysAssignWalls(sid, wids) { _wsysEdit(() => { const s = _wsysSys(sid); for (const w of wids) _wsysAssignWall(s, w); }); }
 function wsysUnassignWall(sid, wid) { _wsysEdit(() => { const s = _wsysSys(sid); if (s) s.members = s.members.filter(m => m !== wid); }); }
 function wsysSetType(sid, type) { _wsysEdit(() => { const s = _wsysSys(sid); if (s) _wsSetType(s, type); }); }
 function wsysRename(sid, name) { _wsysEdit(() => { const s = _wsysSys(sid); if (s) s.name = (name || '').trim() || s.id; }); }
@@ -186,7 +179,7 @@ function wsysDelete(sid) {
 
 // the walls effectively using a system, and their architectural thicknesses
 function _wsysWallsOf(s) {
-  return _wsysCatalog().walls.filter(w => wsysSystemOf(w.id, w.group) === s);
+  return _wsysCatalog().walls.filter(w => wsysSystemOf(w.id) === s);
 }
 function _wsysThicknesses(s) {
   const th = new Set();
@@ -542,6 +535,7 @@ function wsysRender() {
   _wsysRenderStatus();
   _wsysRenderList();
   _wsysRenderGeometry();
+  _wsysRenderArch();
   _wsysRenderLayer();
   _wsysRenderFindings();
   wsysDraw();
@@ -665,55 +659,21 @@ function _wsysRenderStatus() {
 // and end-cap treatment of the design being edited — defaults, then each
 // wall-face junction (Default / Miter / Rounded). The same document fields
 // and algorithms as before; edits are part of this workspace's undo.
-function _wsysRenderGeometry() {
-  const box = document.getElementById('wsys-geom'), title = document.getElementById('wsys-geom-title');
-  if (!box || !window.Designer.wallGeometry) return;
-  _wsysClear(box);
-  const G = window.Designer.wallGeometry();
-  const D = (window.Designer.listDesigns() || []).find(d => d.id === G.design);
-  if (title) title.textContent = `Wall Geometry · ${D ? D.name : G.design}`;
-  const set = patch => _wsysEdit(() => window.Designer.setWallGeometry(patch));
-  const row = (label, input, unit) => {
-    const r = _el('div', 'prop-row');
-    r.appendChild(_el('span', 'prop-label', label));
-    r.appendChild(input);
-    if (unit) r.appendChild(_el('span', 'prop-unit', unit));
-    box.appendChild(r);
-  };
-  const select = (id, value, options, onChange) => {
-    const s = _el('select', 'prop-input');
-    s.id = id;
-    for (const [v, t] of options) { const o = _el('option', null, t); o.value = v; s.appendChild(o); }
-    s.value = value;
-    s.onchange = () => onChange(s.value);
-    return s;
-  };
-  const num = (id, value, step, onChange) => {
-    const n = _el('input', 'prop-input');
-    Object.assign(n, { id, type: 'number', min: 0, step, value });
-    n.onchange = () => onChange(Math.max(0, parseFloat(n.value) || 0));
-    return n;
-  };
-  row('Junctions', select('wsys-junction-style', G.junction_style, [['miter', 'Miter'], ['round', 'Rounded']],
-                          v => set({ junction_style: v })));
-  if (G.junction_style === 'round') row('Junction R', num('wsys-junction-radius', G.junction_radius, 0.5, v => set({ junction_radius: v })), 'in');
-  row('End caps', select('wsys-cap-style', G.cap_style, [['flat', 'Flat'], ['rounded_corners', 'Rounded Corners'],
-                                                         ['full_round', 'Full Round']], v => set({ cap_style: v })));
-  if (G.cap_style === 'rounded_corners') row('End R', num('wsys-cap-radius', G.cap_corner_radius, 1, v => set({ cap_corner_radius: v })), 'in');
-  const J = window.Designer.wallJunctions ? window.Designer.wallJunctions() : [];
-  if (!J.length) { box.appendChild(_el('div', 'asm-calc', 'No wall-face junctions in this design.')); return; }
-  box.appendChild(_el('div', 'asm-calc', `Junctions (${J.length}) — each follows the default unless set:`));
-  const dflt = `Default (${G.junction_style === 'round' ? 'Rounded ' + G.junction_radius + ' in' : 'Miter'})`;
-  J.forEach((j, k) => {
-    const cur = j.treatment || 'default';
-    row(`◆ ${j.label}`, select(`wsys-junction-${k}`, cur, [['default', dflt], ['miter', 'Miter'], ['round', 'Rounded']],
-        v => _wsysEdit(() => window.Designer.setJunctionTreatment(j.key, v === 'default' ? null : v, j.radius))));
-    if (j.treatment === 'round')
-      row('  Radius', num(`wsys-junction-r-${k}`, j.radius, 0.5,
-          v => _wsysEdit(() => window.Designer.setJunctionTreatment(j.key, 'round', v))), 'in');
-    if (j.limited && j.actual_radius != null)
-      box.appendChild(_el('div', 'asm-diff', `  actual radius ${(+j.actual_radius).toFixed(1)} in (geometry limit)`));
-  });
+// (2026-10-15: the Wall Geometry panel — junction / end-cap SHAPE — moved to the
+// Designer's "Junctions & ends": it is architecture, the same in every layout
+// state; this workspace chooses construction only)
+function _wsysRenderGeometry() {}
+
+// ARCHITECTURE, convenience editing (2026-10-15 correction): the Designer's
+// "Junctions, Ends & Corners" controls, built by the Designer itself on the
+// SAME canonical state (project junction default + per-junction treatment,
+// each wall's own end cap and Corner R) — not Wall-System properties, no
+// Variant copies. An edit is a step of this workspace's undo and makes the
+// generation OUTDATED (it is in the generation key); regenerate to see it.
+function _wsysRenderArch() {
+  const box = document.getElementById('wsys-arch');
+  if (!box || !window.Designer.buildArchControls) return;
+  window.Designer.buildArchControls(box, { prefix: 'wsys-arch', wrap: fn => _wsysEdit(fn) });
 }
 
 function _wsysRenderList() {
@@ -734,7 +694,7 @@ function _wsysRenderList() {
     item.append(lab, _el('div', 'path-type', `${_wsysTypeLabel(s.type)} · ${_wsysWallsOf(s).length} walls`));
     list.appendChild(item);
   }
-  const loose = C.walls.filter(w => !wsysSystemOf(w.id, w.group));
+  const loose = C.walls.filter(w => !wsysSystemOf(w.id));
   const lh = loose.filter(w => w.thickness > 0), ls = loose.filter(w => !(w.thickness > 0));
   if (lh.length) _addNote(list, `No Wall System (prints Hollow — two skins): ${lh.map(w => w.label).join(', ')}`);
   if (ls.length) _addNote(list, `No Wall System, no thickness (a single bead): ${ls.map(w => w.label).join(', ')}`);
@@ -744,74 +704,39 @@ function _wsysRenderList() {
   if (edit) edit.style.display = '';
   const title = document.getElementById('wsys-edit-title');
   if (title) title.textContent = _wsysLabel(cur);
-  // ASSIGNMENT (2026-10-11 correction): INDIVIDUAL walls first — every
-  // architectural wall, grouped or not — then whole Wall Groups (bulk); each
-  // wall's THICKNESS editable here (its Wall Group's, shared; else its own)
+  // ASSIGNMENT (2026-10-15): a CHECKLIST of every wall — tick to give it this
+  // construction (a wall has at most one; ticking moves it here); its
+  // THICKNESS editable alongside (the wall's own architecture)
   _addSubTitle(panel, 'Walls');
-  const groupOf = gid => C.groups.find(x => x.id === gid);
-  const groupName = gid => { const g = groupOf(gid); return g ? `${g.name} (${g.thickness} in)` : gid; };
-  const wallOf = wid => C.walls.find(x => x.id === wid);
-  const wallName = wid => { const w = wallOf(wid); return w ? w.label : wid; };
-  const ADD = '__add';
-  const wc = C.walls.filter(w => !(cur.members || []).includes(w.id));
-  if (wc.length) {
-    addPropRowSelectTo(panel, 'Add wall…', ADD, [ADD, ...wc.map(w => w.id)], v => {
-      if (v !== ADD) wsysAssignWall(cur.id, v);
-    }, { [ADD]: '— choose a wall —', ...Object.fromEntries(wc.map(w => {
-      const o = wsysSystemOf(w.id, w.group);
-      return [w.id, w.label + (w.group ? ` · ${groupName(w.group)}` : (w.thickness > 0 ? ` · own ${w.thickness} in` : ' · single bead')) +
-                    (o ? ` (now ${_wsysLabel(o)})` : '')];
-    })) });
-  }
-  const thickRow = (cls, label, w, onX, xTitle) => {
-    const r = _el('div', 'prop-row ' + cls);
-    const nm = _el('span', 'prop-label', label);
+  const unassigned = C.walls.filter(w => !wsysSystemOf(w.id));
+  if (unassigned.length > 1)
+    _addButton(panel, `+ All ${unassigned.length} walls without a Wall System`, () => wsysAssignWalls(cur.id, unassigned.map(w => w.id)));
+  if (!C.walls.length) _addNote(panel, 'No walls yet: draw shapes in the Designer.');
+  for (const w of C.walls) {
+    const mine = (cur.members || []).includes(w.id), other = mine ? null : wsysSystemOf(w.id);
+    const r = _el('div', 'prop-row wsys-wall' + (mine ? ' wsys-member' : ''));
+    r.dataset.wall = w.id;
+    const cb = _el('input');
+    cb.type = 'checkbox'; cb.checked = mine; cb.className = 'wsys-check';
+    cb.title = mine ? `Unassign ${w.label}` : (other ? `Move ${w.label} here from ${_wsysLabel(other)}` : `Assign ${w.label}`);
+    cb.onchange = () => (cb.checked ? wsysAssignWall(cur.id, w.id) : wsysUnassignWall(cur.id, w.id));
+    const nm = _el('span', 'prop-label', w.label + (other ? ` (${_wsysLabel(other)})` : ''));
     nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    nm.title = label;
-    r.appendChild(nm);
-    if (w) {
-      const inp = _el('input', 'prop-input wsys-thick');
-      inp.type = 'number'; inp.step = '0.5'; inp.min = '0'; inp.value = String(w.thickness || 0);
-      inp.style.cssText = 'width:52px;flex:none';
-      inp.title = w.group ? `Wall Thickness of ${groupName(w.group)} — shared by its ${(groupOf(w.group) || { members: [] }).members.length} walls`
-                          : 'This wall’s own Wall Thickness (0 = a single bead)';
-      inp.onchange = () => wsysSetThickness(w.id, parseFloat(inp.value));
-      r.appendChild(inp);
-      r.appendChild(_el('span', 'prop-unit', w.group ? 'in ▣' : 'in'));
-    }
-    if (onX) {
-      const x = _el('button', 'remove-btn', '×');
-      x.title = xTitle;
-      x.onclick = onX;
-      r.appendChild(x);
-    }
+    nm.title = nm.textContent;
+    // (the Designer's own thickness control: THIN ↔ first step at / above the THIN width)
+    const [ctl, unit] = window.Designer.thicknessControl({
+      value: w.thickness, thin: w.thin_width, compact: true, onSet: t => wsysSetThickness(w.id, t),
+      title: 'This wall’s architectural thickness (shared with the Designer; THIN = one bead, its width set by the material)' });
+    ctl.className += ' wsys-thick';
+    r.append(cb, nm, ctl, unit);
     panel.appendChild(r);
-  };
-  if (!(cur.groups || []).length && !(cur.members || []).length) _addNote(panel, 'No walls assigned yet.');
-  for (const wid of cur.members || [])
-    thickRow('wsys-member', wallName(wid), wallOf(wid), () => wsysUnassignWall(cur.id, wid), `Unassign ${wallName(wid)}`);
-  for (const gid of cur.groups || []) {
-    const g = groupOf(gid);
-    thickRow('wsys-group', `▣ ${g ? g.name : gid} — whole group`, g && g.members.length ? wallOf(g.members[0]) : null,
-             () => wsysUnassignGroup(cur.id, gid), `Unassign ${groupName(gid)}`);
-    const via = (g ? g.members : []).filter(m => wsysSystemOf(m, gid) === cur && !(cur.members || []).includes(m));
-    if (via.length) _addNote(panel, `via ${g ? g.name : gid}: ${via.map(wallName).join(', ')}`);
-  }
-  const gc = C.groups.filter(g => !(cur.groups || []).includes(g.id));
-  if (gc.length) {
-    addPropRowSelectTo(panel, 'Add Wall Group…', ADD, [ADD, ...gc.map(g => g.id)], v => {
-      if (v !== ADD) wsysAssignGroup(cur.id, v);
-    }, { [ADD]: '— all walls of a group —', ...Object.fromEntries(gc.map(g => {
-      const o = L.find(s => (s.groups || []).includes(g.id));
-      return [g.id, groupName(g.id) + (o ? ` (from ${_wsysLabel(o)})` : '')];
-    })) });
   }
   const thin = _wsysWallsOf(cur).filter(w => !(w.thickness > 0));
   if (thin.length && cur.type !== 'single')
-    _addNote(panel, `No thickness (single bead) — set one to fill it with ${_wsysTypeLabel(cur.type)}: ${thin.map(w => w.label).join(', ')}`);
+    _addNote(panel, `Thin (single bead) — give a thickness to fill it with ${_wsysTypeLabel(cur.type)}: ${thin.map(w => w.label).join(', ')}`);
   const th = _wsysThicknesses(cur);
   _addNote(panel, (th.length ? `Wall Thickness: ${th.map(t => t + ' in').join(', ')}. ` : '') +
-                  'Thickness is the architecture (shared with the Designer and Assembly): ▣ = the wall’s Wall Group (all its walls).');
+                  'Thickness is each wall’s architecture (shared with the Designer and Assembly).');
   // CONSTRUCTION
   _addSubTitle(panel, 'Construction');
   addPropRowText(panel, 'Name', cur.name || '', v => wsysRename(cur.id, v));

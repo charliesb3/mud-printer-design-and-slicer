@@ -152,22 +152,32 @@ def test_save_writes_a_versioned_file(client):
     assert [d['id'] for d in f['project']['designer']['designs']] == ['base', 'd1', 'd2']
 
 
+def migrated_designs():
+    from walls import migrate_parts
+    ds, _, _, rep = migrate_parts(designs())
+    assert rep and all('dropped' in r for r in rep)
+    return ds
+
+
 def test_save_open_save_preserves_the_authoring_state(client):
     p0 = project()
     _, r1 = save(client, p0)
     text = PF.dumps(r1['file'])
     code, o = open_(client, text)
-    assert code == 200 and not o.get('warnings'), o
+    # (M1, 2026-10-15: the fixture's Variants override persistent wall properties — reported, kept)
+    assert code == 200 and all('overrides persistent wall' in w for w in o.get('warnings') or []), o
     _, r2 = save(client, o['project'])
     assert r2['file']['project'] == r1['file']['project']               # save → open → save: identical
     # … and identical to what was saved, field by field
     P = o['project']
     assert P['name'] == 'Courtyard house'
-    assert P['designer']['designs'] == designs()
+    # (schema 7: the fixture's Variant-stored wall properties / construction are
+    # dropped on save — reported; the reference is the fixture as migrated)
+    assert P['designer']['designs'] == migrated_designs()
     assert P['designer']['active_design'] == 'd1'
     assert P['assembly']['state'] == assembly_state() and P['assembly']['header_counter'] == 2
     # the open design's document = what the Layer Design library resolves
-    assert o['active_document'] == DesignLibrary(designs()).document('d1')
+    assert o['active_document'] == DesignLibrary(migrated_designs()).document('d1')
     # the Assembly reads back to the same model
     assert Assembly.from_dict(P['assembly']['state']).to_dict() == Assembly.from_dict(assembly_state()).to_dict()
 
@@ -175,7 +185,7 @@ def test_save_open_save_preserves_the_authoring_state(client):
 def test_every_design_resolves_to_the_same_document(client):
     _, r = save(client, project())
     _, o = open_(client, PF.dumps(r['file']))
-    a, b = DesignLibrary(designs()), DesignLibrary(o['project']['designer']['designs'])
+    a, b = DesignLibrary(migrated_designs()), DesignLibrary(o['project']['designer']['designs'])
     for did in ('base', 'd1', 'd2'):
         assert a.document(did) == b.document(did)
     doc = b.document('base')
@@ -354,7 +364,7 @@ def test_save_refuses_an_invalid_project(client):
 def test_file_text_is_human_readable_json(client):
     _, r = save(client, project())
     text = PF.dumps(r['file'])
-    assert text.startswith('{\n "format": "mud-printer-project",\n "schema_version": 6,')
+    assert text.startswith('{\n "format": "mud-printer-project",\n "schema_version": 7,')
     assert json.loads(text) == r['file']
 
 

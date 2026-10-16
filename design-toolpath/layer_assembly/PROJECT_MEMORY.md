@@ -52,6 +52,20 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 
 ## Current decisions
 
+### PER-WALL ARCHITECTURE — WALL_ARCHITECTURE.md M0–M4 (2026-10-15; manually reviewed, checkpointed; golden re-baselined, strict passes)
+Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the 2026-10-14 "Wall Geometry belongs to Wall Systems" (reversed: junction / corner / cap SHAPE is architecture, edited in the Designer's "Junctions, Ends & Corners" — also editable from Wall Systems on the same state; reason: it changes the envelope). Full record: `../WALL_ARCHITECTURE.md` (§F decisions, M0–M4 notes, "Before M5 — to decide").
+- **Golden suite** `tests/golden` + `tests/test_golden.py` (22 cases, 5 real; `GOLDEN_UPDATE=1` only; `geom` hash asserted, full hash with `GOLDEN_STRICT=1` — full hashes differ from the M0 baseline only by M2 labels; re-baseline after review).
+- **Schema 7:** no Wall Groups — each wall's own `envelope`; project Wall Systems list `members` only (no `groups`, no Variant `designs` scope); planes select walls (`sources`); Variant physical properties dropped + reported (`walls.migrate_project`, run on every open / save). Only intentional geometry change: `real_10xtest1` Variant 1 round junction r 7 (§F4).
+- **UI:** Wall Systems = a per-wall checklist with inline thickness; the planar cut card has All walls / None (was "Wall Groups (all members)").
+- **Correction pass (2026-10-15, after manual review):**
+  - Compact `− THIN|value +` thickness control.
+  - THIN → first 0.5 in step at or above the THIN width; − back to THIN; never below THIN.
+  - The Designer's "Junctions, Ends & Corners": junction treatment / R, default + per-wall end caps, per-wall Corner treatment / R.
+  - Wall Systems gets an "Architecture · shared with Designer" section built by the same Designer code on the same canonical state (undoable there, makes the generation OUTDATED, no Variant copies).
+  - No geometry change; see `../WALL_ARCHITECTURE.md` "Correction pass".
+- **Shadow junctions** (`design_proto/junctions.py`, `junction_shadow.py`, `POST /api/assembly/junctions_shadow`): project-level `junctions` registry, stable ids, overrides mapped; consistency with production + per-layer presence (ceasing / appearing = valid). Nothing builds from it.
+- Verified: tests below each milestone + golden; production geometry / PrintPlan / `.mudjob` unchanged apart from the reported 10xtest1 divergence.
+
 ### ACTIVE BASELINE + CLEANUP PASS (2026-10-14; committed on `restart/post-print-simulation`)
 **ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface (2026-10-14).
 - **Cleanup on the baseline (UI / ownership only — no geometry algorithm changed):**
@@ -251,7 +265,7 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 - **Remaining bottlenecks:** variant builds (≈ 2.5–3.5 s CPU each, ≈ 0.45 s wall per variant with 8 workers; a full rebuild ≈ 37 s) — dominated by the Designer's per-variant resolve (scaffold verdict + `_build_effective`, junction splits); routing in the plan (≈ 20 s cold: one Designer route per piece, networkx); support ≈ 55–60 ms / layer cold. UI: coalescing, stale-result drop, "resolving…" indicator and background-plan preemption already existed (2026-10-08 / 10-09) and were verified here (5 rapid plane edits → one full resolve + one cached).
 - **Tests:** `tests/test_performance_pass.py` (10): layer_components and `_near` vs the replaced implementations (random geometry, every threshold test), lift graphs identical, a deterministic WORK-COUNT regression (segment-distance evaluations < ¼ of the reference), whole plans byte-identical with the replaced proximity code and the copying router (islands merging in stages; transform groups), one-component route = the copy's route, support `within` = reference incl. points exactly at r, cancelled pool prefetch drops unstarted builds (kept ones identical), cancelled plan routes nothing, the page's JS-typed variant request rebuilds nothing and gets the resolve's geometry (verified to FAIL with the old key).
 
-### WALL GROUPS × WALL SYSTEMS WORKSPACE (2026-10-11; uncommitted, pending manual review)
+### WALL GROUPS × WALL SYSTEMS WORKSPACE (2026-10-11; uncommitted, pending manual review) — *Wall Groups REMOVED 2026-10-15 (schema 7, see "PER-WALL ARCHITECTURE"); the workspace, generation and status rules below still hold*
 - **Decision (durable):** the workflow is Designer → Assembly → **Wall Systems** → Print Simulation. ARCHITECTURE and CONSTRUCTION are separate data structures:
   - **Wall Groups** (per Layer Design, `doc['wall_groups']`, id-keyed, inherited like every record — `layer_design.KEYED`): {id, name, members, thickness, align, print_reference}. The Designer's sidebar is now "Wall Groups" (same compact member UI: members + ×, Add path…; Name, Wall Thickness, Wall Alignment, Print reference); no construction / lattice controls in the Designer.
   - **Wall Systems** (PROJECT level, `project['wall_systems']`): {id, name, type, params, web, members: [wall ids], groups: [group ids], designs: null | [ids]}. A wall's system = the first applicable system listing the wall, else the one listing its group, else none (= Hollow, its two skins). Walls of one group may use different systems; one system may span groups of different thickness. Thickness / alignment are never edited in the workspace.
@@ -440,6 +454,8 @@ LAYER DESIGNS (180 px) | LAYERS (230 px: Undo / Redo, layer height, Bead width, 
 - Benchmark history (cold / warm, 8 workers): 49 layers 8.2 / 1.1 s, 99 → 12.7 / 2.2 s, 299 → 38.3 / 6.3 s before stabilization pass 2; current numbers in the Designer memory → "Performance".
 
 ## Last Updated
+
+2026-10-15 — WALL ARCHITECTURE M0–M4 (uncommitted): golden suite, ownership, schema 7 without Wall Groups, per-wall Wall Systems checklist, Assembly All / None, shadow junction records. See "PER-WALL ARCHITECTURE".
 
 2026-10-15 — Pass 1 (trim-aware snapping, architectural snap UX, Centered default for new Wall Groups, "Center n" labels) and Pass 2 (planar top cut Linear / Stepped / Curved, schema 6) — manually reviewed; after review the Stepped rule got real landings and the planar-cut ghost exact clipping; checkpointed. Machine Profile + 1 ft grid checkpoint 8c51d8a.
 

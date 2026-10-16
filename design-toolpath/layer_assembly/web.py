@@ -947,3 +947,24 @@ def api_print_plan_cancel():
     if job is not None and _JOBS['latest'] == job:
         _JOBS['latest'] = None
     return jsonify({'ok': True})
+
+
+@bp.route('/api/assembly/junctions_shadow', methods=['POST'])
+def api_junctions_shadow():
+    """PERSISTENT JUNCTIONS — SHADOW report (M4, read only): body {project}
+    (current schema). The registry (stored ids kept), per Layer Design the
+    consistency with the production topology, and per resolved layer which
+    junctions exist (ceasing / appearing = valid topology). Nothing built
+    for printing reads this."""
+    import junctions as J
+    from .junction_shadow import presence
+    P = (request.get_json(force=True) or {}).get('project') or {}
+    try:
+        designs = P['designer']['designs']
+        ws = P.get('wall_systems') or []
+        reg, rep = J.build_registry(designs, ws, P.get('junctions'))
+        cons = J.consistency_all(designs, ws, reg['records'])
+        layers = presence(dict(P, junctions=reg), reg)['layers']
+    except (KeyError, TypeError, ValueError, AssemblyError, ProfileError) as e:
+        return jsonify({'error': f'{type(e).__name__}: {e}'}), 400
+    return jsonify({'registry': reg, 'report': rep, 'consistency': cons, 'layers': layers})

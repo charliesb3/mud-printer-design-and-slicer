@@ -1,0 +1,241 @@
+{
+ "format": "mud-printer-project",
+ "schema_version": 1,
+ "saved_at": "2026-10-09T18:57:32Z",
+ "generator": "design_proto",
+ "project": {
+  "name": "test save",
+  "designer": {
+   "designs": [
+    {
+     "id": "base",
+     "name": "Base",
+     "parent": null,
+     "document": {
+      "id": "design",
+      "label": "",
+      "source_paths": [
+       {
+        "id": "p1",
+        "type": "CirclePath",
+        "label": "Circle 1",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "cx": 118.15856777493606,
+        "cy": 289.00255754475705,
+        "radius": 95.90213111208567
+       },
+       {
+        "id": "p2",
+        "type": "RectanglePath",
+        "label": "Rect 1",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "x": 118.6700767263427,
+        "y": 43.47826086956525,
+        "w": 251.6624040920716,
+        "h": 243.4782608695652
+       }
+      ],
+      "offset_treatments": [],
+      "lattice_instances": [],
+      "constraints": {
+       "start_path_id": null,
+       "start_t": null,
+       "reverse_direction": false,
+       "component_order": null
+      },
+      "corner_radius": 0,
+      "cap_style": "flat",
+      "cap_corner_radius": 0,
+      "openings": [],
+      "trims": [
+       {
+        "id": "p3",
+        "source_path_id": "p2",
+        "start": [
+         "p1"
+        ],
+        "end": [
+         "p1"
+        ],
+        "inside": {
+         "p1": true
+        },
+        "u_mid": 0.7533764581266339
+       },
+       {
+        "id": "p4",
+        "source_path_id": "p1",
+        "start": [
+         "p2"
+        ],
+        "end": [
+         "p2"
+        ],
+        "inside": {
+         "p2": true
+        },
+        "u_mid": 0.8737261719864025
+       }
+      ],
+      "route_origins": [],
+      "region_overrides": [],
+      "infills": [
+       {
+        "id": "WS1~web~p2",
+        "path_id": "p2",
+        "kind": "wall",
+        "owner": "WS1",
+        "pattern": "zigzag",
+        "params": {
+         "spacing": 20
+        },
+        "variation_index": 0
+       }
+      ],
+      "junction_style": "miter",
+      "junction_radius": 2,
+      "junction_overrides": [],
+      "network_walls": [],
+      "wall_systems": [
+       {
+        "id": "WS1",
+        "name": "Wall System 1",
+        "type": "interleaved",
+        "thickness": 10,
+        "align": "auto",
+        "print_reference": false,
+        "params": {
+         "pattern": "wave",
+         "paths": 4,
+         "period": 30
+        },
+        "members": [
+         "p2",
+         "p1"
+        ],
+        "web": {
+         "pattern": "zigzag",
+         "params": {
+          "spacing": 20
+         },
+         "variation_index": 0
+        }
+       }
+      ],
+      "wall_relations": [],
+      "material": {
+       "bead_width": 3,
+       "contact_overlap": 0.75,
+       "return_overlap": 0.75,
+       "physical": true
+      },
+      "return_paths": true,
+      "prefer_closed": true
+     }
+    },
+    {
+     "id": "d1",
+     "name": "Variant 1",
+     "parent": "base",
+     "patch": {
+      "openings": {
+       "o5": {
+        "center_s": 896.4884910485932,
+        "end_treatment": "inherit",
+        "id": "o5",
+        "source_path_id": "p2",
+        "width": 58.68542199488479
+       },
+       "o6": {
+        "center_s": 54.760890891496615,
+        "end_treatment": "inherit",
+        "id": "o6",
+        "source_path_id": "p1",
+        "width": 46.20411944018986
+       }
+      },
+      "route_origins": {
+       "p1~ws0p0.0": {
+        "pos": [
+         177.30410331944702,
+         353.58408321303943
+        ],
+        "strand": "p1~ws0p0.0",
+        "u": 0.9938062117447517
+       }
+      }
+     },
+     "settings": {}
+    }
+   ],
+   "active_design": "d1",
+   "id_counter": 7,
+   "design_counter": 2
+  },
+  "assembly": {
+   "state": {
+    "layer_height": 1.5,
+    "sections": [
+     {
+      "design_id": "d1",
+      "height": 80
+     },
+     {
+      "design_id": "base",
+      "height": 30
+     }
+    ],
+    "transform": {
+     "profile": "linear",
+     "shift": [
+      0,
+      0
+     ],
+     "scale_in": 0
+    },
+    "objects": [
+     {
+      "kind": "header",
+      "id": "h1",
+      "section": 1,
+      "layer": 0,
+      "x": 123.67007672634271,
+      "y": 137.1478254047013,
+      "angle": 90,
+      "span": 57.24826617867227,
+      "bearing": 8,
+      "depth": 10,
+      "thickness": 6,
+      "snap": true
+     },
+     {
+      "kind": "header",
+      "id": "h2",
+      "section": 1,
+      "layer": 0,
+      "x": 193.5969076466808,
+      "y": 337.5973059097138,
+      "angle": -57.4176520752638,
+      "span": 44.41421324545843,
+      "bearing": 8,
+      "depth": 12.3125,
+      "thickness": 6,
+      "snap": true
+     }
+    ],
+    "overrides": [],
+    "center_mode": "footprint",
+    "centers": [],
+    "center_counter": 0,
+    "max_overhang": 1.5,
+    "profiles": [],
+    "profile_counter": 0
+   },
+   "header_counter": 2
+  }
+ }
+}

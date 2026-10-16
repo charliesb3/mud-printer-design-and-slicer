@@ -2215,6 +2215,18 @@ function asmPlaneToggleSource(id, sid) {
   });
 }
 
+// every wall / none at once (one undo step) — 2026-10-15: the quick selection
+// that replaces "Wall Groups (all members)" (walls are selected explicitly)
+function asmPlaneSelectAll(id, on) {
+  const p = _asmProfile(id); if (!p) return;
+  return asmEdit(null, () => {
+    const ids = [...new Set(_asmPlaneDesigns().flatMap(d => _asmPlaneSources(d).map(r => r.source)))];
+    p.sources = on ? ids : []; p.systems = []; p.exclude = [];
+    _asmPlaneKeepHL(p); _asmPlaneNorm(p);
+    return asmResolve();
+  });
+}
+
 function asmPlaneToggleSystem(id, sys) {
   const p = _asmProfile(id); if (!p) return;
   return asmEdit(null, () => {
@@ -3028,6 +3040,12 @@ function _asmPlaneCard(p, n, row, input, sel) {
         card.appendChild(b);
       }
     }
+    const qs = row();
+    const all = _el('button', 'mini-btn', 'All walls'); all.dataset.action = 'all-walls';
+    all.title = 'Select every wall'; all.onclick = () => asmPlaneSelectAll(p.id, true);
+    const none = _el('button', 'mini-btn', 'None'); none.dataset.action = 'no-walls';
+    none.title = 'Clear the selection'; none.onclick = () => asmPlaneSelectAll(p.id, false);
+    qs.appendChild(all); qs.appendChild(none); card.appendChild(qs);
     card.appendChild(_el('div', 'asm-calc', `Walls (${nsel}) — click a wall in the plan view to add / remove it:`));
     const seen = new Set();
     for (const d of designs) for (const r of _asmPlaneSources(d)) {

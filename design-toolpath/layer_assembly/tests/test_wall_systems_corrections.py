@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import pytest
 
-from wall_groups import compose
+from walls import compose
 
 MAT = {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'physical': True}
 
@@ -84,11 +84,16 @@ def test_existing_projects_keep_their_maximum_overhang():
     import project_file as PF
     from app import _deserialise_layer
     implicit = PF.load(json.dumps(_v2_file()), _deserialise_layer)
-    assert implicit['migrated_from'] == 2 and implicit['schema_version'] == 6
+    assert implicit['migrated_from'] == 2 and implicit['schema_version'] == 7
     assert implicit['project']['assembly']['state']['max_overhang'] == 1.5          # what it was designed with
     explicit = PF.load(json.dumps(_v2_file(2.25)), _deserialise_layer)
     assert explicit['project']['assembly']['state']['max_overhang'] == 2.25         # untouched
-    assert implicit['project']['wall_systems'] == _v2_file()['project']['wall_systems']
+    # (schema 7: the same constructions, assigned to the group's WALLS; no design scope)
+    from walls import migrate_parts
+    f = _v2_file()['project']
+    _, migrated, _, _ = migrate_parts(f['designer']['designs'], f['wall_systems'])
+    assert implicit['project']['wall_systems'] == migrated
+    assert all('groups' not in s and 'designs' not in s and s['members'] for s in migrated if s['id'] != 'WS4')
 
 
 # ---- every architectural wall assignable; its own envelope -----------------------------------
@@ -115,12 +120,12 @@ def test_ungrouped_walls_compose_with_their_own_envelope():
     assert R['wall:U']['members'] == ['U'] and R['wall:U']['thickness'] == 8.0 and R['wall:U']['align'] == 'center'
     assert R['wall:U']['type'] == 'hollow'                              # no system: its two skins
     S = [{'id': 'S1', 'type': 'parallel', 'params': {'walls': 2}, 'members': ['U'], 'groups': []}]
-    assert recs(compose(d, 'A', S))['wall:U']['type'] == 'parallel'
+    assert recs(compose(d, 'A', S))['S1']['type'] == 'parallel'          # (record = its Wall System)
     assert recs(compose(d, 'A', S, arch=True))['wall:U']['thickness'] == 8.0
     # without a thickness: a single bead, unless a Wall System lists it
     plain = doc()
     assert 'wall:U' not in recs(compose(plain, 'A', []))
-    assert recs(compose(plain, 'A', S))['wall:U']['thickness'] == 0.0
+    assert recs(compose(plain, 'A', S))['S1']['thickness'] == 0.0
     assert 'wall:U' not in recs(compose(plain, 'A', S, arch=True))
 
 
@@ -165,13 +170,13 @@ def test_own_thickness_edit_invalidates_the_generation(client):
 
 def test_base_design_generated_geometry_is_served_from_the_generation(client):
     asm = {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 3}], 'max_overhang': 1.0}
-    S = [{'id': 'S1', 'name': 'W', 'type': 'interleaved', 'params': {'paths': 4}, 'members': [], 'groups': ['G1']}]
+    S = [{'id': 'S1', 'name': 'W', 'type': 'interleaved', 'params': {'paths': 4}, 'members': ['R', 'L']}]
     B = {'assembly': asm, 'designs': [{'id': 'A', 'name': 'A', 'document': doc()}], 'wall_systems': S}
     assert post(client, '/api/wallsystems/layer', dict(B, design='A'))[0] == 409          # not generated
     assert post(client, '/api/wallsystems/generate', B)[0] == 200
     code, base = post(client, '/api/wallsystems/layer', dict(B, design='A'))
     code0, lay0 = post(client, '/api/wallsystems/layer', dict(B, index=0))
-    assert code == 200 and base['index'] == -1 and base['polylines'] and any(p.get('system') == 'G1' for p in base['polylines'])
+    assert code == 200 and base['index'] == -1 and base['polylines'] and any(p.get('system') == 'S1' for p in base['polylines'])
     assert [p['pts'] for p in base['polylines']] == [p['pts'] for p in lay0['polylines']]     # (layer 0 = the design)
 
 

@@ -1,0 +1,177 @@
+{
+ "format": "mud-printer-project",
+ "schema_version": 6,
+ "saved_at": "2026-10-15T22:18:18Z",
+ "generator": "design_proto",
+ "project": {
+  "name": "circle + rectangle, trimmed (Hollow); Variant opening",
+  "designer": {
+   "designs": [
+    {
+     "id": "base",
+     "name": "Base",
+     "parent": null,
+     "document": {
+      "id": "design",
+      "label": "",
+      "source_paths": [
+       {
+        "id": "R",
+        "type": "RectanglePath",
+        "label": "Rect",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "x": 0,
+        "y": 0,
+        "w": 120,
+        "h": 80
+       },
+       {
+        "id": "C",
+        "type": "CirclePath",
+        "label": "Circle",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "cx": 120,
+        "cy": 40,
+        "radius": 40
+       }
+      ],
+      "offset_treatments": [],
+      "lattice_instances": [],
+      "constraints": {
+       "start_path_id": null,
+       "start_t": null,
+       "reverse_direction": false,
+       "component_order": null
+      },
+      "corner_radius": 0,
+      "cap_style": "flat",
+      "cap_corner_radius": 0,
+      "openings": [],
+      "trims": [
+       {
+        "id": "tR",
+        "source_path_id": "R",
+        "start": [
+         "C"
+        ],
+        "end": [
+         "C"
+        ],
+        "inside": {
+         "C": true
+        },
+        "u_mid": 0.4
+       },
+       {
+        "id": "tC",
+        "source_path_id": "C",
+        "start": [
+         "R"
+        ],
+        "end": [
+         "R"
+        ],
+        "inside": {
+         "R": true
+        },
+        "u_mid": 0.4999999999999999
+       }
+      ],
+      "route_origins": [],
+      "region_overrides": [],
+      "infills": [],
+      "junction_style": "miter",
+      "junction_radius": 2,
+      "junction_overrides": [],
+      "network_walls": [],
+      "wall_groups": [
+       {
+        "id": "WG1",
+        "name": "WG1",
+        "members": [
+         "R",
+         "C"
+        ],
+        "thickness": 10.0,
+        "align": "center",
+        "print_reference": false
+       }
+      ],
+      "wall_relations": [],
+      "material": {
+       "bead_width": 3.0,
+       "contact_overlap": 0.75,
+       "return_overlap": 0.75,
+       "physical": true
+      }
+     }
+    },
+    {
+     "id": "d1",
+     "name": "d1",
+     "parent": "base",
+     "patch": {
+      "openings": {
+       "o1": {
+        "id": "o1",
+        "source_path_id": "R",
+        "center_s": 40.0,
+        "width": 16.0,
+        "end_treatment": "inherit"
+       }
+      }
+     },
+     "settings": {}
+    }
+   ],
+   "active_design": "base",
+   "id_counter": 100,
+   "design_counter": 2
+  },
+  "assembly": {
+   "state": {
+    "layer_height": 1.5,
+    "sections": [
+     {
+      "design_id": "d1",
+      "height": 9
+     },
+     {
+      "design_id": "base",
+      "height": 9
+     }
+    ],
+    "transform": null,
+    "objects": [],
+    "overrides": [],
+    "center_mode": "footprint",
+    "centers": [],
+    "center_counter": 1,
+    "opening_alignment": "plumb",
+    "max_overhang": 1.5,
+    "profiles": [],
+    "profile_counter": 0
+   },
+   "header_counter": 1
+  },
+  "wall_systems": [],
+  "machine_profile": {
+   "version": 1,
+   "name": "Mud printer (provisional)",
+   "units": "in",
+   "x_extent": 120.0,
+   "y_extent": 120.0,
+   "max_build_z": null,
+   "z_travel_per_frame": 18.0,
+   "provisional": [
+    "x_extent",
+    "y_extent"
+   ],
+   "envelope_origin": "print_origin"
+  }
+ }
+}

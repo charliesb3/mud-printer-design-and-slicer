@@ -1,0 +1,7873 @@
+{
+ "_migration": {
+  "hash": "7f31bfe5f4a42f4ca4691349753eb5416e49a7e7c76f5a118c98f085320c4087",
+  "summary": {
+   "migrated_from": 4,
+   "warnings": [
+    "Opened a project saved with project schema 4; it will be saved as schema 7."
+   ]
+  }
+ },
+ "assembly": {
+  "geom": "b4dd468084994b80375ed09a838e200f121862acfbceb95ad78e7a36ca20ddf2",
+  "hash": "6ac6ebad06f67f4a788bf8af4e01bfb4518d43d4fd2f2471c1d36c36666c29ea",
+  "summary": {
+   "findings": 1,
+   "instances": 73,
+   "profiles": [
+    [
+     "p1",
+     true
+    ],
+    [
+     "p2",
+     true
+    ]
+   ]
+  }
+ },
+ "designer.base": {
+  "geom": "68dd230ccb583debe65a27cc3ae74083983290f3150396dd4d8962b5392f43fb",
+  "hash": "a3aa2ee1ca31658e8443475084d2801dec9c4f789e87b1697b519a15c6d6f091",
+  "summary": {
+   "bbox": [
+    19.861,
+    27.621,
+    371.867,
+    387.3
+   ],
+   "junctions": 6,
+   "length": 2814.237,
+   "points": 226,
+   "polylines": 12,
+   "trims": {
+    "p3": "ok",
+    "p4": "ok"
+   }
+  }
+ },
+ "designer.d1": {
+  "geom": "ca36733ab303b9a5cde1cb57655e1d334736256e2668e5626c29d7517f653a5d",
+  "hash": "dcc0f8b463a6c1cf407a6fdea706eb39c5e2c264ebb85f224aa0f07ed2ab12e4",
+  "summary": {
+   "bbox": [
+    19.861,
+    27.621,
+    371.867,
+    387.3
+   ],
+   "junctions": 6,
+   "length": 2655.209,
+   "points": 234,
+   "polylines": 16,
+   "trims": {
+    "p3": "ok",
+    "p4": "ok"
+   }
+  }
+ },
+ "envelope.base": {
+  "geom": "169fa726daa9077ed506afc0ba6dd7627c99e56a3f283bc640d17cc22a75fadb",
+  "hash": "13d16dd70ad4fcb81aef18b0e054f875cb07897cb0fdcd60660db6d67c217c86",
+  "summary": {
+   "bbox": null,
+   "junctions": 6,
+   "length": 0.0,
+   "points": 0,
+   "polylines": 0,
+   "trims": {
+    "p3": "ok",
+    "p4": "ok"
+   }
+  }
+ },
+ "envelope.d1": {
+  "geom": "5f90231437d07380264c4c6c782c758acbddce249b2b71de339f581324fc0464",
+  "hash": "22a2bc8ee5acfaac3c354294d42f8e50cb513072d4a3812b5a3468e402eb0351",
+  "summary": {
+   "bbox": null,
+   "junctions": 6,
+   "length": 0.0,
+   "points": 0,
+   "polylines": 0,
+   "trims": {
+    "p3": "ok",
+    "p4": "ok"
+   }
+  }
+ },
+ "mudjob": {
+  "geom": "92eab6337cf1a26d5e14d82527260c2350e2e92921175d1aa61e2c54aff373e0",
+  "hash": "92eab6337cf1a26d5e14d82527260c2350e2e92921175d1aa61e2c54aff373e0",
+  "summary": {
+   "gcode_lines": 17301,
+   "gcode_sha": "42d6840ede6023ce",
+   "lifts": 7
+  }
+ },
+ "plan": {
+  "geom": "ea268094c17164b23999e15c1c89133b04c500270b642363b390abd7ebc085fd",
+  "hash": "124f3379eea6098b29b5908923b421624a622fb8632ae1268b1ef434fba27014",
+  "summary": {
+   "estimate": {
+    "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
+    "estimate": true,
+    "frame_moves": 6,
+    "frame_time": 0.0,
+    "layers": [
+     {
+      "design_id": "d1",
+      "index": 0,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 0,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 12,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2603.20898,
+      "print_time": 1301.60449,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1279.956,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 639.977908
+       },
+       {
+        "index": 1,
+        "length": 1323.253,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 661.626582
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1343.585627,
+      "transition_length": 251.886823,
+      "travel_length": 0,
+      "travel_time": 41.981137
+     },
+     {
+      "design_id": "d1",
+      "index": 1,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 1,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 13,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2601.2253,
+      "print_time": 1300.61265,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1279.259,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 639.629342
+       },
+       {
+        "index": 1,
+        "length": 1321.967,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 660.983308
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1300.647831,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 2,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 2,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 14,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2599.241263,
+      "print_time": 1299.620632,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1278.562,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 639.280806
+       },
+       {
+        "index": 1,
+        "length": 1320.68,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 660.339826
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1299.655813,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 3,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 3,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 15,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2597.25747,
+      "print_time": 1298.628735,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1277.864,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 638.932153
+       },
+       {
+        "index": 1,
+        "length": 1319.393,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 659.696582
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1298.663916,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 4,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 4,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 16,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2595.273521,
+      "print_time": 1297.636761,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1277.167,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 638.58358
+       },
+       {
+        "index": 1,
+        "length": 1318.106,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 659.05318
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1297.671942,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 5,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 5,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 17,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2593.289816,
+      "print_time": 1296.644908,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1276.47,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 638.235089
+       },
+       {
+        "index": 1,
+        "length": 1316.82,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 658.40982
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1296.680089,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 6,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 6,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 18,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2591.305758,
+      "print_time": 1295.652879,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1275.773,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 637.886429
+       },
+       {
+        "index": 1,
+        "length": 1315.533,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 657.76645
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1295.68806,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 7,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 7,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 19,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2589.321944,
+      "print_time": 1294.660972,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1275.076,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 637.53785
+       },
+       {
+        "index": 1,
+        "length": 1314.246,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 657.123122
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1294.696153,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 8,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 8,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 20,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2587.337976,
+      "print_time": 1293.668988,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1274.379,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 637.189252
+       },
+       {
+        "index": 1,
+        "length": 1312.959,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 656.479736
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1293.704169,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 9,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 9,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 21,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2585.354056,
+      "print_time": 1292.677028,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1273.681,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 636.840686
+       },
+       {
+        "index": 1,
+        "length": 1311.673,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 655.836342
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1292.712209,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 10,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 10,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 22,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2583.370182,
+      "print_time": 1291.685091,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1272.984,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 636.492149
+       },
+       {
+        "index": 1,
+        "length": 1310.386,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 655.192942
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1291.720272,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 11,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 11,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 23,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 2581.386356,
+      "print_time": 1290.693178,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1272.287,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 636.143545
+       },
+       {
+        "index": 1,
+        "length": 1309.099,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 654.549633
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1290.728359,
+      "transition_length": 0.211085,
+      "travel_length": 0,
+      "travel_time": 0.035181
+     },
+     {
+      "design_id": "d1",
+      "index": 12,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 24,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 36,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2579.402378,
+      "print_time": 1289.701189,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1307.813,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 653.906268
+       },
+       {
+        "index": 1,
+        "length": 1271.59,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 635.794922
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1304.634577,
+      "transition_length": 89.600326,
+      "travel_length": 0,
+      "travel_time": 14.933388
+     },
+     {
+      "design_id": "d1",
+      "index": 13,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 25,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 37,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2577.41845,
+      "print_time": 1288.709225,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1306.526,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 653.262895
+       },
+       {
+        "index": 1,
+        "length": 1270.893,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 635.44633
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1288.736472,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 14,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 26,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 38,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2575.43457,
+      "print_time": 1287.717285,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1305.239,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 652.619518
+       },
+       {
+        "index": 1,
+        "length": 1270.196,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 635.097767
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1287.744532,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 15,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 27,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 39,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2573.450739,
+      "print_time": 1286.72537,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1303.952,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 651.976134
+       },
+       {
+        "index": 1,
+        "length": 1269.498,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 634.749236
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1286.752617,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 16,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 28,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 40,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2571.466761,
+      "print_time": 1285.73338,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1302.666,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 651.332794
+       },
+       {
+        "index": 1,
+        "length": 1268.801,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 634.400586
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1285.760628,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 17,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 29,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 41,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2569.48303,
+      "print_time": 1284.741515,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1301.379,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 650.689499
+       },
+       {
+        "index": 1,
+        "length": 1268.104,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 634.052016
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1284.768762,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 18,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 30,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 42,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2567.499152,
+      "print_time": 1283.749576,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1300.092,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 650.046049
+       },
+       {
+        "index": 1,
+        "length": 1267.407,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 633.703527
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1283.776823,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 19,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 31,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 43,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2565.515326,
+      "print_time": 1282.757663,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1298.806,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 649.402793
+       },
+       {
+        "index": 1,
+        "length": 1266.71,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 633.35487
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1282.78491,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 20,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 32,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 44,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2563.531354,
+      "print_time": 1281.765677,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1297.519,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 648.759384
+       },
+       {
+        "index": 1,
+        "length": 1266.013,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 633.006293
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1281.792924,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 21,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 33,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 45,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2561.547434,
+      "print_time": 1280.773717,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1296.232,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 648.115971
+       },
+       {
+        "index": 1,
+        "length": 1265.315,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 632.657746
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1280.800964,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 22,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 34,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 46,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2559.563764,
+      "print_time": 1279.781882,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1294.945,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 647.472703
+       },
+       {
+        "index": 1,
+        "length": 1264.618,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 632.309179
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1279.809129,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 23,
+      "lift": 1,
+      "passes": [
+       {
+        "index": 35,
+        "runs": [
+         0
+        ],
+        "stage": 2
+       },
+       {
+        "index": 47,
+        "runs": [
+         1
+        ],
+        "stage": 3
+       }
+      ],
+      "print_length": 2557.579753,
+      "print_time": 1278.789876,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1293.659,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 646.829332
+       },
+       {
+        "index": 1,
+        "length": 1263.921,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 631.960544
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1278.817124,
+      "transition_length": 0.163484,
+      "travel_length": 0,
+      "travel_time": 0.027247
+     },
+     {
+      "design_id": "d1",
+      "index": 24,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 48,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 60,
+        "runs": [
+         1
+        ],
+        "stage": 5
+       }
+      ],
+      "print_length": 2555.595993,
+      "print_time": 1277.797996,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1263.224,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 631.611988
+       },
+       {
+        "index": 1,
+        "length": 1292.372,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 646.186008
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1293.306274,
+      "transition_length": 93.049668,
+      "travel_length": 0,
+      "travel_time": 15.508278
+     },
+     {
+      "design_id": "d1",
+      "index": 25,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 49,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 61,
+        "runs": [
+         1
+        ],
+        "stage": 5
+       }
+      ],
+      "print_length": 2553.61209,
+      "print_time": 1276.806045,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1262.527,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 631.263414
+       },
+       {
+        "index": 1,
+        "length": 1291.085,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 645.542631
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1276.84296,
+      "transition_length": 0.22149,
+      "travel_length": 0,
+      "travel_time": 0.036915
+     },
+     {
+      "design_id": "d1",
+      "index": 26,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 50,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 62,
+        "runs": [
+         1
+        ],
+        "stage": 5
+       }
+      ],
+      "print_length": 2551.628045,
+      "print_time": 1275.814023,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1261.83,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 630.91482
+       },
+       {
+        "index": 1,
+        "length": 1289.798,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 644.899203
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1275.850937,
+      "transition_length": 0.22149,
+      "travel_length": 0,
+      "travel_time": 0.036915
+     },
+     {
+      "design_id": "d1",
+      "index": 27,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 51,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 63,
+        "runs": [
+         1,
+         2,
+         3,
+         4,
+         5,
+         6
+        ],
+        "stage": 5
+       }
+      ],
+      "print_length": 2640.278803,
+      "print_time": 1320.139401,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1261.138,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 630.569003
+       },
+       {
+        "index": 1,
+        "length": 674.489,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 337.244445
+       },
+       {
+        "index": 2,
+        "length": 116.248,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 58.124037
+       },
+       {
+        "index": 3,
+        "length": 116.248,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 58.124037
+       },
+       {
+        "index": 4,
+        "length": 116.248,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 58.124037
+       },
+       {
+        "index": 5,
+        "length": 116.248,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 58.124037
+       },
+       {
+        "index": 6,
+        "length": 239.66,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 119.829804
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1398.061798,
+      "transition_length": 0.22149,
+      "travel_length": 467.312889,
+      "travel_time": 77.922396
+     },
+     {
+      "design_id": "d1",
+      "index": 28,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 52,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 64,
+        "runs": [
+         1,
+         2,
+         3,
+         4,
+         5,
+         6
+        ],
+        "stage": 5
+       }
+      ],
+      "print_length": 2623.310995,
+      "print_time": 1311.655497,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1260.484,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 630.241989
+       },
+       {
+        "index": 1,
+        "length": 237.797,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 118.898276
+       },
+       {
+        "index": 2,
+        "length": 113.234,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.61696
+       },
+       {
+        "index": 3,
+        "length": 113.234,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.61696
+       },
+       {
+        "index": 4,
+        "length": 113.234,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.617058
+       },
+       {
+        "index": 5,
+        "length": 113.234,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.61696
+       },
+       {
+        "index": 6,
+        "length": 672.095,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 336.047295
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1344.878362,
+      "transition_length": 0.840569,
+      "travel_length": 198.496616,
+      "travel_time": 33.222864
+     },
+     {
+      "design_id": "d1",
+      "index": 29,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 53,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 65,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 72,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 79,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 86,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 93,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 100,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2606.431612,
+      "print_time": 1303.215806,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1259.873,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 629.936678
+       },
+       {
+        "index": 1,
+        "length": 669.7,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 334.850206
+       },
+       {
+        "index": 2,
+        "length": 110.22,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 55.110099
+       },
+       {
+        "index": 3,
+        "length": 110.22,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 55.110197
+       },
+       {
+        "index": 4,
+        "length": 110.22,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 55.110099
+       },
+       {
+        "index": 5,
+        "length": 110.22,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 55.110099
+       },
+       {
+        "index": 6,
+        "length": 235.977,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 117.988427
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1334.447057,
+      "transition_length": 187.387503,
+      "travel_length": 0,
+      "travel_time": 31.23125
+     },
+     {
+      "design_id": "d1",
+      "index": 30,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 54,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 66,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 73,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 80,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 87,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 94,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 101,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2589.637379,
+      "print_time": 1294.81869,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1259.306,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 629.652974
+       },
+       {
+        "index": 1,
+        "length": 667.306,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 333.653037
+       },
+       {
+        "index": 2,
+        "length": 107.206,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.603165
+       },
+       {
+        "index": 3,
+        "length": 107.206,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.603165
+       },
+       {
+        "index": 4,
+        "length": 107.206,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.603067
+       },
+       {
+        "index": 5,
+        "length": 107.206,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.603165
+       },
+       {
+        "index": 6,
+        "length": 234.2,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 117.100115
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1295.591165,
+      "transition_length": 4.634853,
+      "travel_length": 0,
+      "travel_time": 0.772476
+     },
+     {
+      "design_id": "d1",
+      "index": 31,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 55,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 67,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 74,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 81,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 88,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 95,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 102,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2572.931095,
+      "print_time": 1286.465547,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1258.782,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 629.391076
+       },
+       {
+        "index": 1,
+        "length": 664.912,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 332.455985
+       },
+       {
+        "index": 2,
+        "length": 104.192,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 52.096163
+       },
+       {
+        "index": 3,
+        "length": 104.193,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 52.096261
+       },
+       {
+        "index": 4,
+        "length": 104.193,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 52.096261
+       },
+       {
+        "index": 5,
+        "length": 104.193,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 52.096261
+       },
+       {
+        "index": 6,
+        "length": 232.467,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 116.233542
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1287.237973,
+      "transition_length": 4.634551,
+      "travel_length": 0,
+      "travel_time": 0.772425
+     },
+     {
+      "design_id": "d1",
+      "index": 32,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 56,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 68,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 75,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 82,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 89,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 96,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 103,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2556.310662,
+      "print_time": 1278.155331,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1258.302,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 629.150938
+       },
+       {
+        "index": 1,
+        "length": 662.518,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 331.258807
+       },
+       {
+        "index": 2,
+        "length": 101.178,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.589194
+       },
+       {
+        "index": 3,
+        "length": 101.178,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.589194
+       },
+       {
+        "index": 4,
+        "length": 101.179,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.589292
+       },
+       {
+        "index": 5,
+        "length": 101.178,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.589194
+       },
+       {
+        "index": 6,
+        "length": 230.777,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 115.388713
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1278.927816,
+      "transition_length": 4.634912,
+      "travel_length": 0,
+      "travel_time": 0.772485
+     },
+     {
+      "design_id": "d1",
+      "index": 33,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 57,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 69,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 76,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 83,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 90,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 97,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 104,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2539.778092,
+      "print_time": 1269.889046,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1257.865,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.932561
+       },
+       {
+        "index": 1,
+        "length": 660.123,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 330.061654
+       },
+       {
+        "index": 2,
+        "length": 98.165,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 49.082263
+       },
+       {
+        "index": 3,
+        "length": 98.165,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 49.082263
+       },
+       {
+        "index": 4,
+        "length": 98.165,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 49.082263
+       },
+       {
+        "index": 5,
+        "length": 98.165,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 49.082361
+       },
+       {
+        "index": 6,
+        "length": 229.131,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 114.565681
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1270.661476,
+      "transition_length": 4.634583,
+      "travel_length": 0,
+      "travel_time": 0.772431
+     },
+     {
+      "design_id": "d1",
+      "index": 34,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 58,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 70,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 77,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 84,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 91,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 98,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 105,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2523.333436,
+      "print_time": 1261.666718,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1257.472,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.736092
+       },
+       {
+        "index": 1,
+        "length": 657.729,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 328.864578
+       },
+       {
+        "index": 2,
+        "length": 95.151,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.575277
+       },
+       {
+        "index": 3,
+        "length": 95.151,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.575375
+       },
+       {
+        "index": 4,
+        "length": 95.151,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.575375
+       },
+       {
+        "index": 5,
+        "length": 95.151,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.575277
+       },
+       {
+        "index": 6,
+        "length": 227.529,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 113.764745
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1262.439172,
+      "transition_length": 4.634724,
+      "travel_length": 0,
+      "travel_time": 0.772454
+     },
+     {
+      "design_id": "d1",
+      "index": 35,
+      "lift": 2,
+      "passes": [
+       {
+        "index": 59,
+        "runs": [
+         0
+        ],
+        "stage": 4
+       },
+       {
+        "index": 71,
+        "runs": [
+         1
+        ],
+        "stage": 6
+       },
+       {
+        "index": 78,
+        "runs": [
+         2
+        ],
+        "stage": 7
+       },
+       {
+        "index": 85,
+        "runs": [
+         3
+        ],
+        "stage": 8
+       },
+       {
+        "index": 92,
+        "runs": [
+         4
+        ],
+        "stage": 9
+       },
+       {
+        "index": 99,
+        "runs": [
+         5
+        ],
+        "stage": 10
+       },
+       {
+        "index": 106,
+        "runs": [
+         6
+        ],
+        "stage": 11
+       }
+      ],
+      "print_length": 2506.976554,
+      "print_time": 1253.488277,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1257.123,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.561585
+       },
+       {
+        "index": 1,
+        "length": 655.335,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 327.667433
+       },
+       {
+        "index": 2,
+        "length": 92.137,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 46.068436
+       },
+       {
+        "index": 3,
+        "length": 92.137,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 46.068338
+       },
+       {
+        "index": 4,
+        "length": 92.137,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 46.068436
+       },
+       {
+        "index": 5,
+        "length": 92.137,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 46.068338
+       },
+       {
+        "index": 6,
+        "length": 225.971,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 112.985712
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1254.26072,
+      "transition_length": 4.634658,
+      "travel_length": 0,
+      "travel_time": 0.772443
+     },
+     {
+      "design_id": "d1",
+      "index": 36,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 107,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 119,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 131,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 143,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 155,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 167,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 179,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2490.70847,
+      "print_time": 1245.354235,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 224.457,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 112.228733
+       },
+       {
+        "index": 1,
+        "length": 89.123,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.56145
+       },
+       {
+        "index": 2,
+        "length": 89.123,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.56145
+       },
+       {
+        "index": 3,
+        "length": 89.123,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.56145
+       },
+       {
+        "index": 4,
+        "length": 89.123,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.56145
+       },
+       {
+        "index": 5,
+        "length": 652.941,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 326.470321
+       },
+       {
+        "index": 6,
+        "length": 1256.819,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.409379
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1306.439767,
+      "transition_length": 366.513193,
+      "travel_length": 0,
+      "travel_time": 61.085532
+     },
+     {
+      "design_id": "d1",
+      "index": 37,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 108,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 120,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 132,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 144,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 156,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 168,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 180,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2474.529235,
+      "print_time": 1237.264617,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 222.988,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 111.494007
+       },
+       {
+        "index": 1,
+        "length": 86.109,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 43.054521
+       },
+       {
+        "index": 2,
+        "length": 86.109,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 43.054521
+       },
+       {
+        "index": 3,
+        "length": 86.109,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 43.054521
+       },
+       {
+        "index": 4,
+        "length": 86.109,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 43.054521
+       },
+       {
+        "index": 5,
+        "length": 650.546,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 325.273244
+       },
+       {
+        "index": 6,
+        "length": 1256.559,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.279282
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1238.030608,
+      "transition_length": 4.595946,
+      "travel_length": 0,
+      "travel_time": 0.765991
+     },
+     {
+      "design_id": "d1",
+      "index": 38,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 109,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 121,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 133,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 145,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 157,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 169,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 181,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2458.438702,
+      "print_time": 1229.219351,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 221.563,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 110.781682
+       },
+       {
+        "index": 1,
+        "length": 83.095,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.547457
+       },
+       {
+        "index": 2,
+        "length": 83.095,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.547555
+       },
+       {
+        "index": 3,
+        "length": 83.095,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.547555
+       },
+       {
+        "index": 4,
+        "length": 83.095,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.547457
+       },
+       {
+        "index": 5,
+        "length": 648.152,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 324.076059
+       },
+       {
+        "index": 6,
+        "length": 1256.343,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.171585
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1229.985427,
+      "transition_length": 4.596453,
+      "travel_length": 0,
+      "travel_time": 0.766075
+     },
+     {
+      "design_id": "d1",
+      "index": 39,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 110,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 122,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 134,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 146,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 158,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 170,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 182,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2442.439645,
+      "print_time": 1221.219823,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 220.184,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 110.092054
+       },
+       {
+        "index": 1,
+        "length": 80.081,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 40.040556
+       },
+       {
+        "index": 2,
+        "length": 80.081,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 40.040653
+       },
+       {
+        "index": 3,
+        "length": 80.081,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 40.040653
+       },
+       {
+        "index": 4,
+        "length": 80.081,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 40.040556
+       },
+       {
+        "index": 5,
+        "length": 645.758,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 322.878962
+       },
+       {
+        "index": 6,
+        "length": 1256.173,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.086388
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1221.98582,
+      "transition_length": 4.595982,
+      "travel_length": 0,
+      "travel_time": 0.765997
+     },
+     {
+      "design_id": "d1",
+      "index": 40,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 111,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 123,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 135,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 147,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 159,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 171,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 183,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2426.53055,
+      "print_time": 1213.265275,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 218.85,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 109.42493
+       },
+       {
+        "index": 1,
+        "length": 77.067,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.533626
+       },
+       {
+        "index": 2,
+        "length": 77.067,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.533626
+       },
+       {
+        "index": 3,
+        "length": 77.067,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.533724
+       },
+       {
+        "index": 4,
+        "length": 77.067,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.533626
+       },
+       {
+        "index": 5,
+        "length": 643.364,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 321.681763
+       },
+       {
+        "index": 6,
+        "length": 1256.048,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.023979
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1214.03132,
+      "transition_length": 4.596268,
+      "travel_length": 0,
+      "travel_time": 0.766045
+     },
+     {
+      "design_id": "d1",
+      "index": 41,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 112,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 124,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 136,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 148,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 160,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 172,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 184,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2410.713599,
+      "print_time": 1205.356799,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 217.562,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 108.780894
+       },
+       {
+        "index": 1,
+        "length": 74.053,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.026673
+       },
+       {
+        "index": 2,
+        "length": 74.053,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.026673
+       },
+       {
+        "index": 3,
+        "length": 74.053,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.026673
+       },
+       {
+        "index": 4,
+        "length": 74.054,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.02677
+       },
+       {
+        "index": 5,
+        "length": 640.969,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 320.484658
+       },
+       {
+        "index": 6,
+        "length": 1255.969,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 627.984457
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1206.122825,
+      "transition_length": 4.596154,
+      "travel_length": 0,
+      "travel_time": 0.766026
+     },
+     {
+      "design_id": "d1",
+      "index": 42,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 113,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 125,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 137,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 149,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 161,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 173,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 185,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2394.989414,
+      "print_time": 1197.494707,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 216.32,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 108.1599
+       },
+       {
+        "index": 1,
+        "length": 71.039,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.519701
+       },
+       {
+        "index": 2,
+        "length": 71.04,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.519798
+       },
+       {
+        "index": 3,
+        "length": 71.04,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.519798
+       },
+       {
+        "index": 4,
+        "length": 71.04,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.519798
+       },
+       {
+        "index": 5,
+        "length": 638.575,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 319.287554
+       },
+       {
+        "index": 6,
+        "length": 1255.936,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 627.968157
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1198.260712,
+      "transition_length": 4.596027,
+      "travel_length": 0,
+      "travel_time": 0.766005
+     },
+     {
+      "design_id": "d1",
+      "index": 43,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 114,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 126,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 138,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 150,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 162,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 174,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 186,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2394.357715,
+      "print_time": 1197.178858,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 216.624,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 108.312232
+       },
+       {
+        "index": 1,
+        "length": 71.026,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.5128
+       },
+       {
+        "index": 2,
+        "length": 71.026,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.5128
+       },
+       {
+        "index": 3,
+        "length": 71.025,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.512703
+       },
+       {
+        "index": 4,
+        "length": 71.026,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 35.5128
+       },
+       {
+        "index": 5,
+        "length": 637.681,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 318.840446
+       },
+       {
+        "index": 6,
+        "length": 1255.95,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 627.975079
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1197.301443,
+      "transition_length": 0.735515,
+      "travel_length": 0,
+      "travel_time": 0.122586
+     },
+     {
+      "design_id": "d1",
+      "index": 44,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 115,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 127,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 139,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 151,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 163,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 175,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 187,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2408.820615,
+      "print_time": 1204.410307,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 218.476,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 109.238121
+       },
+       {
+        "index": 1,
+        "length": 74.012,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.00585
+       },
+       {
+        "index": 2,
+        "length": 74.012,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.005753
+       },
+       {
+        "index": 3,
+        "length": 74.012,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.00585
+       },
+       {
+        "index": 4,
+        "length": 74.012,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 37.005753
+       },
+       {
+        "index": 5,
+        "length": 638.287,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 319.143323
+       },
+       {
+        "index": 6,
+        "length": 1256.011,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.005656
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1205.176317,
+      "transition_length": 4.596058,
+      "travel_length": 0,
+      "travel_time": 0.76601
+     },
+     {
+      "design_id": "d1",
+      "index": 45,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 116,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 128,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 140,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 152,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 164,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 176,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 188,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2423.379662,
+      "print_time": 1211.689831,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 220.376,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 110.187951
+       },
+       {
+        "index": 1,
+        "length": 76.998,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.498952
+       },
+       {
+        "index": 2,
+        "length": 76.998,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.498855
+       },
+       {
+        "index": 3,
+        "length": 76.998,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.498952
+       },
+       {
+        "index": 4,
+        "length": 76.998,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 38.498855
+       },
+       {
+        "index": 5,
+        "length": 638.892,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 319.446238
+       },
+       {
+        "index": 6,
+        "length": 1256.12,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.06003
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1212.455896,
+      "transition_length": 4.596393,
+      "travel_length": 0,
+      "travel_time": 0.766066
+     },
+     {
+      "design_id": "d1",
+      "index": 46,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 117,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 129,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 141,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 153,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 165,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 177,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 189,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2438.034792,
+      "print_time": 1219.017396,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 222.324,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 111.16191
+       },
+       {
+        "index": 1,
+        "length": 79.984,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 39.992002
+       },
+       {
+        "index": 2,
+        "length": 79.984,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 39.991905
+       },
+       {
+        "index": 3,
+        "length": 79.984,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 39.991905
+       },
+       {
+        "index": 4,
+        "length": 79.984,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 39.991905
+       },
+       {
+        "index": 5,
+        "length": 639.498,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 319.749088
+       },
+       {
+        "index": 6,
+        "length": 1256.277,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.138681
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1219.783388,
+      "transition_length": 4.595949,
+      "travel_length": 0,
+      "travel_time": 0.765992
+     },
+     {
+      "design_id": "d1",
+      "index": 47,
+      "lift": 3,
+      "passes": [
+       {
+        "index": 118,
+        "runs": [
+         0
+        ],
+        "stage": 12
+       },
+       {
+        "index": 130,
+        "runs": [
+         1
+        ],
+        "stage": 13
+       },
+       {
+        "index": 142,
+        "runs": [
+         2
+        ],
+        "stage": 14
+       },
+       {
+        "index": 154,
+        "runs": [
+         3
+        ],
+        "stage": 15
+       },
+       {
+        "index": 166,
+        "runs": [
+         4
+        ],
+        "stage": 16
+       },
+       {
+        "index": 178,
+        "runs": [
+         5
+        ],
+        "stage": 17
+       },
+       {
+        "index": 190,
+        "runs": [
+         6
+        ],
+        "stage": 18
+       }
+      ],
+      "print_length": 2452.787297,
+      "print_time": 1226.393648,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 224.321,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 112.160426
+       },
+       {
+        "index": 1,
+        "length": 82.97,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.4849
+       },
+       {
+        "index": 2,
+        "length": 82.97,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.4849
+       },
+       {
+        "index": 3,
+        "length": 82.97,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.484997
+       },
+       {
+        "index": 4,
+        "length": 82.97,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 41.4849
+       },
+       {
+        "index": 5,
+        "length": 640.104,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 320.051922
+       },
+       {
+        "index": 6,
+        "length": 1256.483,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.241603
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1227.159676,
+      "transition_length": 4.596163,
+      "travel_length": 0,
+      "travel_time": 0.766027
+     },
+     {
+      "design_id": "d1",
+      "index": 48,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 191,
+        "runs": [
+         0
+        ],
+        "stage": 19
+       },
+       {
+        "index": 196,
+        "runs": [
+         1
+        ],
+        "stage": 20
+       },
+       {
+        "index": 205,
+        "runs": [
+         2
+        ],
+        "stage": 22
+       },
+       {
+        "index": 214,
+        "runs": [
+         3
+        ],
+        "stage": 23
+       },
+       {
+        "index": 223,
+        "runs": [
+         4
+        ],
+        "stage": 24
+       },
+       {
+        "index": 232,
+        "runs": [
+         5
+        ],
+        "stage": 25
+       },
+       {
+        "index": 241,
+        "runs": [
+         6
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2467.640201,
+      "print_time": 1233.820101,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1256.739,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.369516
+       },
+       {
+        "index": 1,
+        "length": 640.71,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 320.354788
+       },
+       {
+        "index": 2,
+        "length": 85.956,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 42.978028
+       },
+       {
+        "index": 3,
+        "length": 85.956,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 42.978028
+       },
+       {
+        "index": 4,
+        "length": 85.956,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 42.978124
+       },
+       {
+        "index": 5,
+        "length": 85.956,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 42.978028
+       },
+       {
+        "index": 6,
+        "length": 226.367,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 113.183589
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1298.791609,
+      "transition_length": 389.82905,
+      "travel_length": 0,
+      "travel_time": 64.971508
+     },
+     {
+      "design_id": "d1",
+      "index": 49,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 192,
+        "runs": [
+         0
+        ],
+        "stage": 19
+       },
+       {
+        "index": 197,
+        "runs": [
+         1
+        ],
+        "stage": 20
+       },
+       {
+        "index": 206,
+        "runs": [
+         2
+        ],
+        "stage": 22
+       },
+       {
+        "index": 215,
+        "runs": [
+         3
+        ],
+        "stage": 23
+       },
+       {
+        "index": 224,
+        "runs": [
+         4
+        ],
+        "stage": 24
+       },
+       {
+        "index": 233,
+        "runs": [
+         5
+        ],
+        "stage": 25
+       },
+       {
+        "index": 242,
+        "runs": [
+         6
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2482.593431,
+      "print_time": 1241.296716,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1257.045,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.522462
+       },
+       {
+        "index": 1,
+        "length": 641.315,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 320.65768
+       },
+       {
+        "index": 2,
+        "length": 88.942,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.471187
+       },
+       {
+        "index": 3,
+        "length": 88.942,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.47109
+       },
+       {
+        "index": 4,
+        "length": 88.942,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.47109
+       },
+       {
+        "index": 5,
+        "length": 88.942,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 44.471187
+       },
+       {
+        "index": 6,
+        "length": 228.464,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 114.232018
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1242.062757,
+      "transition_length": 4.59625,
+      "travel_length": 0,
+      "travel_time": 0.766042
+     },
+     {
+      "design_id": "d1",
+      "index": 50,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 193,
+        "runs": [
+         0
+        ],
+        "stage": 19
+       },
+       {
+        "index": 198,
+        "runs": [
+         1
+        ],
+        "stage": 20
+       },
+       {
+        "index": 207,
+        "runs": [
+         2
+        ],
+        "stage": 22
+       },
+       {
+        "index": 216,
+        "runs": [
+         3
+        ],
+        "stage": 23
+       },
+       {
+        "index": 225,
+        "runs": [
+         4
+        ],
+        "stage": 24
+       },
+       {
+        "index": 234,
+        "runs": [
+         5
+        ],
+        "stage": 25
+       },
+       {
+        "index": 243,
+        "runs": [
+         6
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2497.693491,
+      "print_time": 1248.846745,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1257.402,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.701061
+       },
+       {
+        "index": 1,
+        "length": 641.967,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 320.983407
+       },
+       {
+        "index": 2,
+        "length": 91.928,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 45.964084
+       },
+       {
+        "index": 3,
+        "length": 91.928,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 45.964084
+       },
+       {
+        "index": 4,
+        "length": 91.928,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 45.964084
+       },
+       {
+        "index": 5,
+        "length": 91.928,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 45.964084
+       },
+       {
+        "index": 6,
+        "length": 230.612,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 115.305944
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1249.612757,
+      "transition_length": 4.59607,
+      "travel_length": 0,
+      "travel_time": 0.766012
+     },
+     {
+      "design_id": "d1",
+      "index": 51,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 194,
+        "runs": [
+         0
+        ],
+        "stage": 19
+       },
+       {
+        "index": 199,
+        "runs": [
+         1
+        ],
+        "stage": 20
+       },
+       {
+        "index": 208,
+        "runs": [
+         2
+        ],
+        "stage": 22
+       },
+       {
+        "index": 217,
+        "runs": [
+         3
+        ],
+        "stage": 23
+       },
+       {
+        "index": 226,
+        "runs": [
+         4
+        ],
+        "stage": 24
+       },
+       {
+        "index": 235,
+        "runs": [
+         5
+        ],
+        "stage": 25
+       },
+       {
+        "index": 244,
+        "runs": [
+         6
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2512.971671,
+      "print_time": 1256.485835,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1257.811,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 628.905544
+       },
+       {
+        "index": 1,
+        "length": 642.692,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 321.346009
+       },
+       {
+        "index": 2,
+        "length": 94.914,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.457099
+       },
+       {
+        "index": 3,
+        "length": 94.914,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.457099
+       },
+       {
+        "index": 4,
+        "length": 94.914,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.457195
+       },
+       {
+        "index": 5,
+        "length": 94.914,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 47.457099
+       },
+       {
+        "index": 6,
+        "length": 232.812,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 116.405791
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1257.251831,
+      "transition_length": 4.595972,
+      "travel_length": 0,
+      "travel_time": 0.765995
+     },
+     {
+      "design_id": "d1",
+      "index": 52,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 195,
+        "runs": [
+         0
+        ],
+        "stage": 19
+       },
+       {
+        "index": 200,
+        "runs": [
+         1
+        ],
+        "stage": 20
+       },
+       {
+        "index": 209,
+        "runs": [
+         2
+        ],
+        "stage": 22
+       },
+       {
+        "index": 218,
+        "runs": [
+         3
+        ],
+        "stage": 23
+       },
+       {
+        "index": 227,
+        "runs": [
+         4
+        ],
+        "stage": 24
+       },
+       {
+        "index": 236,
+        "runs": [
+         5
+        ],
+        "stage": 25
+       },
+       {
+        "index": 245,
+        "runs": [
+         6
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2528.357753,
+      "print_time": 1264.178876,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1258.273,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 629.136481
+       },
+       {
+        "index": 1,
+        "length": 643.419,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 321.70931
+       },
+       {
+        "index": 2,
+        "length": 97.9,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 48.950228
+       },
+       {
+        "index": 3,
+        "length": 97.9,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 48.950228
+       },
+       {
+        "index": 4,
+        "length": 97.9,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 48.950228
+       },
+       {
+        "index": 5,
+        "length": 97.9,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 48.950228
+       },
+       {
+        "index": 6,
+        "length": 235.064,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 117.532174
+       }
+      ],
+      "section_index": 0,
+      "total_time": 1264.944932,
+      "transition_length": 4.596337,
+      "travel_length": 0,
+      "travel_time": 0.766056
+     },
+     {
+      "design_id": "base",
+      "index": 53,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 201,
+        "runs": [
+         0
+        ],
+        "stage": 21
+       },
+       {
+        "index": 210,
+        "runs": [
+         1
+        ],
+        "stage": 22
+       },
+       {
+        "index": 219,
+        "runs": [
+         2
+        ],
+        "stage": 23
+       },
+       {
+        "index": 228,
+        "runs": [
+         3
+        ],
+        "stage": 24
+       },
+       {
+        "index": 237,
+        "runs": [
+         4
+        ],
+        "stage": 25
+       },
+       {
+        "index": 246,
+        "runs": [
+         5
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2703.209112,
+      "print_time": 1351.604556,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2062.292,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1031.145901
+       },
+       {
+        "index": 1,
+        "length": 100.887,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.44337
+       },
+       {
+        "index": 2,
+        "length": 100.887,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.443273
+       },
+       {
+        "index": 3,
+        "length": 100.887,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.44337
+       },
+       {
+        "index": 4,
+        "length": 100.887,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 50.443273
+       },
+       {
+        "index": 5,
+        "length": 237.371,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 118.68537
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1352.363388,
+      "transition_length": 4.552993,
+      "travel_length": 0,
+      "travel_time": 0.758832
+     },
+     {
+      "design_id": "base",
+      "index": 54,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 202,
+        "runs": [
+         0
+        ],
+        "stage": 21
+       },
+       {
+        "index": 211,
+        "runs": [
+         1
+        ],
+        "stage": 22
+       },
+       {
+        "index": 220,
+        "runs": [
+         2
+        ],
+        "stage": 23
+       },
+       {
+        "index": 229,
+        "runs": [
+         3
+        ],
+        "stage": 24
+       },
+       {
+        "index": 238,
+        "runs": [
+         4
+        ],
+        "stage": 25
+       },
+       {
+        "index": 247,
+        "runs": [
+         5
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2718.704586,
+      "print_time": 1359.352293,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2063.482,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1031.740902
+       },
+       {
+        "index": 1,
+        "length": 103.873,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 51.936423
+       },
+       {
+        "index": 2,
+        "length": 103.873,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 51.936326
+       },
+       {
+        "index": 3,
+        "length": 103.873,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 51.936326
+       },
+       {
+        "index": 4,
+        "length": 103.873,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 51.936423
+       },
+       {
+        "index": 5,
+        "length": 239.732,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 119.865893
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1360.111118,
+      "transition_length": 4.552948,
+      "travel_length": 0,
+      "travel_time": 0.758825
+     },
+     {
+      "design_id": "base",
+      "index": 55,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 203,
+        "runs": [
+         0
+        ],
+        "stage": 21
+       },
+       {
+        "index": 212,
+        "runs": [
+         1
+        ],
+        "stage": 22
+       },
+       {
+        "index": 221,
+        "runs": [
+         2
+        ],
+        "stage": 23
+       },
+       {
+        "index": 230,
+        "runs": [
+         3
+        ],
+        "stage": 24
+       },
+       {
+        "index": 239,
+        "runs": [
+         4
+        ],
+        "stage": 25
+       },
+       {
+        "index": 248,
+        "runs": [
+         5
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2734.311432,
+      "print_time": 1367.155716,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2064.728,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1032.36388
+       },
+       {
+        "index": 1,
+        "length": 106.859,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.429382
+       },
+       {
+        "index": 2,
+        "length": 106.859,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.429382
+       },
+       {
+        "index": 3,
+        "length": 106.859,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.429286
+       },
+       {
+        "index": 4,
+        "length": 106.859,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 53.429382
+       },
+       {
+        "index": 5,
+        "length": 242.149,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 121.074403
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1367.914515,
+      "transition_length": 4.552795,
+      "travel_length": 0,
+      "travel_time": 0.758799
+     },
+     {
+      "design_id": "base",
+      "index": 56,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 204,
+        "runs": [
+         0
+        ],
+        "stage": 21
+       },
+       {
+        "index": 213,
+        "runs": [
+         1
+        ],
+        "stage": 22
+       },
+       {
+        "index": 222,
+        "runs": [
+         2
+        ],
+        "stage": 23
+       },
+       {
+        "index": 231,
+        "runs": [
+         3
+        ],
+        "stage": 24
+       },
+       {
+        "index": 240,
+        "runs": [
+         4
+        ],
+        "stage": 25
+       },
+       {
+        "index": 249,
+        "runs": [
+         5
+        ],
+        "stage": 26
+       }
+      ],
+      "print_length": 2750.033008,
+      "print_time": 1375.016504,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2066.031,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1033.015395
+       },
+       {
+        "index": 1,
+        "length": 109.845,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 54.922341
+       },
+       {
+        "index": 2,
+        "length": 109.845,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 54.922437
+       },
+       {
+        "index": 3,
+        "length": 109.845,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 54.922341
+       },
+       {
+        "index": 4,
+        "length": 109.845,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 54.922437
+       },
+       {
+        "index": 5,
+        "length": 244.623,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 122.311554
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1375.775339,
+      "transition_length": 4.553008,
+      "travel_length": 0,
+      "travel_time": 0.758835
+     },
+     {
+      "design_id": "base",
+      "index": 57,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 250,
+        "runs": [
+         0,
+         1,
+         2,
+         3,
+         4,
+         5
+        ],
+        "stage": 27
+       }
+      ],
+      "print_length": 2765.871506,
+      "print_time": 1382.935753,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 247.155,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 123.577715
+       },
+       {
+        "index": 1,
+        "length": 112.831,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.415484
+       },
+       {
+        "index": 2,
+        "length": 112.831,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.415484
+       },
+       {
+        "index": 3,
+        "length": 112.831,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.415484
+       },
+       {
+        "index": 4,
+        "length": 112.831,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 56.415484
+       },
+       {
+        "index": 5,
+        "length": 2067.392,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1033.696101
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1416.14499,
+      "transition_length": 0.758826,
+      "travel_length": 198.496593,
+      "travel_time": 33.209237
+     },
+     {
+      "design_id": "base",
+      "index": 58,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 251,
+        "runs": [
+         0,
+         1,
+         2,
+         3,
+         4,
+         5
+        ],
+        "stage": 27
+       }
+      ],
+      "print_length": 2781.82892,
+      "print_time": 1390.91446,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 115.817,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 57.908521
+       },
+       {
+        "index": 1,
+        "length": 115.817,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 57.908521
+       },
+       {
+        "index": 2,
+        "length": 115.817,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 57.908521
+       },
+       {
+        "index": 3,
+        "length": 115.817,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 57.908521
+       },
+       {
+        "index": 4,
+        "length": 249.748,
+        "sources": [
+         "p2"
+        ],
+        "systems": [
+         "wall:p2"
+        ],
+        "time": 124.873871
+       },
+       {
+        "index": 5,
+        "length": 2068.813,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1034.406506
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1439.035549,
+      "transition_length": 1.504366,
+      "travel_length": 287.222169,
+      "travel_time": 48.121089
+     },
+     {
+      "design_id": "base",
+      "index": 59,
+      "lift": 4,
+      "passes": [
+       {
+        "index": 252,
+        "runs": [
+         0
+        ],
+        "stage": 27
+       }
+      ],
+      "print_length": 2694.50958,
+      "print_time": 1347.25479,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2694.51,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1347.25479
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1347.385339,
+      "transition_length": 0.783292,
+      "travel_length": 0,
+      "travel_time": 0.130549
+     },
+     {
+      "design_id": "base",
+      "index": 60,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 253,
+        "runs": [
+         0
+        ],
+        "stage": 28
+       }
+      ],
+      "print_length": 2695.784556,
+      "print_time": 1347.892278,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2695.785,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1347.892278
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1348.028057,
+      "transition_length": 0.814673,
+      "travel_length": 0,
+      "travel_time": 0.135779
+     },
+     {
+      "design_id": "base",
+      "index": 61,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 254,
+        "runs": [
+         0
+        ],
+        "stage": 28
+       }
+      ],
+      "print_length": 2697.188147,
+      "print_time": 1348.594073,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2697.188,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1348.594073
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1348.735176,
+      "transition_length": 0.846614,
+      "travel_length": 0,
+      "travel_time": 0.141102
+     },
+     {
+      "design_id": "base",
+      "index": 62,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 255,
+        "runs": [
+         0
+        ],
+        "stage": 28
+       }
+      ],
+      "print_length": 2698.724273,
+      "print_time": 1349.362137,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2698.724,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1349.362137
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1349.508742,
+      "transition_length": 0.879635,
+      "travel_length": 0,
+      "travel_time": 0.146606
+     },
+     {
+      "design_id": "base",
+      "index": 63,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 256,
+        "runs": [
+         0
+        ],
+        "stage": 28
+       }
+      ],
+      "print_length": 2700.396652,
+      "print_time": 1350.198326,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2700.397,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1350.198326
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1350.350591,
+      "transition_length": 0.913592,
+      "travel_length": 0,
+      "travel_time": 0.152265
+     },
+     {
+      "design_id": "base",
+      "index": 64,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 257,
+        "runs": [
+         0
+        ],
+        "stage": 28
+       }
+      ],
+      "print_length": 2702.209753,
+      "print_time": 1351.104876,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2702.21,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1351.104876
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1351.262988,
+      "transition_length": 0.94867,
+      "travel_length": 0,
+      "travel_time": 0.158112
+     },
+     {
+      "design_id": "base",
+      "index": 65,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 258,
+        "runs": [
+         0
+        ],
+        "stage": 28
+       }
+      ],
+      "print_length": 2704.168221,
+      "print_time": 1352.084111,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 2704.168,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 1352.084111
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1352.248247,
+      "transition_length": 0.984819,
+      "travel_length": 0,
+      "travel_time": 0.164137
+     },
+     {
+      "design_id": "base",
+      "index": 66,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 259,
+        "runs": [
+         0
+        ],
+        "stage": 29
+       },
+       {
+        "index": 265,
+        "runs": [
+         1
+        ],
+        "stage": 30
+       }
+      ],
+      "print_length": 2685.135937,
+      "print_time": 1342.567968,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1433.73,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 716.865008
+       },
+       {
+        "index": 1,
+        "length": 1251.406,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 625.70296
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1356.234665,
+      "transition_length": 82.000178,
+      "travel_length": 0,
+      "travel_time": 13.666696
+     },
+     {
+      "design_id": "base",
+      "index": 67,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 260,
+        "runs": [
+         0
+        ],
+        "stage": 29
+       },
+       {
+        "index": 266,
+        "runs": [
+         1
+        ],
+        "stage": 30
+       }
+      ],
+      "print_length": 2683.179857,
+      "print_time": 1341.589929,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1432.686,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 716.342783
+       },
+       {
+        "index": 1,
+        "length": 1250.494,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 625.247145
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1341.615826,
+      "transition_length": 0.155386,
+      "travel_length": 0,
+      "travel_time": 0.025898
+     },
+     {
+      "design_id": "base",
+      "index": 68,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 261,
+        "runs": [
+         0
+        ],
+        "stage": 29
+       },
+       {
+        "index": 267,
+        "runs": [
+         1
+        ],
+        "stage": 30
+       }
+      ],
+      "print_length": 2681.223778,
+      "print_time": 1340.611889,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1431.641,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 715.820558
+       },
+       {
+        "index": 1,
+        "length": 1249.583,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 624.791331
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1340.637787,
+      "transition_length": 0.155386,
+      "travel_length": 0,
+      "travel_time": 0.025898
+     },
+     {
+      "design_id": "base",
+      "index": 69,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 262,
+        "runs": [
+         0
+        ],
+        "stage": 29
+       },
+       {
+        "index": 268,
+        "runs": [
+         1
+        ],
+        "stage": 30
+       }
+      ],
+      "print_length": 2679.267698,
+      "print_time": 1339.633849,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1430.597,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 715.298333
+       },
+       {
+        "index": 1,
+        "length": 1248.671,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 624.335516
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1339.659747,
+      "transition_length": 0.155386,
+      "travel_length": 0,
+      "travel_time": 0.025898
+     },
+     {
+      "design_id": "base",
+      "index": 70,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 263,
+        "runs": [
+         0
+        ],
+        "stage": 29
+       },
+       {
+        "index": 269,
+        "runs": [
+         1
+        ],
+        "stage": 30
+       }
+      ],
+      "print_length": 2677.311619,
+      "print_time": 1338.65581,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1429.552,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 714.776109
+       },
+       {
+        "index": 1,
+        "length": 1247.759,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 623.879701
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1338.681707,
+      "transition_length": 0.155386,
+      "travel_length": 0,
+      "travel_time": 0.025898
+     },
+     {
+      "design_id": "base",
+      "index": 71,
+      "lift": 5,
+      "passes": [
+       {
+        "index": 264,
+        "runs": [
+         0
+        ],
+        "stage": 29
+       },
+       {
+        "index": 270,
+        "runs": [
+         1
+        ],
+        "stage": 30
+       }
+      ],
+      "print_length": 2675.35554,
+      "print_time": 1337.67777,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1428.508,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 714.253884
+       },
+       {
+        "index": 1,
+        "length": 1246.848,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 623.423886
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1337.703667,
+      "transition_length": 0.155386,
+      "travel_length": 0,
+      "travel_time": 0.025898
+     },
+     {
+      "design_id": "base",
+      "index": 72,
+      "lift": 6,
+      "passes": [
+       {
+        "index": 271,
+        "runs": [
+         0
+        ],
+        "stage": 31
+       },
+       {
+        "index": 272,
+        "runs": [
+         1
+        ],
+        "stage": 32
+       }
+      ],
+      "print_length": 2673.39946,
+      "print_time": 1336.69973,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 1245.936,
+        "sources": [
+         "p1",
+         "p2"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 622.968071
+       },
+       {
+        "index": 1,
+        "length": 1427.463,
+        "sources": [
+         "p1",
+         "p2",
+         "p5"
+        ],
+        "systems": [
+         "wall:p1",
+         "wall:p2"
+        ],
+        "time": 713.731659
+       }
+      ],
+      "section_index": 1,
+      "total_time": 1338.446438,
+      "transition_length": 10.480247,
+      "travel_length": 0,
+      "travel_time": 1.746708
+     }
+    ],
+    "lifts": [
+     {
+      "first_layer": 0,
+      "frame_time": 0.0,
+      "frame_z": 0.0,
+      "height": 18.0,
+      "index": 0,
+      "last_layer": 11,
+      "layers": 12,
+      "passes": 24,
+      "print_time": 15553.786311,
+      "reposition_in": null,
+      "stages": [
+       0,
+       1
+      ],
+      "total_time": 15596.154438,
+      "travel_time": 42.368127,
+      "z_bottom": 0.0,
+      "z_top": 18.0
+     },
+     {
+      "first_layer": 12,
+      "frame_time": 0.0,
+      "frame_z": 18.0,
+      "height": 18.0,
+      "index": 1,
+      "last_layer": 23,
+      "layers": 12,
+      "passes": 24,
+      "print_time": 15410.946355,
+      "reposition_in": {
+       "at": [
+        79.16003,
+        43.47828
+       ],
+       "frame_z_from": 0.0,
+       "frame_z_to": 18.0,
+       "from_lift": 0,
+       "rise": 18.0,
+       "to_lift": 1,
+       "z": 18.0
+      },
+      "stages": [
+       2,
+       3
+      ],
+      "total_time": 15426.179464,
+      "travel_time": 15.233108,
+      "z_bottom": 18.0,
+      "z_top": 36.0
+     },
+     {
+      "first_layer": 24,
+      "frame_time": 0.0,
+      "frame_z": 36.0,
+      "height": 18.0,
+      "index": 2,
+      "last_layer": 35,
+      "layers": 12,
+      "passes": 59,
+      "print_time": 15409.912378,
+      "reposition_in": {
+       "at": [
+        80.14094,
+        132.99231
+       ],
+       "frame_z_from": 18.0,
+       "frame_z_to": 36.0,
+       "from_lift": 1,
+       "rise": 18.0,
+       "to_lift": 2,
+       "z": 36.0
+      },
+      "stages": [
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11
+      ],
+      "total_time": 15572.50571,
+      "travel_time": 162.593333,
+      "z_bottom": 36.0,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 36,
+      "frame_time": 0.0,
+      "frame_z": 54.0,
+      "height": 18.0,
+      "index": 3,
+      "last_layer": 47,
+      "layers": 12,
+      "passes": 84,
+      "print_time": 14607.864848,
+      "reposition_in": {
+       "at": [
+        357.82861,
+        280.47198
+       ],
+       "frame_z_from": 36.0,
+       "frame_z_to": 54.0,
+       "from_lift": 2,
+       "rise": 18.0,
+       "to_lift": 3,
+       "z": 54.0
+      },
+      "stages": [
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       18
+      ],
+      "total_time": 14676.733199,
+      "travel_time": 68.86835,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 48,
+      "frame_time": 0.0,
+      "frame_z": 72.0,
+      "height": 18.0,
+      "index": 4,
+      "last_layer": 59,
+      "layers": 12,
+      "passes": 62,
+      "print_time": 15818.862346,
+      "reposition_in": {
+       "at": [
+        219.6097,
+        152.1989
+       ],
+       "frame_z_from": 54.0,
+       "frame_z_to": 72.0,
+       "from_lift": 3,
+       "rise": 18.0,
+       "to_lift": 4,
+       "z": 72.0
+      },
+      "stages": [
+       19,
+       20,
+       21,
+       22,
+       23,
+       24,
+       25,
+       26,
+       27
+      ],
+      "total_time": 15971.394124,
+      "travel_time": 152.531778,
+      "z_bottom": 72.0,
+      "z_top": 90.0
+     },
+     {
+      "first_layer": 60,
+      "frame_time": 0.0,
+      "frame_z": 90.0,
+      "height": 18.0,
+      "index": 5,
+      "last_layer": 71,
+      "layers": 12,
+      "passes": 18,
+      "print_time": 16139.973015,
+      "reposition_in": {
+       "at": [
+        271.99228,
+        309.42492
+       ],
+       "frame_z_from": 72.0,
+       "frame_z_to": 90.0,
+       "from_lift": 4,
+       "rise": 18.0,
+       "to_lift": 5,
+       "z": 90.0
+      },
+      "stages": [
+       28,
+       29,
+       30
+      ],
+      "total_time": 16154.6672,
+      "travel_time": 14.694185,
+      "z_bottom": 90.0,
+      "z_top": 108.0
+     },
+     {
+      "first_layer": 72,
+      "frame_time": 0.0,
+      "frame_z": 108.0,
+      "height": 1.5,
+      "index": 6,
+      "last_layer": 72,
+      "layers": 1,
+      "passes": 2,
+      "print_time": 1336.69973,
+      "reposition_in": {
+       "at": [
+        205.25656,
+        318.07183
+       ],
+       "frame_z_from": 90.0,
+       "frame_z_to": 108.0,
+       "from_lift": 5,
+       "rise": 18.0,
+       "to_lift": 6,
+       "z": 108.0
+      },
+      "stages": [
+       31,
+       32
+      ],
+      "total_time": 1338.446438,
+      "travel_time": 1.746708,
+      "z_bottom": 108.0,
+      "z_top": 109.5
+     }
+    ],
+    "print_length": 188556.089966,
+    "print_time": 94278.044983,
+    "retrace_length": 0.0,
+    "runs": 293,
+    "sections": [
+     {
+      "index": 0,
+      "layers": 53,
+      "print_length": 134454.276331,
+      "print_time": 67227.138165,
+      "total_time": 67584.236697,
+      "travel_length": 2142.591187,
+      "travel_time": 357.098531
+     },
+     {
+      "index": 1,
+      "layers": 20,
+      "print_length": 54101.813635,
+      "print_time": 27050.906818,
+      "total_time": 27151.843875,
+      "travel_length": 605.622346,
+      "travel_time": 100.937058
+     }
+    ],
+    "speeds": {
+     "frame": 0.0,
+     "print": 2.0,
+     "travel": 6.0
+    },
+    "stages": [
+     {
+      "first_layer": 0,
+      "index": 0,
+      "kind": "island",
+      "last_layer": 11,
+      "layers": 12,
+      "lift": 0,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11
+      ],
+      "print_time": 7656.728789,
+      "total_time": 7656.965918,
+      "travel_time": 0.237129,
+      "z_bottom": 0.0,
+      "z_top": 18.0
+     },
+     {
+      "first_layer": 0,
+      "index": 1,
+      "kind": "island",
+      "last_layer": 11,
+      "layers": 12,
+      "lift": 0,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       18,
+       19,
+       20,
+       21,
+       22,
+       23
+      ],
+      "print_time": 7897.057522,
+      "total_time": 7939.188519,
+      "travel_time": 42.130997,
+      "z_bottom": 0.0,
+      "z_top": 18.0
+     },
+     {
+      "first_layer": 12,
+      "index": 2,
+      "kind": "island",
+      "last_layer": 23,
+      "layers": 12,
+      "lift": 1,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       24,
+       25,
+       26,
+       27,
+       28,
+       29,
+       30,
+       31,
+       32,
+       33,
+       34,
+       35
+      ],
+      "print_time": 7804.41334,
+      "total_time": 7804.576824,
+      "travel_time": 0.163484,
+      "z_bottom": 18.0,
+      "z_top": 36.0
+     },
+     {
+      "first_layer": 12,
+      "index": 3,
+      "kind": "island",
+      "last_layer": 23,
+      "layers": 12,
+      "lift": 1,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       36,
+       37,
+       38,
+       39,
+       40,
+       41,
+       42,
+       43,
+       44,
+       45,
+       46,
+       47
+      ],
+      "print_time": 7606.533016,
+      "total_time": 7621.60264,
+      "travel_time": 15.069624,
+      "z_bottom": 18.0,
+      "z_top": 36.0
+     },
+     {
+      "first_layer": 24,
+      "index": 4,
+      "kind": "island",
+      "last_layer": 35,
+      "layers": 12,
+      "lift": 2,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       48,
+       49,
+       50,
+       51,
+       52,
+       53,
+       54,
+       55,
+       56,
+       57,
+       58,
+       59
+      ],
+      "print_time": 7558.96312,
+      "total_time": 7559.126604,
+      "travel_time": 0.163484,
+      "z_bottom": 36.0,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 24,
+      "index": 5,
+      "kind": "island",
+      "last_layer": 28,
+      "layers": 5,
+      "lift": 2,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       60,
+       61,
+       62,
+       63,
+       64
+      ],
+      "print_time": 3307.611747,
+      "total_time": 3434.270997,
+      "travel_time": 126.65925,
+      "z_bottom": 36.0,
+      "z_top": 43.5
+     },
+     {
+      "first_layer": 29,
+      "index": 6,
+      "kind": "split",
+      "last_layer": 35,
+      "layers": 7,
+      "lift": 2,
+      "name": "B.1",
+      "parents": [
+       5
+      ],
+      "passes": [
+       65,
+       66,
+       67,
+       68,
+       69,
+       70,
+       71
+      ],
+      "print_time": 2318.811699,
+      "total_time": 2319.696995,
+      "travel_time": 0.885296,
+      "z_bottom": 43.5,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 29,
+      "index": 7,
+      "kind": "split",
+      "last_layer": 35,
+      "layers": 7,
+      "lift": 2,
+      "name": "B.2",
+      "parents": [
+       5
+      ],
+      "passes": [
+       72,
+       73,
+       74,
+       75,
+       76,
+       77,
+       78
+      ],
+      "print_time": 354.124597,
+      "total_time": 356.263252,
+      "travel_time": 2.138655,
+      "z_bottom": 43.5,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 29,
+      "index": 8,
+      "kind": "split",
+      "last_layer": 35,
+      "layers": 7,
+      "lift": 2,
+      "name": "B.3",
+      "parents": [
+       5
+      ],
+      "passes": [
+       79,
+       80,
+       81,
+       82,
+       83,
+       84,
+       85
+      ],
+      "print_time": 354.124793,
+      "total_time": 362.311462,
+      "travel_time": 8.18667,
+      "z_bottom": 43.5,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 29,
+      "index": 9,
+      "kind": "split",
+      "last_layer": 35,
+      "layers": 7,
+      "lift": 2,
+      "name": "B.4",
+      "parents": [
+       5
+      ],
+      "passes": [
+       86,
+       87,
+       88,
+       89,
+       90,
+       91,
+       92
+      ],
+      "print_time": 354.124792,
+      "total_time": 362.311446,
+      "travel_time": 8.186654,
+      "z_bottom": 43.5,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 29,
+      "index": 10,
+      "kind": "split",
+      "last_layer": 35,
+      "layers": 7,
+      "lift": 2,
+      "name": "B.5",
+      "parents": [
+       5
+      ],
+      "passes": [
+       93,
+       94,
+       95,
+       96,
+       97,
+       98,
+       99
+      ],
+      "print_time": 354.124695,
+      "total_time": 362.311365,
+      "travel_time": 8.18667,
+      "z_bottom": 43.5,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 29,
+      "index": 11,
+      "kind": "split",
+      "last_layer": 35,
+      "layers": 7,
+      "lift": 2,
+      "name": "B.6",
+      "parents": [
+       5
+      ],
+      "passes": [
+       100,
+       101,
+       102,
+       103,
+       104,
+       105,
+       106
+      ],
+      "print_time": 808.026935,
+      "total_time": 816.213589,
+      "travel_time": 8.186654,
+      "z_bottom": 43.5,
+      "z_top": 54.0
+     },
+     {
+      "first_layer": 36,
+      "index": 12,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       107,
+       108,
+       109,
+       110,
+       111,
+       112,
+       113,
+       114,
+       115,
+       116,
+       117,
+       118
+      ],
+      "print_time": 1322.022841,
+      "total_time": 1323.433246,
+      "travel_time": 1.410406,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 36,
+      "index": 13,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       119,
+       120,
+       121,
+       122,
+       123,
+       124,
+       125,
+       126,
+       127,
+       128,
+       129,
+       130
+      ],
+      "print_time": 472.778489,
+      "total_time": 476.695927,
+      "travel_time": 3.917438,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 36,
+      "index": 14,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "C",
+      "parents": [],
+      "passes": [
+       131,
+       132,
+       133,
+       134,
+       135,
+       136,
+       137,
+       138,
+       139,
+       140,
+       141,
+       142
+      ],
+      "print_time": 472.77849,
+      "total_time": 481.992174,
+      "travel_time": 9.213684,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 36,
+      "index": 15,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "D",
+      "parents": [],
+      "passes": [
+       143,
+       144,
+       145,
+       146,
+       147,
+       148,
+       149,
+       150,
+       151,
+       152,
+       153,
+       154
+      ],
+      "print_time": 472.778781,
+      "total_time": 481.992484,
+      "travel_time": 9.213703,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 36,
+      "index": 16,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "E",
+      "parents": [],
+      "passes": [
+       155,
+       156,
+       157,
+       158,
+       159,
+       160,
+       161,
+       162,
+       163,
+       164,
+       165,
+       166
+      ],
+      "print_time": 472.778393,
+      "total_time": 481.992083,
+      "travel_time": 9.21369,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 36,
+      "index": 17,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "F",
+      "parents": [],
+      "passes": [
+       167,
+       168,
+       169,
+       170,
+       171,
+       172,
+       173,
+       174,
+       175,
+       176,
+       177,
+       178
+      ],
+      "print_time": 3857.383579,
+      "total_time": 3866.597272,
+      "travel_time": 9.213693,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 36,
+      "index": 18,
+      "kind": "island",
+      "last_layer": 47,
+      "layers": 12,
+      "lift": 3,
+      "name": "G",
+      "parents": [],
+      "passes": [
+       179,
+       180,
+       181,
+       182,
+       183,
+       184,
+       185,
+       186,
+       187,
+       188,
+       189,
+       190
+      ],
+      "print_time": 7537.344276,
+      "total_time": 7564.030012,
+      "travel_time": 26.685736,
+      "z_bottom": 54.0,
+      "z_top": 72.0
+     },
+     {
+      "first_layer": 48,
+      "index": 19,
+      "kind": "island",
+      "last_layer": 52,
+      "layers": 5,
+      "lift": 4,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       191,
+       192,
+       193,
+       194,
+       195
+      ],
+      "print_time": 3143.635063,
+      "total_time": 3143.671079,
+      "travel_time": 0.036015,
+      "z_bottom": 72.0,
+      "z_top": 79.5
+     },
+     {
+      "first_layer": 48,
+      "index": 20,
+      "kind": "island",
+      "last_layer": 52,
+      "layers": 5,
+      "lift": 4,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       196,
+       197,
+       198,
+       199,
+       200
+      ],
+      "print_time": 1605.051194,
+      "total_time": 1632.176213,
+      "travel_time": 27.125019,
+      "z_bottom": 72.0,
+      "z_top": 79.5
+     },
+     {
+      "first_layer": 53,
+      "index": 21,
+      "kind": "merge",
+      "last_layer": 56,
+      "layers": 4,
+      "lift": 4,
+      "name": "A+B",
+      "parents": [
+       19,
+       20
+      ],
+      "passes": [
+       201,
+       202,
+       203,
+       204
+      ],
+      "print_time": 4128.266079,
+      "total_time": 4128.771959,
+      "travel_time": 0.50588,
+      "z_bottom": 79.5,
+      "z_top": 85.5
+     },
+     {
+      "first_layer": 48,
+      "index": 22,
+      "kind": "island",
+      "last_layer": 56,
+      "layers": 9,
+      "lift": 4,
+      "name": "C",
+      "parents": [],
+      "passes": [
+       205,
+       206,
+       207,
+       208,
+       209,
+       210,
+       211,
+       212,
+       213
+      ],
+      "print_time": 440.55214,
+      "total_time": 443.196147,
+      "travel_time": 2.644007,
+      "z_bottom": 72.0,
+      "z_top": 85.5
+     },
+     {
+      "first_layer": 48,
+      "index": 23,
+      "kind": "island",
+      "last_layer": 56,
+      "layers": 9,
+      "lift": 4,
+      "name": "D",
+      "parents": [],
+      "passes": [
+       214,
+       215,
+       216,
+       217,
+       218,
+       219,
+       220,
+       221,
+       222
+      ],
+      "print_time": 440.551947,
+      "total_time": 450.741924,
+      "travel_time": 10.189977,
+      "z_bottom": 72.0,
+      "z_top": 85.5
+     },
+     {
+      "first_layer": 48,
+      "index": 24,
+      "kind": "island",
+      "last_layer": 56,
+      "layers": 9,
+      "lift": 4,
+      "name": "E",
+      "parents": [],
+      "passes": [
+       223,
+       224,
+       225,
+       226,
+       227,
+       228,
+       229,
+       230,
+       231
+      ],
+      "print_time": 440.552044,
+      "total_time": 450.742023,
+      "travel_time": 10.189979,
+      "z_bottom": 72.0,
+      "z_top": 85.5
+     },
+     {
+      "first_layer": 48,
+      "index": 25,
+      "kind": "island",
+      "last_layer": 56,
+      "layers": 9,
+      "lift": 4,
+      "name": "F",
+      "parents": [],
+      "passes": [
+       232,
+       233,
+       234,
+       235,
+       236,
+       237,
+       238,
+       239,
+       240
+      ],
+      "print_time": 440.55214,
+      "total_time": 450.742152,
+      "travel_time": 10.190012,
+      "z_bottom": 72.0,
+      "z_top": 85.5
+     },
+     {
+      "first_layer": 48,
+      "index": 26,
+      "kind": "island",
+      "last_layer": 56,
+      "layers": 9,
+      "lift": 4,
+      "name": "G",
+      "parents": [],
+      "passes": [
+       241,
+       242,
+       243,
+       244,
+       245,
+       246,
+       247,
+       248,
+       249
+      ],
+      "print_time": 1058.596735,
+      "total_time": 1068.786748,
+      "travel_time": 10.190014,
+      "z_bottom": 72.0,
+      "z_top": 85.5
+     },
+     {
+      "first_layer": 57,
+      "index": 27,
+      "kind": "merge",
+      "last_layer": 59,
+      "layers": 3,
+      "lift": 4,
+      "name": "A+B+C+D+E+F+G",
+      "parents": [
+       21,
+       22,
+       23,
+       24,
+       25,
+       26
+      ],
+      "passes": [
+       250,
+       251,
+       252
+      ],
+      "print_time": 4121.105003,
+      "total_time": 4202.565878,
+      "travel_time": 81.460874,
+      "z_bottom": 85.5,
+      "z_top": 90.0
+     },
+     {
+      "first_layer": 60,
+      "index": 28,
+      "kind": "island",
+      "last_layer": 65,
+      "layers": 6,
+      "lift": 5,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       253,
+       254,
+       255,
+       256,
+       257,
+       258
+      ],
+      "print_time": 8099.235801,
+      "total_time": 8100.133801,
+      "travel_time": 0.898001,
+      "z_bottom": 90.0,
+      "z_top": 99.0
+     },
+     {
+      "first_layer": 66,
+      "index": 29,
+      "kind": "split",
+      "last_layer": 71,
+      "layers": 6,
+      "lift": 5,
+      "name": "A.1",
+      "parents": [
+       28
+      ],
+      "passes": [
+       259,
+       260,
+       261,
+       262,
+       263,
+       264
+      ],
+      "print_time": 4293.356676,
+      "total_time": 4305.428866,
+      "travel_time": 12.07219,
+      "z_bottom": 99.0,
+      "z_top": 108.0
+     },
+     {
+      "first_layer": 66,
+      "index": 30,
+      "kind": "split",
+      "last_layer": 71,
+      "layers": 6,
+      "lift": 5,
+      "name": "A.2",
+      "parents": [
+       28
+      ],
+      "passes": [
+       265,
+       266,
+       267,
+       268,
+       269,
+       270
+      ],
+      "print_time": 3747.380539,
+      "total_time": 3749.104533,
+      "travel_time": 1.723994,
+      "z_bottom": 99.0,
+      "z_top": 108.0
+     },
+     {
+      "first_layer": 72,
+      "index": 31,
+      "kind": "island",
+      "last_layer": 72,
+      "layers": 1,
+      "lift": 6,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       271
+      ],
+      "print_time": 622.968071,
+      "total_time": 622.981599,
+      "travel_time": 0.013527,
+      "z_bottom": 108.0,
+      "z_top": 109.5
+     },
+     {
+      "first_layer": 72,
+      "index": 32,
+      "kind": "island",
+      "last_layer": 72,
+      "layers": 1,
+      "lift": 6,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       272
+      ],
+      "print_time": 713.731659,
+      "total_time": 715.464839,
+      "travel_time": 1.73318,
+      "z_bottom": 108.0,
+      "z_top": 109.5
+     }
+    ],
+    "total_time": 94736.080572,
+    "transition_length": 1596.685267,
+    "travel_length": 1151.528267,
+    "travel_time": 458.035589
+   },
+   "layers": 73
+  }
+ }
+}

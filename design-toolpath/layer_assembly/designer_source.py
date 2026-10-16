@@ -79,11 +79,16 @@ def _vkey(design_id, transforms, cuts):
 
 
 def grouped(designs) -> bool:
-    """Do these Layer Designs use the Wall Group form (2026-10-11,
-    design_proto/wall_groups.py)?"""
-    from wall_groups import is_grouped
-    return any(is_grouped((d.get('document') if isinstance(d, dict) else d.document) or {})
-               or 'wall_groups' in ((d.get('patch') if isinstance(d, dict) else d.patch) or {}) for d in designs)
+    """Do these Layer Designs use the per-wall form (design_proto/walls.py —
+    construction from the project's Wall Systems; an older Wall Group project
+    counts too: it is normalised)? Legacy documents carry their own."""
+    from walls import is_wall_document
+    for d in designs:
+        doc = d.get('document') if isinstance(d, dict) else d.document
+        par = d.get('parent') if isinstance(d, dict) else d.parent
+        if par is None and is_wall_document(doc):
+            return True
+    return False
 
 
 def arch_library(designs):
@@ -232,7 +237,8 @@ class DesignerSource:
         if self.env_lib is None:
             return False
         try:
-            return 'wall_groups' in self.lib.raw_document(design_id)
+            from walls import is_wall_document
+            return is_wall_document(self.lib.raw_document(design_id))
         except (AttributeError, KeyError):
             return False
 

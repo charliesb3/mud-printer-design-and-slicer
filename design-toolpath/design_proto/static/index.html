@@ -358,6 +358,43 @@
     }
     .path-item:hover { background: #222; border-color: #333; }
     .path-item.selected { background: #1c3050; border-color: var(--accent-dim); }
+    .path-item.multi { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+    /* PATH THICKNESS (2026-10-15 correction): label | [− value +] | unit / THIN width
+       — fixed widths, nothing overlaps; the value is "THIN" or inches */
+    .path-wall-row { display: flex; align-items: center; gap: 5px; padding: 1px 6px 4px 16px;
+                     font-size: 10px; color: #777; min-width: 0; }
+    .path-wall-row .thick-lab { flex: none; width: 52px; }
+    .thick-ctl { display: inline-flex; align-items: stretch; flex: none; width: 88px; height: 22px; box-sizing: border-box; }
+    .thick-ctl.compact { width: 76px; height: 20px; }
+    .thick-ctl > .thick-step { flex: 0 0 20px; width: 20px; height: 100%; padding: 0; margin: 0; box-sizing: border-box;
+                               background: #262626; color: #aaa; border: 1px solid #333; font: 13px/1 inherit; cursor: pointer; }
+    .thick-ctl.compact > .thick-step { flex-basis: 18px; width: 18px; font-size: 12px; }
+    .thick-ctl > .thick-dn { border-right: none; border-radius: 2px 0 0 2px; }
+    .thick-ctl > .thick-up { border-left: none; border-radius: 0 2px 2px 0; }
+    .thick-ctl > .thick-step:hover:not(:disabled) { background: #303a46; color: #dde; }
+    .thick-ctl > .thick-step:disabled { opacity: 0.35; cursor: default; }
+    .thick-ctl > .thick-val { flex: 1 1 auto; width: 0; min-width: 0; height: 100%; box-sizing: border-box; margin: 0;
+                              background: #1e1e1e; border: 1px solid #333; border-radius: 0; color: #ccc;
+                              font: 11px inherit; font-family: inherit; text-align: center; padding: 0 2px;
+                              font-variant-numeric: tabular-nums; }
+    .thick-ctl.compact > .thick-val { font-size: 10px; }
+    .thick-ctl > .thick-val.is-thin { color: #8fb8e8; font-weight: 600; letter-spacing: 0.06em; }
+    .thick-ctl > .thick-val:focus { outline: none; border-color: var(--accent-dim); }
+    .thick-unit { flex: 1 1 auto; min-width: 0; color: #666; font-size: 10px; white-space: nowrap;
+                  overflow: hidden; text-overflow: ellipsis; }
+    /* JUNCTIONS, ENDS & CORNERS: per-item rows (a junction, a wall's cap / corners) */
+    .sidebar .prop-row.arch-item .prop-label, .prop-row.arch-item .prop-label { flex: 1 1 auto; width: auto; min-width: 0; overflow: hidden;
+                                      text-overflow: ellipsis; white-space: nowrap; }
+    .prop-row.arch-item select.prop-input { flex: 0 0 112px; width: 112px; }
+    .prop-row.arch-item .arch-fixed { flex: 0 0 auto; margin-left: 0; font-style: italic; }
+    .sidebar .prop-row.arch-sub .prop-label, .prop-row.arch-sub .prop-label { padding-left: 12px; box-sizing: border-box; }
+    /* Wall Systems: the shared ARCHITECTURE section, visibly not construction */
+    .wsys-arch-section { margin-top: 10px; padding: 6px; border: 1px dashed #4a6a8a; border-radius: 4px; background: #161c22; }
+    .wsys-arch-section .section-title { color: #8fb8e8; }
+    .wsys-arch-note { font-size: 10px; color: #778; margin: 2px 0 6px; line-height: 1.35; }
+    .wsys-wall .thick-ctl { margin-left: auto; }
+    .wsys-wall .thick-unit { flex: 0 0 48px; }
+    #path-wall-row .thick-unit { flex: 1 1 auto; }
     .path-item .role-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     }
@@ -653,8 +690,8 @@
   <button class="tool-btn" id="btn-move-start" onclick="toggleMoveStart()"
           title="Move route starts / seams: start markers take every click (paths and openings are not edited)">Move Start</button>
   <button class="tool-btn" id="btn-beads"    onclick="toggleBeads()" title="Show the physical mud bead around every printable centerline (Material / Bead)">Beads</button>
-  <button class="tool-btn" id="btn-envelope" onclick="toggleEnvelope()" title="Show each wall's ARCHITECTURAL ENVELOPE — its inner and outer boundaries (Wall Groups: thickness + alignment). Off: the original shapes as single lines.">Wall Envelope</button>
-  <span class="toolbar-note" id="designer-mode-note" title="The Designer edits the architecture: each wall's envelope from its Wall Group. Printable constructions are generated in the Wall Systems workspace; print paths are planned in the Print Simulation.">Architecture · print paths: Wall Systems workspace</span>
+  <button class="tool-btn" id="btn-envelope" onclick="toggleEnvelope()" title="Show each wall's ARCHITECTURAL ENVELOPE — its inner and outer boundaries (each wall's thickness + alignment). Off: the original shapes as single lines.">Wall Envelope</button>
+  <span class="toolbar-note" id="designer-mode-note" title="The Designer edits the architecture: each wall's envelope from its own thickness. Printable constructions are generated in the Wall Systems workspace; print paths are planned in the Print Simulation.">Architecture · print paths: Wall Systems workspace</span>
   <div class="tool-sep"></div>
   <button class="tool-btn" id="btn-clear-all" onclick="clearAll()"
           title="Clear the Layer Design being edited: its paths, Wall Systems, openings, trims and routing (undoable). Other Layer Designs, the Assembly and the project are kept — to start over entirely use New Project.">Clear Design</button>
@@ -700,7 +737,7 @@
         <summary class="section-title">Extra Offsets (older project)</summary>
         <div class="path-type" style="margin:4px 0 6px">
           This design still carries extra parallel beads from an older version. They are no
-          longer offered — walls are made with Wall Groups and Wall Systems. Remove them here.
+          longer offered — walls are made by giving paths a thickness (and a Wall System). Remove them here.
         </div>
         <div id="offset-list"></div>
       </details>
@@ -708,18 +745,15 @@
     </div>
   </div>
 
-  <!-- WALL GROUPS — which paths are walls, their thickness + alignment (ARCHITECTURE;
-       the printable construction is chosen in the Wall Systems workspace) -->
+  <!-- JUNCTIONS & ENDS (2026-10-15) — the ARCHITECTURAL junction shape and default
+       end caps, the same in every layout state. (Each wall's thickness / alignment
+       is the wall's own: the Paths list and path properties; the printable
+       construction is chosen in the Wall Systems workspace.) -->
   <div class="sidebar sidebar-left" id="sidebar-wallsys">
-    <div class="sidebar-head">Wall Groups</div>
+    <div class="sidebar-head">Junctions, Ends &amp; Corners</div>
     <div class="sidebar-scroll">
-      <div id="wallgrp-section">
-        <div class="section-title">Wall Groups</div>
-        <div class="path-list" id="wallgrp-list"></div>
-      </div>
-      <div id="wallgrp-edit-section" style="display:none">
-        <div class="section-title" id="wallgrp-edit-title">Wall Group</div>
-        <div class="prop-panel" id="wallgrp-props"></div>
+      <div id="walls-geom-section">
+        <div class="prop-panel" id="walls-geom"></div>
       </div>
     </div>
   </div>
@@ -966,10 +1000,15 @@
           <div class="section-title" id="wsys-edit-title">Wall System</div>
           <div class="prop-panel" id="wsys-props"></div>
         </div>
-        <!-- WALL GEOMETRY: junction and end-cap treatment of the walls (moved here from
-             the Designer, 2026-10-14; the design being edited in the Designer) -->
-        <div class="section-title" id="wsys-geom-title">Wall Geometry</div>
-        <div class="prop-panel" id="wsys-geom"></div>
+        <!-- ARCHITECTURE (convenience editing, 2026-10-15): the Designer's "Junctions,
+             Ends & Corners" controls on the SAME canonical state (wallsystems.js
+             _wsysRenderArch) — not Wall System properties; edits make the generation OUTDATED -->
+        <div class="wsys-arch-section" id="wsys-arch-section">
+          <div class="section-title">Architecture · shared with Designer</div>
+          <div class="wsys-arch-note">Junctions, ends &amp; corners of the walls themselves (the Designer’s values).
+            Changing one makes the generation OUTDATED — generate again to see it.</div>
+          <div class="prop-panel arch-panel" id="wsys-arch"></div>
+        </div>
       </div>
     </div>
     <div class="sim-center">

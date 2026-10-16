@@ -159,6 +159,57 @@ KEYED = {
     'route_origins': 'strand',
 }
 MERGED_SETTINGS = ('material', 'constraints')
+# PERSISTENT WALL PROPERTIES (M1, 2026-10-15 — WALL_ARCHITECTURE.md): owned by
+# the lineage root (document-level) / the design that introduced the record —
+# never by a layout-state Variant. The Designer writes edits through to the
+# owner; a Variant that STORES one (older projects) is reported (divergences).
+OWNED_DOC_SETTINGS = ('junction_style', 'junction_radius', 'cap_style', 'cap_corner_radius', 'corner_radius', 'material')
+OWNED_RECORD_FIELDS = {'source_paths': ('envelope', 'wall', 'corner_radius', 'cap'),
+                       'wall_groups': ('name', 'thickness', 'align', 'print_reference')}
+
+
+def divergences(designs) -> list:
+    """Every persistent wall / material property a DERIVED design stores
+    (Layer Design exchange dicts): [{design, name, kind, field, record?, value}].
+    kind 'setting' (document-level), 'junction_override', 'record' (an owned
+    field of an inherited record). New records and removals (layout state) are
+    not divergences."""
+    out = []
+    for d in designs or []:
+        if d.get('parent') is None:
+            continue
+        did, name = d.get('id'), d.get('name') or d.get('id')
+        st, patch = d.get('settings') or {}, d.get('patch') or {}
+        for f in OWNED_DOC_SETTINGS:
+            if f not in st:
+                continue
+            if f == 'material' and isinstance(st[f], dict):
+                for k, v in st[f].items():
+                    out.append({'design': did, 'name': name, 'kind': 'setting', 'field': f'material.{k}', 'value': v})
+            else:
+                out.append({'design': did, 'name': name, 'kind': 'setting', 'field': f, 'value': st[f]})
+        for key, v in (patch.get('junction_overrides') or {}).items():
+            out.append({'design': did, 'name': name, 'kind': 'junction_override', 'field': key, 'value': v})
+        for coll, fields in OWNED_RECORD_FIELDS.items():
+            for rid, r in (patch.get(coll) or {}).items():
+                if not isinstance(r, dict) or r.get('id') == rid:
+                    continue                      # (removed / introduced here: layout state)
+                for f in fields:
+                    if f in r:
+                        out.append({'design': did, 'name': name, 'kind': 'record', 'record': rid,
+                                    'field': f, 'value': r[f]})
+    return out
+
+
+def describe_divergences(divs) -> list:
+    """One readable line per design."""
+    by = {}
+    for x in divs:
+        f = x['field'] if x['kind'] != 'record' else f"{x['record']} {x['field']}"
+        if x['kind'] == 'junction_override':
+            f = 'junction override'
+        by.setdefault(x['name'], []).append(f'{f} = {x["value"]!r}' if x['kind'] == 'setting' else f)
+    return [f'{n} overrides persistent wall / material properties ({", ".join(fs)}).' for n, fs in by.items()]
 _INFILL_IDENTITY = ('path_id', 'kind', 'pattern', 'params', 'variation_index')
 # The LATTICE DEFINITION of a wall infill — owned by the LINEAGE (the design
 # that introduced the infill record), never overridden by a descendant.
@@ -480,7 +531,7 @@ class DesignLibrary:
             return self.raw_document(design_id)
         key = ('doc', design_id)
         if key not in self._cache:
-            from wall_groups import compose
+            from walls import compose
             self._cache[key] = compose(self.raw_document(design_id), design_id, self.wall_systems, self.arch)
         return copy.deepcopy(self._cache[key])
 

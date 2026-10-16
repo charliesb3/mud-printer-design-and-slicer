@@ -55,8 +55,8 @@ eval(src + `
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   addPrimitive('RectanglePath');
   const A = layer.source_paths[0];
-  // (a project Wall System; its Wall Group gives the 10 in thickness)
-  const S = { id: 'S1', name: 'Loops', type: 'chain', thickness: 10, params: {}, members: [], groups: [],
+  // (a project Wall System; the wall's own 10 in thickness)
+  const S = { id: 'S1', name: 'Loops', type: 'chain', thickness: 10, params: {}, members: [],
               web: { pattern: 'none', params: {} } };
   layer.material = { ...(layer.material || {}), bead_width: 3 };
   const panel = document.getElementById('wsys-props');
@@ -137,12 +137,12 @@ eval(src + `
           WALL_SYSTEMS.chain.params.every(q => near(val(q.label), +(+(q.name === 'phase' ? e2.phase : e2[q.name])).toFixed(3), 2e-3)),
           'sequence ' + l + ' = ' + v + ': stored values consistent, every field shows the generated value');
   }
-  // --- requests (Designer full preview): a Wall Group THICKNESS edit ------------------------
-  const G = _wgNew([A.id], 10);
-  project.wall_systems = [{ ...S, groups: [G.id] }];
-  updateWallGroupSection();
-  const gpanel = document.getElementById('wallgrp-props');
-  const thick = v => { const r = row(gpanel, 'Wall Thickness').children[1]; r.value = String(v); r.onchange(); };
+  // --- requests (Designer full preview): a wall THICKNESS edit (path properties) ------------
+  setWallProps([A.id], { thickness: 10 });
+  project.wall_systems = [{ ...S, members: [A.id] }];
+  selectedId = A.id;
+  const gpanel = document.getElementById('path-props');
+  const thick = v => { gpanel.children.length = 0; updatePropPanel(); const r = row(gpanel, 'Thickness').children[1].children[1]; r.value = String(v); r.onchange(); };
   const calls = [];
   let pending = [];
   global.fetch = (url, opts) => new Promise((res, rej) => {
@@ -157,7 +157,7 @@ eval(src + `
                       closure: { physical: true, closed: 1, components: 1, open: [] } };
   showToolpath = true; routeResult = { moves: [] };
   thick(11);
-  check(routeResult === null && G.thickness === 11, 'a thickness edit clears the old toolpath at once');
+  check(routeResult === null && A.envelope.thickness === 11, 'a thickness edit clears the old toolpath at once');
   await sleep(330);
   check(calls.length === 1 && calls[0].url === '/api/effective_paths', 'geometry first (walls, toolpath shown)');
   check(JSON.parse(calls[0].body).project_wall_systems[0].type === 'chain' && !JSON.parse(calls[0].body).envelope,
@@ -165,7 +165,7 @@ eval(src + `
   for (const v of [12, 13, 14, 15]) { thick(v); await sleep(40); }
   await sleep(330);
   check(calls[0].aborted, 'a newer edit aborts the resolve in flight');
-  check(calls.length === 2 && JSON.parse(calls[1].body).wall_groups[0].thickness === 15,
+  check(calls.length === 2 && JSON.parse(calls[1].body).source_paths[0].envelope.thickness === 15,
         'rapid edits: ONE follow-up resolve, with the latest value');
   check(calls[1].seq > calls[0].seq && calls[1].ch === calls[0].ch, 'resolve requests carry the page channel and increasing sequence numbers');
   pending[1](geom); await sleep(10);

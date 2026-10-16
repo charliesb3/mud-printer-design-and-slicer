@@ -393,9 +393,9 @@ eval(src + `
   const [WO] = layer.source_paths;
   selectedId = WO.id;
   let nodes = panelNodes();
-  const iWall = nodes.findIndex(n => n.textContent === 'Wall Group');
+  const iWall = nodes.findIndex(n => n.id === 'path-wall-row');
   const iAdv = nodes.findIndex(n => n.id === 'adv-geometry');
-  check(iWall >= 0 && iAdv > iWall, 'the Wall Group identity row comes before the Advanced section');
+  check(iWall >= 0 && iAdv > iWall, 'the Wall (thickness) row comes before the Advanced section');
   check(nodes.find(n => n.id === 'adv-geometry').open !== true, 'Advanced (link / inset) starts collapsed');
   check(nodes.some(n => n.id === 'relation-none') && !nodes.some(n => n.id === 'relation-picker'),
         'no candidate → an explanation, not a dead picker');
@@ -403,18 +403,18 @@ eval(src + `
   WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
   check(buildPayload().source_paths[0].wall.thickness === 10, 'Wall Thickness kept in the payload');
   WO.wall = null;
-  // NEW Wall Groups default to CENTERED (2026-10-15); a stored alignment is never rewritten
-  const gNew = _wgNew([WO.id]);
-  check(gNew.align === 'center', 'a new Wall Group defaults to Centered alignment');
-  layer.wall_groups = [{ ...gNew, id: 'WGold', align: 'auto' }];
-  check(JSON.parse(JSON.stringify(layer)).wall_groups[0].align === 'auto' && buildPayload().wall_groups[0].align === 'auto',
-        "an existing group's stored alignment (auto) is kept as it is");
-  layer.wall_groups = [];
-  _wgNew([WO.id]).align = 'inside';
+  // a wall made THICK defaults to CENTERED (2026-10-15); a stored alignment is never rewritten
+  setWallProps([WO.id], { thickness: 10 });
+  check(WO.envelope.thickness === 10 && WO.envelope.align === 'center', 'a wall given a thickness defaults to Centered alignment');
+  WO.envelope.align = 'auto';
+  setWallProps([WO.id], { thickness: 12 });
+  check(WO.envelope.align === 'auto' && buildPayload().source_paths[0].envelope.align === 'auto',
+        "a wall's stored alignment (auto) is kept as it is");
   nodes = panelNodes();
-  check(nodes.some(n => typeof n.textContent === 'string' && /^Wall Group 1 · 10 in$/.test(n.textContent)),
-        'the Wall Group identity row names the group and its thickness (edited in its panel)');
-  layer.wall_groups = [];
+  check(nodes.some(n => n.id === 'path-wall-row') && nodes.some(n => n.textContent === 'Wall Alignment'),
+        'the path properties edit the wall itself: thickness + alignment (no group)');
+  setWallProps([WO.id], { thickness: 0 });
+  check(!WO.envelope, 'thickness 0 / empty: a THIN wall again (no envelope)');
   WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
   derivedPaths = [{ id: WO.id + '.wall', source_id: WO.id, treatment_id: WO.id + '.wall', closed: true,
                     points: [[110, 110], [290, 110], [290, 210], [110, 210]] }];

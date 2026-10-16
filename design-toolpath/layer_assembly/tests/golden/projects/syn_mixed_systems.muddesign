@@ -1,0 +1,227 @@
+{
+ "format": "mud-printer-project",
+ "schema_version": 6,
+ "saved_at": "2026-10-15T22:18:18Z",
+ "generator": "design_proto",
+ "project": {
+  "name": "Chained Loop \u00d7 Parallel; Skin + Web \u00d7 Hollow",
+  "designer": {
+   "designs": [
+    {
+     "id": "base",
+     "name": "Base",
+     "parent": null,
+     "document": {
+      "id": "design",
+      "label": "",
+      "source_paths": [
+       {
+        "id": "C",
+        "type": "CirclePath",
+        "label": "Tower",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "cx": 0,
+        "cy": 0,
+        "radius": 40
+       },
+       {
+        "id": "P",
+        "type": "LinePath",
+        "label": "Parallel spur",
+        "closed": false,
+        "role": "free",
+        "visible": true,
+        "start": [
+         40,
+         0
+        ],
+        "end": [
+         110,
+         0
+        ]
+       },
+       {
+        "id": "S",
+        "type": "RectanglePath",
+        "label": "Skin room",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "x": 200,
+        "y": -40,
+        "w": 120,
+        "h": 80
+       },
+       {
+        "id": "Hb",
+        "type": "LinePath",
+        "label": "Hollow spur",
+        "closed": false,
+        "role": "free",
+        "visible": true,
+        "start": [
+         260,
+         -40
+        ],
+        "end": [
+         260,
+         20
+        ]
+       }
+      ],
+      "offset_treatments": [],
+      "lattice_instances": [],
+      "constraints": {
+       "start_path_id": null,
+       "start_t": null,
+       "reverse_direction": false,
+       "component_order": null
+      },
+      "corner_radius": 0,
+      "cap_style": "flat",
+      "cap_corner_radius": 0,
+      "openings": [],
+      "trims": [],
+      "route_origins": [],
+      "region_overrides": [],
+      "infills": [],
+      "junction_style": "miter",
+      "junction_radius": 2,
+      "junction_overrides": [],
+      "network_walls": [],
+      "wall_groups": [
+       {
+        "id": "WG1",
+        "name": "WG1",
+        "members": [
+         "C"
+        ],
+        "thickness": 10.0,
+        "align": "center",
+        "print_reference": false
+       },
+       {
+        "id": "WG2",
+        "name": "WG2",
+        "members": [
+         "P"
+        ],
+        "thickness": 10.0,
+        "align": "center",
+        "print_reference": false
+       },
+       {
+        "id": "WG3",
+        "name": "WG3",
+        "members": [
+         "S"
+        ],
+        "thickness": 10.0,
+        "align": "center",
+        "print_reference": false
+       },
+       {
+        "id": "WG4",
+        "name": "WG4",
+        "members": [
+         "Hb"
+        ],
+        "thickness": 6.0,
+        "align": "center",
+        "print_reference": false
+       }
+      ],
+      "wall_relations": [],
+      "material": {
+       "bead_width": 3.0,
+       "contact_overlap": 0.75,
+       "return_overlap": 0.75,
+       "physical": true
+      }
+     }
+    }
+   ],
+   "active_design": "base",
+   "id_counter": 100,
+   "design_counter": 1
+  },
+  "assembly": {
+   "state": {
+    "layer_height": 1.5,
+    "sections": [
+     {
+      "design_id": "base",
+      "height": 18
+     }
+    ],
+    "transform": null,
+    "objects": [],
+    "overrides": [],
+    "center_mode": "footprint",
+    "centers": [],
+    "center_counter": 1,
+    "opening_alignment": "plumb",
+    "max_overhang": 1.5,
+    "profiles": [],
+    "profile_counter": 0
+   },
+   "header_counter": 1
+  },
+  "wall_systems": [
+   {
+    "id": "S1",
+    "name": "S1",
+    "type": "chain",
+    "params": {},
+    "web": {},
+    "members": [
+     "C"
+    ],
+    "groups": [],
+    "designs": null
+   },
+   {
+    "id": "S2",
+    "name": "S2",
+    "type": "parallel",
+    "params": {
+     "walls": 3
+    },
+    "web": {},
+    "members": [
+     "P"
+    ],
+    "groups": [],
+    "designs": null
+   },
+   {
+    "id": "S3",
+    "name": "S3",
+    "type": "skin_web",
+    "params": {},
+    "web": {},
+    "members": [
+     "S"
+    ],
+    "groups": [],
+    "designs": null
+   }
+  ],
+  "machine_profile": {
+   "version": 1,
+   "name": "Mud printer (provisional)",
+   "units": "in",
+   "x_extent": 120.0,
+   "y_extent": 120.0,
+   "max_build_z": null,
+   "z_travel_per_frame": 18.0,
+   "provisional": [
+    "x_extent",
+    "y_extent"
+   ],
+   "envelope_origin": "print_origin"
+  }
+ }
+}

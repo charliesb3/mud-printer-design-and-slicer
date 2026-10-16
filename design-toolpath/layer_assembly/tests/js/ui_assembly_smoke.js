@@ -66,7 +66,7 @@ eval(src + `
   // ---- a Base design in the Designer ----
   addPrimitive('RectanglePath');                       // (140,140) 120 x 120
   const R = layer.source_paths[0];
-  _wgNew([R.id]);                                     // a 10 in Wall Group: no Wall System = Hollow (skins)
+  setWallProps([R.id], { thickness: 10 });            // a 10 in wall: no Wall System = Hollow (skins)
   layer.material.physical = true;
   historyCheckpoint();
   const designerBefore = JSON.stringify(layer);
@@ -579,7 +579,7 @@ eval(src + `
   _downloadText = (name, text) => { saved = { name, text }; };
   await saveProject();
   const F = JSON.parse(saved.text);
-  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 6 &&
+  check(saved.name === 'Smoke house.muddesign' && F.format === 'mud-printer-project' && F.schema_version === 7 &&
         saved.text.indexOf('"schema_version"') < saved.text.indexOf('"project"'),
         'Save Project downloads Smoke house.muddesign: format id + schema version first, human-readable JSON');
   const FD = F.project.designer;

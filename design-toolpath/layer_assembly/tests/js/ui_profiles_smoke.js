@@ -72,11 +72,12 @@ async function run() {
   // ---- a Base design: a hollow rectangle room + a free-standing straight Parallel wall ----
   addPrimitive('RectanglePath');                       // (140,140) 120 x 120
   const R = layer.source_paths[0];
-  _wgNew([R.id]);                                      // (no Wall System: Hollow)
+  setWallProps([R.id], { thickness: 10 });             // (no Wall System: Hollow)
   addPrimitive('LinePath');
   const Ln = layer.source_paths[1];
   Ln.start = [140, 330]; Ln.end = [260, 330]; _computePrimitivePoints(Ln);
-  wsysNew('parallel', { groups: [_wgNew([Ln.id]).id] });   // a project Wall System: 4 walls (even: closes at the ends)
+  setWallProps([Ln.id], { thickness: 10 });
+  wsysNew('parallel', { members: [Ln.id] });                // a project Wall System: 4 walls (even: closes at the ends)
   layer.material.physical = true;
   historyCheckpoint();
   const designerBefore = JSON.stringify(layer);
@@ -498,6 +499,13 @@ async function run() {
           'a second planar cut on the same wall: both valid, each with its own selection');
     const both = asm.resolved.instances.find(i => ((i.print_key || i.geometry_key).match(/"plane"/g) || []).length === 2);
     check(!!both, 'some layers carry BOTH plane cuts (composed subtractively by the Designer)');
+    // (2026-10-15) quick selection: All walls / None — explicit wall ids, no group
+    const u7 = undoN();
+    await asmPlaneSelectAll(P2.id, true);
+    check([R.id, Ln.id].every(w => _asmProfile(P2.id).sources.includes(w)) && !_asmProfile(P2.id).systems.length && undoN() === u7 + 1,
+          'All walls: every wall selected explicitly (one undo step)');
+    await asmPlaneSelectAll(P2.id, false);
+    check(!_asmProfile(P2.id).sources.length && !_asmPlaneSel(_asmProfile(P2.id), 'base').size, 'None: the selection cleared');
     await asmProfileDelete(P2.id);
     check(rep(PL.id).valid && !asm.state.profiles.some(q => q.id === P2.id), 'deleting one plane leaves the other');
     asmProfileEdit(PL.id);

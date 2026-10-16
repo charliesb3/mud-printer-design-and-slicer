@@ -100,12 +100,15 @@ eval(src + `
   updatePathList();
   const nets = _networkOf();
   check(nets[R.id].label === 'N1' && nets[P.id].label === 'N1', 'network badge N1 for both');
-  // --- junctions: the Designer only SHOWS the diamonds (connectivity); their
-  // treatment is Wall Geometry, edited from the Wall Systems workspace through
-  // window.Designer (2026-10-14) — the same overrides as before
+  // --- junctions (2026-10-15): a wall-face CORNER junction's shape is architecture —
+  // clicking its diamond in the Designer selects it (Junction panel); an internal
+  // junction (no wall-face corner) stays connectivity only
   selectedId = null; selectedOpeningId = null;
   onMouseDown(ev(198.5, 140.5)); onMouseUp();
-  check(!selectedJunction, 'clicking a diamond no longer selects the junction in the Designer');
+  const corner = networkInfo.junctions.find(j => j.corner && Math.hypot(j.x - 198.5, j.y - 140.5) < 3);
+  check(corner ? !!selectedJunction && selectedJunction.key === corner.key : !selectedJunction,
+        'clicking a corner diamond selects that junction (an internal one: nothing)');
+  selectedJunction = null;
   const D = window.Designer;
   const J = D.wallJunctions();
   check(J.length === 1 && J[0].key === 'p1|p2#0', 'the Wall Systems list offers the corner junction only (internal: no treatment)');
@@ -162,25 +165,21 @@ eval(src + `
   selectedId = keepSel; rebuild();
   check(panelEl.children.some(c => (c.textContent || '').startsWith('Connected to')),
         'the path Properties show connectivity');
-  // (2026-10-11: the Designer's WALL GROUPS own the envelope; constructions are the
-  // Wall Systems workspace's)
-  const wsRow = findRow('Wall Group');
-  check(!!wsRow && wsRow.id === 'path-wallgrp-row' && /None \\(single bead\\)/.test(wsRow.children[1].textContent) &&
-        !wsRow.children.some(c => c.tagName === 'SELECT' || (c.children || []).some(k => k.tagName === 'SELECT')),
-        'path Properties: which Wall Group gives it its envelope (identity only — no duplicated editing controls)');
-  check(!findRow('Wall Thickness') && !findRow('Network Wall Thickness'), 'no wall thickness editor on the path');
+  // (2026-10-15: every path is a WALL owning its thickness — edited on the
+  // path itself; constructions are the Wall Systems workspace's)
+  const wsRow = findRow('Thickness');
+  check(!!wsRow && wsRow.id === 'path-wall-row' && wsRow.children[1].children[1].value === 'THIN' &&
+        panelEl.children.some(c => /THIN wall/.test(c.textContent || '')),
+        "path Properties: the wall's own thickness (empty = a THIN wall, its material width shown)");
+  check(!findRow('Network Wall Thickness'), 'no network thickness');
   check(!panelEl.children.some(c => /New Wall Group|New Wall System/.test(c.textContent || '')),
-        'no Wall Group creation in the path Properties (the Wall Groups panel owns it)');
-  const WS = _wgNew([R.id]);
+        'no group / construction creation in the path Properties');
   selectedId = R.id; rebuild();
-  const r2 = findRow('Wall Group');
-  check(r2.children[1].textContent.includes(_wgLabel(WS)) && r2.children[2] && r2.children[2].textContent === 'Edit',
-        'a member shows its group with an Edit link');
-  wallGroupPick = null;
-  r2.children[2].onclick();
-  check(wallGroupPick === WS.id, 'Edit opens that group in the Wall Groups panel');
-  check(_wgOf(P.id) === null, 'the touching path is NOT forced into it (membership is explicit)');
-  layer.wall_groups = [];
+  const r2 = findRow('Thickness');
+  r2.children[1].children[1].value = '10'; r2.children[1].children[1].onchange();
+  check(R.envelope && R.envelope.thickness === 10 && !P.envelope,
+        'giving one wall a thickness changes only that wall (the touching path is not forced to follow)');
+  setWallProps([R.id], { thickness: 0 });
   // --- path picker: hover / arrow keys highlight the candidate path
   const pk = addPathPickerRow({ appendChild() {} }, 'Source', P.id, id => { picked = id; });
   let picked = null;

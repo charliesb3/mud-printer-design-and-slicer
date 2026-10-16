@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import pytest
 
-from wall_groups import TYPES
+from walls import TYPES
 
 MAT = {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'physical': True}
 PARAMS = {'parallel': {'walls': 4}, 'interleaved': {'paths': 4}, 'linked': {'paths': 4}}
@@ -69,7 +69,7 @@ def designs():
 
 def systems(t):
     return [{'id': 'S1', 'name': 'Room walls', 'type': t, 'params': PARAMS.get(t, {}), 'web': WEB.get(t, {}),
-             'members': [], 'groups': ['G1']}]
+             'members': ['R']}]            # (2026-10-15: a Wall System lists walls)
 
 
 def assembly(arr, h_spacing=14.0, v_spacing=6.0, position=120.0, upper_height=9.0, height=60.0):

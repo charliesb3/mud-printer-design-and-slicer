@@ -127,13 +127,13 @@ def test_routing_continuity_items_come_from_the_wall_system_reports(client):
         {'id': 'L', 'type': 'LinePath', 'label': 'Wave wall', 'start': [0, 0], 'end': [200, 0]}],
         'wall_groups': [{'id': 'G', 'name': 'Wall', 'members': ['L'], 'thickness': 12.0, 'align': 'center',
                          'print_reference': False}]}
-    ws = [{'id': 'S1', 'name': 'Odd waves', 'type': 'interleaved', 'params': {'paths': 3}, 'members': [], 'groups': ['G']}]
+    ws = [{'id': 'S1', 'name': 'Odd waves', 'type': 'interleaved', 'params': {'paths': 3}, 'members': ['L']}]
     B = {'assembly': {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 4.5}], 'max_overhang': 1.0},
          'designs': [{'id': 'A', 'name': 'A', 'document': doc}], 'wall_systems': ws}
     code, g = post(client, '/api/wallsystems/generate', B)
     assert code == 200
     cont = g['inspection']['continuity']
-    assert len(cont) == 1 and cont[0]['system'] == 'G' and cont[0]['layers'] == [0, 1, 2]
+    assert len(cont) == 1 and cont[0]['system'] == 'S1' and cont[0]['layers'] == [0, 1, 2]
     assert 'cannot close' in cont[0]['reason'] and cont[0]['sources'] == ['L']
     ws[0]['params']['paths'] = 4                                   # even: one closed route — no item
     code, g2 = post(client, '/api/wallsystems/generate', B)

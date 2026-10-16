@@ -1,0 +1,274 @@
+{
+ "format": "mud-printer-project",
+ "schema_version": 4,
+ "saved_at": "2026-10-15T02:03:54Z",
+ "generator": "design_proto",
+ "project": {
+  "name": "test 3",
+  "designer": {
+   "designs": [
+    {
+     "id": "base",
+     "name": "Base",
+     "parent": null,
+     "document": {
+      "id": "design",
+      "label": "",
+      "source_paths": [
+       {
+        "id": "p1",
+        "type": "CirclePath",
+        "label": "Circle 1",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "cx": 115.6010230179028,
+        "cy": 291.56010230179027,
+        "radius": 95.73966484358891
+       },
+       {
+        "id": "p2",
+        "type": "RectanglePath",
+        "label": "Rect 1",
+        "closed": true,
+        "role": "free",
+        "visible": true,
+        "x": 78.26086956521739,
+        "y": 27.621483375959087,
+        "w": 293.6061381074169,
+        "h": 296.16368286445015
+       },
+       {
+        "id": "p5",
+        "type": "LinePath",
+        "label": "Line 1",
+        "closed": false,
+        "role": "free",
+        "visible": true,
+        "start": [
+         78.26086956521739,
+         150.89514066496162
+        ],
+        "end": [
+         219.43734015345268,
+         150.89514066496164
+        ]
+       }
+      ],
+      "offset_treatments": [],
+      "lattice_instances": [],
+      "constraints": {
+       "start_path_id": null,
+       "start_t": null,
+       "reverse_direction": false,
+       "component_order": null
+      },
+      "corner_radius": 0,
+      "cap_style": "flat",
+      "cap_corner_radius": 0,
+      "openings": [],
+      "trims": [
+       {
+        "id": "p3",
+        "source_path_id": "p2",
+        "start": [
+         "p1"
+        ],
+        "end": [
+         "p1"
+        ],
+        "inside": {
+         "p1": true
+        },
+        "u_mid": 0.7458947761892764
+       },
+       {
+        "id": "p4",
+        "source_path_id": "p1",
+        "start": [
+         "p2"
+        ],
+        "end": [
+         "p2"
+        ],
+        "inside": {
+         "p2": true
+        },
+        "u_mid": 0.870430194838899
+       }
+      ],
+      "route_origins": [],
+      "region_overrides": [],
+      "infills": [],
+      "junction_style": "miter",
+      "junction_radius": 2,
+      "junction_overrides": [],
+      "network_walls": [],
+      "wall_groups": [
+       {
+        "id": "WG1",
+        "name": "Wall Group 1",
+        "members": [
+         "p1",
+         "p2"
+        ],
+        "thickness": 10,
+        "align": "auto",
+        "print_reference": false
+       }
+      ],
+      "wall_relations": [],
+      "material": {
+       "bead_width": 3,
+       "contact_overlap": 0.75,
+       "return_overlap": 0.75,
+       "physical": true
+      },
+      "return_paths": true,
+      "prefer_closed": true
+     }
+    },
+    {
+     "id": "d1",
+     "name": "Variant 1",
+     "parent": "base",
+     "patch": {
+      "openings": {
+       "o6": {
+        "center_s": 1118.9258312020463,
+        "end_treatment": "inherit",
+        "id": "o6",
+        "source_path_id": "p2",
+        "width": 89.5140664961632
+       }
+      }
+     },
+     "settings": {}
+    }
+   ],
+   "active_design": "d1",
+   "id_counter": 7,
+   "design_counter": 2
+  },
+  "assembly": {
+   "state": {
+    "layer_height": 1.5,
+    "sections": [
+     {
+      "design_id": "d1",
+      "height": 80
+     },
+     {
+      "design_id": "base",
+      "height": 30
+     }
+    ],
+    "transform": {
+     "profile": "linear",
+     "shift": [
+      0,
+      0
+     ],
+     "scale_in": 0.125
+    },
+    "objects": [
+     {
+      "kind": "header",
+      "id": "h1",
+      "section": 1,
+      "layer": 0,
+      "x": 83.26086956521739,
+      "y": 83.35348055809199,
+      "angle": 90,
+      "span": 89.81739687001222,
+      "bearing": 8,
+      "depth": 13,
+      "thickness": 6,
+      "snap": true
+     }
+    ],
+    "overrides": [],
+    "center_mode": "footprint",
+    "centers": [],
+    "center_counter": 0,
+    "opening_alignment": "plumb",
+    "max_overhang": 1,
+    "profiles": [
+     {
+      "kind": "opening",
+      "id": "p1",
+      "wall": {
+       "source": "p2",
+       "edge": 1
+      },
+      "position": 47.75,
+      "z_bottom": 40.5,
+      "height": 48,
+      "width": 24,
+      "label": "",
+      "upper": "pointed",
+      "lower": "pointed",
+      "bottom_depth": 24,
+      "middle": false,
+      "middle_height": null,
+      "upper_height": 24,
+      "driver": "upper_height",
+      "array": {
+       "arrangement": "horizontal",
+       "count": 5,
+       "cols": 3,
+       "rows": 2,
+       "h_spacing": 26,
+       "v_spacing": 12,
+       "stagger": null
+      }
+     },
+     {
+      "kind": "opening",
+      "id": "p2",
+      "wall": {
+       "source": "p2",
+       "edge": 2
+      },
+      "position": 94,
+      "z_bottom": 0,
+      "height": 99,
+      "width": 36,
+      "label": "",
+      "upper": "curve",
+      "lower": "flat",
+      "bottom_depth": null,
+      "middle": true,
+      "middle_height": 40.5,
+      "upper_height": 58.5,
+      "driver": "width"
+     }
+    ],
+    "profile_counter": 2
+   },
+   "header_counter": 1
+  },
+  "wall_systems": [
+   {
+    "id": "S1",
+    "name": "Wall System 1",
+    "type": "interleaved",
+    "params": {
+     "pattern": "wave",
+     "paths": 4,
+     "period": 30
+    },
+    "members": [],
+    "groups": [],
+    "designs": null,
+    "web": {
+     "pattern": "zigzag",
+     "params": {
+      "spacing": 20
+     },
+     "variation_index": 0
+    }
+   }
+  ]
+ }
+}

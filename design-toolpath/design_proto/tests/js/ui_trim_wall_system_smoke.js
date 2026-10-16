@@ -52,11 +52,10 @@ eval(src + `
   const R = layer.source_paths[0];
   setTool('line'); onMouseDown(ev(100, 200)); onMouseDown(ev(300, 200)); setTool('edit');
   const L = layer.source_paths[1];
-  // (2026-10-11: walls are WALL GROUPS in the Designer — the Skin + Web web records
-  // are composed by the backend from the project's Wall Systems, not kept here)
-  layer.wall_groups = [{ id: 'WG1', name: 'Walls', thickness: 10, align: 'auto', print_reference: false,
-                         members: [R.id, L.id] }];
-  const sysJSON = () => JSON.stringify(layer.wall_groups);
+  // (2026-10-15: each wall owns its envelope — the Skin + Web web records are
+  // composed by the backend from the project's Wall Systems, not kept here)
+  for (const p of [R, L]) p.envelope = { thickness: 10, align: 'auto', print_reference: false };
+  const sysJSON = () => JSON.stringify([R.envelope, L.envelope]);
   const sys0 = sysJSON();
 
   const sec = (id, source, start, end, inside, u, pts) =>
@@ -96,7 +95,7 @@ eval(src + `
     onMouseDown(ev(x, y)); respond();
   }
   check(layer.trims.length === 2 && _hist.undo.length === steps + 2, 'two trims after assignment: two undo steps');
-  check(sysJSON() === sys0, 'Wall Group membership and envelope unchanged by Trim');
+  check(sysJSON() === sys0, "the walls' envelopes unchanged by Trim");
 
   // the final remaining unwanted section can still be trimmed
   onMouseMove(ev(200, 203));

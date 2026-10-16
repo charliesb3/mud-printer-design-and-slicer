@@ -73,8 +73,6 @@ const layer = {
   junction_radius: 2,        // radius when junction_style === 'round'
   junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
   network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
-  wall_groups: [],           // [{ id, name, members, thickness, align, print_reference }] (ARCHITECTURE;
-                             //  the printable constructions are the PROJECT's Wall Systems)
   wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
   // MATERIAL / BEAD (physical deposit; see Bead section)
   material: { bead_width: 3.0, contact_overlap: 0.75, return_overlap: 0.75, physical: true },
@@ -2540,10 +2538,12 @@ function onMouseDown(e) {
       }
     }
 
-    // 1a. (Network junction diamonds are shown as CONNECTIVITY only: their
-    // treatment — Miter / Rounded, radius — is WALL GEOMETRY, set in the
-    // Wall Systems workspace since 2026-10-14; the Designer no longer
-    // selects them)
+    // 1a. A wall-face JUNCTION ◆ (2026-10-15): its architectural shape —
+    // Miter / Rounded + radius — is edited here (Junction panel), the same in
+    // every layout state (reverses the 2026-10-14 move to Wall Systems:
+    // junction shape is architecture, not construction)
+    const jn = hitTestJunction(wx, wy);
+    if (jn && jn.corner && !jn.derived) { selectJunction(jn); return; }
 
     // 1b. An opening gap (slide it) — before the wall body under it
     const oid = hitTestOpening(wx, wy);
@@ -3218,11 +3218,24 @@ function _networkOf() {
 function updatePathList() {
   const el = document.getElementById('path-list');
   el.innerHTML = '';
+  if (Array.isArray(el.children)) el.children.length = 0;
   const nets = _networkOf();
+  for (const id of [...multiSel]) if (!layer.source_paths.some(p => p.id === id)) multiSel.delete(id);
+  if (multiSel.size > 1) _addBatchBar(el);
   for (const p of layer.source_paths) {
     const item = document.createElement('div');
-    item.className = 'path-item' + (p.id === selectedId ? ' selected' : '');
-    item.onclick = () => { selectedId = p.id; selectedOpeningId = null; selectedJunction = null; updatePathList(); updatePropPanel(); updateHint(); repaint(); };
+    item.className = 'path-item' + (p.id === selectedId ? ' selected' : '') + (multiSel.has(p.id) ? ' multi' : '');
+    item.dataset.path = p.id;
+    // click: select; Cmd / Ctrl / Shift-click: add to / remove from the MULTI-SELECTION
+    // (several walls edited together — thickness, alignment, Wall System)
+    item.onclick = e => {
+      if (e && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+        if (selectedId && !multiSel.size) multiSel.add(selectedId);
+        if (multiSel.has(p.id)) multiSel.delete(p.id); else multiSel.add(p.id);
+      } else multiSel.clear();
+      selectedId = p.id; selectedOpeningId = null; selectedJunction = null;
+      updatePathList(); updatePropPanel(); updateHint(); repaint();
+    };
     item.onmouseenter = () => setHighlight(p.id);
     item.onmouseleave = () => setHighlight(null);
 
@@ -3248,17 +3261,18 @@ function updatePathList() {
       badge.title = `Connected wall network ${net.label}: ${net.names.join(', ')}`;
       item.appendChild(badge);
     }
-    const wg = _wgOf(p.id);
-    if (wg) {
-      const b = document.createElement('div');
-      b.className = 'path-type wallgrp-badge';
-      b.style.cssText = 'color:var(--accent);margin-left:6px;max-width:78px;overflow:hidden;' +
-                        'text-overflow:ellipsis;white-space:nowrap';
-      b.textContent = `▣ ${_wgLabel(wg)}`;
-      b.title = `Wall Group ${_wgLabel(wg)} (${wg.thickness} in)`;
-      item.appendChild(b);
-    }
     el.appendChild(item);
+    // the wall's THICKNESS, editable without expanding the path
+    if (!_legacyWalls()) {
+      const tr = document.createElement('div');
+      tr.className = 'path-wall-row';
+      tr.dataset.wall = p.id;
+      const lab = document.createElement('span');
+      lab.className = 'thick-lab';
+      lab.textContent = 'Thickness';
+      tr.append(lab, ..._thicknessInput(p, true));
+      el.appendChild(tr);
+    }
 
     for (const op of _openingsOf(p.id)) {
       const oi = document.createElement('div');
@@ -3407,15 +3421,7 @@ function _alignLabel(align, closed) {
 // it overrides it — `{ thickness: 0 }` is the explicit single-bead override.
 function _effectiveWall(path) {
   const net = _networkOf()[path.id];
-  const grp = _wgOf(path.id);
-  if (grp) {
-    // the WALL GROUP owns the envelope (architecture)
-    return grp.thickness > 0
-      ? { wall: { thickness: grp.thickness, align: grp.align || 'auto', print_reference: !!grp.print_reference },
-          from: 'group', net, grp }
-      : { wall: null, from: 'group', net, grp };
-  }
-  if (path.envelope && path.envelope.thickness > 0)       // an ungrouped wall's OWN envelope
+  if (path.envelope && path.envelope.thickness > 0)       // the wall's OWN envelope
     return { wall: { thickness: path.envelope.thickness, align: path.envelope.align || 'auto',
                      print_reference: !!path.envelope.print_reference }, from: 'own', net };
   const sys = _wsOf(path.id);
@@ -3942,56 +3948,24 @@ function _addWebRows(panel, s, rebuild, opts = {}) {
   panel.appendChild(adv);
 }
 
-// WALL GROUPS (2026-10-11; the Designer's architecture): an explicit group of
-// paths owning Wall Thickness, Wall Alignment and the print-reference line —
-// the ENVELOPE. Members need not touch; a path in no group is a single bead.
-// The printable CONSTRUCTION (Single / Hollow / Skin + Web / Parallel / waves /
-// Chained Loop + parameters) is the PROJECT's Wall Systems, assigned to walls or
-// whole groups in the Wall Systems workspace (wall_groups.py composes them).
-function _wgOf(pid) { return (layer.wall_groups || []).find(g => g.members.includes(pid)) || null; }
-function _wgLabel(g) { return g.name || g.id; }
-function _newWallGroupId() {
-  const taken = new Set((layer.wall_groups || []).map(g => g.id));
-  for (const d of (typeof project !== 'undefined' && project.wall_systems) || []) taken.add(d.id);
-  let k = 1;
-  while (taken.has(`WG${k}`)) k++;
-  return `WG${k}`;
-}
-function _wgSetMember(pid, g) {             // at most ONE group per path
-  for (const x of layer.wall_groups || []) x.members = x.members.filter(m => m !== pid);
-  if (g && !g.members.includes(pid)) g.members.push(pid);
-}
-let wallGroupPick = null;                    // the group shown in the Wall Groups panel
-function _wgNew(pids = [], thickness = 10) {
-  layer.wall_groups = layer.wall_groups || [];
-  let k = layer.wall_groups.length + 1;
-  while (layer.wall_groups.some(g => g.name === `Wall Group ${k}`)) k++;
-  // NEW groups default to CENTERED (2026-10-15; an authoring default only —
-  // stored alignments, incl. 'auto' in existing projects, are never changed)
-  const g = { id: _newWallGroupId(), name: `Wall Group ${k}`, members: [], thickness, align: 'center',
-              print_reference: false };
-  layer.wall_groups.push(g);
-  for (const pid of pids) _wgSetMember(pid, g);
-  wallGroupPick = g.id;
-  return g;
-}
-
-// An older document (or fixture) still holding Wall Systems: split ONCE into
-// Wall Groups (members, thickness, alignment; ids kept) + project Wall Systems
-// (construction; same id, assigned to that group) — the backend's
-// wall_groups.split_document, 1:1 (not an undo step).
+// An older document (or fixture) still holding Wall Systems: adopted ONCE into
+// the per-wall form — each member wall receives its record's envelope, and the
+// construction becomes a project Wall System (same id) listing those walls
+// (the backend's split + walls migration, 1:1; not an undo step).
 function _adoptLegacyWallSystems() {
   const legacy = layer.wall_systems;
-  if (!legacy || !legacy.length || (layer.wall_groups && layer.wall_groups.length)) {
+  if (!legacy || !legacy.length) {
     if (legacy && !legacy.length) delete layer.wall_systems;
     return false;
   }
   const clean = !!_hist.current && _histState() === _hist.current.state;
-  layer.wall_groups = legacy.map(w => {
-    const g = { id: w.id, name: w.name || w.id, members: [...(w.members || [])] };
-    for (const f of ['thickness', 'align', 'print_reference']) if (f in w) g[f] = w[f];
-    return g;
-  });
+  for (const w of legacy) {
+    for (const m of w.members || []) {
+      const p = layer.source_paths.find(x => x.id === m);
+      if (!p || !(w.thickness > 0)) continue;
+      p.envelope = { thickness: w.thickness, align: w.align || 'auto', print_reference: !!w.print_reference };
+    }
+  }
   const P = typeof project !== 'undefined' ? project : null;
   if (P) {
     P.wall_systems = P.wall_systems || [];
@@ -4002,8 +3976,7 @@ function _adoptLegacyWallSystems() {
       if (w.type === 'skin_web' && owned && web.pattern && web.pattern !== 'none')
         Object.assign(web, { pattern: owned.pattern, params: JSON.parse(JSON.stringify(owned.params || {})) });
       P.wall_systems.push({ id: w.id, name: w.name || w.id, type: w.type || 'skin_web',
-                            params: JSON.parse(JSON.stringify(w.params || {})), web, members: [], groups: [w.id],
-                            designs: null });
+                            params: JSON.parse(JSON.stringify(w.params || {})), web, members: [...(w.members || [])] });
     }
   }
   delete layer.wall_systems;
@@ -4011,130 +3984,324 @@ function _adoptLegacyWallSystems() {
   return true;
 }
 
-let _wgLastSel = null;
 function updateWallSystemSection() { return updateWallGroupSection(); }
-function updateWallGroupSection() {
-  const list = document.getElementById('wallgrp-list');
-  const panel = document.getElementById('wallgrp-props');
-  const edit = document.getElementById('wallgrp-edit-section');
-  if (!list || !panel) return;
-  list.innerHTML = ''; panel.innerHTML = '';
-  if (Array.isArray(list.children)) list.children.length = 0;
-  if (Array.isArray(panel.children)) panel.children.length = 0;
-  const all = layer.wall_groups || (layer.wall_groups = []);
-  const rebuild = () => { routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint(); };
-  const sel = selectedId && layer.source_paths.find(p => p.id === selectedId);
-  if (selectedId !== _wgLastSel) {          // selecting a path shows its group
-    _wgLastSel = selectedId;
-    const gg = sel && _wgOf(sel.id);
-    if (gg) wallGroupPick = gg.id;
-  }
-  const cur = all.find(g => g.id === wallGroupPick) || all[0] || null;
-  wallGroupPick = cur ? cur.id : null;
-  for (const g of all) {
-    const item = document.createElement('div');
-    item.className = 'path-item wallgrp-item' + (g === cur ? ' selected' : '');
-    item.onclick = () => { wallGroupPick = g.id; updateWallGroupSection(); };
-    const label = document.createElement('div');
-    label.className = 'path-label';
-    label.textContent = _wgLabel(g);
-    const type = document.createElement('div');
-    type.className = 'path-type';
-    type.textContent = `${g.thickness > 0 ? g.thickness + ' in' : 'single bead'} · ${g.members.length}`;
-    item.append(label, type);
-    list.appendChild(item);
-  }
-  const loose = layer.source_paths.filter(p => !_wgOf(p.id))
-    .map(p => _pathName(p.id) + (p.envelope && p.envelope.thickness > 0 ? ` (own ${p.envelope.thickness} in)` : ''));
-  if (loose.length) _addNote(list, `No Wall Group (single bead unless an own thickness is set in Wall Systems): ${loose.join(', ')}`);
-  _addButton(list, sel && !_wgOf(sel.id) ? `+ New Wall Group with ${_pathName(sel.id)}` : '+ New Wall Group',
-             () => { _wgNew(sel && !_wgOf(sel.id) ? [sel.id] : []); rebuild(); });
-  if (!cur) { if (edit) edit.style.display = 'none'; return; }
-  if (edit) edit.style.display = '';
-  const title = document.getElementById('wallgrp-edit-title');
-  if (title) title.textContent = _wgLabel(cur);
-  // MEMBERS first: only this group's paths (compact ×), then Add path…
-  _addSubTitle(panel, 'Members');
-  if (!cur.members.length) _addNote(panel, 'No paths yet.');
-  for (const pid of cur.members) {
-    const r = document.createElement('div');
-    r.className = 'prop-row wallgrp-member';
-    const nm = document.createElement('span');
-    nm.className = 'prop-label';
-    nm.style.cssText = 'flex:1;cursor:pointer';
-    nm.textContent = _pathName(pid);
-    nm.onclick = () => { selectedId = pid; updatePathList(); updatePropPanel(); repaint(); };
-    nm.onmouseenter = () => setHighlight(pid);
-    nm.onmouseleave = () => setHighlight(null);
-    const x = document.createElement('button');
-    x.className = 'remove-btn';
-    x.textContent = '×';
-    x.title = `Remove ${_pathName(pid)} from ${_wgLabel(cur)}`;
-    x.onclick = () => { _wgSetMember(pid, null); rebuild(); };
-    r.append(nm, x);
-    panel.appendChild(r);
-  }
-  const cand = layer.source_paths.filter(p => !cur.members.includes(p.id));
-  if (cand.length) {
-    const ADD = '__add';
-    addPropRowSelectTo(panel, 'Add path…', ADD, [ADD, ...cand.map(p => p.id)], v => {
-      if (v === ADD) return;
-      _wgSetMember(v, cur);                 // (moves it out of another group)
-      rebuild();
-    }, { [ADD]: '— choose a path —', ...Object.fromEntries(cand.map(p => {
-      const o = _wgOf(p.id);
-      return [p.id, _pathName(p.id) + (o ? ` (from ${_wgLabel(o)})` : '')];
-    })) });
-  }
-  _addSubTitle(panel, 'Envelope');
-  addPropRowText(panel, 'Name', cur.name || '', v => { cur.name = v.trim() || cur.id; rebuild(); });
-  addPropRowNumTo(panel, 'Wall Thickness', cur.thickness ?? 10, v => {
-    cur.thickness = Math.max(0.5, v);
-    routeResult = null; scheduleRefresh({ supersede: true }); repaint();
-  });
-  const alignOpts = ['Default', 'Centered', 'Inside', 'Outside'];
-  addPropRowSelect(panel, 'Wall Alignment', !cur.align || cur.align === 'auto' ? 'Default' : _alignLabel(cur.align, true),
-                   alignOpts, v => { cur.align = v === 'Default' ? 'auto' : ALIGN_UI[v]; rebuild(); });
-  _addNote(panel, 'Default: Centered on lines, Inside closed shapes.');
-  if (cur.align === 'center') {
-    addPropRowCheck(panel, 'Print reference line', !!cur.print_reference, v => { cur.print_reference = v; rebuild(); });
-  }
-  _addNote(panel, 'The Designer shows each wall’s envelope (its faces). How it prints — Single, Hollow, ' +
-                  'Skin + Web, Parallel, waves, Chained Loop — is chosen per wall or per group in the Wall Systems ' +
-                  'workspace (walls of one group may print differently).');
-  _addButton(panel, `Delete ${_wgLabel(cur)}`, () => {
-    layer.wall_groups = layer.wall_groups.filter(g => g !== cur);
-    wallGroupPick = null; rebuild();
-  });
+// WALLS (M3, 2026-10-15 — WALL_ARCHITECTURE.md): every path is a persistent
+// WALL that owns its architecture — its envelope `path.envelope` = {thickness,
+// align (Centered by default), print_reference} (no envelope / thickness 0 =
+// a THIN wall: one bead — out and back when open — its width set by the
+// material, not a free value), its Corner R and its end-cap shape
+// (`path.cap`, else the project default). Wall Groups no longer exist: walls
+// are edited together by MULTI-SELECTION (Paths list: Cmd / Ctrl / Shift-click).
+// Writes go to the wall's OWNER design (Base for an inherited wall: the same
+// wall in every layout state).
+let multiSel = new Set();            // walls selected together (batch edits)
+
+// the physical width of a THIN wall — set by the material (two passes W − R
+// apart when open with physical rules; one bead otherwise)
+function _thinWidth(path) {
+  const m = _material(), W = m.bead_width;
+  return (!path.closed && m.physical) ? Math.round((2 * W - m.return_overlap) * 100) / 100 : W;
 }
 
-// Path Properties: WHICH Wall Group gives this path its envelope — identity
-// only (membership and envelope are edited in the Wall Groups panel).
+function _isThick(path) { return !!(path && path.envelope && path.envelope.thickness > 0); }
+
+// THIN → EXPLICIT THICKNESS (2026-10-15 correction): a THIN wall has no
+// architectural thickness, only its construction-derived width (above). An
+// EXPLICIT thickness is never below that width: the smallest one is the first
+// thickness increment AT OR ABOVE it (THIN 5.25 in → 5.5 in); − from there
+// returns to THIN. A typed value below the THIN width becomes that minimum.
+const THICK_STEP = 0.5;
+const _r6 = v => Math.round(v * 1e6) / 1e6;
+function _minThick(thin, inc = THICK_STEP) { return _r6(Math.ceil(thin / inc - 1e-9) * inc); }
+function _clampThick(t, thin) {
+  t = Math.max(0, +t || 0);
+  return t <= 1e-9 ? 0 : (t < thin - 1e-9 ? _minThick(thin) : t);
+}
+// one − / + step of the thickness control (0 = THIN)
+function _stepThick(t, thin, dir, inc = THICK_STEP) {
+  const lo = _minThick(thin, inc);
+  if (!(t > 0)) return dir > 0 ? lo : 0;
+  if (dir > 0) return Math.max(lo, _r6((Math.floor(t / inc + 1e-9) + 1) * inc));
+  const next = _r6((Math.ceil(t / inc - 1e-9) - 1) * inc);
+  return next < lo - 1e-9 ? 0 : next;
+}
+
+// the compact THICKNESS control: [− value +] + its unit / state. THIN shows
+// "THIN" and the wall's physical width; a thick wall its thickness in inches.
+// Returns [control, unit] (the caller places them in its row).
+// (own buttons, not numeric.js steppers: a step here is the THIN rule above)
+function _thicknessControl({ id, value, thin, onSet, compact, title }) {
+  const thick = value > 0;
+  const ctl = document.createElement('span');
+  ctl.className = 'thick-ctl' + (compact ? ' compact' : '');
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.inputMode = 'decimal';
+  inp.className = 'thick-val' + (thick ? '' : ' is-thin');
+  if (id) inp.id = id;
+  inp.value = thick ? String(value) : 'THIN';
+  inp.title = title || '';
+  const parse = s => { const v = parseFloat(String(s).replace(',', '.')); return Number.isFinite(v) ? v : 0; };
+  inp.onclick = e => e && e.stopPropagation && e.stopPropagation();
+  inp.onfocus = () => { if (!thick && inp.select) inp.select(); };
+  inp.onkeydown = e => { if (e && e.key === 'Enter' && inp.blur) inp.blur(); };
+  inp.onchange = () => onSet(_clampThick(parse(inp.value), thin));
+  const btn = (dir, txt) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'thick-step ' + (dir > 0 ? 'thick-up' : 'thick-dn');
+    b.tabIndex = -1; b.textContent = txt;
+    b.disabled = dir < 0 && !thick;
+    b.title = dir > 0 ? (thick ? `Thicker (+${THICK_STEP} in)` : `Make it a thick wall: ${_minThick(thin)} in (the first ${THICK_STEP} in step at or above the THIN width)`)
+                      : (thick && _stepThick(value, thin, -1) === 0 ? 'Back to THIN' : `Thinner (−${THICK_STEP} in)`);
+    b.onclick = e => { if (e && e.stopPropagation) e.stopPropagation(); if (!b.disabled) onSet(_stepThick(value, thin, dir)); };
+    return b;
+  };
+  ctl.append(btn(-1, '−'), inp, btn(1, '+'));
+  const unit = document.createElement('span');
+  unit.className = 'thick-unit';
+  unit.textContent = thick ? 'in' : `${thin} in`;
+  unit.title = thick ? 'Architectural thickness'
+    : 'THIN wall: one bead (out and back when open) — its width comes from the bead width and return-lane overlap, not a free thickness';
+  if (thick && value < thin - 1e-9) {          // (an older value, or the material changed since)
+    unit.textContent = 'in ⚠';
+    unit.title = `Below this wall's THIN width (${thin} in) — the next edit raises it to at least ${_minThick(thin)} in`;
+  }
+  return [ctl, unit];
+}
+
+// set wall properties of several walls at once: {thickness (0 / null = thin;
+// else at least the wall's THIN width), align, print_reference, cap ({style,
+// corner_radius} | null = project default), corner_radius (its own Corner R)}
+function setWallProps(ids, patch) {
+  let changed = false;
+  for (const doc of _catalogDocs()) {
+    for (const id of ids) {
+      const p = (doc.source_paths || []).find(x => x.id === id);
+      if (!p) continue;
+      const sig = () => JSON.stringify([p.envelope || null, p.cap || null, p.corner_radius ?? null]);
+      const before = sig();
+      if ('thickness' in patch) {
+        const t = _clampThick(patch.thickness, _thinWidth(p));   // (never below the THIN width)
+        if (t > 1e-9) p.envelope = { align: 'center', print_reference: false, ...(p.envelope || {}), thickness: t };
+        else delete p.envelope;
+      }
+      if (p.envelope && 'align' in patch) p.envelope.align = patch.align;
+      if (p.envelope && 'print_reference' in patch) p.envelope.print_reference = !!patch.print_reference;
+      if ('cap' in patch) { if (patch.cap) p.cap = { ...patch.cap }; else delete p.cap; }
+      if ('corner_radius' in patch) { p.corner_radius = Math.max(0, +patch.corner_radius || 0); _computePrimitivePoints(p); }
+      if (sig() !== before) changed = true;
+    }
+  }
+  if (changed) {
+    routeResult = null;
+    scheduleRefresh({ supersede: true });     // (a parameter edit: the Designer geometry, its own undo step)
+    updatePropPanel(); updatePathList(); repaint();
+  }
+  return changed;
+}
+
+// the walls a property edit on `pid` applies to: the multi-selection when the
+// wall belongs to it, else the wall alone
+function _editTargets(pid) { return multiSel.size > 1 && multiSel.has(pid) ? [...multiSel] : [pid]; }
+
+function _thicknessInput(path, compact) {
+  return _thicknessControl({
+    id: compact ? null : 'prop-wall-thickness', compact: true,
+    value: _isThick(path) ? path.envelope.thickness : 0, thin: _thinWidth(path),
+    onSet: t => setWallProps(_editTargets(path.id), { thickness: t }),
+    title: 'Wall Thickness (in) — THIN = no architectural thickness (one bead; out and back when open). ' +
+           '+ from THIN: the first ' + THICK_STEP + ' in step at or above the THIN width. ' +
+           'With several walls selected: applies to all of them.' });
+}
+
+// JUNCTIONS, ENDS & CORNERS (Design sidebar; 2026-10-15 correction): the
+// architectural shape controls, each written to its OWN canonical owner —
+//   * junctions: the PROJECT default treatment + radius (lineage root, every
+//     layout state), and each junction's own treatment (also by its ◆);
+//   * end caps: the project default, and each open wall's OWN cap (`path.cap`);
+//     a THIN open wall's ends are U-turns, set by construction;
+//   * corners: each wall's OWN Corner R (`path.corner_radius`; Sharp = 0) —
+//     the corners of its source path, never the corners junctions create.
+// One builder, two editing surfaces: the Designer (#walls-geom) and the Wall
+// Systems workspace (window.Designer.buildArchControls, wrapped in that
+// workspace's undo / OUTDATED) — never a second copy of the state.
+function updateWallGeometrySection() {
+  const box = document.getElementById('walls-geom');
+  if (!box) return;
+  _buildArchControls(box, { prefix: 'walls', wrap: fn => fn(), after: updateWallGeometrySection });
+}
+
+const _CAPS = [['flat', 'Flat'], ['rounded_corners', 'Rounded Corners'], ['full_round', 'Full Round']];
+function _hasCorners(p) { return p.type === 'RectanglePath' || p.type === 'ExplicitPath' || !p.type; }
+
+function _buildArchControls(box, { prefix, wrap, after }) {
+  box.innerHTML = '';
+  if (Array.isArray(box.children)) box.children.length = 0;
+  const G = wallGeometry();
+  const edit = fn => { wrap(fn); if (after) after(); };
+  const row = (label, input, unit, cls) => {
+    const r = document.createElement('div');
+    r.className = 'prop-row' + (cls ? ' ' + cls : '');
+    const l = document.createElement('span'); l.className = 'prop-label'; l.textContent = label; l.title = label;
+    r.append(l, input);
+    if (unit) { const u = document.createElement('span'); u.className = 'prop-unit'; u.textContent = unit; r.appendChild(u); }
+    box.appendChild(r);
+    return r;
+  };
+  const select = (id, value, options, onChange) => {
+    const sl = document.createElement('select');
+    sl.className = 'prop-input'; sl.id = `${prefix}-${id}`;
+    for (const [v, t] of options) { const o = document.createElement('option'); o.value = v; o.textContent = t; sl.appendChild(o); }
+    sl.value = value;
+    sl.onchange = () => onChange(sl.value);
+    return sl;
+  };
+  const num = (id, value, step, onChange) => {
+    const n = document.createElement('input');
+    Object.assign(n, { id: `${prefix}-${id}`, className: 'prop-input', type: 'number', min: 0, step, value });
+    n.onchange = () => onChange(Math.max(0, parseFloat(n.value) || 0));
+    return n;
+  };
+  const head = t => _addSubTitle(box, t);
+  const walls = layer.source_paths.filter(p => p.visible !== false);
+  // JUNCTIONS
+  head('Junctions');
+  row('Treatment', select('junction-style', G.junction_style, [['miter', 'Miter'], ['round', 'Rounded']],
+                          v => edit(() => setWallGeometry({ junction_style: v }))));
+  if (G.junction_style === 'round')
+    row('Radius', num('junction-radius', G.junction_radius, 0.5, v => edit(() => setWallGeometry({ junction_radius: v }))), 'in');
+  const J = wallJunctions();
+  const dflt = `Default (${G.junction_style === 'round' ? 'Rounded ' + G.junction_radius + ' in' : 'Miter'})`;
+  J.forEach((j, k) => {
+    row(`◆ ${j.label}`, select(`junction-${k}`, j.treatment || 'default',
+        [['default', dflt], ['miter', 'Miter'], ['round', 'Rounded']],
+        v => edit(() => setJunctionTreatment(j.key, v === 'default' ? null : v, j.radius))), null, 'arch-item');
+    if (j.treatment === 'round')
+      row('Radius', num(`junction-r-${k}`, j.radius, 0.5,
+          v => edit(() => setJunctionTreatment(j.key, 'round', v))), 'in', 'arch-sub');
+  });
+  if (!J.length) _addNote(box, 'No junctions: walls that meet get one here (or click its ◆).');
+  // END CAPS
+  head('End caps');
+  row('Default', select('cap-style', G.cap_style, _CAPS, v => edit(() => setWallGeometry({ cap_style: v }))));
+  if (G.cap_style === 'rounded_corners')
+    row('End R', num('cap-radius', G.cap_corner_radius, 1, v => edit(() => setWallGeometry({ cap_corner_radius: v }))), 'in');
+  const capDflt = `Default (${(_CAPS.find(c => c[0] === G.cap_style) || [, 'Flat'])[1]})`;
+  for (const p of walls.filter(w => !w.closed)) {
+    const name = p.label || p.id;
+    if (!_isThick(p)) {
+      const t = document.createElement('span');
+      t.className = 'prop-unit arch-fixed';
+      t.textContent = _material().physical ? 'U-turn (THIN: set by construction)' : 'single bead';
+      row(name, t, null, 'arch-item');
+      continue;
+    }
+    const cur = (p.cap && p.cap.style) || 'default';
+    row(name, select(`cap-${p.id}`, cur, [['default', capDflt], ..._CAPS], v => edit(() => setWallProps([p.id], {
+      cap: v === 'default' ? null
+        : { style: v, corner_radius: v === 'rounded_corners' ? ((p.cap && p.cap.corner_radius) || G.cap_corner_radius || 3) : 0 } }))),
+      null, 'arch-item');
+    if (cur === 'rounded_corners')
+      row('End R', num(`cap-r-${p.id}`, p.cap.corner_radius || 0, 1,
+          v => edit(() => setWallProps([p.id], { cap: { style: 'rounded_corners', corner_radius: v } }))), 'in', 'arch-sub');
+  }
+  // CORNERS (each wall's own source corners)
+  head('Corners');
+  const cw = walls.filter(_hasCorners);
+  for (const p of cw) {
+    const r = _cornerR(p);
+    row(p.label || p.id, select(`corner-${p.id}`, r > 0 ? 'round' : 'sharp', [['sharp', 'Sharp'], ['round', 'Rounded']],
+        v => edit(() => setWallProps([p.id], { corner_radius: v === 'round' ? (r > 0 ? r : 2) : 0 }))), null, 'arch-item');
+    if (r > 0)
+      row('Corner R', num(`corner-r-${p.id}`, r, 0.5, v => edit(() => setWallProps([p.id], { corner_radius: v }))), 'in', 'arch-sub');
+  }
+  if (!cw.length) _addNote(box, 'No wall with corners (rectangles, polylines).');
+  _addNote(box, 'Architecture of every layout state (Base and its Variants): junction defaults are the project’s; ' +
+                'an end cap or Corner R belongs to its wall; a junction’s own treatment to that junction.');
+}
+// (older callers)
+function updateWallGroupSection() { updateWallGeometrySection(); }
+
+// the multi-selection bar (Paths list): set the same thickness / alignment on
+// every selected wall at once — temporary, not a group
+function _addBatchBar(el) {
+  const bar = document.createElement('div');
+  bar.className = 'batch-bar';
+  bar.id = 'path-batch-bar';
+  bar.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:4px 6px;margin-bottom:4px;' +
+                      'border:1px solid var(--accent);border-radius:4px;font-size:11px';
+  const ids = [...multiSel];
+  const n = document.createElement('span');
+  n.textContent = `${ids.length} walls selected:`;
+  const t = document.createElement('input');
+  Object.assign(t, { type: 'number', min: 0, step: 0.5, className: 'prop-input', placeholder: 'thickness', id: 'batch-thickness' });
+  t.style.cssText = 'width:64px';
+  t.title = 'Set every selected wall to this thickness (empty / 0 = thin)';
+  t.onchange = () => setWallProps(ids, { thickness: parseFloat(t.value) || 0 });
+  const al = document.createElement('select');
+  al.className = 'prop-input'; al.id = 'batch-align';
+  for (const [v, txt] of [['', 'alignment…'], ['center', 'Centered'], ['inside', 'Inside / Left'], ['outside', 'Outside / Right']]) {
+    const o = document.createElement('option'); o.value = v; o.textContent = txt; al.appendChild(o);
+  }
+  al.onchange = () => {
+    if (!al.value) return;
+    for (const id of ids) {               // (Inside / Outside on closed walls, Left / Right on open ones)
+      const p = layer.source_paths.find(x => x.id === id);
+      if (!p) continue;
+      const v = al.value === 'center' ? 'center' : (p.closed ? al.value : (al.value === 'inside' ? 'left' : 'right'));
+      setWallProps([id], { align: v });
+    }
+  };
+  const clr = document.createElement('button');
+  clr.className = 'mini-btn'; clr.textContent = 'Clear';
+  clr.onclick = () => { multiSel.clear(); updatePathList(); updatePropPanel(); };
+  bar.append(n, t, al, clr);
+  el.appendChild(bar);
+}
+
+// Path Properties: the WALL — thickness (empty = thin), alignment, print
+// reference, end cap. With several walls selected, edits apply to all.
 function _addWallRows(panel, path) {
-  const g = _wgOf(path.id);
+  _addSubTitle(panel, multiSel.size > 1 && multiSel.has(path.id) ? `Wall · ${multiSel.size} walls selected` : 'Wall');
+  if (_legacyWalls()) {
+    const ew = _effectiveWall(path);
+    _addNote(panel, ew.wall ? `${ew.wall.thickness} in wall (older design — set in its Wall System)` : 'Single bead (older design)');
+    return;
+  }
   const row = document.createElement('div');
   row.className = 'prop-row';
-  row.id = 'path-wallgrp-row';
+  row.id = 'path-wall-row';
   const lab = document.createElement('span');
   lab.className = 'prop-label';
-  lab.textContent = 'Wall Group';
-  const val = document.createElement('span');
-  val.className = 'path-type';
-  val.style.flex = '1';
-  val.textContent = g ? `${_wgLabel(g)} · ${g.thickness} in`
-    : (path.envelope && path.envelope.thickness > 0 ? `None · own wall ${path.envelope.thickness} in (Wall Systems)`
-       : (_legacyWalls() && _effectiveWall(path).wall ? `${_effectiveWall(path).wall.thickness} in wall (older design)`
-                                                      : 'None (single bead)'));
-  row.append(lab, val);
-  if (g) {
-    const ed = document.createElement('button');
-    ed.className = 'mini-btn';
-    ed.textContent = 'Edit';
-    ed.title = 'Open this Wall Group in the Wall Groups panel';
-    ed.onclick = () => { wallGroupPick = g.id; updateWallGroupSection(); };
-    row.appendChild(ed);
-  }
+  lab.textContent = 'Thickness';
+  lab.title = 'Wall Thickness';
+  row.append(lab, ..._thicknessInput(path, false));
   panel.appendChild(row);
+  if (!_isThick(path)) {
+    _addNote(panel, `THIN wall: ${_thinWidth(path)} in wide — set by the bead width` +
+                    (!path.closed && _material().physical ? ' and return-lane overlap (out and back).' : '.') +
+                    ` + makes it a thick wall of ${_minThick(_thinWidth(path))} in (never thinner than THIN).`);
+    if (!path.closed && _material().physical) _addNote(panel, 'End caps: a U-turn — set by construction (out and back).');
+    return;
+  }
+  const env = path.envelope;
+  const opts = _alignOptions(path.closed);
+  addPropRowSelect(panel, 'Wall Alignment', _alignLabel(env.align, path.closed), opts,
+                   v => setWallProps(_editTargets(path.id), { align: ALIGN_UI[v] }));
+  if (env.align === 'center')
+    addPropRowCheck(panel, 'Print reference line', !!env.print_reference,
+                    v => setWallProps(_editTargets(path.id), { print_reference: v }));
+  if (!path.closed) {
+    const CAPS = { default: 'Project default', flat: 'Flat', rounded_corners: 'Rounded Corners', full_round: 'Full Round' };
+    const cur = (path.cap && path.cap.style) || 'default';
+    addPropRowSelect(panel, 'End caps', CAPS[cur], Object.values(CAPS), v => {
+      const style = Object.keys(CAPS).find(k => CAPS[k] === v);
+      setWallProps(_editTargets(path.id), { cap: style === 'default' ? null
+        : { style, corner_radius: style === 'rounded_corners' ? ((path.cap && path.cap.corner_radius) || layer.cap_corner_radius || 3) : 0 } });
+    });
+    if (cur === 'rounded_corners')
+      addPropRowNumTo(panel, 'End R', path.cap.corner_radius || 0,
+                      v => setWallProps(_editTargets(path.id), { cap: { style: 'rounded_corners', corner_radius: Math.max(0, v) } }));
+  }
 }
 
 // (legacy) Network Wall of a network — read only by the migration / old designs
@@ -4283,12 +4450,10 @@ function addPathPickerRow(panel, label, currentId, onChange, excludeId, filterFn
            get active() { return active; }, isOpen: () => isOpen };
 }
 
+// (the wall's own Corner R — the same canonical value as "Junctions, Ends &
+// Corners" and the Wall Systems workspace)
 function _addCornerRRow(panel, path) {
-  addPropRowNum(panel, 'Corner R', 'corner-r', _cornerR(path), v => {
-    path.corner_radius = Math.max(0, v);
-    _computePrimitivePoints(path);
-    routeResult = null; scheduleRefresh(); repaint();
-  });
+  addPropRowNum(panel, 'Corner R', 'corner-r', _cornerR(path), v => setWallProps([path.id], { corner_radius: v }));
 }
 
 function addPropRowNum(panel, label, fieldKey, value, onChange, unitText = 'in') {
@@ -4735,7 +4900,7 @@ function addPropRowSelectTo(panel, label, value, options, onChange, labels = nul
 // Any wall (own or network) using a non-default Wall System?
 function _anyWallSystem() {
   if (_designerEnvelope()) return false;     // (envelopes: no construction is resolved)
-  return (layer.wall_groups || []).length > 0 ||          // (full preview: the project's constructions)
+  return layer.source_paths.some(p => p.envelope) ||       // (full preview: the project's constructions)
          (layer.wall_systems || []).some(s => s.type !== 'skin_web') ||
          layer.source_paths.some(p => p.wall && p.wall.thickness > 0 && _wallSystemType(p.wall) !== 'skin_web') ||
          (layer.network_walls || []).some(w => _wallSystemType(w) !== 'skin_web');
@@ -4949,8 +5114,7 @@ function buildPayload() {
     network_walls: (layer.network_walls || []).map(w => ({ ...w })),
     // ARCHITECTURE: the Wall Groups; (an older document's own Wall Systems
     // until adopted); the project's Wall Systems only for the full preview
-    wall_groups: (layer.wall_groups || []).map(g => ({ ...g, members: [...g.members] })),
-    ...((layer.wall_systems || []).length && !(layer.wall_groups || []).length
+    ...((layer.wall_systems || []).length
       ? { wall_systems: layer.wall_systems.map(w => ({ ...w, params: { ...(w.params || {}) },
                                                        members: [...w.members], web: { ...(w.web || {}) } })) }
       : (_designerEnvelope() ? { envelope: true }
@@ -5254,6 +5418,7 @@ function _applyMaterial() {
   if (m.return_overlap < 0) m.return_overlap = 0;
   layer.material = m;
   _syncMaterialControls();
+  updatePathList(); updatePropPanel();       // (every THIN wall's displayed width follows the material)
   if (notes.length) setStatus(notes.join(' · '));
   if (m.physical) { routeResult = null; scheduleRefresh(); }   // geometry depends on it
   else { historyCheckpoint(); updateUndoButtons(); }           // legacy: visual only
@@ -5536,7 +5701,6 @@ function deletePath(id) {
   }
   layer.network_walls = (layer.network_walls || []).filter(w => w.path_id);
   for (const s of layer.wall_systems || []) s.members = s.members.filter(m => m !== id);
-  for (const g of layer.wall_groups || []) g.members = g.members.filter(m => m !== id);
   selectedId = null;
   selectedOpeningId = null;
   routeResult = null;
@@ -5564,7 +5728,6 @@ function clearAll() {
   layer.infills = [];
   layer.network_walls = [];
   delete layer.wall_systems;
-  layer.wall_groups = [];
   layer.wall_relations = [];
   layer.return_paths = true;
   layer.prefer_closed = true;
@@ -6487,66 +6650,42 @@ function _catalogDocs() {
   return baseDoc && baseDoc !== layer ? [baseDoc, layer] : [layer];
 }
 function wallCatalog() {
-  const groups = new Map(), walls = new Map();
+  const walls = new Map();
   for (const doc of _catalogDocs()) {
-    const byId = Object.fromEntries((doc.source_paths || []).map(p => [p.id, p]));
-    for (const g of doc.wall_groups || [])
-      groups.set(g.id, { id: g.id, name: g.name || g.id, thickness: g.thickness, align: g.align || 'auto',
-                         members: g.members.filter(m => byId[m]) });
     for (const p of doc.source_paths || []) {
       if (p.visible === false) continue;
-      const g = (doc.wall_groups || []).find(x => x.members.includes(p.id));
       const env = p.envelope || null;
-      walls.set(p.id, { id: p.id, label: p.label || p.id, group: g ? g.id : null,
-                        thickness: g ? (g.thickness || 0) : ((env && env.thickness) || 0),
-                        align: g ? (g.align || 'auto') : ((env && env.align) || 'auto') });
+      walls.set(p.id, { id: p.id, label: p.label || p.id, closed: !!p.closed,
+                        thickness: (env && env.thickness) || 0, align: (env && env.align) || 'center',
+                        thin_width: _thinWidth(p) });    // (its THIN width: also the floor of an explicit thickness)
     }
   }
-  return { groups: [...groups.values()], walls: [...walls.values()] };
+  return { walls: [...walls.values()] };
 }
 
-// THICKNESS edited from the Wall Systems workspace: the AUTHORITATIVE
-// architectural value upstream — a grouped wall's Wall Group (shared by its
-// walls), an ungrouped wall's own envelope — in Base and in the design being
-// edited (so an inherited record keeps following Base: no delta).
-function setWallThickness(wallId, t) {
-  t = Math.max(0, +t || 0);
-  let changed = false;
-  for (const doc of _catalogDocs()) {
-    const g = (doc.wall_groups || []).find(x => x.members.includes(wallId));
-    if (g) {
-      const v = Math.max(0.5, t);
-      if (g.thickness !== v) { g.thickness = v; changed = true; }
-      continue;
-    }
-    const p = (doc.source_paths || []).find(x => x.id === wallId);
-    if (!p) continue;
-    if (t > 1e-9) {
-      const env = { align: 'auto', print_reference: false, ...(p.envelope || {}), thickness: t };
-      if (JSON.stringify(env) !== JSON.stringify(p.envelope || null)) { p.envelope = env; changed = true; }
-    } else if (p.envelope) { delete p.envelope; changed = true; }
-  }
-  if (changed) {
-    routeResult = null;
-    scheduleRefresh();                        // the Designer geometry (and its own undo step)
-    updatePropPanel(); updatePathList(); repaint();
-  }
-  return changed;
-}
-// the architecture a thickness edit touches (the workspace's undo snapshots)
+// THICKNESS edited from the Wall Systems workspace: the wall's OWN envelope,
+// in Base and in the design being edited (an inherited wall: the same wall
+// in every layout state — no delta)
+function setWallThickness(wallId, t) { return setWallProps([wallId], { thickness: t }); }
+// the per-wall architecture the Wall Systems workspace may edit (its undo
+// snapshots): each wall's envelope, own end cap and own Corner R
+const _ARCH_WALL_FIELDS = ['envelope', 'cap', 'corner_radius'];
 function archThickness() {
   return _catalogDocs().map(doc => ({
-    groups: (doc.wall_groups || []).map(g => [g.id, g.thickness]),
-    envs: (doc.source_paths || []).filter(p => p.envelope).map(p => [p.id, p.envelope]) }));
+    walls: (doc.source_paths || []).map(p => [p.id, Object.fromEntries(_ARCH_WALL_FIELDS.filter(f => p[f] != null).map(f => [f, _clone(p[f])]))]) }));
 }
 function setArchThickness(snap) {
   const docs = _catalogDocs();
   snap.forEach((s, k) => {
     const doc = docs[k];
     if (!doc) return;
-    for (const [id, t] of s.groups) { const g = (doc.wall_groups || []).find(x => x.id === id); if (g) g.thickness = t; }
-    const envs = new Map(s.envs);
-    for (const p of doc.source_paths || []) { if (envs.has(p.id)) p.envelope = envs.get(p.id); else delete p.envelope; }
+    const walls = new Map(s.walls || []);
+    for (const p of doc.source_paths || []) {
+      if (!walls.has(p.id)) continue;
+      const w = walls.get(p.id), r0 = p.corner_radius;
+      for (const f of _ARCH_WALL_FIELDS) { if (w[f] != null) p[f] = _clone(w[f]); else delete p[f]; }
+      if (p.corner_radius !== r0) _computePrimitivePoints(p);
+    }
   });
   routeResult = null; scheduleRefresh(); updatePropPanel(); updatePathList(); repaint();
 }
@@ -6623,10 +6762,113 @@ function _withoutBeadWidth(settings) {
   return s;
 }
 
+// ---------------------------------------------------------------------------
+// PERSISTENT WALL-PROPERTY OWNERSHIP (M1, 2026-10-15 — WALL_ARCHITECTURE.md).
+// Base / Variants are layout STATES of ONE architecture: a wall's physical
+// properties, the junction / cap shape, junction overrides and the material
+// belong to the design that OWNS them (the lineage root for document-level
+// settings; for a wall, the design that introduced it) — never to whichever
+// Variant happens to be open. While a Variant is edited, every edit of an
+// OWNED field of an inherited record is written THROUGH to its owner when the
+// design syncs, so the Variant's delta never gains it. Layout state (walls
+// added / removed, their geometry, openings, trims, route origins, region
+// overrides) stays the Variant's. Divergences a Variant ALREADY stores (older
+// projects) are left untouched, still rendered — and reported.
+// ---------------------------------------------------------------------------
+const OWNED_DOC_FIELDS = ['junction_style', 'junction_radius', 'cap_style', 'cap_corner_radius', 'corner_radius', 'material'];
+const OWNED_RECORD_FIELDS = { source_paths: ['envelope', 'wall', 'corner_radius', 'cap'],
+                            };
+let _variantSynced = null;     // { id, doc }: the open derived design's document as last synced
+const _clone = o => (o === undefined ? undefined : JSON.parse(JSON.stringify(o)));
+const _same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+function _markVariantSynced() {
+  const d = project.designs.find(x => x.id === project.active);
+  _variantSynced = d && d.parent != null ? { id: d.id, doc: _clone(layer) } : null;
+}
+
+// the OWNER record of an inherited record (Base's, or the full record an
+// ancestor Variant introduced), or null when the open design introduced it
+function _ownerRecord(coll, id) {
+  const chain = [];
+  let cur = project.designs.find(x => x.id === project.active);
+  while (cur && cur.parent != null) {
+    cur = project.designs.find(x => x.id === cur.parent);
+    if (cur) chain.unshift(cur);
+  }
+  for (const d of chain) {
+    if (d.parent == null) {
+      const r = ((project.baseDoc || {})[coll] || []).find(x => x.id === id);
+      if (r) return r;
+    } else {
+      const r = (((project.deltas[d.id] || {}).patch || {})[coll] || {})[id];
+      if (r && r.id === id) return r;                // (a full record = introduced there)
+    }
+  }
+  return null;
+}
+
+// write every owned-field edit made in the open Variant since the last sync to
+// its owner; returns the written fields (tests / status)
+function _writeThroughOwned() {
+  const S = _variantSynced;
+  if (!S || S.id !== project.active || !project.baseDoc) return [];
+  const writes = [], base = project.baseDoc;
+  for (const f of OWNED_DOC_FIELDS) {
+    if (_same(layer[f], S.doc[f])) continue;
+    if (f === 'material') {
+      const m = { ...(base.material || {}) }, now = layer.material || {}, was = S.doc.material || {};
+      for (const k of new Set([...Object.keys(now), ...Object.keys(was)]))
+        if (!_same(now[k], was[k])) { if (now[k] === undefined) delete m[k]; else m[k] = _clone(now[k]); }
+      base.material = m;
+    } else if (layer[f] === undefined) delete base[f];
+    else base[f] = _clone(layer[f]);
+    writes.push(f);
+  }
+  // junction overrides: owned by the lineage root, record by record (key)
+  const jo = layer.junction_overrides || [], jo0 = S.doc.junction_overrides || [];
+  if (!_same(jo, jo0)) {
+    const byKey = new Map((base.junction_overrides || []).map(o => [o.key, o]));
+    const now = new Map(jo.map(o => [o.key, o])), was = new Map(jo0.map(o => [o.key, o]));
+    for (const [k, o] of now) if (!_same(o, was.get(k))) byKey.set(k, _clone(o));
+    for (const k of was.keys()) if (!now.has(k)) byKey.delete(k);
+    base.junction_overrides = [...byKey.values()];
+    writes.push('junction_overrides');
+  }
+  for (const [coll, fields] of Object.entries(OWNED_RECORD_FIELDS)) {
+    for (const r of layer[coll] || []) {
+      const r0 = (S.doc[coll] || []).find(x => x.id === r.id);
+      if (!r0) continue;                               // new since the last sync: the Variant's own
+      const owner = _ownerRecord(coll, r.id);
+      if (!owner) continue;                            // introduced by the open design itself
+      for (const f of fields) {
+        if (_same(r[f], r0[f])) continue;
+        if (r[f] === undefined) delete owner[f]; else owner[f] = _clone(r[f]);
+        writes.push(`${coll}.${r.id}.${f}`);
+      }
+    }
+  }
+  return writes;
+}
+
+// the owned properties a derived design STORES (older projects): reported,
+// never silently written (mirror of layer_design.divergences)
+function _variantDivergences(id) {
+  const dl = project.deltas[id] || {}, out = [];
+  for (const f of OWNED_DOC_FIELDS) if (dl.settings && f in dl.settings && f !== 'material') out.push(f.replace(/_/g, ' '));
+  if (dl.settings && dl.settings.material) for (const k of Object.keys(dl.settings.material)) out.push(`material ${k.replace(/_/g, ' ')}`);
+  if (dl.patch && dl.patch.junction_overrides && Object.keys(dl.patch.junction_overrides).length) out.push('junction overrides');
+  for (const [coll, fields] of Object.entries(OWNED_RECORD_FIELDS))
+    for (const [rid, r] of Object.entries((dl.patch || {})[coll] || {}))
+      if (r && r.id !== rid) for (const f of fields) if (f in r) out.push(`${rid} ${f.replace(/_/g, ' ')}`);
+  return out;
+}
+
 // store the delta of the derived design being edited (vs its LIVE parent)
 async function syncActiveDesign() {
   const d = project.designs.find(x => x.id === project.active);
   if (!d || d.parent == null) return;
+  _writeThroughOwned();                                // owned edits go to their owner first
   const r = await _post('/api/layer_designs/delta',
                         { designs: _designsPayload(), parent: d.parent, id: d.id,
                           document: JSON.parse(JSON.stringify(layer)) });
@@ -6643,6 +6885,7 @@ async function syncActiveDesign() {
     if (od.parent == null) project.baseDoc = od.document;
     else project.deltas[owner] = { patch: od.patch, settings: od.settings };
   }
+  _markVariantSynced();
 }
 
 async function designsForBackend() {
@@ -6684,8 +6927,12 @@ async function editDesign(id) {
   scheduleRefresh();
   updateUndoButtons();
   repaint();
+  _markVariantSynced();
+  const div = target.parent == null ? [] : _variantDivergences(id);
   setStatus(target.parent == null ? `Editing ${target.name}.`
-            : `Editing ${target.name} — derived from ${_designName(target.parent)}: only its differences are stored.`);
+            : `Editing ${target.name} — derived from ${_designName(target.parent)}: only its differences are stored.` +
+              (div.length ? ` ⚠ This state still overrides persistent wall properties (${div.join(', ')}) — ` +
+                            'older project data; they will be dropped when the project format is upgraded.' : ''));
 }
 
 // rename: the user-facing name only — the stable id (referenced by every
@@ -6750,6 +6997,9 @@ async function projectState() {
     assembly: window.AssemblyProject ? window.AssemblyProject.exportState() : null,
     wall_systems: JSON.parse(JSON.stringify(project.wall_systems || [])),   // (printable construction)
     machine_profile: machineProfile(),                                       // (schema 5)
+    // (M4: persistent junction records, SHADOW mode — kept opaque so their ids
+    // survive saves; rebuilt by the backend, nothing here reads them)
+    ...(project.junctions ? { junctions: JSON.parse(JSON.stringify(project.junctions)) } : {}),
   };
 }
 
@@ -6850,15 +7100,17 @@ function applyProject(res, fileName) {
   project.hist = {};
   project.wall_systems = clone(P.wall_systems || []);      // the PROJECT's printable constructions
   project.machine_profile = clone(P.machine_profile || machineDefaultProfile());   // the project's printer
+  project.junctions = P.junctions ? clone(P.junctions) : null;                     // (M4 shadow junction records)
   project.name = P.name || (fileName || '').replace(/\.[^.]*$/, '');
   _idCounter = D.id_counter;
   _designCounter = D.design_counter;
   const doc = project.active === root.id ? root.document : res.active_document;
   for (const k of Object.keys(layer)) delete layer[k];
   Object.assign(layer, clone(doc));
+  _markVariantSynced();
   _ensurePathPoints(layer);
   // derived results, interaction and view-derived state: reset
-  selectedId = null; selectedOpeningId = null; selectedJunction = null; wallSystemPick = null; wallGroupPick = null;
+  selectedId = null; selectedOpeningId = null; selectedJunction = null; wallSystemPick = null; multiSel = new Set();
   envelopeLines = null;
   snapHint = null; drawPts = []; highlightPathId = null; trimHover = null;
   dragging = null; bodyDragging = null; rotateDrag = null; openingDrag = null; originDrag = null;
@@ -6940,6 +7192,7 @@ window.Designer = {
   setWallSystems: list => { project.wall_systems = list; },
   wallCatalog, setWallThickness, archThickness, setArchThickness,
   wallGeometry, setWallGeometry, wallJunctions, setJunctionTreatment,
+  buildArchControls: _buildArchControls, thicknessControl: _thicknessControl,
   onWorkspaceShow: (name, fn) => { _workspaceHooks[name] = fn; },
   onWorkspaceHide: (name, fn) => { _workspaceHideHooks[name] = fn; },
 };

@@ -534,6 +534,9 @@ class NetworkResult:
     arrangement: Arrangement
     emitter: dict = field(default_factory=dict)   # edge → emitting bead idx
     material: dict = field(default_factory=dict)  # face id → is wall
+    # (M4 shadow junctions, internal only) the wall elements meeting at
+    # each entry of `junctions` — never serialised, changes nothing
+    junction_walls: list = field(default_factory=list)
 
 
 def resolve(beads: list[Bead], material: list[Shape], voids: list[Shape],
@@ -631,8 +634,10 @@ def resolve(beads: list[Bead], material: list[Shape], voids: list[Shape],
         if el.startswith('S:'):
             for n in (u, v):
                 walls_at.setdefault(n, set()).add(el)
-    junctions = [arr.nodes[n] for n, els in walls_at.items() if len(els) >= 2]
-    return NetworkResult(resolved, junctions, arr.faces, arr, emitter, mat)
+    jn = [n for n, els in walls_at.items() if len(els) >= 2]
+    junctions = [arr.nodes[n] for n in jn]
+    return NetworkResult(resolved, junctions, arr.faces, arr, emitter, mat,
+                         [sorted(walls_at[n]) for n in jn])
 
 
 # ---------------------------------------------------------------------------

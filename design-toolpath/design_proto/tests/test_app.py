@@ -101,17 +101,20 @@ class TestWorkspaceLayout:
                  'btn-toolpath', 'btn-arrows', 'btn-dims']
         for i in design:
             assert p.where.get(i) == 'sidebar-design', f'{i} should be in the Design sidebar'
-        # WALL GEOMETRY (junction / end-cap treatment) belongs to the Wall Systems
-        # workspace since 2026-10-14 — not the Designer; no Extra Offsets control
+        # JUNCTION / END-CAP SHAPE is architecture (2026-10-15, M3 — reverses the
+        # 2026-10-14 move to Wall Systems): the Designer's "Junctions, Ends &
+        # Corners" sidebar; no Wall Geometry panel in Wall Systems; no Extra Offsets control
         for i in ('wg-junction-style', 'wg-junction-radius', 'wg-cap-style', 'wg-cap-corner-radius'):
-            assert i not in p.ids, f'{i} is no longer a Designer control'
-        assert 'wsys-geom' in p.ids and 'wsys-geom-title' in p.ids
+            assert i not in p.ids, f'{i} is no longer a static control'
+        assert 'wsys-geom' not in p.ids and p.where.get('walls-geom') == 'sidebar-wallsys'
+        # (2026-10-15 correction: "Junctions, Ends & Corners"; Wall Systems edits the
+        # SAME architecture in its own, visibly separate section)
+        assert 'wsys-arch' in p.ids and p.where.get('wsys-arch') not in ('sidebar-design', 'sidebar-wallsys')
         html = open(os.path.join(os.path.dirname(__file__), '..', 'static', 'index.html')).read()
         assert 'addOffset()' not in html and 'Add Extra Offset' not in html
-        # WALL SYSTEM: its own sidebar next to Design (construction, not geometry)
-        # (2026-10-11: the Designer's WALL GROUPS sidebar; constructions: the Wall Systems workspace)
+        # WALL GROUPS removed (2026-10-15, M2/M3): no group panels anywhere
         for i in ('wallgrp-section', 'wallgrp-list', 'wallgrp-edit-section', 'wallgrp-props'):
-            assert p.where.get(i) == 'sidebar-wallsys', f'{i} should be in the Wall Groups sidebar'
+            assert i not in p.ids, f'{i}: Wall Groups no longer exist'
         for i in prnt:
             assert p.where.get(i) == 'sidebar-print', f'{i} should be in the Print / Toolpath sidebar'
         for i in tools:

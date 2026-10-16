@@ -400,7 +400,8 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
   click with Alt where they need exact free coordinates near grid points.
 - **New Wall Groups default to Centered** (`_wgNew` align 'center', was
   'auto' = inside for closed paths). Authoring default only — stored
-  alignments (incl. 'auto') unchanged; not a junction fix.
+  alignments (incl. 'auto') unchanged; not a junction fix. *(M3, 2026-10-15:
+  Wall Groups removed — a wall given a thickness defaults to Centered.)*
 - **Transform centres are displayed "Center n"** (Assembly list, selector,
   preview label, assign banner; was "Cn", read like "Circle 1"); ids c1, c2 …
   unchanged; the backend's internal warning still names ids.
@@ -1482,6 +1483,39 @@ transform junction failures, corner / junction / end-cap architecture, Wall
 Geometry ownership / scope — incl. the trim-topology observation (a contact
 on a removed section un-resolves the Trim; strict-xfail case in
 `design_proto/tests/test_trim_ghost.py`).
+**IMPLEMENTED M0–M4 2026-10-15 (manually reviewed; checkpoint commit on
+restart/post-print-simulation; M5 next) — `WALL_ARCHITECTURE.md` revision 4 (§F final
+decisions: topology may change through Z, no continuation limit, out-and-back
+host strand resolved geometrically per layer, Variant physical properties
+dropped + reported) and its "M0–M4 implementation notes" + "Before M5 — to
+decide".** Now: golden regression suite (`layer_assembly/tests/golden`, 22
+cases); persistent wall-property ownership (Variant edits written to the
+owner); `.muddesign` schema 7 — Wall Groups REMOVED (`walls.py`: per-wall
+`envelope`, Wall Systems per wall, planes on walls; `wall_groups.py` = legacy
+reader); Designer "Junctions & ends" + row thickness + multi-select; Wall
+Systems per-wall checklist; persistent junction records in SHADOW mode
+(`junctions.py`, project-level registry, nothing builds from it). Production
+geometry unchanged except `real_10xtest1`'s reported Variant junction r 7.
+Correction pass after the user's manual review (2026-10-15, uncommitted):
+- readable Path thickness control;
+- the THIN → explicit thickness rule (first 0.5 in step at or above 2W − R; never below THIN);
+- "Junctions, Ends & Corners" (per-owner: project junction default, per-junction, per-wall cap and Corner R);
+- the same controls in Wall Systems on the same state (OUTDATED on edit).
+Junction generation untouched; M5 not started.
+*Earlier text of this proposal (revision 3, before approval):* User decisions applied: remove Wall Groups (walls
+own thickness / alignment / Corner R / caps; THIN state for out-and-back);
+Base / Variants = layout states (may add / remove walls, openings; never wall
+properties — lineage-owned like the lattice definition); no Wall Types;
+construction and material project-level; persistent junctions (members by
+wall id, shape) with junction-preserving transform re-resolution (LOST /
+AMBIGUOUS / SPLIT reported); continuous-excursion construction via strand
+identity + the router's existing `join_group` / `join_points`. Milestones
+M0–M10: M1–M4 byte-identical, M5 = first intentional junction-geometry change.
+Golden plan §11. Open: Q1–Q4. NOTE: moving junction / cap shape to the
+Designer reverses the 2026-10-14 "Wall Geometry belongs to Wall Systems"
+cleanup decision. Two shared roots: wall properties stored per
+Layer Design (Variant leaks), and no persistent junction — trims / junction
+overrides / attachments keyed to re-derived contacts.
 
 Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its correction checkpoint, 2026-10-08; Wall Systems, canonical corner motifs and Adaptive Truss manually reviewed and accepted):
 
@@ -1500,6 +1534,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-15 — WALL ARCHITECTURE M0–M4 implemented (uncommitted, for manual review): golden suite, ownership write-through, schema 7 without Wall Groups, UI simplification (junction / cap shape back in the Designer — reverses the 2026-10-14 cleanup decision), shadow junction records. See WALL_ARCHITECTURE.md → "M0–M4 implementation notes".
 
 2026-10-15 — Pass 1 (trim-aware snapping, architectural snap UX, Centered default for new Wall Groups, "Center n" labels) and Pass 2 (planar top cut Linear / Stepped / Curved, schema 6) — manually reviewed; after review the Stepped rule got real landings and the planar-cut ghost exact clipping; checkpointed. Machine Profile + 1 ft grid checkpoint 8c51d8a.
 

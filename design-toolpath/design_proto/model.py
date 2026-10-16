@@ -2509,18 +2509,31 @@ class PrintLayer:
     def _path_by_id(self, pid: str) -> Optional[Path]:
         return next((p for p in self.source_paths if p.id == pid), None)
 
-    def _normalized_cap_style(self) -> str:
+    def _normalized_cap_style(self, style=None) -> str:
         """
         Normalize cap_style aliases:
           'round' (legacy) → 'full_round'
           'rounded' → 'rounded_corners'
         """
-        s = (self.cap_style or 'flat').lower()
+        s = (style if style is not None else (self.cap_style or 'flat')).lower()
         if s == 'round':
             return 'full_round'
         if s == 'rounded':
             return 'rounded_corners'
         return s
+
+    def _own_cap(self, sid):
+        """A wall's OWN end-cap shape (M3, 2026-10-15: `path['cap']` =
+        {style, corner_radius}), or None — the project default applies."""
+        p = self._path_by_id(str(sid).split('~')[0]) if sid is not None else None
+        cap = getattr(p, 'cap', None) if p is not None else None
+        return cap if isinstance(cap, dict) and cap.get('style') else None
+
+    def _cap_radius_of(self, sid) -> float:
+        cap = self._own_cap(sid)
+        if cap is not None and cap.get('corner_radius') is not None:
+            return float(cap.get('corner_radius') or 0.0)
+        return self.cap_corner_radius
 
     def _anchor(self, inf) -> str:
         """The source an infill is anchored to (an inner face absorbed into
@@ -2694,7 +2707,8 @@ class PrintLayer:
         semicircle (its "cap" is the nozzle's U-turn, not architecture)."""
         if sid in getattr(self, '_return_lanes', ()):
             return 'full_round'
-        return self._normalized_cap_style()
+        cap = self._own_cap(sid)
+        return self._normalized_cap_style(cap['style'] if cap is not None else None)
 
     def _opening_cap_reach(self, offsets, sid=None) -> float:
         """How far this wall system's end treatment protrudes past a cut
@@ -2707,7 +2721,7 @@ class PrintLayer:
             return 0.0
         if style == 'full_round':
             return W / 2.0
-        return min(max(0.0, self.cap_corner_radius), W / 2.0)
+        return min(max(0.0, self._cap_radius_of(sid)), W / 2.0)
 
     def effective_paths(self) -> list[Path]:
         """
@@ -2729,23 +2743,12 @@ class PrintLayer:
         """
         return self._build_effective()[0]
 
-    def network_summary(self) -> dict:
-        """Derived wall-network topology of this layer (for the UI/API)."""
-        return self._build_effective()[1]['network']
-
-    def _build_effective(self):
-        """(effective paths, meta). meta['cls'] maps id(path) → bead class
-        (network.FACE / INTERNAL / WIRE) for retrace costs; meta['network']
-        summarises the derived wall networks."""
+    def _contact_stage(self):
+        """(processed polylines {id: pts}, visible sources in order, snapped
+        ends) — stages 1 / 1b of _build_effective: the DESIGN geometry every
+        contact (trims, junctions) is found on. Also kept as
+        `_contact_sources` for the shadow junction records (junctions.py)."""
         import network as N
-
-        result: list[Path] = []
-        cls_of: dict[int, str] = {}           # id(path object) → bead class
-        elem_of: dict[int, str] = {}          # id(path object) → element
-
-        # 1) Canonical processed-source polylines (ONE per visible source path)
-        # Parametric InsetPaths are design geometry derived from their
-        # parent's processed polyline: evaluated after it (chains allowed).
         self._relation_status = {}
         by_id = {p.id: p for p in self.source_paths}
         for rel in self.wall_relations:
@@ -2763,6 +2766,30 @@ class PrintLayer:
         # it (a near-miss from float noise is a junction, not a gap).
         snapped = self._snap_source_ends(source_paths_in_order, processed,
                                          N.SNAP_TOL)
+        self._contact_sources = (list(source_paths_in_order), dict(processed))
+        return processed, source_paths_in_order, snapped
+
+    def network_summary(self) -> dict:
+        """Derived wall-network topology of this layer (for the UI/API)."""
+        return self._build_effective()[1]['network']
+
+    def _build_effective(self):
+        """(effective paths, meta). meta['cls'] maps id(path) → bead class
+        (network.FACE / INTERNAL / WIRE) for retrace costs; meta['network']
+        summarises the derived wall networks."""
+        import network as N
+
+        result: list[Path] = []
+        cls_of: dict[int, str] = {}           # id(path object) → bead class
+        elem_of: dict[int, str] = {}          # id(path object) → element
+
+        # 1) Canonical processed-source polylines (ONE per visible source path)
+        # Parametric InsetPaths are design geometry derived from their
+        # parent's processed polyline: evaluated after it (chains allowed).
+        processed, source_paths_in_order, snapped = self._contact_stage()
+        # (M4 shadow junctions, internal only: the production junctions,
+        # recorded by _apply_networks — nothing serialised)
+        self._production_junctions = []
 
         # 1c) TRIMS: sections of sources between their contacts with other
         # sources (design geometry, untrimmed), and the sections the layer's
@@ -3061,7 +3088,7 @@ class PrintLayer:
             for pid, src_pts, walls, landings in pieces:
                 npc = piece_by_key.get(pid)
                 ends = _wall_system_end_pts(src_pts, walls, self._cap_style_of(src.id),
-                                            self.cap_corner_radius, landings)
+                                            self._cap_radius_of(src.id), landings)
                 for which, ((cap_pts, extensions), tag, label) in enumerate(zip(
                         ends, ('_cs', '_ce'), ('cap_start', 'cap_end'))):
                     e_pt = src_pts[0] if which == 0 else src_pts[-1]
@@ -4778,11 +4805,16 @@ class PrintLayer:
                 'lattices': sorted(e[2:] for e in elems if e.startswith('L:')),
             })
             corner_at = {(c.pt.x, c.pt.y): c for c in corners}
-            for p in res.junctions:
+            prod = self.__dict__.setdefault('_production_junctions', [])
+            for k, p in enumerate(res.junctions):
                 c = corner_at.pop((p.x, p.y), None)
                 summary['junctions'].append(self._junction_info(p, c))
+                prod.append({'x': p.x, 'y': p.y, 'corner': c.key if c else None,
+                             'walls': list(res.junction_walls[k]) if k < len(res.junction_walls) else []})
             for c in corner_at.values():
                 summary['junctions'].append(self._junction_info(c.pt, c))
+                prod.append({'x': c.pt.x, 'y': c.pt.y, 'corner': c.key,
+                             'walls': sorted({rb.bead.element for rb, _, _ in c.ends})})
             # Region infill: one coherent field per wall-material region.
             comps, comp_of = N.material_components(res)
             summary.setdefault('_rings', []).extend(

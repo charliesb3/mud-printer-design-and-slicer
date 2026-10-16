@@ -340,6 +340,12 @@ def test_project_save_open_keeps_envelope_editing_identical(client):
     opened = client.post('/api/project/open', data=text.encode()).get_json()
     p2 = opened['project'] if 'project' in opened else opened
     ds2, asm2 = p2['designer']['designs'], p2['assembly']['state']
+    # (2026-10-15, schema 7: the fixture's Variants stored persistent wall
+    # properties — dropped on save and REPORTED; the reference is that same
+    # project as the migration leaves it)
+    from walls import migrate_parts
+    ds, _, asm, rep = migrate_parts(ds, [], asm)
+    assert rep and all('dropped' in r for r in rep)
     r1 = post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': ds, 'envelope': True})
     r2 = post(client, '/api/assembly/resolve', {'assembly': asm2, 'designs': ds2, 'envelope': True})
     assert r1['instances'] == r2['instances'] and r1['support'] == r2['support'] and r1['profiles'] == r2['profiles']

@@ -98,7 +98,7 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   // ---- a project: a Hollow rectangle (Wall System) + a separate circle (another run: travel); Base + a derived design ----
   addPrimitive('RectanglePath');
   const R = layer.source_paths[0];
-  _wgNew([R.id]);                                      // a 10 in Wall Group (Hollow)
+  setWallProps([R.id], { thickness: 10 });             // a 10 in wall (Hollow)
   addPrimitive('CirclePath');
   const Cp = layer.source_paths[1]; Cp.cx = 420; Cp.cy = 200; _computePrimitivePoints(Cp);
   layer.material.physical = true;
@@ -243,7 +243,7 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   check(/Layer 3/.test(lay) && /printing/.test(lay) && /travel/.test(lay) && /Estimated/.test(lay) &&
         El.runs.length === D.res.plan.layers[2].runs && El.runs.length >= 2 && Math.abs(El.total_time - (lb - la)) < 1e-3 && /printed in 3 passes: A, B, C/.test(lay), 'layer info: distances, passes per island, duration = the layer\\'s clock');
   const runsTxt = txt('sim-runs');
-  check(/Run 1/.test(runsTxt) && /Run 2/.test(runsTxt) && /Rect 1/.test(runsTxt) && /Circle 1/.test(runsTxt) && /Wall Group 1/.test(runsTxt),
+  check(/Run 1/.test(runsTxt) && /Run 2/.test(runsTxt) && /Rect 1/.test(runsTxt) && /Circle 1/.test(runsTxt) && /Rect 1/.test(runsTxt),
         'per-run durations with their SOURCE paths and wall construction (a group with no Wall System: its own, Hollow)');
   simStepLayer(1);
   check(sim.selLayer === 3 && sim.mode === 'top', 'next layer');
@@ -457,7 +457,7 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
   const saves = calls.filter(c => c.url.startsWith('/api/project/')).length;
   setWorkspace('simulation');
   check(newProject() === true && asked === 2, 'confirmed');
-  check(layer.source_paths.length === 0 && !(layer.wall_groups || []).length && !project.wall_systems.length && layer.openings.length === 0 &&
+  check(layer.source_paths.length === 0 && !project.wall_systems.length && layer.openings.length === 0 &&
         project.designs.length === 1 && project.active === 'base' && !project.name &&
         JSON.stringify(layer.material) === JSON.stringify(JSON.parse(_PRISTINE_LAYER).material),
         'a clean empty Base design (no derived designs, Wall Systems, sources; default material)');

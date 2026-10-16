@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import pytest
 
-from wall_groups import compose, split_designs, system_of, ARCH_TYPE
+from walls import compose, system_of, ARCH_TYPE, migrate_parts
+from wall_groups import split_designs
 
 
 @pytest.fixture(autouse=True)
@@ -74,62 +75,57 @@ def recs(doc):
 
 # ---- composition -----------------------------------------------------------------------
 
-def test_wall_group_membership_thickness_alignment_compose_unassigned_as_hollow():
+# (2026-10-15, M2: Wall Groups REMOVED — the composition is per wall
+# (design_proto/walls.py); a grouped document is only an older INPUT,
+# normalised: each member wall receives its group's envelope. Group-level
+# assignment no longer exists — a Wall System lists walls.)
+
+def test_grouped_input_is_normalised_to_per_wall_envelopes():
     d = compose(grouped_doc(), 'A', [])
     R = recs(d)
-    assert set(R) == {'G1', 'G2'}
-    assert R['G1']['members'] == ['R', 'L'] and R['G1']['thickness'] == 10.0 and R['G1']['align'] == 'auto'
-    assert R['G2']['thickness'] == 12.0 and R['G1']['type'] == R['G2']['type'] == 'hollow'
-    assert d['wall_groups'] == grouped_doc()['wall_groups']            # (kept: planar-cut selection)
+    assert set(R) == {'wall:R', 'wall:L', 'wall:C'} and 'wall_groups' not in d
+    assert all(R[f'wall:{w}']['type'] == 'hollow' for w in 'RLC')
+    assert R['wall:R']['thickness'] == R['wall:L']['thickness'] == 10.0 and R['wall:C']['thickness'] == 12.0
+    assert R['wall:R']['align'] == 'auto'                                 # (the stored value, kept)
 
 
-def test_independent_wall_system_membership_and_construction():
-    S = [{'id': 'S1', 'name': 'Waves', 'type': 'interleaved', 'params': {'paths': 4}, 'web': {},
-          'members': [], 'groups': ['G1'], 'designs': None}]
+def test_wall_system_membership_and_construction():
+    S = [{'id': 'S1', 'name': 'Waves', 'type': 'interleaved', 'params': {'paths': 4}, 'web': {}, 'members': ['R', 'L']}]
     R = recs(compose(grouped_doc(), 'A', S))
-    assert R['G1']['type'] == 'interleaved' and R['G1']['params'] == {'paths': 4} and R['G1']['name'] == 'Waves'
-    assert R['G1']['thickness'] == 10.0                                  # the GROUP's envelope
-    assert R['G2']['type'] == 'hollow'
+    assert R['S1']['type'] == 'interleaved' and R['S1']['params'] == {'paths': 4} and R['S1']['name'] == 'Waves'
+    assert R['S1']['members'] == ['R', 'L'] and R['S1']['thickness'] == 10.0   # the WALLS' envelope
+    assert R['wall:C']['type'] == 'hollow'
+    assert system_of('L', S)['id'] == 'S1' and system_of('C', S) is None
 
 
-def test_mixed_constructions_within_one_wall_group():
-    S = [{'id': 'S1', 'name': 'Waves', 'type': 'interleaved', 'params': {'paths': 4}, 'members': [], 'groups': ['G1']},
-         {'id': 'S2', 'name': 'Chain', 'type': 'chain', 'params': {}, 'members': ['L'], 'groups': []}]
+def test_one_construction_across_walls_of_different_and_equal_thickness():
+    S = [{'id': 'S1', 'name': 'Parallel', 'type': 'parallel', 'params': {'walls': 4}, 'members': ['R', 'L', 'C']}]
     R = recs(compose(grouped_doc(), 'A', S))
-    assert R['G1~S1']['members'] == ['R'] and R['G1~S1']['type'] == 'interleaved'
-    assert R['G1~S2']['members'] == ['L'] and R['G1~S2']['type'] == 'chain'      # the wall's own system wins
-    assert R['G1~S1']['thickness'] == R['G1~S2']['thickness'] == 10.0
-    assert system_of('L', 'G1', S)['id'] == 'S2' and system_of('R', 'G1', S)['id'] == 'S1'
-
-
-def test_one_construction_across_groups_of_different_and_equal_thickness():
-    S = [{'id': 'S1', 'name': 'Parallel', 'type': 'parallel', 'params': {'walls': 4}, 'members': [], 'groups': ['G1', 'G2']}]
-    R = recs(compose(grouped_doc(), 'A', S))
-    assert {R['G1']['thickness'], R['G2']['thickness']} == {10.0, 12.0}
-    assert R['G1']['type'] == R['G2']['type'] == 'parallel' and R['G1']['params'] == R['G2']['params']
+    assert R['S1']['members'] == ['R', 'L'] and R['S1~2']['members'] == ['C']     # one record per envelope
+    assert {R['S1']['thickness'], R['S1~2']['thickness']} == {10.0, 12.0}
     doc = grouped_doc()
-    doc['wall_groups'][1]['thickness'] = 10.0                            # equal envelopes: ONE record, as before
+    doc['wall_groups'][1]['thickness'] = 10.0                             # equal envelopes: ONE record, as before
     R2 = recs(compose(doc, 'A', S))
     assert list(R2) == ['S1'] and R2['S1']['members'] == ['R', 'L', 'C']
 
 
 def test_skin_web_webs_are_composed_into_owned_records():
     S = [{'id': 'S1', 'name': 'Web', 'type': 'skin_web', 'params': {},
-          'web': {'pattern': 'wave', 'params': {'spacing': 18}, 'variation_index': 0}, 'members': [], 'groups': ['G2']}]
+          'web': {'pattern': 'wave', 'params': {'spacing': 18}, 'variation_index': 0}, 'members': ['C']}]
     d = compose(grouped_doc(), 'A', S)
-    owned = [f for f in d['infills'] if f['owner'] == 'G2']
-    assert [f['id'] for f in owned] == ['G2~web~C'] and owned[0]['pattern'] == 'wave' and owned[0]['params'] == {'spacing': 18}
+    owned = [f for f in d['infills'] if f['owner'] == 'S1']
+    assert [f['id'] for f in owned] == ['S1~web~C'] and owned[0]['pattern'] == 'wave' and owned[0]['params'] == {'spacing': 18}
     doc = grouped_doc()
     doc['infills'] = [{'id': 'old', 'path_id': 'C', 'kind': 'wall', 'pattern': 'zigzag', 'params': {'spacing': 20},
-                       'owner': 'G2', 'variation_index': 0}]
+                       'owner': 'S1', 'variation_index': 0}]
     d2 = compose(doc, 'A', S)
     assert [f['id'] for f in d2['infills']] == ['old'] and d2['infills'][0]['pattern'] == 'wave'   # id kept (lineage)
 
 
-def test_design_scope_and_architecture_ignore_systems():
-    S = [{'id': 'S1', 'type': 'chain', 'params': {}, 'members': [], 'groups': ['G1'], 'designs': ['d1']}]
-    assert recs(compose(grouped_doc(), 'base', S))['G1']['type'] == 'hollow'
-    assert recs(compose(grouped_doc(), 'd1', S))['G1']['type'] == 'chain'
+def test_construction_never_depends_on_the_layout_state_and_architecture_ignores_systems():
+    S = [{'id': 'S1', 'type': 'chain', 'params': {}, 'members': ['R', 'L'], 'designs': ['d1']}]   # (a stale scope)
+    assert recs(compose(grouped_doc(), 'base', S))['S1']['type'] == 'chain'
+    assert recs(compose(grouped_doc(), 'd1', S))['S1']['type'] == 'chain'
     a1 = compose(grouped_doc(), 'd1', [], arch=True)
     a2 = compose(grouped_doc(), 'd1', S, arch=True)
     assert a1 == a2 and all(r['type'] == ARCH_TYPE and not r['params'] for r in a1['wall_systems'])
@@ -138,21 +134,39 @@ def test_design_scope_and_architecture_ignore_systems():
 def test_legacy_documents_are_untouched():
     from layer_assembly.tests.test_profiles_plane_designer import building
     d = building('interleaved')
-    assert compose(d, 'A', [{'id': 'X', 'type': 'chain', 'groups': ['WS1']}]) is d
+    assert compose(d, 'A', [{'id': 'X', 'type': 'chain', 'members': ['C']}]) is d
 
 
 # ---- migration ----------------------------------------------------------------------------
 
 def _norm(doc):
+    """A build document modulo build-record ids / names (labels — renaming a
+    record never moves a bead) and the per-wall envelope (folded into the
+    records' thickness / align)."""
     d = json.loads(json.dumps(doc))
     d.pop('wall_groups', None)
-    for k in ('wall_systems', 'infills'):
-        if not d.get(k):
-            d.pop(k, None)
-    for r in d.get('wall_systems') or []:
-        for k in ('web', 'params'):
-            if not r.get(k):
-                r.pop(k, None)
+    for p in d.get('source_paths') or []:
+        p.pop('envelope', None)
+    ids = {}
+    recs_ = []
+    for r in d.pop('wall_systems', None) or []:
+        r = dict({'align': 'auto', 'print_reference': False}, **r)     # (the reader's defaults)
+        if r.get('thickness') is not None:
+            r['thickness'] = float(r['thickness'])
+        ids[r['id']] = 'R' + ','.join(sorted(r['members']))
+        recs_.append({k: v for k, v in r.items() if k not in ('id', 'name') and v not in ({}, None, [])} |
+                     {'members': sorted(r['members'])})
+    if recs_:
+        d['wall_systems'] = sorted(recs_, key=lambda r: json.dumps(r, sort_keys=True))
+    inf = []
+    for f in d.pop('infills', None) or []:
+        f = dict(f)
+        if f.get('owner') in ids:
+            f['owner'] = ids[f['owner']]
+            f['id'] = f'{f["owner"]}~web~{f["path_id"]}' if '~web~' in str(f.get('id')) else f['id']
+        inf.append(f)
+    if inf:
+        d['infills'] = sorted(inf, key=lambda f: json.dumps(f, sort_keys=True))
     return json.dumps(d, sort_keys=True)
 
 
@@ -169,16 +183,28 @@ def _legacy_fixtures():
 
 @pytest.mark.parametrize('name,designs', _legacy_fixtures())
 def test_migration_reproduces_every_legacy_document(name, designs):
+    """legacy (schema 1) → Wall Groups (schema 2) → per wall (schema 7): every
+    document builds the same records (modulo record-id labels) — except a
+    design whose construction differed per Layer Design (the old `designs`
+    scope): construction no longer depends on the layout state (reported)."""
     from layer_design import DesignLibrary
     old = DesignLibrary(designs)
     new, systems = split_designs(designs)
+    new, systems, _, rep = migrate_parts(new, systems)
+    scoped = any('applied only to' in r for r in rep)
+    names = {d['id']: d.get('name') or d['id'] for d in designs}
     lib = DesignLibrary(new, systems)
+    same = 0
     for d in old.designs:
         raw = lib.raw_document(d)
-        assert 'wall_systems' not in raw and isinstance(raw.get('wall_groups'), list)   # the architecture only
-        assert _norm(lib.document(d)) == _norm(old.document(d)), (name, d)
+        assert 'wall_systems' not in raw and 'wall_groups' not in raw                   # the architecture only
+        if _norm(lib.document(d)) == _norm(old.document(d)):
+            same += 1
+        else:                       # only a REPORTED divergence may change a design
+            assert scoped or any(r.startswith(names[d] + ':') for r in rep), (name, d, rep)
+    assert same >= 1
     ids = [s['id'] for s in systems]
-    assert len(ids) == len(set(ids))
+    assert len(ids) == len(set(ids)) and all('groups' not in s and 'designs' not in s for s in systems)
 
 
 def test_migration_keeps_ids_and_scopes_only_where_designs_differ():
@@ -200,12 +226,13 @@ def test_project_file_v1_opens_as_schema_2_and_round_trips(client):
         'assembly': {'state': B.assembly(12), 'header_counter': 0}}}
     res = PF.load(json.dumps(v1), _deserialise_layer)
     P = res['project']
-    assert res['migrated_from'] == 1 and res['schema_version'] == 6 and P['wall_systems']
+    assert res['migrated_from'] == 1 and res['schema_version'] == 7 and P['wall_systems']
     assert all('wall_systems' not in (d.get('document') or {}) and 'wall_systems' not in (d.get('patch') or {})
                for d in P['designer']['designs'])
-    assert 'wall_groups' in res['active_document']
+    assert 'wall_groups' not in res['active_document']
+    assert any(p.get('envelope') for p in res['active_document']['source_paths'])     # the walls own their envelope
     code, saved = post(client, '/api/project/save', {'project': P})
-    assert code == 200 and saved['file']['schema_version'] == 6 and saved['file']['project']['wall_systems'] == P['wall_systems']
+    assert code == 200 and saved['file']['schema_version'] == 7 and saved['file']['project']['wall_systems'] == P['wall_systems']
     again = client.post('/api/project/open', data=json.dumps(saved['file']).encode()).get_json()
     assert again['project']['wall_systems'] == P['wall_systems'] and again['project']['designer'] == P['designer']
 
@@ -228,8 +255,8 @@ def test_assembly_envelopes_do_not_depend_on_the_wall_systems(client):
     ds = [{'id': 'A', 'name': 'A', 'document': grouped_doc()}]
     asm = {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 6}], 'max_overhang': 1.5,
            'transform': {'profile': 'linear', 'shift': [0.25, 0], 'scale_in': 0}}
-    S1 = [{'id': 'S1', 'type': 'interleaved', 'params': {'paths': 4}, 'members': [], 'groups': ['G1']}]
-    S2 = [{'id': 'S1', 'type': 'chain', 'params': {}, 'members': [], 'groups': ['G1']}]
+    S1 = [{'id': 'S1', 'type': 'interleaved', 'params': {'paths': 4}, 'members': ['R', 'L']}]
+    S2 = [{'id': 'S1', 'type': 'chain', 'params': {}, 'members': ['R', 'L']}]
     _, a = post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': ds, 'wall_systems': S1, 'envelope': True})
     _, b = post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': ds, 'wall_systems': S2, 'envelope': True})
     _, ga = post(client, '/api/assembly/geometry', {'designs': ds, 'ids': ['A'], 'envelope': True, 'wall_systems': S1})
@@ -247,7 +274,7 @@ def _gen_body(**kw):
     asm = {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 6}], 'max_overhang': 1.5,
            'transform': {'profile': 'linear', 'shift': [0.25, 0], 'scale_in': 0}}
     S = [{'id': 'S1', 'name': 'Waves', 'type': 'interleaved', 'params': {'paths': 4}, 'web': {},
-          'members': [], 'groups': ['G1']}]
+          'members': ['R', 'L']}]
     return dict({'assembly': asm, 'designs': ds, 'wall_systems': S}, **kw)
 
 
@@ -261,7 +288,7 @@ def test_generation_status_and_invalidation(client):
     assert code == 200 and len(g['layers']) == 4 and g['support']['level'] == 'bead'
     assert {s['type'] for s in g['systems'].values()} == {'interleaved', 'hollow'}
     code, L = post(client, '/api/wallsystems/layer', dict(B, index=2))
-    assert code == 200 and L['polylines'] and {p.get('system') for p in L['polylines']} >= {'G1'}
+    assert code == 200 and L['polylines'] and {p.get('system') for p in L['polylines']} >= {'S1'}
     code, p = post(client, '/api/assembly/print_plan', dict(B, require_generated=True, detail='summary'))
     assert code == 200 and p['plan']['layers']
     # speeds / lift settings are not geometry: still current
@@ -316,6 +343,7 @@ def test_generated_geometry_and_toolpaths_equal_the_previous_pipeline(client):
                          'bottom_depth': 3.0, 'upper_height': 3.0, 'middle': False, 'middle_height': None,
                          'label': ''}], 'profile_counter': 2}
     new, systems = split_designs(legacy)
+    new, systems, asm_new, _ = migrate_parts(new, systems, asm)       # (schema 7: per wall, planes on walls)
     # the previous pipeline: full resolve + variants + plan of the LEGACY documents
     _, r0 = post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': legacy})
     need = {k: {'design_id': v['design_id'], 'transforms': v['transforms'], 'cuts': v.get('cuts') or []}
@@ -323,7 +351,7 @@ def test_generated_geometry_and_toolpaths_equal_the_previous_pipeline(client):
     _, g0 = post(client, '/api/assembly/geometry', {'designs': legacy, 'variants': need})
     _, p0 = post(client, '/api/assembly/print_plan', {'assembly': asm, 'designs': legacy, 'detail': 'stream'})
     # the new model: Wall Groups + project Wall Systems, generated, then planned from it
-    B = {'assembly': asm, 'designs': new, 'wall_systems': systems}
+    B = {'assembly': asm_new, 'designs': new, 'wall_systems': systems}
     code, g = post(client, '/api/wallsystems/generate', B)
     assert code == 200
     _, r1 = post(client, '/api/assembly/resolve', B)
@@ -336,7 +364,11 @@ def test_generated_geometry_and_toolpaths_equal_the_previous_pipeline(client):
     assert arch(r1['profiles']) == arch(r0['profiles']) and r1['support'] == r0['support']
     for L in g['layers']:
         code, lay = post(client, '/api/wallsystems/layer', dict(B, index=L['index']))
-        ref = g0['designs'][L['geometry_key']]['polylines'] if L['geometry_key'] in g0['designs'] else None
+        # (the legacy variant of the SAME layer: matched by index — a migrated
+        # planar cut selects its walls as explicit `sources`, so its key spells
+        # the same selection differently)
+        k0 = next(i['geometry_key'] for i in r0['instances'] if i['index'] == L['index'])
+        ref = g0['designs'][k0]['polylines'] if k0 in g0['designs'] else None
         if ref is None:
             _, c0 = post(client, '/api/assembly/geometry', {'designs': legacy, 'ids': [L['design_id']]})
             ref = c0['designs'][L['design_id']]['polylines']

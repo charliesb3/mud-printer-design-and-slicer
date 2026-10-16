@@ -62,7 +62,7 @@ import re
 from datetime import datetime, timezone
 
 FORMAT = 'mud-printer-project'
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 EXTENSION = '.muddesign'
 GENERATOR = 'design_proto'
 MAX_BYTES = 200 * 1024 * 1024          # (a sanity bound, far above real projects)
@@ -159,7 +159,16 @@ def _v5_to_v6(data: dict) -> dict:
     return data
 
 
-MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5, 5: _v5_to_v6}
+def _v6_to_v7(data: dict) -> dict:
+    """Schema 7 (2026-10-15): the PER-WALL architecture — no Wall Groups; wall
+    properties, junction / cap shape and material owned by Base, never by a
+    layout-state Variant; Wall Systems assigned to walls in every state. The
+    conversion itself is `walls.migrate_project`, run (idempotently, with its
+    report) by `validate` on every open and save."""
+    return data
+
+
+MIGRATIONS: dict = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5, 5: _v5_to_v6, 6: _v6_to_v7}
 
 
 def migrate(data: dict) -> tuple[dict, int]:
@@ -263,6 +272,14 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
     _need(len(set(ids)) == len(ids), 'The project file is damaged: two Layer Designs share an id.')
     roots = [d for d in designs if d.get('parent') is None]
     _need(len(roots) == 1, f'A project has exactly one base Layer Design (this file has {len(roots)}).')
+    # ---- PER-WALL ARCHITECTURE (schema 7, 2026-10-15 — walls.py): Wall Groups →
+    # walls, Variant-stored persistent properties dropped, Wall Systems per wall,
+    # planes on walls. Idempotent — run on EVERY open and save, so grouped data
+    # from anywhere (an older page) is converted too; each change is REPORTED.
+    _need(isinstance(P.get('wall_systems', []), list), 'The project file is damaged: "wall_systems" must be a list.')
+    from walls import migrate_project
+    warnings += migrate_project(P)
+    designs = D['designs']
     try:
         docs = {did: DesignLibrary(designs).document(did) for did in ids}
         designs = _without_derived_points(designs, docs)
@@ -271,7 +288,7 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
     except (LayerDesignError, KeyError, TypeError, ValueError, AttributeError) as e:
         raise ProjectFileError(f'The Layer Designs cannot be resolved: {e}')
     # ---- the project's WALL SYSTEMS (printable construction; schema 2) ------------
-    from wall_groups import TYPES, compose
+    from walls import TYPES, compose
     systems = P.get('wall_systems', [])
     _need(isinstance(systems, list), 'The project file is damaged: "wall_systems" must be a list.')
     seen = set()
@@ -281,18 +298,13 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
         _need(w['id'] not in seen, f'The project file is damaged: two Wall Systems share the id {w["id"]!r}.')
         seen.add(w['id'])
         _need(w.get('type') in TYPES, f'Wall System {w["id"]!r}: unknown construction {w.get("type")!r}.')
-        for f in ('members', 'groups'):
-            _need(isinstance(w.get(f, []), list), f'Wall System {w["id"]!r}: its {f} are damaged.')
-        _need(w.get('designs') is None or isinstance(w.get('designs'), list),
-              f'Wall System {w["id"]!r}: its design scope is damaged.')
+        _need(isinstance(w.get('members', []), list), f'Wall System {w["id"]!r}: its members are damaged.')
         _need(isinstance(w.get('params', {}), dict) and isinstance(w.get('web', {}), dict),
               f'Wall System {w["id"]!r}: its parameters are damaged.')
     P['wall_systems'] = systems
     for did, doc in docs.items():
         _need(isinstance(doc.get('source_paths', []), list),
               f'Layer Design {did!r}: its paths are damaged.')
-        _need(isinstance(doc.get('wall_groups', []), list),
-              f'Layer Design {did!r}: its Wall Groups are damaged.')
         if check_document is not None:
             try:
                 check_document(compose(doc, did, systems))
@@ -316,6 +328,17 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
                          _num_suffix_max(ids, 'd') + 1, 1)
     P['designer'] = {'designs': [_design_out(d) for d in designs], 'active_design': active,
                      'id_counter': id_counter, 'design_counter': design_counter}
+    # ---- PERSISTENT JUNCTIONS — SHADOW MODE (M4, junctions.py): detected from the
+    # designs, ids kept from the stored registry; nothing builds from them yet.
+    # Never blocks opening / saving: on failure the stored registry is kept.
+    prev = P.get('junctions') if isinstance(P.get('junctions'), dict) else None
+    try:
+        from junctions import build_registry
+        P['junctions'] = build_registry(P['designer']['designs'], systems, prev)[0]
+    except Exception as e:                              # (shadow only: report, keep going)
+        warnings.append(f'Junction records (shadow) could not be updated: {type(e).__name__}: {e}')
+        if prev is None:
+            P.pop('junctions', None)
 
     # ---- Assembly -----------------------------------------------------------------
     A = P.get('assembly')
@@ -454,6 +477,9 @@ def load(text, check_document=None) -> dict:
     if saved_v < SCHEMA_VERSION:
         warnings.insert(0, f'Opened a project saved with project schema {saved_v}; '
                            f'it will be saved as schema {SCHEMA_VERSION}.')
+    # (M1: Variant-stored persistent wall / material properties — kept, reported)
+    from layer_design import divergences, describe_divergences
+    warnings += describe_divergences(divergences(project['designer']['designs']))
     active = project['designer']['active_design']
     return {'project': project, 'active_document': docs[active], 'schema_version': SCHEMA_VERSION,
             'migrated_from': saved_v, 'warnings': warnings}

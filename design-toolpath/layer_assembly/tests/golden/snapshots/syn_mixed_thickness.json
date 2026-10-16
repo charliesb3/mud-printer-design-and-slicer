@@ -1,0 +1,851 @@
+{
+ "_migration": {
+  "hash": "116a308c8e57faebcbd6e5a9d2962c931dec2f4e6d1fa4bca70b259446884362",
+  "summary": {
+   "migrated_from": 6,
+   "warnings": [
+    "Opened a project saved with project schema 6; it will be saved as schema 7."
+   ]
+  }
+ },
+ "assembly": {
+  "geom": "c63867448ab6939f35027bbbb4fcbd9282e20d484207fff0fe00116596bf168f",
+  "hash": "3fdf98da58effbd479cfe0b337574538fb4626220f0d6b26209b998681e649e4",
+  "summary": {
+   "findings": 0,
+   "instances": 12,
+   "profiles": []
+  }
+ },
+ "designer.base": {
+  "geom": "c3d78ab88d40c5404701d9c1762d07f787806b136e7eec5c7356969325ae2d70",
+  "hash": "e465eb4fea8eaf3c586f5ae759992bec9ce238a9db3045a0bda8e32d8586dd7d",
+  "summary": {
+   "bbox": [
+    -5.0,
+    -5.0,
+    125.0,
+    85.0
+   ],
+   "junctions": 4,
+   "length": 881.283,
+   "points": 60,
+   "polylines": 9,
+   "trims": {}
+  }
+ },
+ "envelope.base": {
+  "geom": "4b779303238c998ed1012eead14b4cebf8b5e502e664f57dda12007d48a02c4d",
+  "hash": "4b779303238c998ed1012eead14b4cebf8b5e502e664f57dda12007d48a02c4d",
+  "summary": {
+   "bbox": null,
+   "junctions": 4,
+   "length": 0.0,
+   "points": 0,
+   "polylines": 0,
+   "trims": {}
+  }
+ },
+ "mudjob": {
+  "geom": "8aa3a1db977d3d1ba2c93c48d53e4957ee8408a7b83140c0f0f247cc9424faa8",
+  "hash": "8aa3a1db977d3d1ba2c93c48d53e4957ee8408a7b83140c0f0f247cc9424faa8",
+  "summary": {
+   "gcode_lines": 672,
+   "gcode_sha": "ae2c2e54f14ba06b",
+   "lifts": 1
+  }
+ },
+ "plan": {
+  "geom": "3373ef5a5ea510f5391826035a59b0da90453ccd9d9856ff25df6da1c9202a66",
+  "hash": "f5c112175254043de9907a146769b08f1867ac1c4fec02cc5177dbe0906ab633",
+  "summary": {
+   "estimate": {
+    "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
+    "estimate": true,
+    "frame_moves": 0,
+    "frame_time": 0.0,
+    "layers": [
+     {
+      "design_id": "base",
+      "index": 0,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 0,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 12,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 496.728384,
+      "transition_length": 66.520791,
+      "travel_length": 0,
+      "travel_time": 11.086798
+     },
+     {
+      "design_id": "base",
+      "index": 1,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 1,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 13,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 2,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 2,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 14,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 3,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 3,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 15,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 4,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 4,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 16,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 5,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 5,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 17,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 6,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 6,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 18,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 7,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 7,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 19,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 8,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 8,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 20,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 9,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 9,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 21,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 10,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 10,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 22,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     },
+     {
+      "design_id": "base",
+      "index": 11,
+      "lift": 0,
+      "passes": [
+       {
+        "index": 11,
+        "runs": [
+         0
+        ],
+        "stage": 0
+       },
+       {
+        "index": 23,
+        "runs": [
+         1
+        ],
+        "stage": 1
+       }
+      ],
+      "print_length": 971.28317,
+      "print_time": 485.641585,
+      "retrace_length": 0,
+      "runs": [
+       {
+        "index": 0,
+        "length": 531.283,
+        "sources": [
+         "O",
+         "R",
+         "T"
+        ],
+        "systems": [
+         "wall:R",
+         "wall:T"
+        ],
+        "time": 265.641585
+       },
+       {
+        "index": 1,
+        "length": 440.0,
+        "sources": [
+         "R"
+        ],
+        "systems": [
+         "wall:R"
+        ],
+        "time": 220.0
+       }
+      ],
+      "section_index": 0,
+      "total_time": 485.641585,
+      "transition_length": 0.0,
+      "travel_length": 0,
+      "travel_time": 0.0
+     }
+    ],
+    "lifts": [
+     {
+      "first_layer": 0,
+      "frame_time": 0.0,
+      "frame_z": 0.0,
+      "height": 18.0,
+      "index": 0,
+      "last_layer": 11,
+      "layers": 12,
+      "passes": 24,
+      "print_time": 5827.699022,
+      "reposition_in": null,
+      "stages": [
+       0,
+       1
+      ],
+      "total_time": 5838.785821,
+      "travel_time": 11.086798,
+      "z_bottom": 0.0,
+      "z_top": 18.0
+     }
+    ],
+    "print_length": 11655.398045,
+    "print_time": 5827.699022,
+    "retrace_length": 0.0,
+    "runs": 24,
+    "sections": [
+     {
+      "index": 0,
+      "layers": 12,
+      "print_length": 11655.398045,
+      "print_time": 5827.699022,
+      "total_time": 5838.785821,
+      "travel_length": 66.520791,
+      "travel_time": 11.086798
+     }
+    ],
+    "speeds": {
+     "frame": 0.0,
+     "print": 2.0,
+     "travel": 6.0
+    },
+    "stages": [
+     {
+      "first_layer": 0,
+      "index": 0,
+      "kind": "island",
+      "last_layer": 11,
+      "layers": 12,
+      "lift": 0,
+      "name": "A",
+      "parents": [],
+      "passes": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11
+      ],
+      "print_time": 3187.699022,
+      "total_time": 3187.699022,
+      "travel_time": 0.0,
+      "z_bottom": 0.0,
+      "z_top": 18.0
+     },
+     {
+      "first_layer": 0,
+      "index": 1,
+      "kind": "island",
+      "last_layer": 11,
+      "layers": 12,
+      "lift": 0,
+      "name": "B",
+      "parents": [],
+      "passes": [
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       18,
+       19,
+       20,
+       21,
+       22,
+       23
+      ],
+      "print_time": 2640.0,
+      "total_time": 2651.086798,
+      "travel_time": 11.086798,
+      "z_bottom": 0.0,
+      "z_top": 18.0
+     }
+    ],
+    "total_time": 5838.785821,
+    "transition_length": 66.520791,
+    "travel_length": 0.0,
+    "travel_time": 11.086798
+   },
+   "layers": 12
+  }
+ }
+}
