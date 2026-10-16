@@ -171,6 +171,25 @@ eval(src + `
   check(!U.envelope && wsysSystemOf(U.id) && wsysSystemOf(U.id).id === S4.id, 'undo: the thickness reverts, the assignment stays');
   wsysRedo();
   check(U.envelope && U.envelope.thickness === 8, 'redo');
+  // MEMBERSHIP and THICKNESS are independent state (2026-10-16 correctness pass):
+  // the checkbox never writes a thickness, a thickness edit never assigns
+  const tick = on => { const cb = wallRow(U.id).children[0]; cb.checked = on; cb.onchange(); };
+  tick(false);
+  check(!wsysSystemOf(U.id) && U.envelope && U.envelope.thickness === 8 &&
+        wallRow(U.id).children[2].children[1].value === '8' && /No Wall System \\(prints Hollow/.test(txt('wsys-list')),
+        'unticking keeps the wall’s thickness; a thick wall in no Wall System is listed as printing Hollow');
+  const tU2 = wallRow(U.id).children[2].children[1];
+  tU2.value = '0'; tU2.onchange();
+  check(!U.envelope && !wsysSystemOf(U.id) && wallRow(U.id).children[2].children[1].value === 'THIN',
+        'back to THIN while unassigned: still in no Wall System');
+  tick(true);
+  check(wsysSystemOf(U.id) && wsysSystemOf(U.id).id === S4.id && !U.envelope &&
+        wallRow(U.id).children[2].children[1].value === 'THIN' && wallRow(U.id).children[3].textContent === '5.25 in',
+        'ticking a THIN wall keeps it THIN (its derived width shown, no thickness written)');
+  wallRow(U.id).children[2].children[2].onclick();
+  check(U.envelope.thickness === 5.5 && wsysSystemOf(U.id).id === S4.id, '+ from THIN starts at the derived minimum step, membership unchanged');
+  wallRow(U.id).children[2].children[1].value = '8'; wallRow(U.id).children[2].children[1].onchange();
+  check(U.envelope.thickness === 8 && wsysSystemOf(U.id).id === S4.id, '(back to the state above)');
   // a wall's thickness is ITS OWN: the other walls of its construction keep theirs
   wsys.pick = S2.id; wsysRender();
   const tL = wallRow(Ln.id).children[2].children[1];
@@ -243,6 +262,28 @@ eval(src + `
   await sleep(20);
   check(wsys.stats.layerFetches === lf && reqs('/api/wallsystems/generate') === ng && Object.keys(wsys.cache).length === 5,
         'switching between visited layers / display modes: served from the cache (no fetch), nothing regenerated');
+  {  // SHOW BEAD (2026-10-16): printed paths at the project bead width — a VIEW only
+    const rec = { widths: [], caps: [] };
+    const ctx = new Proxy({}, { get(t, k) { return k in t ? t[k] : () => {}; },
+                                set(t, k, v) { if (k === 'lineWidth') rec.widths.push(v); if (k === 'lineCap') rec.caps.push(v);
+                                               t[k] = v; return true; } });
+    el('wsys-canvas').getContext = () => ctx;
+    const n0 = calls.length, gen0 = JSON.stringify(wsys.cache);
+    wsysDraw();
+    const vecMax = Math.max(...rec.widths);
+    rec.widths.length = 0; rec.caps.length = 0;
+    wsysToggleBeads(true);
+    const W = _material().bead_width;
+    const vv = wsys.view, items = _wsysShown(wsys.layer), B = _wsysBounds(items);
+    const cv = el('wsys-canvas');
+    const k = 0.86 * Math.min(cv.width, cv.height) / Math.max(B[2] - B[0], B[3] - B[1], 1) * vv.zoom;
+    check(wsys.beads && rec.widths.some(w => Math.abs(w - W * k) < 1e-6) && rec.caps.includes('round') && vecMax < 2,
+          'Show Bead: every printed path drawn at the project bead width (round caps), vector view = thin centre lines');
+    check(calls.length === n0 && JSON.stringify(wsys.cache) === gen0 && wsys.stats.layerFetches === lf,
+          'Show Bead is a view only: no request, no regeneration, the generated geometry unchanged');
+    wsysToggleBeads(false);
+    check(!wsys.beads, 'back to the vector view');
+  }
   check(/bead level/.test(txt('wsys-support-head')), 'support findings of the selected layer: bead level for generated paths');
   wsysSetDisplay('envelope');
   check(/architectural/.test(txt('wsys-support-head')), '… and architectural (preliminary) for the envelope');

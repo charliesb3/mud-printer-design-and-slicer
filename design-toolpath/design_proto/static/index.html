@@ -1040,6 +1040,7 @@
         <div class="prop-row wsys-nav-btns">
           <button class="tool-btn" id="wsys-show-env" onclick="wsysSetDisplay('envelope')" title="The architectural envelope (wall material)">Envelope</button>
           <button class="tool-btn" id="wsys-show-gen" onclick="wsysSetDisplay('generated')" title="The generated printable geometry (Wall Systems, junctions, caps, openings)">Generated Paths</button>
+          <button class="tool-btn" id="wsys-show-beads" onclick="wsysToggleBeads()" title="VECTOR (centre lines) or SHOW BEAD: every printed path drawn at the project's bead width (Material / Bead) — a view only: geometry, routing, support, estimates and export are unchanged">Show Bead</button>
         </div>
         <div class="asm-calc" id="wsys-layer-info"></div>
       </div>
@@ -1133,6 +1134,7 @@
           <button class="tool-btn" onclick="simViewPreset('front')">Front</button>
           <label class="sim-check"><input type="checkbox" id="sim-ghost" checked onchange="simSetOption('ghost', this.checked)"> ghost unprinted</label>
           <label class="sim-check"><input type="checkbox" id="sim-travel" checked onchange="simSetOption('travel', this.checked)"> travel</label>
+          <label class="sim-check" title="VECTOR (centre lines) or SHOW BEAD: every extruded pass drawn at the project's bead width (Material / Bead) — a view only: geometry, routing, support, estimates and export are unchanged"><input type="checkbox" id="sim-beads" onchange="simSetOption('beads', this.checked)"> show bead</label>
         </div>
         <div class="canvas-hint" id="sim-hint">Drag to orbit · Shift-drag to pan · wheel to zoom</div>
       </div>

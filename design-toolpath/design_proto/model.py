@@ -2714,6 +2714,8 @@ class PrintLayer:
         self._ws_frames = []                 # generated Wall System frames (the PHASE REFERENCE of cut variants)
         network['wall_system_membership'] = dict(getattr(self, '_wall_system_of', {}) or {})
         network['source_walls'] = dict(getattr(self, '_source_walls', {}) or {})
+        if jobs and not self.envelope_only:
+            jobs = self._restrict_webs(N, result, cls_of, regions, jobs)
         if getattr(self, '_wall_systems', None) and not self.envelope_only:
             result, jobs = self._apply_wall_systems(N, result, cls_of, regions, jobs, network)
         network['reference_only'] = sorted(ref_only)
@@ -3014,6 +3016,83 @@ class PrintLayer:
         return sorted(groups.values(),
                       key=lambda g: [s.id for s in sources].index(g[0]))
 
+    def _region_faces(self, N, result, cls_of, rings):
+        """(members, msid): the face beads bounding one wall-material region
+        and the source each belongs to — a junction fillet between two
+        different sources is '__J' (followed by neither band)."""
+        known = sorted((q.id for q in self.source_paths), key=len, reverse=True)
+        members, msid = [], {}
+        for p in result:
+            if cls_of.get(id(p)) != N.FACE:
+                continue
+            pts = p.sample_points()
+            sm = (pts[::max(1, len(pts) // 12)] + [pts[-1]]) if pts else []
+            if not sm or not all(min(N.dist_to_polyline(q, r, True) for r in rings) < 0.05 for q in sm):
+                continue
+            members.append(p)
+            msid[id(p)] = (getattr(p, 'source_id', None) or p.id).split('~')[0]
+            if str(p.id).startswith('junction:'):
+                faces_ = str(p.id)[len('junction:'):].split('#')[0].split('|')
+                srcs_ = {next((k for k in known if f.startswith(k)), None) for f in faces_} - {None}
+                if len(srcs_) > 1:
+                    msid[id(p)] = '__J'
+        return members, msid
+
+    def _web_envelope(self, N, rings, members, msid):
+        """The rings of a region's SKIN + WEB walls alone: every wall of the
+        region that does not print a web (a thick wall of another
+        construction — Hollow, its own unassigned record, a generated
+        system) closed off by a chord across its mouth (the same stitching as
+        _split_wall_systems). None when nothing needs closing off, or when a
+        non-web wall cannot be closed off (a partition)."""
+        def other(sid_):
+            if sid_ == '__J' or self._web_member(sid_):
+                return False
+            sw = (getattr(self, '_source_walls', {}) or {}).get(sid_) or {}
+            return float(sw.get('thickness') or 0.0) > 1e-9
+        sids = set(msid.values())
+        if not any(other(s) for s in sids) or not any(s != '__J' and self._web_member(s) for s in sids):
+            return None
+
+        def key(sid_):
+            if sid_ == '__J':
+                return '__J'
+            return sid_ if other(sid_) else None
+        keep = getattr(self, '_split_skin_part', None)
+        try:
+            self._split_skin_part = None
+            parts = self._split_wall_systems(N, rings, members, msid, key)
+            env = self._split_skin_part if parts is not None else None
+        finally:
+            self._split_skin_part = keep
+        return env['rings'] if env and env.get('rings') else None
+
+    def _restrict_webs(self, N, result, cls_of, regions, jobs):
+        """A SKIN + WEB web fills only its OWN walls (2026-10-16): a Wall
+        Infill job OWNED by a Skin + Web Wall System, in a region that also
+        holds thick walls of another construction (Hollow / an unassigned
+        wall's own record), is generated on the web walls' envelope alone.
+        Before, the web filled the whole connected material region — a wall
+        NOT in the Skin + Web system received its web as soon as it had a
+        thickness, as if it were a member. The layer's own unowned Wall
+        Infill still fills its whole region. Regions with a GENERATED wall
+        are restricted in _apply_wall_systems."""
+        gen = getattr(self, '_wall_systems', {}) or {}
+        for rings in regions:
+            ring0 = rings[0][0] if rings and rings[0] else None
+            mine = [j for j in jobs if ring0 is not None and j['rings'] and j['rings'][0]
+                    and j['rings'][0][0].dist(ring0) < 1e-6 and getattr(j['infill'], 'owner', None)]
+            if not mine:
+                continue
+            members, msid = self._region_faces(N, result, cls_of, rings)
+            if any(s in gen for s in msid.values()):
+                continue
+            env = self._web_envelope(N, rings, members, msid)
+            if env is not None:
+                for j in mine:
+                    j['rings'] = env
+        return jobs
+
     def _apply_wall_systems(self, N, result, cls_of, regions, jobs, network):
         """WALL SYSTEMS (wall_systems.py): a wall-material region whose
         bounding walls choose a non-default system prints that system's paths
@@ -3206,9 +3285,17 @@ class PrintLayer:
             skin_env = getattr(self, '_split_skin_part', None) if len(keys) > 1 else None
             if skin_env and any(self._web_member(s_) for s_ in sids):
                 # MIXED region with Skin + Web members: their web is generated on the
-                # skin walls' own envelope (the generated walls' bands closed off)
+                # skin walls' own envelope (the generated walls' bands closed off) —
+                # and, when a thick skin wall of another construction (Hollow) shares
+                # it, on the WEB walls' own envelope (_restrict_webs)
+                env_ = skin_env['rings']
+                if any(getattr(j['infill'], 'owner', None) for j in mine) and \
+                        any(s_ not in self._wall_systems and not self._web_member(s_) and
+                            float(((getattr(self, '_source_walls', {}) or {}).get(s_) or {}).get('thickness') or 0) > 1e-9
+                            for s_ in sids):
+                    env_ = self._web_envelope(N, rings, members, msid) or env_
                 for j in mine:
-                    j['rings'] = skin_env['rings']
+                    j['rings'] = env_
                 mine = []
             jobs = [j for j in jobs if j not in mine]
             for j in mine:                          # a Wall Infill here is not printed

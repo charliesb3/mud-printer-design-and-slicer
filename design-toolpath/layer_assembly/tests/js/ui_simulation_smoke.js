@@ -214,6 +214,33 @@ function firstTransI() { const D = sim.data; return Array.from(D.kind).findIndex
         'playing forward draws only the newly finished moves (cached static geometry)');
   simScrub(5000, false);
   check(Math.abs(sim.t - D.total / 2) < 1e-6 && el('sim-time').textContent.includes('left'), 'timeline scrubbing (whole print)');
+  {  // SHOW BEAD (2026-10-16): extruded passes at the project bead width — a VIEW only
+    const rec = { widths: [], caps: [] };
+    const ctx = new Proxy({}, { get(t, k) { return k in t ? t[k] : () => {}; },
+                                set(t, k, v) { if (k === 'lineWidth') rec.widths.push(v); if (k === 'lineCap') rec.caps.push(v);
+                                               t[k] = v; return true; } });
+    el('sim-canvas').getContext = () => ctx;
+    const realCanvas = _simCanvas;
+    _simCanvas = (W, H) => ({ width: W, height: H, getContext: () => ctx });        // (the static caches too)
+    const n0 = calls.length, plan0 = sim.data, t0 = sim.t;
+    sim.cache = null; simDraw();
+    const vec = Math.max(...rec.widths);
+    rec.widths.length = 0; rec.caps.length = 0;
+    sim.view.zoom = 8; sim.cache = null;
+    simSetOption('beads', true);
+    const bead = sim.beadPx['3d'], cv = el('sim-canvas'), Bd = D.bounds;
+    const s3 = 0.8 * Math.min(cv.width, cv.height) / Math.max(1, Math.hypot(Bd.x1 - Bd.x0, Bd.y1 - Bd.y0), Bd.z1) * 8;
+    check(sim.opts.beads && Math.abs(bead - _material().bead_width * s3) < 1e-9 && bead > 2.4 &&
+          rec.widths.some(w => Math.abs(w - bead) < 1e-9) && rec.caps.includes('round') && vec <= 2.4,
+          'Show Bead (3D): extruded passes at the project bead width × the view scale (round caps); the vector view stays thin');
+    rec.widths.length = 0;
+    simTopView(); sim.view.zoom = 8; simDraw();
+    check(rec.widths.some(w => Math.abs(w - sim.beadPx.top) < 1e-9) && sim.beadPx.top > 2.4, 'Show Bead (layer top view) at the bead width too');
+    check(calls.length === n0 && sim.data === plan0 && sim.t === t0, 'Show Bead is a view only: no request, the plan / playhead unchanged');
+    simSetOption('beads', false);
+    sim.mode = '3d'; sim.view.zoom = 1;
+    _simCanvas = realCanvas; sim.cache = null;
+  }
 
   // ---- time sidebar ----
   const tt = txt('sim-times');

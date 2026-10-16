@@ -43,6 +43,7 @@ const wsys = {
   error: null,
   layer: -1,                        // -1 = the Base design view, else a layer index
   display: 'envelope',              // 'envelope' | 'generated'
+  beads: false,                     // SHOW BEAD: printed paths at the bead width (a view only)
   view: { mode: 'top', zoom: 1, px: 0, py: 0, yaw: -Math.PI / 4, pitch: 0.6 },
   cache: {},                        // `${clientKey}|${index}` → generated layer geometry (index -1: Base design)
   pending: {},                      // the same keys while their request is in flight
@@ -348,6 +349,18 @@ function wsysSetDisplay(d) {
   if (d === 'generated') _wsysFetchLayer(wsys.layer);
   wsysRender();
 }
+// SHOW BEAD (2026-10-16): VECTOR (centre lines) ↔ the deposited bead at the
+// project's bead width (Material / Bead — the Designer's bead width, round caps
+// and joins like its bead view). VISUALIZATION ONLY: geometry, generation,
+// support, routing and export never see it.
+function wsysToggleBeads(on) {
+  wsys.beads = on === undefined ? !wsys.beads : !!on;
+  wsysRender();
+}
+function _wsysBeadWidth() {
+  const m = typeof _material === 'function' ? _material() : null;
+  return m && m.bead_width > 0 ? m.bead_width : 3.0;
+}
 
 async function _wsysBaseEnvelope() {
   const root = window.Designer.listDesigns().find(d => d.parent == null);
@@ -451,17 +464,33 @@ function wsysDraw() {
     P = (x, y) => [W / 2 + v.px + k * (x - cx), H / 2 + v.py - k * (y - cy)];
     if (typeof drawPhysicalGrid === 'function') drawPhysicalGrid(g, P, W, H);   // 1 ft squares from the print origin
   }
+  // SHOW BEAD: the bead width on screen (top: k px / in; orbit: its 0.8 k plan scale)
+  const beadPx = wsys.beads ? Math.max(1, _wsysBeadWidth() * k * (v.mode === 'orbit' ? 0.8 : 1)) : 0;
+  const trace = (it, z) => {
+    g.beginPath();
+    const a = P(it.pts[0][0], it.pts[0][1], z);
+    g.moveTo(a[0], a[1]);
+    for (let j = 1; j < it.pts.length; j++) { const q = P(it.pts[j][0], it.pts[j][1], z); g.lineTo(q[0], q[1]); }
+    if (it.closed) g.closePath();
+  };
   const stroke = (list, z, alpha) => {
     for (const it of list) {
       if (it.pts.length < 2) continue;
+      const color = it.role === 'path' ? _wsysSystemColor(it.system) : '#6fb1ff';
+      if (beadPx && it.role !== 'ring') {
+        // the deposited bead, translucent: where two passes overlap (a THIN
+        // Out-and-Back's lanes, a contact) the band reads denser
+        g.globalAlpha = alpha * 0.45;
+        g.strokeStyle = color; g.lineWidth = beadPx;
+        g.lineCap = 'round'; g.lineJoin = 'round';
+        trace(it, z);
+        g.stroke();
+        g.lineCap = 'butt'; g.lineJoin = 'miter';
+      }
       g.globalAlpha = alpha;
-      g.strokeStyle = it.role === 'path' ? _wsysSystemColor(it.system) : '#6fb1ff';
-      g.lineWidth = it.role === 'path' ? 1.4 : 1.2;
-      g.beginPath();
-      const a = P(it.pts[0][0], it.pts[0][1], z);
-      g.moveTo(a[0], a[1]);
-      for (let j = 1; j < it.pts.length; j++) { const q = P(it.pts[j][0], it.pts[j][1], z); g.lineTo(q[0], q[1]); }
-      if (it.closed) g.closePath();
+      g.strokeStyle = color;
+      g.lineWidth = beadPx && it.role !== 'ring' ? 1 : (it.role === 'path' ? 1.4 : 1.2);
+      trace(it, z);
       g.stroke();
     }
     g.globalAlpha = 1;
@@ -780,6 +809,7 @@ function _wsysRenderLayer() {
   if (sl) { sl.max = String(Math.max(0, n - 1)); if (document.activeElement !== sl) sl.value = String(Math.max(0, i)); }
   if (el('wsys-layer-count')) el('wsys-layer-count').textContent = `/ ${n}`;
   for (const [id, on] of [['wsys-show-env', wsys.display === 'envelope'], ['wsys-show-gen', wsys.display === 'generated'],
+                          ['wsys-show-beads', !!wsys.beads],
                           ['wsys-top-btn', wsys.view.mode === 'top'], ['wsys-orbit-btn', wsys.view.mode === 'orbit'],
                           ['wsys-base-btn', i < 0]]) {
     const b = el(id);

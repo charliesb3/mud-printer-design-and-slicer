@@ -1140,7 +1140,9 @@ def _opening_headers(p, res, members, insts, tgs, bead):
             continue
         ux, uy = (t.b[0] - t.a[0]) / t.length, (t.b[1] - t.a[1]) / t.length
         hs = p.header_settings(t.thickness, bead)
-        sc = inst.transform.scale or 1.0
+        # (local units of the WALL's frame: its transform group's placement in
+        # 'multiple' mode — the frame the header's x / y are in)
+        sc = wall_placement(inst, p.wall.source).scale or 1.0
         hid = f'{p.id}-header' + (f'-{j + 1}' if len(members) > 1 else '')
         out.append(Header(hid, inst.section_index, inst.index - first[inst.section_index],
                           t.a[0] + ux * _at(m, last + 1), t.a[1] + uy * _at(m, last + 1), math.degrees(math.atan2(uy, ux)),

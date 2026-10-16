@@ -55,8 +55,9 @@ const sim = {
   mode: '3d',                      // '3d' | 'top' (layer inspection)
   selLayer: 0, selRun: null, selSection: null, selLift: null, selStage: null,
   open: {},                        // tree: expanded nodes
-  opts: { ghost: true, travel: true },
+  opts: { ghost: true, travel: true, beads: false },   // beads: SHOW BEAD (deposited width) — drawing only
   view: { yaw: -Math.PI / 4, pitch: 0.55, zoom: 1, px: 0, py: 0 },
+  beadPx: { '3d': 1, top: 1 },     // SHOW BEAD: the bead width on screen (px), per view
   drag: null, scrubbing: false,
   cache: null,                     // { key, W, H, sx, sy, ghost, printed, drawn, lod }
   stats: { framesDrawn: 0, itemsDrawn: 0, fullRedraws: 0, lastFrameMs: 0 },
@@ -248,9 +249,21 @@ function _simStyle(i, mode) {
   // 3D: one colour per island / connected stage
   const color = mode === 'top' ? SIM_RUN_COLORS[Math.max(0, D.run[i]) % SIM_RUN_COLORS.length]
                                : SIM_PALETTE[Math.max(0, D.stage[i]) % SIM_PALETTE.length];
-  return { color, width: k === SIM_KIND.RETRACE ? 2.4 : 1.4, dash: null,
-           kind: k === SIM_KIND.RETRACE ? 'retrace' : 'print' };
+  const kind = k === SIM_KIND.RETRACE ? 'retrace' : 'print';
+  if (sim.opts.beads)          // SHOW BEAD: the deposited bead at its real width (project material)
+    return { color, width: Math.max(1, sim.beadPx[mode] || 1), dash: null, kind, bead: true };
+  return { color, width: k === SIM_KIND.RETRACE ? 2.4 : 1.4, dash: null, kind };
 }
+
+// ---- SHOW BEAD (2026-10-16): VISUALIZATION ONLY — the extruded passes drawn
+// at the project's bead width (the Designer's Material / Bead width, round
+// caps / joins like the Designer's bead view) instead of thin centrelines.
+// Nothing here reaches the plan, its timing, the support check or the export.
+function simBeadWidth() {
+  const m = typeof _material === 'function' ? _material() : null;
+  return m && m.bead_width > 0 ? m.bead_width : 3.0;
+}
+function _simSetBeadPx(mode, pxPerInch) { sim.beadPx[mode] = simBeadWidth() * pxPerInch; }
 
 // ---- projection ---------------------------------------------------------------
 function simProjector(W, H) {
@@ -260,6 +273,7 @@ function simProjector(W, H) {
   const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
   const span = Math.max(1, Math.hypot(B.x1 - B.x0, B.y1 - B.y0), B.z1);
   const s = 0.8 * Math.min(W, H) / span * zoom;
+  _simSetBeadPx('3d', s);
   return (x, y, z) => {
     const a = (x - cx) * cyw - (y - cy) * syw, b = (x - cx) * syw + (y - cy) * cyw;
     return [W / 2 + a * s + px, H / 2 - ((z - cz) * cp + b * sp) * s + py];
@@ -278,6 +292,7 @@ function simTopProjector(W, H, L) {        // a layer from straight above, fitte
   }
   if (!isFinite(x0)) { x0 = 0; x1 = 1; y0 = 0; y1 = 1; }
   const s = 0.88 * Math.min(W / Math.max(1, x1 - x0), H / Math.max(1, y1 - y0)) * sim.view.zoom;
+  _simSetBeadPx('top', s);
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
   return (x, y) => [W / 2 + (x - cx) * s + sim.view.px, H / 2 - (y - cy) * s + sim.view.py];
 }
@@ -290,7 +305,7 @@ function _simCanvas(W, H) {
 }
 
 function _simViewKey(W, H) {
-  return JSON.stringify([W, H, sim.view, sim.opts, sim.key, sim.mode]);
+  return JSON.stringify([W, H, sim.view, sim.opts, sim.key, sim.mode, sim.opts.beads ? simBeadWidth() : 0]);
 }
 
 // project every vertex (z per vertex: a transition climbs from z0 to z1)
@@ -373,6 +388,7 @@ function _simDrawItems(g, C, a, b, lod, only) {
     if (cur !== sk) {
       flush();
       g.strokeStyle = st.color; g.lineWidth = st.width;
+      g.lineCap = st.bead ? 'round' : 'butt'; g.lineJoin = st.bead ? 'round' : 'miter';
       if (g.setLineDash) g.setLineDash(st.dash || []);
       g.beginPath();
       cur = sk;
@@ -388,6 +404,7 @@ function _simDrawItems(g, C, a, b, lod, only) {
   }
   flush();
   if (g.setLineDash) g.setLineDash([]);
+  g.lineCap = 'butt'; g.lineJoin = 'miter';
 }
 
 function _simLod(lod) {
@@ -470,6 +487,7 @@ function _simDraw3D(g, W, H, loc) {
   const o = D.off[loc.i];
   if (st.kind !== 'frame' && (!(st.kind === 'travel' || st.kind === 'transition') || sim.opts.travel)) {
     g.strokeStyle = st.color; g.lineWidth = st.width;
+    g.lineCap = st.bead ? 'round' : 'butt'; g.lineJoin = st.bead ? 'round' : 'miter';
     if (g.setLineDash) g.setLineDash(st.dash || []);
     g.beginPath();
     g.moveTo(C.sx[o], C.sy[o]);
@@ -481,6 +499,7 @@ function _simDraw3D(g, W, H, loc) {
     g.lineTo(q[0], q[1]);
     g.stroke();
     if (g.setLineDash) g.setLineDash([]);
+    g.lineCap = 'butt'; g.lineJoin = 'miter';
   }
   if (typeof machineProfile === 'function') drawMachineEnvelope(g, simProjector(W, H), machineProfile(), { z: true });
   _simDrawLifts(g, simProjector(W, H), loc);
@@ -559,9 +578,12 @@ function _simDrawTop(g, W, H, loc) {
     const isTravel = st.kind === 'travel' || st.kind === 'transition';
     if (isTravel && !sim.opts.travel) continue;
     const sel = sim.selRun === null || D.run[i] === sim.selRun || isTravel;
-    g.globalAlpha = (i < cur ? 1 : (sim.opts.ghost ? 0.28 : 0)) * (sel ? 1 : 0.25);
+    g.globalAlpha = (i < cur ? 1 : (sim.opts.ghost ? 0.28 : 0)) * (sel ? 1 : 0.25) * (st.bead ? 0.55 : 1);
     if (g.globalAlpha <= 0) continue;
-    g.strokeStyle = st.color; g.lineWidth = st.width + 0.6;
+    // (SHOW BEAD: the bead's real width, translucent — where two passes overlap
+    // the band is denser: a THIN Out-and-Back shows both beads and their overlap)
+    g.strokeStyle = st.color; g.lineWidth = st.bead ? st.width : st.width + 0.6;
+    g.lineCap = st.bead ? 'round' : 'butt'; g.lineJoin = st.bead ? 'round' : 'miter';
     if (g.setLineDash) g.setLineDash(st.dash || []);
     g.beginPath();
     const o = D.off[i], n = D.n[i];
@@ -580,6 +602,7 @@ function _simDrawTop(g, W, H, loc) {
   }
   if (g.setLineDash) g.setLineDash([]);
   g.globalAlpha = 1;
+  g.lineCap = 'butt'; g.lineJoin = 'miter';
   // start (green, numbered) / end (red) of every run
   g.font = '11px monospace';
   for (const r of Object.keys(runStart)) {

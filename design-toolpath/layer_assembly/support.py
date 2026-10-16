@@ -585,16 +585,27 @@ def analyse_support(resolved, geometry, assembly=None, groups=None, cache=None, 
     vgs_from_tags = groups is not None and groups.by_tag
 
     def group_at(inst, p):
-        """The transform group of the vertex of `inst` nearest to local point p."""
+        """The transform group of the vertex of `inst` nearest to local point p.
+        p is in a vertex's LOCAL frame (its group's placement — what findings
+        and headers store), so every vertex is compared in its own frame:
+        a variant's geometry is already moved by its groups (semantic
+        transforms), and comparing p with it directly mixed two frames — a
+        wall moved away by its group lost its header to whatever unassigned
+        wall now lay closer (the header was then placed by the layer's own
+        transform: where the wall used to be)."""
         if level == 'envelope' or vgs_from_tags:  # (by the vertex's source tag)
             if not inst.parts:
                 return None
             best = (math.inf, None)
             for pl in geometry[gk(inst)][0]:
                 for q, t in zip(pl['pts'], pl.get('src') or ()):
-                    d = math.dist(p, q)
+                    g = group_of.get(t)
+                    T = inst.transform_of(g)
+                    w = inst.transform.apply(q[0], q[1])
+                    k = T.scale if abs(T.scale) > 1e-12 else 1.0
+                    d = math.dist(p, ((w[0] - T.tx) / k, (w[1] - T.ty) / k))
                     if d < best[0]:
-                        best = (d, group_of.get(t))
+                        best = (d, g)
             return best[1]
         v = vgs.get(inst.design_id)
         if not v or not inst.parts:

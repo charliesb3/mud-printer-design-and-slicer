@@ -713,6 +713,15 @@ M0–M4 is listed in the M0–M4 implementation notes below.
 - **Milestone namespace:** M-numbers in this document (M0–M10) are not those of `DEFERRED_TOOLPATH_ARCHITECTURE.md` (deferred print paths M0–M5; M0–M2 done, M3+ archived).
 - **Deliberately NOT done here** (each its own reviewed step): junction override removal, `trim.junctions` write-only, M6 attach unification, `tolerances.py` / Vec2 consolidation, schema 8, the pass-10 contact machinery, full-wall junctions, M8, M9.
 
+### Small fixes after the cleanup (2026-10-16; uncommitted, pending review)
+
+- **Support / header frames under transform groups:** `support.group_at` compares a finding's / header's local point with each vertex in that vertex's OWN group frame (it compared it with the already-moved variant geometry: a wall moved away by its group lost its header to a nearer unassigned wall). A generated header's initial span uses its wall's placement scale. Test `layer_assembly/tests/test_support_group_frames.py`.
+- **Webs fill only their own Wall System:** a web owned by a Skin + Web Wall System is generated on its walls' envelope, other thick walls (Hollow, a wall in no Wall System) closed off at their mouth (`model._restrict_webs` / `_web_envelope`, the `_split_wall_systems` stitching). A thick wall in no Wall System no longer receives the neighbouring web. Thickness and membership stay independent state (UI smoke). Test `layer_assembly/tests/test_wall_membership_web.py`.
+- **THIN width verified** (no code change): lanes W − R apart, deposited 2W − R, overlap R. Test `design_proto/tests/test_thin_width.py`.
+- **SHOW BEAD view** in Wall Systems and Print Simulation (drawing only, project bead width).
+- **Still OPEN (deferred, strict-xfail reproductions):** an unassigned one-end-attached Out-and-Back rotates through Z with its host's group (`test_transform_unassigned_wall.py`); Skin + Web phase incoherent through Z on a gradually scaled circle (`test_wall_system_z_coherence.py`); an Assembly opening changes far geometry of GENERATED constructions (Interleaved / Linked / Chained Loop / Parallel; Skin + Web and Hollow are local) — no test yet. None was introduced by the cleanup.
+- **Still OPEN — physical wall width (clarified by the user 2026-10-16, NOT implemented):** architectural Wall Thickness should mean the FINISHED DEPOSITED width, outside bead edge to outside bead edge; today's envelope / construction does not consistently realise that (observed discrepancy). To be designed separately.
+
 ### Before M5 — to decide
 
 1. *(M5: no longer arises in any golden case — those nodes were the unresolved trims' overlap; still open for genuine band overlaps without trims.)* **Band-overlap contacts** (production_only above): with source-line junctions, bands that overlap without their source lines touching are NOT a junction. Should M5 treat them as plain material union (no junction, no corner treatment), or keep a junction there?

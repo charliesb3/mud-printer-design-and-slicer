@@ -470,6 +470,8 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
 
 ## Last Updated
 
+2026-10-16 — Small fixes after the cleanup (uncommitted, pending review): `support.group_at` compares in each vertex's group frame; webs fill only their own Wall System; SHOW BEAD view. Deferred bugs: see `../WALL_ARCHITECTURE.md` → "Small fixes after the cleanup".
+
 2026-10-15 — WALL ARCHITECTURE M0–M4 (uncommitted): golden suite, ownership, schema 7 without Wall Groups, per-wall Wall Systems checklist, Assembly All / None, shadow junction records. See "PER-WALL ARCHITECTURE".
 
 2026-10-15 — Pass 1 (trim-aware snapping, architectural snap UX, Centered default for new Wall Groups, "Center n" labels) and Pass 2 (planar top cut Linear / Stepped / Curved, schema 6) — manually reviewed; after review the Stepped rule got real landings and the planar-cut ghost exact clipping; checkpointed. Machine Profile + 1 ft grid checkpoint 8c51d8a.
