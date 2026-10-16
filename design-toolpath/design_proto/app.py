@@ -2,7 +2,6 @@
 Design Canvas Prototype — Flask application.
 
 Serves the design canvas UI and exposes a stateless API:
-  GET  /api/generators          list available lattice generators + params
   POST /api/route               route a PrintLayer from JSON body
   POST /api/effective_paths     compute effective paths from a PrintLayer JSON
 """
@@ -19,10 +18,10 @@ from flask import Flask, jsonify, request, send_from_directory
 from model import (
     PrintLayer, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
     QuadBezierPath,
-    OffsetTreatment, LatticeInstance, TraversalConstraints, Opening, Trim,
-    RegionOverride, RegionInfill, JunctionSetting, WallSpec, NetworkWall, WallSystem,
+    OffsetTreatment, TraversalConstraints, Opening, Trim,
+    RegionOverride, RegionInfill, JunctionSetting, WallSystem,
     InsetPath, WallRelation,
-    GENERATORS, Vec2
+    Vec2
 )
 from material import MaterialSpec
 import infill as infill_mod
@@ -44,24 +43,8 @@ def index():
 # Deserialisation helpers
 # ---------------------------------------------------------------------------
 
-def _wall(d):
-    """A path's OWN wall. Absent → none (it inherits its network's wall, if
-    any). An explicit thickness 0 is the SINGLE-BEAD override: the path prints
-    as a single bead (physical rules: its return-lane solution) even inside a
-    thick-walled network — never a fake epsilon wall, never deleted."""
-    w = d.get('wall')
-    if not isinstance(w, dict) or 'thickness' not in w:
-        return None
-    t = float(w.get('thickness', 0) or 0)
-    sysd = w.get('system')
-    return WallSpec(max(0.0, t), w.get('align', 'auto') or 'auto',
-                    bool(w.get('print_reference', False)),
-                    dict(sysd) if isinstance(sysd, dict) else None)
-
-
 def _deserialise_path(d: dict):
     p = _deserialise_path_geom(d)
-    p.wall = _wall(d)
     # (Assembly profile variants: a ring cut open keeps its ring's wall SIDE —
     # 'left' / 'right' of its own direction — inside its Wall System)
     p.align_override = d.get('align_override') or None
@@ -129,17 +112,6 @@ def _deserialise_layer(data: dict) -> PrintLayer:
             label=od.get('label', ''),
         ))
 
-    for ld in data.get('lattice_instances', []):
-        layer.lattice_instances.append(LatticeInstance(
-            id=ld['id'],
-            generator_name=ld['generator'],
-            path_a_id=ld['path_a_id'],
-            path_b_id=ld['path_b_id'],
-            params=ld.get('params', {}),
-            variation_index=ld.get('variation_index', 0),
-            label=ld.get('label', ''),
-        ))
-
     cd = data.get('constraints') or {}
     layer.constraints = TraversalConstraints(
         start_path_id=cd.get('start_path_id'),
@@ -204,13 +176,6 @@ def _deserialise_layer(data: dict) -> PrintLayer:
         layer.wall_relations.append(WallRelation(
             id=rd.get('id') or 'wr', outer_id=rd['outer_id'], inner_id=rd['inner_id'],
             thickness=float(rd.get('thickness', 10.0)), driver=rd.get('driver', 'outer')))
-    for wd in data.get('network_walls', []) or []:
-        layer.network_walls.append(NetworkWall(
-            id=wd['id'], path_id=wd['path_id'],
-            thickness=float(wd.get('thickness', 0) or 0),
-            align=wd.get('align', 'auto') or 'auto',
-            print_reference=bool(wd.get('print_reference', False)),
-            system=dict(wd['system']) if isinstance(wd.get('system'), dict) else None))
     for sd in data.get('wall_systems', []) or []:
         if not isinstance(sd, dict):
             continue
@@ -240,31 +205,6 @@ def _deserialise_layer(data: dict) -> PrintLayer:
     return layer
 
 
-# ---------------------------------------------------------------------------
-# API — generators
-# ---------------------------------------------------------------------------
-
-@app.route('/api/generators')
-def api_generators():
-    result = []
-    for name, gen in GENERATORS.items():
-        result.append({
-            'name': name,
-            'parameters': [
-                {
-                    'name': p.name,
-                    'label': p.label,
-                    'default': p.default,
-                    'min': p.min,
-                    'max': p.max,
-                    'step': p.step,
-                }
-                for p in gen.parameters()
-            ],
-        })
-    return jsonify(result)
-
-
 @app.route('/api/infill_patterns')
 def api_infill_patterns():
     import solid as solid_mod
@@ -290,9 +230,7 @@ def _apply_lineage(layer, data):
     if len(designs) < 2 or lin.get('id') is None:
         return
     from layer_design import DesignLibrary
-    from walls import is_wall_document
-    grouped = any(is_wall_document(d.get('document')) for d in designs if d.get('parent') is None)
-    lib = DesignLibrary(designs, (data.get('project_wall_systems') or []) if grouped else None)
+    lib = DesignLibrary(designs, data.get('project_wall_systems') or [])
     active = lib.get(lin['id'])
     doc = lin.get('document')
     if doc is not None:                      # the live (unsaved) edit of the active design:
@@ -386,19 +324,6 @@ def api_effective_paths():
 # ---------------------------------------------------------------------------
 # API — route (geometry + toolpath)
 # ---------------------------------------------------------------------------
-
-@app.route('/api/migrate_wall_systems', methods=['POST'])
-def api_migrate_wall_systems():
-    """Legacy walls (path / Network Wall / wall infills) → explicit Wall
-    Systems (model.PrintLayer.migrate_wall_systems)."""
-    try:
-        data = request.get_json(force=True)
-        layer = _deserialise_layer(data)
-        _apply_lineage(layer, data)
-        return jsonify(layer.migrate_wall_systems())
-    except Exception:
-        return jsonify({'error': traceback.format_exc()}), 400
-
 
 @app.route('/api/route', methods=['POST'])
 def api_route():
@@ -507,7 +432,7 @@ def api_layer_design_document():
         from layer_design import DesignLibrary
         data = request.get_json(force=True)
         lib = DesignLibrary(data['designs'])
-        return jsonify({'document': lib.document(data['id']), 'lineage': lib.lineage(data['id'])})
+        return jsonify({'document': lib.raw_document(data['id']), 'lineage': lib.lineage(data['id'])})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
@@ -537,7 +462,7 @@ def api_layer_design_delta():
         data = request.get_json(force=True)
         lib = DesignLibrary(data['designs'])
         if data.get('id') is None:
-            patch, settings = derive_delta(lib.document(data['parent']), data['document'])
+            patch, settings = derive_delta(lib.raw_document(data['parent']), data['document'])
             return jsonify({'patch': patch, 'settings': settings})
         # the design's delta; LATTICE DEFINITION edits of inherited infills
         # are moved to their owner (the lineage) — `designs` is the updated set

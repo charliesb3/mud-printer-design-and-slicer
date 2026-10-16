@@ -63,11 +63,8 @@ def _variant_worker(designs_json, design_id, transforms, cuts=None):
     lib = _WORKER_LIBS.get(designs_json)
     if lib is None:
         _WORKER_LIBS.clear()
-        spec = json.loads(designs_json)
-        if isinstance(spec, dict):              # designs + the project's Wall Systems
-            lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False))
-        else:
-            lib = DesignLibrary(spec)
+        spec = json.loads(designs_json)         # designs + the project's Wall Systems
+        lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False))
         _WORKER_LIBS[designs_json] = lib
     return _geometry_of(lib.build(design_id, transforms=transforms or None, cuts=cuts or None))
 
@@ -78,24 +75,9 @@ def _vkey(design_id, transforms, cuts):
     return (design_id, ST.spec_key(transforms) if transforms else '[]', PC.cut_key(cuts) if cuts else '')
 
 
-def grouped(designs) -> bool:
-    """Do these Layer Designs use the per-wall form (design_proto/walls.py —
-    construction from the project's Wall Systems; an older Wall Group project
-    counts too: it is normalised)? Legacy documents carry their own."""
-    from walls import is_wall_document
-    for d in designs:
-        doc = d.get('document') if isinstance(d, dict) else d.document
-        par = d.get('parent') if isinstance(d, dict) else d.parent
-        if par is None and is_wall_document(doc):
-            return True
-    return False
-
-
 def arch_library(designs):
-    """The ARCHITECTURE library of a design set (Wall Group documents
-    composed without construction: envelopes), or None for legacy documents."""
-    if not grouped(designs):
-        return None
+    """The ARCHITECTURE library of a design set (the per-wall documents
+    composed without construction: envelopes)."""
     from layer_design import DesignLibrary
     return DesignLibrary(designs, arch=True)
 
@@ -125,20 +107,17 @@ class DesignerSource:
         # adapter of these designs (web.py: Assembly editing and print
         # preparation keep separate adapters; each canonical design is built once)
         self.shared_plain = None
-        # the ARCHITECTURE library (Wall Group documents composed without
-        # construction: wall_groups.compose arch) that envelopes come from —
-        # shared by every adapter of one design set, whatever its Wall
-        # Systems (web.py); None: envelopes from `lib` (legacy documents)
+        # the ARCHITECTURE library (the documents composed without
+        # construction: walls.compose arch) that envelopes come from — shared
+        # by every adapter of one design set, whatever its Wall Systems
+        # (web.py); None: envelopes from `lib` (tests / tools)
         self.env_lib = None
 
     @staticmethod
     def from_designs(designs, wall_systems=None) -> 'DesignerSource':
-        """wall_systems: the project's Wall Systems (Wall Group documents are
-        composed with them; with Wall Group documents and none given: [],
-        every wall Hollow)."""
+        """wall_systems: the project's Wall Systems the documents are composed
+        with (none given: no construction, every thick wall Hollow)."""
         from layer_design import DesignLibrary
-        if wall_systems is None and grouped(designs):
-            wall_systems = []
         return DesignerSource(DesignLibrary(designs, wall_systems))
 
     def design_ids(self):
@@ -228,19 +207,11 @@ class DesignerSource:
         return self._walls[design_id]
 
     def architectural(self, design_id) -> bool:
-        """A Wall Group design (its constructions are the project's Wall
-        Systems) with an architecture library: the Assembly reads its
-        ARCHITECTURE only — placement footprints, transform groups, profile
-        targets and openings — so changing a Wall System never moves or
-        re-validates the Assembly (2026-10-11). Legacy documents (their
-        construction authored in the document): as before."""
-        if self.env_lib is None:
-            return False
-        try:
-            from walls import is_wall_document
-            return is_wall_document(self.lib.raw_document(design_id))
-        except (AttributeError, KeyError):
-            return False
+        """With an architecture library (web.py gives every adapter one) the
+        Assembly reads a design's ARCHITECTURE only — placement footprints,
+        transform groups, profile targets and openings — so changing a Wall
+        System never moves or re-validates the Assembly (2026-10-11)."""
+        return self.env_lib is not None
 
     def construction_walls(self, design_id):
         """The straight walls with their CONSTRUCTION's printable minimum
@@ -319,12 +290,10 @@ class DesignerSource:
             _POOL = None
 
     def _lib_json(self):
-        """The library as worker processes rebuild it (designs [+ the
-        project's Wall Systems when it composes Wall Groups])."""
+        """The library as worker processes rebuild it (designs + the
+        project's Wall Systems)."""
         import json
         designs = [x.to_dict() for x in self.lib.designs.values()]
-        if not getattr(self.lib, '_compose', False):
-            return json.dumps(designs, sort_keys=True)
         return json.dumps({'designs': designs, 'wall_systems': self.lib.wall_systems, 'arch': self.lib.arch},
                           sort_keys=True)
 

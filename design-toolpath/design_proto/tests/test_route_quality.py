@@ -27,10 +27,10 @@ import pytest
 from graph import route_layer, build_graph
 import route_quality as RQ
 import route_plan as RP
-from model import (Vec2, LinePath, RectanglePath, OffsetTreatment, PrintLayer,
-                   LatticeInstance, Opening, RegionInfill, WallSpec, NetworkWall,
+from model import (Vec2, LinePath, RectanglePath, PrintLayer, Opening, RegionInfill,
                    _processed_source_pts)
 from tests.test_networks import _assert_internal_inside, _build
+from tests.canon import thick
 
 
 # ---------------------------------------------------------------------------
@@ -43,18 +43,16 @@ def _inf(pid, sp=20, pat='zigzag'):
 
 def rect_branches(n, t=10, sp=20, **kw):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(t)
     srcs = [R, LinePath(Vec2(200, 260), Vec2(200, 340), id='B1')]
     if n >= 2:
         srcs.append(LinePath(Vec2(300, 200), Vec2(380, 200), id='B2'))
-    return PrintLayer('t', source_paths=srcs, network_walls=[NetworkWall('W', 'B1', t)],
+    return PrintLayer('t', source_paths=srcs, wall_systems=[thick([p.id for p in srcs], t, sid='W')],
                       infills=_inf('R', sp), **kw)
 
 
 def rect_wall(**kw):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(10)
-    return PrintLayer('t', source_paths=[R], infills=_inf('R'), **kw)
+    return PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)], infills=_inf('R'), **kw)
 
 
 def two_voids(pat='zigzag', **kw):
@@ -68,25 +66,24 @@ def star(**kw):
                      Vec2(200 + 120 * math.cos(k * math.pi / 3 + 0.2),
                           200 + 120 * math.sin(k * math.pi / 3 + 0.2)), id=f'L{k + 1}')
             for k in range(6)]
-    return PrintLayer('t', source_paths=arms, network_walls=[NetworkWall('W', 'L1', 10)],
+    return PrintLayer('t', source_paths=arms, wall_systems=[thick([a.id for a in arms], 10, sid='W')],
                       junction_style='round', junction_radius=3,
                       cap_style='full_round', infills=_inf('L1', 16), **kw)
 
 
 def nearby_branches(**kw):
     R = RectanglePath(100, 140, 240, 120, id='R')
-    R.wall = WallSpec(10)
     srcs = [R] + [LinePath(Vec2(150 + 25 * k, 260), Vec2(150 + 25 * k + 8 * (k - 1), 330),
                            id=f'B{k}') for k in range(3)]
-    return PrintLayer('t', source_paths=srcs, network_walls=[NetworkWall('W', 'B0', 8)],
+    return PrintLayer('t', source_paths=srcs,
+                      wall_systems=[thick('R', 10), thick([f'B{k}' for k in range(3)], 8, sid='W')],
                       infills=_inf('R', 18), **kw)
 
 
 def narrow(**kw):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(4)
     srcs = [R, LinePath(Vec2(200, 260), Vec2(200, 320), id='B')]
-    return PrintLayer('t', source_paths=srcs, network_walls=[NetworkWall('W', 'B', 4)],
+    return PrintLayer('t', source_paths=srcs, wall_systems=[thick(['R', 'B'], 4, sid='W')],
                       infills=_inf('R', 20), **kw)
 
 
@@ -207,7 +204,8 @@ def test_printed_reference_lines_keep_their_junction():
     # lines still meet at their user-authored degree-6 hub.
     L = star()
     L.infills = []
-    L.network_walls[0].print_reference = True
+    for ws in L.wall_systems:
+        ws.print_reference = True
     paths, meta = _build(L)
     G = build_graph(L.to_routing_layer(paths, meta))
     assert G.degree((200, 200)) == 6
@@ -221,36 +219,9 @@ def test_centred_reference_is_not_printed_by_default():
 
 
 class TestGeneratedCrossings:
-
-    def H(self):
-        # H: two requested lattices crossing each other in one wall
-        R = RectanglePath(0, 0, 200, 120, id='R')
-        return PrintLayer('t', source_paths=[R],
-                          offset_treatments=[OffsetTreatment('Ri', 'R', 12)],
-                          lattice_instances=[
-                              LatticeInstance('Z', 'zigzag', 'R', 'Ri',
-                                              {'segments': 12, 'connect_ends': 1}),
-                              LatticeInstance('V', 'wave', 'R', 'Ri', {'cycles': 7})])
-
-    def test_crossings_are_not_junctions(self):
-        L = self.H()
-        rl = L.to_routing_layer()
-        G = build_graph(rl)
-        z = [((a.x, a.y), (b.x, b.y)) for s in rl.strands if s.kind == 'field'
-             for a, b in s.segments()]
-        crossings = set()
-        for i in range(len(z)):
-            for j in range(i + 1, len(z)):
-                x = RQ._cross(*z[i], *z[j])
-                if x is not None:
-                    crossings.add((round(x[0], 6), round(x[1], 6)))
-        assert crossings
-        nodes = {(round(n[0], 6), round(n[1], 6)) for n in G.nodes}
-        assert not (crossings & nodes), 'a generated crossing became a junction'
-
-    def test_crossing_lattices_still_route_continuously(self):
-        q = RQ.quality(self.H())
-        assert q['runs'] == 1 and q['travel_moves'] == 0
+    """(The pre-wall-lattice pairwise lattices and their crossing tests were
+    removed in the 2026-10-16 cleanup; generated field crossings stay
+    structural, never routing junctions.)"""
 
     def test_repair_corrections_cross_without_joining(self):
         # support struts / phase shifts that cross printed struts add no node
@@ -320,8 +291,7 @@ def test_separate_faces_without_infill_travel():
     # separate printed components → one travel (no hidden bridge is
     # invented).
     R = RectanglePath(0, 0, 160, 100, id='R')
-    R.wall = WallSpec(10)
-    q = RQ.quality(PrintLayer('t', source_paths=[R]))
+    q = RQ.quality(PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)]))
     assert q['runs'] == 2 and q['travel_moves'] == 1 and q['exact_retrace'] == 0
 
 

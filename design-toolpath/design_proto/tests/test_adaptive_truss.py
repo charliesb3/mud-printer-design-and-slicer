@@ -28,8 +28,9 @@ import multi_opening_fixtures as MO               # noqa: E402
 from infill import _Region                        # noqa: E402
 from layer_design import DesignLibrary            # noqa: E402
 from graph import route_layer, compute_metrics, build_graph, closure_report   # noqa: E402
-from model import (Vec2, PrintLayer, RectanglePath, RegionInfill, WallSpec, Opening,   # noqa: E402
+from model import (Vec2, PrintLayer, RectanglePath, RegionInfill, Opening,   # noqa: E402
                    LinePath)
+from canon import thick                           # noqa: E402
 
 C = 2.25            # contact separation of the physical defaults (W 3, O 0.75)
 D = 40.0            # default Max Unsupported Span
@@ -78,8 +79,7 @@ def layer_rings(layer):
 
 def ring_layer(openings=(), seed=0, t=10.0):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(t)
-    lay = PrintLayer('t', source_paths=[R],
+    lay = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', t)],
                      infills=[RegionInfill('I', 'R', 'truss', {'seed': seed})])
     lay.openings = [Opening(f'o{k}', 'R', c, w) for k, (c, w) in enumerate(openings)]
     return PF._phys(lay)
@@ -355,8 +355,8 @@ def test_different_seeds_select_other_valid_solutions():
 def test_a_corner_less_loop_regenerates_its_free_phase():
     from model import CirclePath
     Cp = CirclePath(200, 200, 90, id='C')
-    Cp.wall = WallSpec(10)
-    lay = PF._phys(PrintLayer('t', source_paths=[Cp], infills=[RegionInfill('I', 'C', 'truss', {})]))
+    lay = PF._phys(PrintLayer('t', source_paths=[Cp], wall_systems=[thick('C', 10)],
+                              infills=[RegionInfill('I', 'C', 'truss', {})]))
     (rings,) = layer_rings(lay)
     keys = {repr(key(plan(rings, seed=s).polylines)) for s in range(4)}
     assert len(keys) >= 2
@@ -370,8 +370,8 @@ def test_choices_are_hashed_per_feature_not_a_global_stream():
     a = ring_layer(seed=5)
     b = ring_layer(seed=5)
     extra = LinePath(Vec2(500, 100), Vec2(500, 300), id='X')
-    extra.wall = WallSpec(10)
     b.source_paths.append(extra)
+    b.wall_systems.append(thick('X', 10))
     b.infills.append(RegionInfill('IX', 'X', 'truss', {'seed': 5}))
     ra, rb = layer_rings(a), layer_rings(b)
     ring_b = next(r for r in rb if all(q.x < 400 for q in r[0]))

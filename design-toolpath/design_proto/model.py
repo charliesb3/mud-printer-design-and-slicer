@@ -106,10 +106,6 @@ class Path:
         # never the corners the wall network creates at junctions).
         # None = fall back to the legacy layer-wide PrintLayer.corner_radius.
         self.corner_radius: Optional[float] = corner_radius
-        # The wall this path stands for (thickness + alignment): generates
-        # its offsets parametrically. None = no own wall (a network-level
-        # NetworkWall may supply one).
-        self.wall: Optional['WallSpec'] = None
 
     # -- Override in subclasses --
 
@@ -157,7 +153,11 @@ class Path:
             'type': self.__class__.__name__,
             'points': [[p.x, p.y] for p in pts],
             'corner_radius': self.corner_radius,
-            'wall': self.wall.to_dict() if self.wall else None,
+            # (per-path walls were removed 2026-10-16 — a wall's envelope lives in the
+            # document / its Wall System record; the key is kept, always None, so the
+            # strict golden response hashes stay byte-identical. Drop it at the next
+            # deliberate golden re-baseline.)
+            'wall': None,
         }
 
 
@@ -1091,34 +1091,6 @@ class DerivedPath(Path):
 
 
 # ---------------------------------------------------------------------------
-# LatticeGenerator — base class
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ParameterSpec:
-    name: str
-    label: str
-    default: float
-    min: float
-    max: float
-    step: float = 1.0
-
-
-class LatticeGenerator:
-    name: str = 'base'
-
-    def parameters(self) -> list[ParameterSpec]:
-        return []
-
-    def variation_count(self, path_a: Path, path_b: Path, params: dict) -> int:
-        return 1
-
-    def generate(self, path_a: Path, path_b: Path,
-                 params: dict, variation_index: int = 0) -> list[DerivedPath]:
-        raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
 # Geometry validity helpers
 # ---------------------------------------------------------------------------
 
@@ -1161,258 +1133,6 @@ def _segments_intersect(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> bool:
     u = ((p3.x - p1.x) * d1.y - (p3.y - p1.y) * d1.x) / cross
     # Strictly interior to both segments (excludes endpoints)
     return 1e-6 < t < 1.0 - 1e-6 and 1e-6 < u < 1.0 - 1e-6
-
-
-def _segment_crosses_polyline(a: Vec2, b: Vec2,
-                               poly: list[Vec2], closed: bool) -> bool:
-    """True if segment a-b strictly crosses any edge of poly."""
-    n = len(poly)
-    for i in range(n - 1):
-        if _segments_intersect(a, b, poly[i], poly[i + 1]):
-            return True
-    if closed and n >= 2:
-        if _segments_intersect(a, b, poly[-1], poly[0]):
-            return True
-    return False
-
-
-def _lattice_valid_in_cavity(derived_paths: list['DerivedPath'],
-                              path_a: Path, path_b: Path) -> bool:
-    """
-    Check every lattice segment lies inside the wall cavity (between path_a and
-    path_b). Returns True if all segments are geometrically valid.
-
-    Only applies when both boundaries are closed. For open boundaries, returns
-    True unconditionally (no cavity to validate against).
-    """
-    if not (path_a.closed and path_b.closed):
-        return True
-
-    pts_a = path_a.sample_points(128)
-    pts_b = path_b.sample_points(128)
-
-    # Determine which is outer (larger area)
-    area_a = abs(_polygon_area(pts_a))
-    area_b = abs(_polygon_area(pts_b))
-    if area_a >= area_b:
-        outer_pts, inner_pts = pts_a, pts_b
-    else:
-        outer_pts, inner_pts = pts_b, pts_a
-
-    for dp in derived_paths:
-        seg_pts = dp.sample_points()
-        n = len(seg_pts)
-        for i in range(n - 1):
-            a, b = seg_pts[i], seg_pts[i + 1]
-            # Midpoint must be inside outer AND outside inner
-            mid = a.lerp(b, 0.5)
-            if not _point_in_polygon(mid, outer_pts):
-                return False
-            if _point_in_polygon(mid, inner_pts):
-                return False
-            # Segment must not cross either boundary
-            if _segment_crosses_polyline(a, b, outer_pts, True):
-                return False
-            if _segment_crosses_polyline(a, b, inner_pts, True):
-                return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# ZigzagGenerator
-# ---------------------------------------------------------------------------
-
-class ZigzagGenerator(LatticeGenerator):
-    name = 'zigzag'
-
-    def parameters(self) -> list[ParameterSpec]:
-        return [
-            ParameterSpec('segments', 'Segments', 6, 2, 40, 1),
-            ParameterSpec('connect_ends', 'Connect ends', 1, 0, 1, 1),
-        ]
-
-    def variation_count(self, path_a: Path, path_b: Path, params: dict) -> int:
-        return 2
-
-    def _generate_at_count(self, path_a: Path, path_b: Path,
-                           segments: int, connect_ends: bool,
-                           variation_index: int) -> list[DerivedPath]:
-        """Generate zigzag at a specific segment count."""
-        # For closed paths include the closing segment so all sides are covered
-        pts_a = _resample(path_a.sample_points(), segments + 1,
-                          closed=path_a.closed)
-        pts_b = _resample(path_b.sample_points(), segments + 1,
-                          closed=path_b.closed)
-
-        if variation_index % 2 == 1:
-            pts_a, pts_b = pts_b, pts_a
-
-        zigzag_pts = []
-        for i in range(segments + 1):
-            if i % 2 == 0:
-                zigzag_pts.append(pts_a[i])
-            else:
-                zigzag_pts.append(pts_b[i])
-
-        path = DerivedPath(zigzag_pts, closed=False,
-                           role='lattice', label='zigzag',
-                           source_id='', treatment_id='')
-        result = [path]
-
-        if connect_ends and pts_a and pts_b:
-            if segments % 2 == 0:
-                connector = DerivedPath([pts_a[-1], pts_b[-1]],
-                                        closed=False, role='lattice',
-                                        label='zigzag_end',
-                                        source_id='', treatment_id='')
-            else:
-                connector = DerivedPath([pts_b[-1], pts_a[-1]],
-                                        closed=False, role='lattice',
-                                        label='zigzag_end',
-                                        source_id='', treatment_id='')
-            result.append(connector)
-
-        return result
-
-    def generate(self, path_a: Path, path_b: Path,
-                 params: dict, variation_index: int = 0) -> list[DerivedPath]:
-        segments_req = max(2, int(params.get('segments', 6)))
-        connect_ends = bool(params.get('connect_ends', True))
-
-        do_validate = path_a.closed and path_b.closed
-
-        result = self._generate_at_count(
-            path_a, path_b, segments_req, connect_ends, variation_index)
-
-        if not do_validate:
-            return result
-
-        # Auto-increase until all segments are geometrically valid in the cavity
-        actual = segments_req
-        MAX_SEGMENTS = 80
-        while actual <= MAX_SEGMENTS:
-            if _lattice_valid_in_cavity(result, path_a, path_b):
-                break
-            actual += 2
-            result = self._generate_at_count(
-                path_a, path_b, actual, connect_ends, variation_index)
-
-        # Record the actual count in the label
-        for dp in result:
-            if dp.label in ('zigzag', 'zigzag_end'):
-                dp.label = f'zigzag_n{actual}'
-
-        return result
-
-
-# ---------------------------------------------------------------------------
-# WaveGenerator — oscillates between boundary A and boundary B
-# ---------------------------------------------------------------------------
-
-class WaveGenerator(LatticeGenerator):
-    """
-    Wave lattice: smoothly oscillates from boundary A → B → A → repeat.
-    Wall spacing = transverse amplitude (not user-controlled).
-    alpha(s) = 0.5 * (1 - cos(2π * cycles * s + phase_offset))
-    alpha=0 → on A, alpha=1 → on B.
-
-    For closed boundaries a seam bridge is added from the wave end to the
-    other boundary's first node. This creates exactly two odd-degree nodes
-    in the routing graph → Eulerian path → zero travel moves.
-    """
-    name = 'wave'
-
-    def parameters(self) -> list[ParameterSpec]:
-        return [
-            ParameterSpec('cycles', 'Cycles', 3.0, 0.5, 20.0, 0.5),
-        ]
-
-    def variation_count(self, path_a: Path, path_b: Path, params: dict) -> int:
-        return 2  # V1: start on A  |  V2: start on B (half-cycle offset)
-
-    def generate(self, path_a: Path, path_b: Path,
-                 params: dict, variation_index: int = 0) -> list[DerivedPath]:
-        cycles = max(0.5, float(params.get('cycles', 3.0)))
-
-        # V2 shifts by half a cycle so the wave starts on B instead of A
-        phase_total = 0.5 * (variation_index % 2)
-
-        # Choose sample count from cycles (~32 pts/cycle, min 64)
-        samples = max(64, int(cycles * 32))
-
-        pts_a = _resample(path_a.sample_points(), samples,
-                          closed=path_a.closed)
-        pts_b = _resample(path_b.sample_points(), samples,
-                          closed=path_b.closed)
-
-        wave_pts = []
-        for i in range(samples):
-            # Normalized arc-length position along the perimeter
-            if path_a.closed:
-                t = i / samples
-            else:
-                t = i / (samples - 1) if samples > 1 else 0.0
-            # alpha ∈ [0,1]: 0 = on A, 1 = on B
-            alpha = 0.5 * (1.0 - math.cos(
-                2.0 * math.pi * (cycles * t + phase_total)))
-            wave_pts.append(pts_a[i].lerp(pts_b[i], alpha))
-
-        result = [DerivedPath(wave_pts, closed=False, role='lattice',
-                              label='wave', source_id='', treatment_id='')]
-
-        # Seam bridge for closed boundaries: connects wave end to the other
-        # boundary's first node. This creates exactly two odd-degree nodes
-        # (the touched node on each boundary) → Eulerian path → zero travel.
-        if path_a.closed and path_b.closed:
-            if variation_index % 2 == 0:
-                # V1 starts on A (wave_pts[0] = pts_a[0]); bridge to B[0]
-                seam_end = path_b.sample_points()[0]
-            else:
-                # V2 starts on B (wave_pts[0] = pts_b[0]); bridge to A[0]
-                seam_end = path_a.sample_points()[0]
-            result.append(DerivedPath(
-                [wave_pts[-1], seam_end],
-                closed=False, role='lattice', label='wave_seam',
-                source_id='', treatment_id='',
-            ))
-
-        return result
-
-
-# ---------------------------------------------------------------------------
-# LatticeInstance — one generator applied between two source paths
-# ---------------------------------------------------------------------------
-
-@dataclass
-class LatticeInstance:
-    id: str
-    generator_name: str
-    path_a_id: str
-    path_b_id: str
-    params: dict
-    variation_index: int = 0
-    label: str = ''
-
-    def generate(self, path_a: Path, path_b: Path,
-                 generator: LatticeGenerator) -> list[DerivedPath]:
-        paths = generator.generate(path_a, path_b, self.params,
-                                   self.variation_index)
-        for p in paths:
-            p.source_id = self.id
-            p.treatment_id = self.generator_name
-        return paths
-
-    def to_dict(self) -> dict:
-        return {
-            'id': self.id,
-            'type': 'lattice',
-            'generator': self.generator_name,
-            'path_a_id': self.path_a_id,
-            'path_b_id': self.path_b_id,
-            'params': self.params,
-            'variation_index': self.variation_index,
-            'label': self.label,
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -1566,9 +1286,6 @@ class WallSpec:
     # strut — local mud build-up). Inside / outside / left / right walls
     # keep the reference as one of their printed faces.
     print_reference: bool = False
-    # WALL SYSTEM (wall_systems.py): None / 'skin_web' = two skins + Wall
-    # Infill (the default); otherwise how the envelope is filled.
-    system: dict = None
 
     def resolved_align(self, closed: bool) -> str:
         a = self.align
@@ -1582,11 +1299,8 @@ class WallSpec:
         return self.print_reference or self.resolved_align(closed) != 'center'
 
     def to_dict(self) -> dict:
-        d = {'thickness': self.thickness, 'align': self.align,
-             'print_reference': self.print_reference}
-        if self.system:
-            d['system'] = dict(self.system)
-        return d
+        return {'thickness': self.thickness, 'align': self.align,
+                'print_reference': self.print_reference}
 
     def offsets(self, path_id: str, closed: bool,
                 pts: list[Vec2]) -> list['OffsetTreatment']:
@@ -1603,31 +1317,6 @@ class WallSpec:
                                     label='wall')]
         return [OffsetTreatment(f'{path_id}.wall+', path_id, t / 2, label='wall'),
                 OffsetTreatment(f'{path_id}.wall-', path_id, -t / 2, label='wall')]
-
-
-@dataclass
-class NetworkWall:
-    """
-    Wall-NETWORK property: the default wall (thickness + alignment) for
-    every source path of the network that `path_id` belongs to (source
-    paths that touch / cross, transitively). A path's own WallSpec wins.
-    Membership is derived per layer, so a path joined to the network later
-    inherits it too. First NetworkWall per network wins.
-    """
-    id: str
-    path_id: str
-    thickness: float
-    align: str = 'auto'
-    print_reference: bool = False
-    system: dict = None                  # WALL SYSTEM (see WallSpec)
-
-    def to_dict(self) -> dict:
-        d = {'id': self.id, 'type': 'network_wall', 'path_id': self.path_id,
-             'thickness': self.thickness, 'align': self.align,
-             'print_reference': self.print_reference}
-        if self.system:
-            d['system'] = dict(self.system)
-        return d
 
 
 @dataclass
@@ -2325,105 +2014,9 @@ def _seg_intersect_param(a: Vec2, b: Vec2, c: Vec2, d: Vec2,
     return None
 
 
-def _clip_lattice_by_openings(pts: list[Vec2], plans: list[_OpeningPlan]
-                              ) -> list[list[Vec2]]:
-    """
-    Remove every part of a lattice polyline that lies inside an opening.
-
-    Each segment is split where it crosses an opening cut — the cut FACE
-    (outermost → innermost wall endpoint, i.e. the flat end line), or that
-    line continued past the assembly for lattice reaching beyond it (the
-    source normal line when the wall has no offsets). Sub-segments whose
-    midpoint lies inside an opening are dropped, so no lattice crosses,
-    bridges or protrudes into an opening.
-
-    A surviving piece that ends on a cut face is registered as a landing
-    on that cut; the cap builder then joins it to the end geometry (real
-    contact with the end wall, not invented connectivity).
-    """
-    if len(pts) < 2:
-        return [list(pts)]
-    band = 1.0 + max(_project_to_polyline(p, pl.src_pts, pl.cum, pl.closed)[1]
-                     for pl in plans for p in pts)
-    lines = []          # (c, d, cut or None)
-    for pl in plans:
-        for cut in pl.cuts:
-            if cut.face is not None:
-                f0, f1 = cut.face
-                lines.append((f0, f1, cut))
-                # The face line continued beyond the wall assembly.
-                dn = (f1 - f0).normalized()
-                lines.append((f0 - dn * band, f0, None))
-                lines.append((f1, f1 + dn * band, None))
-            else:
-                p, n = cut.point, cut.normal
-                lines.append((Vec2(p.x - n.x * band, p.y - n.y * band),
-                              Vec2(p.x + n.x * band, p.y + n.y * band), None))
-
-    def inside(q: Vec2) -> bool:
-        return any(pl.in_opening(q) for pl in plans)
-
-    pieces: list[tuple[list[Vec2], object, object]] = []
-    cur: list[Vec2] = []
-    cur_cut = None
-
-    def flush(end_cut):
-        nonlocal cur, cur_cut
-        if len(cur) >= 2:
-            pieces.append((cur, cur_cut, end_cut))
-        cur, cur_cut = [], None
-
-    for a, b in zip(pts, pts[1:]):
-        brk = [[0.0, a, None], [1.0, b, None]]
-        for c, d, cut in lines:
-            r = _seg_intersect_param(a, b, c, d)
-            if r is None:
-                continue
-            t, u = r
-            x = c.lerp(d, u)
-            if cut is not None:
-                # Snap onto an exact wall endpoint so graph nodes merge.
-                for e in cut.ends:
-                    if x.dist(e) < 1e-7:
-                        x = e
-            for bp in brk:
-                if bp[1].dist(x) < 1e-9:
-                    if cut is not None:
-                        bp[2] = cut
-                    break
-            else:
-                brk.append([t, x, cut])
-        brk.sort(key=lambda bp: bp[0])
-        for (t0, p0, c0), (t1, p1, c1) in zip(brk, brk[1:]):
-            if p0.dist(p1) < 1e-12:
-                continue
-            if inside(p0.lerp(p1, 0.5)):
-                flush(c0)
-                continue
-            if not cur:
-                cur, cur_cut = [p0], c0
-            cur.append(p1)
-    flush(None)
-
-    out = []
-    for piece, sc, ec in pieces:
-        for end_pt, cut in ((piece[0], sc), (piece[-1], ec)):
-            if cut is not None and cut.face is not None and \
-                    all(end_pt.dist(e) > 1e-9 for e in cut.ends):
-                cut.landings.append(end_pt)
-        out.append(piece)
-    return out
-
-
 # ---------------------------------------------------------------------------
 # PrintLayer — assembles effective print geometry
 # ---------------------------------------------------------------------------
-
-GENERATORS: dict[str, LatticeGenerator] = {
-    'zigzag': ZigzagGenerator(),
-    'wave': WaveGenerator(),
-}
-
 
 @dataclass
 class PrintLayer:
@@ -2435,7 +2028,6 @@ class PrintLayer:
     label: str = ''
     source_paths: list[Path] = field(default_factory=list)
     offset_treatments: list[OffsetTreatment] = field(default_factory=list)
-    lattice_instances: list[LatticeInstance] = field(default_factory=list)
     constraints: TraversalConstraints = field(default_factory=TraversalConstraints)
     corner_radius: float = 0.0        # global fillet radius; 0 = sharp corners
     cap_style: str = 'flat'           # 'flat' | 'rounded_corners' | 'full_round'
@@ -2447,7 +2039,6 @@ class PrintLayer:
     junction_style: str = 'miter'     # default for every junction corner
     junction_radius: float = 0.0      # radius when junction_style == 'round'
     junction_overrides: list[JunctionSetting] = field(default_factory=list)
-    network_walls: list[NetworkWall] = field(default_factory=list)
     wall_systems: list[WallSystem] = field(default_factory=list)
     wall_relations: list[WallRelation] = field(default_factory=list)
     # return_paths ("Infill repair" in the UI): local continuity repair of
@@ -2457,7 +2048,8 @@ class PrintLayer:
     return_paths: bool = True
     prefer_closed: bool = True
     # MATERIAL / BEAD (material.py): the physical bead deposited around each
-    # printable centerline. First pass: carried, not yet used by geometry.
+    # printable centerline; under `physical` its width / overlaps drive the
+    # lane spacing, landings, splices and the Assembly support.
     material: MaterialSpec = field(default_factory=MaterialSpec)
     # ROUTE ORIGINS: where a CLOSED printable component's circuit begins and
     # returns, chosen by the designer — [{'strand': printable strand id,
@@ -2732,11 +2324,11 @@ class PrintLayer:
             → openings cut the whole wall assembly into open pieces
             → end treatment per wall-system piece (not per offset); the
               same builder closes original open ends and opening faces
-            → lattice built on the full walls, clipped out of openings,
-              its cut ends landing on the opening caps
             → wall networks: systems that touch / cross are combined into
               one printable region (network.py); attached ends splice
               into their host instead of being capped
+            → Wall Systems fill the material regions; the wall lattice /
+              region infill fills what remains (wall_lattice, infill, solid)
         Sources without openings produce exactly the pre-opening output,
         and systems that touch nothing produce exactly the pre-network
         output.
@@ -2842,7 +2434,6 @@ class PrintLayer:
         # same one the offsets and the canvas use. (Curves used to be
         # routed at their 64-point default sampling instead.)
         full_sources: dict[str, Path] = {}
-        geom_sources: dict[str, Path] = {}      # what lattice generators see
         pts_of: dict[int, list[Vec2]] = {}      # id(path) → printed polyline
         for p in source_paths_in_order:
             pts = processed[p.id]
@@ -2852,15 +2443,9 @@ class PrintLayer:
                     pts, closed=p.closed, id=p.id, role=p.role,
                     label=p.label, source_id=p.id,
                     treatment_id='snap' if p.id in snapped else ('attach' if p.id in attached else 'round'))
-                geom_sources[p.id] = full_sources[p.id]
             else:
                 full_sources[p.id] = p
                 pts_of[id(p)] = pts
-                geom_sources[p.id] = p if _same_polyline(
-                    _dedupe_polyline(p.sample_points(), p.closed), pts) \
-                    else DerivedPath(pts, closed=p.closed, id=p.id,
-                                     role=p.role, label=p.label,
-                                     source_id=p.id, treatment_id='sampled')
 
         # 3) Full offset-derived paths. All offsets of the same source use
         # the SAME processed polyline — no re-sampling or re-rounding.
@@ -2956,39 +2541,6 @@ class PrintLayer:
                                    else [(list(processed[p.id]), bool(p.closed))])
                             for p in source_paths_in_order}
         self._src_order = {p.id: i for i, p in enumerate(source_paths_in_order)}
-
-        # 5) Lattice — generated on the FULL walls (so generator validity is
-        # unchanged), then clipped out of any opening of the walls it uses.
-        full_by_id = dict(geom_sources)
-        full_by_id.update({d.id: d for d in all_offsets})
-        lattice_paths: list[Path] = []
-        for li in self.lattice_instances:
-            pa = full_by_id.get(li.path_a_id)
-            pb = full_by_id.get(li.path_b_id)
-            gen = GENERATORS.get(li.generator_name)
-            if pa is None or pb is None or not gen:
-                continue
-            generated = li.generate(pa, pb, gen)
-            li_plans = [plans[sid] for sid in
-                        dict.fromkeys((source_of.get(li.path_a_id),
-                                       source_of.get(li.path_b_id)))
-                        if sid in plans]
-            if not li_plans:
-                out = generated
-            else:
-                out = []
-                for dp in generated:
-                    for k, piece in enumerate(_clip_lattice_by_openings(
-                            dp.sample_points(), li_plans)):
-                        out.append(DerivedPath(
-                            piece, closed=False, role=dp.role, label=dp.label,
-                            source_id=dp.source_id,
-                            treatment_id=dp.treatment_id,
-                            id=f'{dp.id}~{k}'))
-            for dp in out:
-                cls_of[id(dp)] = N.INTERNAL
-                elem_of[id(dp)] = f'L:{li.id}'
-            lattice_paths.extend(out)
 
         # 6) Wall-system pieces (the unit of end treatment and of networks).
         net_pieces: list = []
@@ -3153,15 +2705,9 @@ class PrintLayer:
                         if npc is not None:
                             npc.cap_ids[which].append(xp.id)
 
-        result.extend(lattice_paths)
-
         # 9) Wall networks.
-        lat_bounds = {li.id: {source_of.get(li.path_a_id),
-                              source_of.get(li.path_b_id)} - {None}
-                      for li in self.lattice_instances}
         result, network = self._apply_networks(
-            N, result, cls_of, elem_of, pts_of, net_pieces, lat_bounds,
-            full_by_id, plans, offsets_by_source, processed)
+            N, result, cls_of, elem_of, pts_of, net_pieces, plans, offsets_by_source, processed)
         regions = network.pop('_rings', [])
         jobs = network.pop('_infill_jobs', [])
         network['wall_systems'] = []
@@ -3187,11 +2733,8 @@ class PrintLayer:
         network['derived_sources'] = {
             p.id: [[q.x, q.y] for q in p.points]
             for p in self.source_paths if isinstance(p, InsetPath)}
-        network['source_networks'] = [
-            {'id': f'N{k + 1}', 'sources': ids,
-             'wall': (lambda w: w.to_dict() if w else None)(
-                 self._network_wall_for(ids))}
-            for k, ids in enumerate(n for n in source_nets if len(n) > 1)]
+        network['source_networks'] = [{'id': f'N{k + 1}', 'sources': ids}
+                                      for k, ids in enumerate(n for n in source_nets if len(n) > 1)]
         meta = {'cls': cls_of, 'pts': pts_of, 'network': network,
                 'regions': regions}
         if self.envelope_only:
@@ -3470,9 +3013,6 @@ class PrintLayer:
             groups.setdefault(uf.find(f'S:{p.id}'), []).append(p.id)
         return sorted(groups.values(),
                       key=lambda g: [s.id for s in sources].index(g[0]))
-
-    def _network_wall_for(self, ids) -> Optional[NetworkWall]:
-        return next((w for w in self.network_walls if w.path_id in ids), None)
 
     def _apply_wall_systems(self, N, result, cls_of, regions, jobs, network):
         """WALL SYSTEMS (wall_systems.py): a wall-material region whose
@@ -4109,78 +3649,6 @@ class PrintLayer:
                 pts_between.append((g_, v))
         return q, [v for _, v in sorted(pts_between, key=lambda t: t[0])]
 
-    def _connect_generated(self, gen, WS, bead):
-        """An incoming GENERATED wall system (Parallel / Interleaved / Linked /
-        Chained Loop) meeting another system part: its envelope was closed off
-        by the chord across the host's NOMINAL face, so its outer end cap sat
-        there — a visible gap before the host's real material. The outer cap
-        rail along that chord is opened and the remaining route (its two face
-        lanes leading into it) is connected with wall_systems.connect_branch:
-        both face lanes continue STRAIGHT until they reach the host's printed
-        material, the handoff lies inside the host; the nested inner returns
-        stay inside the incoming wall. Fallback: unchanged (two routes)."""
-        R = float(self.junction_radius or 0.0) if self.junction_style == 'round' else 0.0
-        h = 0.5 * bead
-        for g in gen:
-            for ch in g['part'].get('chords', []):
-                if not ch['is_end'] or len(ch['other']) != 1:
-                    continue
-                host = next((x for x in gen if x is not g and x['part']['key'] == ch['other'][0]), None)
-                if host is None:
-                    continue
-                c1, c2 = ch['ends']
-                d = c2 - c1
-                L2 = d.x * d.x + d.y * d.y
-                if L2 < 1e-12:
-                    continue
-
-                ud = d * (1.0 / math.sqrt(L2))
-
-                def on_rail(q):
-                    """q lies on the cap rail: half a bead inside the chord, within it."""
-                    t = ((q.x - c1.x) * d.x + (q.y - c1.y) * d.y) / L2
-                    off = abs((q.x - c1.x) * ud.y - (q.y - c1.y) * ud.x)
-                    return -0.05 <= t <= 1.05 and abs(off - h) <= 0.25
-                for pi, pl in enumerate(g['polys']):
-                    closed = len(pl) > 3 and pl[0].dist(pl[-1]) < 1e-6
-                    if not closed:
-                        continue
-                    core = pl[:-1]
-                    n = len(core)
-                    # the cap rail along this chord: the longest segment parallel
-                    # to it, half a bead inside (the end motif's outer cap)
-                    best = None
-                    for i in range(n):
-                        a_, b_ = core[i], core[(i + 1) % n]
-                        v = b_ - a_
-                        if v.length() < 1e-6 or not (on_rail(a_) and on_rail(b_)):
-                            continue
-                        if abs(v.x * ud.x + v.y * ud.y) / v.length() < 0.95:
-                            continue
-                        if best is None or v.length() > best[1]:
-                            best = (i, v.length())
-                    if best is None:
-                        continue
-                    i = best[0]
-                    chain = [core[(i + 1 + x) % n] for x in range(n)]      # opened at that segment
-                    if len(chain) < 4:
-                        continue
-                    mid = chain[len(chain) // 2]
-                    sid = g['part']['sources'][0]
-                    d1 = self._junction_dir(sid, chain[0], mid)
-                    d2 = self._junction_dir(sid, chain[-1], mid)
-                    if d1 is None or d2 is None:
-                        continue
-                    res = WS.connect_branch(host['polys'], chain, d1, d2, R, bead,
-                                            2.0 * (host['rep'].get('envelope') or 10.0) + 2.0 * bead)
-                    if res is None:
-                        continue
-                    host['polys'], info = res
-                    g['polys'] = g['polys'][:pi] + g['polys'][pi + 1:]
-                    host['rep'].setdefault('junctions', []).append(dict(info, incoming=sid))
-                    g['rep']['joined_into'] = host['rep'].get('system_id')
-                    break
-
     def _virtual_faces(self) -> list:
         """[(face point at s0, face point at s1, unit normal at s0, unit
         normal at s1, alpha)] of the cut_transitions: points of the processed
@@ -4222,57 +3690,12 @@ class PrintLayer:
         return out
 
     def _web_member(self, sid) -> bool:
-        """Does source sid print a Skin + Web web (layer system or legacy)?"""
+        """Does source sid print a Skin + Web web (its record's web, or — a
+        source in no record — its own unowned wall infill)?"""
         ws = self._system_of(sid)
-        if ws is not None and ws.thickness is not None:
+        if ws is not None:
             return ws.type == 'skin_web' and (ws.web or {}).get('pattern', 'none') != 'none'
         return sid not in (getattr(self, '_wall_systems', {}) or {})
-
-    @staticmethod
-    def _kiss_into_skin(polys, ends, bead):
-        """A generated wall whose end meets SKIN walls: its outer cap rail
-        (straight, half a bead inside the chord across the host's mouth) is
-        bent to touch the chord's middle P, and the host face is closed across
-        the mouth by the bead c1 → P → c2 (two halves ending at P). The
-        incoming loop restarts at P, so host skins + incoming wall form one
-        route through P. (polys, [half1, half2]) or None."""
-        c1, c2 = ends
-        d = c2 - c1
-        L2 = d.x * d.x + d.y * d.y
-        if L2 < 1e-12:
-            return None
-        ud = d * (1.0 / math.sqrt(L2))
-        h = 0.5 * bead
-
-        def on_rail(q):
-            t = ((q.x - c1.x) * d.x + (q.y - c1.y) * d.y) / L2
-            off = abs((q.x - c1.x) * ud.y - (q.y - c1.y) * ud.x)
-            return -0.05 <= t <= 1.05 and abs(off - h) <= 0.25
-        P = c1.lerp(c2, 0.5)
-        for pi, pl in enumerate(polys):
-            if not (len(pl) > 3 and pl[0].dist(pl[-1]) < 1e-6):
-                continue
-            core = pl[:-1]
-            n = len(core)
-            best = None
-            for i in range(n):
-                a_, b_ = core[i], core[(i + 1) % n]
-                v = b_ - a_
-                if v.length() < 1e-6 or not (on_rail(a_) and on_rail(b_)):
-                    continue
-                if abs(v.x * ud.x + v.y * ud.y) / v.length() < 0.95:
-                    continue
-                if best is None or v.length() > best[1]:
-                    best = (i, v.length())
-            if best is None:
-                continue
-            i = best[0]
-            a_, b_ = core[i], core[(i + 1) % n]
-            # rail a → b bent to touch P (a shallow V half a bead deep)
-            loop = [P] + [core[(i + 1 + x) % n] for x in range(n)] + [P]
-            # (loop: P → b … a → P)
-            return polys[:pi] + polys[pi + 1:] + [loop], [[c1, P], [P, c2]]
-        return None
 
     def _junction_dir(self, sid, e, inner):
         """The ARCHITECTURAL junction direction of source `sid` at its wall end
@@ -4301,9 +3724,10 @@ class PrintLayer:
 
     def _connect_skins(self, polys, part, WS, envelope):
         """Join each incoming skin-like wall (single / out-and-back, hollow,
-        Skin + Web) to the host system's ACTUAL printed geometry
-        (wall_systems.connect_branch); where that is not possible (no straight
-        lanes, no contact) fall back to the mouth splice (_splice_skins).
+        Skin + Web) to the host system's ACTUAL printed geometry (M6 source-wall
+        attachment: _attach_to_host / wall_systems._resolve_host); where that
+        is not possible (no straight lanes, no contact) fall back to the mouth
+        splice (_splice_skins).
         → (polys, joined count, chains re-emitted, junction reports)."""
         R = float(self.junction_radius or 0.0) if self.junction_style == 'round' else 0.0
         bead = self.material.bead_width
@@ -4440,64 +3864,6 @@ class PrintLayer:
             spliced += 1
         return WS._join(polys), spliced
 
-    def migrate_wall_systems(self) -> dict:
-        """MIGRATION of a legacy design to explicit Wall Systems (pure: the
-        layer is not changed). Every path's EFFECTIVE wall under the old rules
-        (own WallSpec, Network Wall inheritance, the membership-only systems
-        of the previous pass, wall infills reaching its region) is grouped by
-        (thickness, alignment, reference, construction, parameters, web) into
-        one Wall System; the wall infills become webs OWNED by the system of
-        their anchor path (same record and id: Layer-Design lineage is kept).
-        Returns {'wall_systems': [...], 'owners': {infill id: system id},
-        'migrated': bool}; the caller clears path walls / Network Walls."""
-        _, meta = self._build_effective()
-        net = meta['network']
-        sw = net.get('source_walls') or {}
-        nets = {pid: n['sources'] for n in net.get('source_networks') or [] for pid in n['sources']}
-        legacy = any(p.wall is not None for p in self.source_paths) or bool(self.network_walls) or \
-            any(ws.thickness is None for ws in self.wall_systems) or \
-            any(not f.owner and f.kind == 'wall' and sw.get(f.path_id) for f in self.infills)
-        if not legacy:
-            return {'wall_systems': [w.to_dict() for w in self.wall_systems], 'owners': {}, 'migrated': False}
-        groups, order = {}, []
-        sys_of = {}
-        for p in self.source_paths:
-            w = sw.get(p.id)
-            if not w:
-                continue
-            spec = dict(w['system'] or {'type': 'skin_web'})
-            typ = spec.pop('type')
-            ids = nets.get(p.id, [p.id])
-            f = next((f for f in self.infills if not f.owner and f.kind == 'wall' and f.path_id in ids), None)
-            web = {'pattern': f.pattern, 'params': dict(f.params), 'variation_index': f.variation_index} \
-                if (f is not None and typ == 'skin_web') else {'pattern': 'zigzag', 'params': {'spacing': 20.0},
-                                                               'variation_index': 0}
-            if typ == 'skin_web' and f is None:
-                typ = 'hollow'                   # skins, no web: Hollow / Skins Only
-            key = json.dumps([w['thickness'], w['align'], bool(w['print_reference']), typ, spec, web], sort_keys=True)
-            if key not in groups:
-                groups[key] = {'type': typ, 'params': spec, 'web': web, 'thickness': w['thickness'],
-                               'align': w['align'], 'print_reference': bool(w['print_reference']), 'members': []}
-                order.append(key)
-            groups[key]['members'].append(p.id)
-        used, out = set(), []
-        for k, key in enumerate(order):
-            g = groups[key]
-            old = next((ws for ws in self.wall_systems if ws.id not in used and ws.type == g['type']
-                        and set(ws.members) & set(g['members'])), None)
-            taken = used | {ws.id for ws in self.wall_systems}
-            sid = old.id if old is not None else next(f'WS{n}' for n in range(1, 10000) if f'WS{n}' not in taken)
-            used.add(sid)
-            name = (old.name if old is not None and old.name else f'Wall System {k + 1}')
-            ws = WallSystem(sid, g['type'], g['params'], g['members'], name=name, thickness=g['thickness'],
-                            align=g['align'], print_reference=g['print_reference'], web=g['web'])
-            out.append(ws)
-            for pid in g['members']:
-                sys_of[pid] = sid
-        owners = {f.id: sys_of[f.path_id] for f in self.infills
-                  if not f.owner and f.kind == 'wall' and f.path_id in sys_of}
-        return {'wall_systems': [w.to_dict() for w in out], 'owners': owners, 'migrated': True}
-
     def _system_of(self, pid) -> Optional[WallSystem]:
         """The Wall System a path explicitly belongs to (first wins; the
         Designer keeps one system per path)."""
@@ -4531,9 +3897,9 @@ class PrintLayer:
         return out
 
     def _wall_offsets(self, sources, processed, source_nets):
-        """Offsets generated by wall specs: a path's own WallSpec, else its
-        network's NetworkWall."""
-        net_of = {pid: ids for ids in source_nets for pid in ids}
+        """Offsets generated by the walls' envelopes: each source's Wall
+        System build record (walls.compose — thickness, alignment, print
+        reference); a wall in no record, or a `single` one, is a thin wall."""
         out, ref_only = [], set()
         self._return_lanes = set()
         self._wall_systems = {}               # source id → its (non Skin + Web) wall system
@@ -4545,27 +3911,16 @@ class PrintLayer:
         import wall_systems as WS
         for p in sources:
             lsys = self._system_of(p.id)
-            if lsys is not None and lsys.type == 'single':
-                # SINGLE / OUT-AND-BACK: the ordinary single-line wall (one bead;
-                # Physical rules → the separated outbound + return lanes below)
-                spec, src = None, 'system'
-            elif lsys is not None and lsys.thickness is not None:
-                spec = lsys.envelope()            # the WALL SYSTEM owns the envelope
-                if getattr(p, 'align_override', None):
-                    spec = WallSpec(spec.thickness, p.align_override, spec.print_reference, spec.system)
+            spec, src = None, None
+            if lsys is not None:
                 src = 'system'
-            else:
-                spec, src = p.wall, ('path' if p.wall is not None else None)
-                if spec is not None and spec.thickness <= 1e-9:
-                    spec, src = None, 'single'   # explicit SINGLE BEAD: no inherited network wall
-                elif spec is None:
-                    nw = self._network_wall_for(net_of.get(p.id, [p.id]))
-                    if nw is not None:
-                        spec = WallSpec(nw.thickness, nw.align, nw.print_reference, nw.system)
-                        src = 'network'
+                if lsys.type != 'single':         # (SINGLE / OUT-AND-BACK: one bead, no envelope —
+                    spec = lsys.envelope()        # Physical rules → the outbound + return lanes below)
+                    if spec is not None and getattr(p, 'align_override', None):
+                        spec = WallSpec(spec.thickness, p.align_override, spec.print_reference)
             ws = None
             if spec is not None and spec.thickness > 1e-9:
-                ws = WS.normalize(lsys.spec()) if lsys is not None else WS.normalize(spec.system)
+                ws = WS.normalize(lsys.spec())
                 if ws is not None:
                     self._wall_systems[p.id] = ws
                     self._wall_system_key[p.id] = lsys.id if lsys is not None else None
@@ -4861,12 +4216,11 @@ class PrintLayer:
         return snapped
 
     def _apply_networks(self, N, result, cls_of, elem_of, pts_of, net_pieces,
-                        lat_bounds, full_by_id, plans, offsets_by_source,
-                        processed):
+                        plans, offsets_by_source, processed):
         """
-        Find wall networks (systems / lattices whose beads touch or cross)
-        and replace their beads by the resolved network geometry. Elements
-        in no network are returned untouched.
+        Find wall networks (wall systems whose beads touch or cross) and
+        replace their beads by the resolved network geometry. Elements in
+        no network are returned untouched.
         """
         summary = {'components': [], 'junctions': [], 'modified_sources': [],
                    'regions': [], 'infills': []}
@@ -4888,27 +4242,11 @@ class PrintLayer:
         if len({b.element for b in beads_all}) < 2 and not infills and not ws_sources:
             return result, summary
 
-        def _expected(a, b):
-            """Lattice touching its own boundary walls is not a junction, and
-            lattices crossing each other are structural crossings (generated
-            field geometry), not a wall network."""
-            if a.startswith('L:') and b.startswith('L:'):
-                return True
-            for x, y in ((a, b), (b, a)):
-                if x.startswith('L:') and y.startswith('S:') and \
-                        y[2:] in lat_bounds.get(x[2:], ()):
-                    return True
-            return False
-
         uf = N.UnionFind()
-        for lid, sids in lat_bounds.items():
-            for sid in sids:
-                uf.union(f'L:{lid}', f'S:{sid}')
         foreign = []
         for a, b in N.find_contacts(beads_all):
             uf.union(a, b)
-            if not _expected(a, b):
-                foreign.append(a)
+            foreign.append(a)
         # Infill on a closed single-bead wall declares its inside to be
         # wall; closed walls lying inside it are its holes (even-odd).
         declared: dict[str, list] = {}           # anchor id → [ring, holes…]
@@ -4977,26 +4315,6 @@ class PrintLayer:
             for k, (bid, a, b) in enumerate(getattr(self, '_mouths', [])):
                 if f'S:{bid}' in elems:
                     beads.append(N.Bead(f'{bid}_mouth{k}', [a, b], False, N.SPLIT, f'S:{bid}'))
-            # Lattice between two separate systems: its cavity is wall,
-            # except the inside of closed walls lying within it (islands).
-            for e in sorted(elems):
-                if not e.startswith('L:'):
-                    continue
-                li = next((x for x in self.lattice_instances if x.id == e[2:]),
-                          None)
-                if li is None or len(lat_bounds.get(li.id, ())) < 2:
-                    continue
-                cav = self._lattice_cavity(N, li, full_by_id, comp_pieces,
-                                           lat_bounds)
-                if cav is None:
-                    for b in beads:            # no cavity: keep it as drawn
-                        if b.element == e:
-                            b.cls = N.WIRE
-                    continue
-                shape, closers = cav
-                material.append(shape)
-                beads.extend(N.Bead(f'{li.id}_cav{k}', c, False, N.VIRTUAL, e)
-                             for k, c in enumerate(closers))
             # Openings keep their clear width free of every wall's material.
             for sid in sorted(sys_ids):
                 plan = plans.get(sid)
@@ -5036,10 +4354,7 @@ class PrintLayer:
                                         max((pc.width for pc in comp_pieces), default=0.0))
             self._emit_network(N, res, replaced, appended, cls_of, summary)
             ci = len(summary['components'])
-            summary['components'].append({
-                'sources': sorted(sys_ids),
-                'lattices': sorted(e[2:] for e in elems if e.startswith('L:')),
-            })
+            summary['components'].append({'sources': sorted(sys_ids)})
             corner_at = {(c.pt.x, c.pt.y): c for c in corners}
             prod = self.__dict__.setdefault('_production_junctions', [])
             for k, p in enumerate(res.junctions):
@@ -5192,28 +4507,6 @@ class PrintLayer:
                     joins.append(jn)
         return joins, dropped
 
-    def _lattice_cavity(self, N, li, full_by_id, comp_pieces, lat_bounds):
-        """Wall region implied by a lattice spanning two separate systems."""
-        pa, pb = full_by_id.get(li.path_a_id), full_by_id.get(li.path_b_id)
-        if pa is None or pb is None:
-            return None
-        a, b = pa.sample_points(), pb.sample_points()
-        if pa.closed and pb.closed:
-            ann = N.Shape([a, b])
-            islands = []
-            for pc in comp_pieces:
-                if not pc.closed or pc.sys_id in lat_bounds[li.id]:
-                    continue
-                ring = max((w[1] for w in pc.walls),
-                           key=lambda r: abs(_polygon_area(r)))
-                if ann.contains(ring[0]):
-                    islands.append(ring)
-            return N.Shape([a, b] + islands), []
-        if not pa.closed and not pb.closed:
-            return (N.Shape([a + list(reversed(b))]),
-                    [[a[-1], b[-1]], [b[0], a[0]]])
-        return None
-
     def _emit_network(self, N, res, replaced, appended, cls_of, summary):
         """Turn resolved beads back into effective paths."""
         for rb in res.beads:
@@ -5331,7 +4624,6 @@ class PrintLayer:
             'label': self.label,
             'source_paths': [p.to_dict() for p in self.source_paths],
             'offset_treatments': [ot.to_dict() for ot in self.offset_treatments],
-            'lattice_instances': [li.to_dict() for li in self.lattice_instances],
             'constraints': self.constraints.to_dict(),
             'corner_radius': self.corner_radius,
             'cap_style': self.cap_style,
@@ -5342,7 +4634,6 @@ class PrintLayer:
             'junction_style': self.junction_style,
             'junction_radius': self.junction_radius,
             'junction_overrides': [j.to_dict() for j in self.junction_overrides],
-            'network_walls': [w.to_dict() for w in self.network_walls],
             'wall_systems': [w.to_dict() for w in self.wall_systems],
             'wall_relations': [w.to_dict() for w in self.wall_relations],
             'return_paths': self.return_paths,
@@ -5713,48 +5004,3 @@ def _point_beside(pts: list[Vec2], closed: bool, s: float,
     a, b = pts[k], pts[(k + 1) % len(pts)]
     d = (b - a).normalized()
     return Vec2(p.x - d.y * offset, p.y + d.x * offset)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _resample(pts: list[Vec2], n: int, closed: bool = False) -> list[Vec2]:
-    """
-    Resample a polyline to exactly n evenly-spaced points by arc length.
-
-    If closed=True, the closing segment (last → first) is included in the
-    total arc length. This ensures closed-path resampling covers the full
-    perimeter including the final edge back to the start point.
-    The n-th sample (at t=1.0) equals the first sample (t=0), so for closed
-    paths use n=segments+1 to get segments+1 points including the wrap-back.
-    """
-    if not pts or n < 2:
-        return list(pts)
-
-    # For closed paths, append the closing point so the final segment is included
-    working = list(pts)
-    if closed and len(pts) >= 2:
-        working = working + [pts[0]]
-
-    lengths = [0.0]
-    for a, b in zip(working, working[1:]):
-        lengths.append(lengths[-1] + a.dist(b))
-    total = lengths[-1]
-
-    if total < 1e-12:
-        return [pts[0]] * n
-
-    result = []
-    for i in range(n):
-        target = total * i / (n - 1)
-        for j in range(len(lengths) - 1):
-            if lengths[j] <= target <= lengths[j + 1]:
-                seg_len = lengths[j + 1] - lengths[j]
-                t = (target - lengths[j]) / seg_len if seg_len > 1e-12 else 0.0
-                result.append(working[j].lerp(working[j + 1], t))
-                break
-        else:
-            result.append(working[-1])
-
-    return result

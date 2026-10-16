@@ -1,6 +1,6 @@
 """
 REGRESSION fixture (2026-10-06): a connected rectangle + circle + line wall
-network (10 in walls, ONE wave Wall Infill — on the rectangle, as the UI adds
+network (10 in walls — each its own envelope — ONE wave Wall Infill — on the rectangle, as the UI adds
 it) with several large openings. Two openings on the circle cut its far arc
 free of the rest of the network; that arc keeps both faces and must keep
 its lattice. Used by tests/test_multi_opening_lattice.py and by the Layer
@@ -14,12 +14,11 @@ CX, CY, R = 480.0, 180.0, 80.0          # circle, joined to the rect by the line
 def document(openings=(('C', 150, 40), ('C', 350, 40), ('R', 120, 40)), infill_on=('R',)):
     return {'id': 'l', 'source_paths': [
         {'id': 'R', 'type': 'RectanglePath', 'label': 'Rect 1', 'x': 100, 'y': 100, 'w': 240, 'h': 160,
-         'closed': True, 'wall': {'thickness': 10}},
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}},
         {'id': 'C', 'type': 'CirclePath', 'label': 'Circle 1', 'cx': CX, 'cy': CY, 'radius': R,
-         'closed': True, 'wall': {'thickness': 10}},
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}},
         {'id': 'L', 'type': 'LinePath', 'label': 'Line 1', 'start': [340, 180], 'end': [400, 180],
-         'wall': {'thickness': 10}}],
-        'offset_treatments': [], 'lattice_instances': [],
+         'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}],
         'infills': [{'id': 'I' + p, 'path_id': p, 'pattern': 'wave', 'params': {'spacing': 20},
                      'kind': 'wall', 'variation_index': 0} for p in infill_on],
         'openings': [{'id': f'o{k}', 'source_path_id': s, 'center_s': c, 'width': w}

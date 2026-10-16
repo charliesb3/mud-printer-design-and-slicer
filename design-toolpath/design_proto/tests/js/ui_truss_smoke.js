@@ -51,7 +51,7 @@ eval(src + `
       { name: 'turn_radius', label: 'Min Turn Radius', default: 1.5, min: 0 }] } };
   addPrimitive('RectanglePath');
   const R = layer.source_paths[0];
-  R.wall = { thickness: 10, align: 'auto' };
+  R.envelope = { thickness: 10, align: 'auto', print_reference: false };
   selectedId = R.id;
   addInfill();
   const f = layer.infills[0];

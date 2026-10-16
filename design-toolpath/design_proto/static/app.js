@@ -53,8 +53,7 @@ const layer = {
   id: 'design',
   label: '',
   source_paths: [],
-  offset_treatments: [],
-  lattice_instances: [],   // legacy pairwise lattice (backend only; no UI)
+  offset_treatments: [],   // Extra Offsets (older projects only: no UI to add one)
   constraints: {
     start_path_id: null,
     start_t: null,
@@ -72,7 +71,6 @@ const layer = {
   junction_style: 'miter',   // default treatment of network junction corners
   junction_radius: 2,        // radius when junction_style === 'round'
   junction_overrides: [],    // [{ key, treatment, radius }] per junction corner
-  network_walls: [],         // [{ id, path_id, thickness, align }] network-level wall
   wall_relations: [],        // [{ id, outer_id, inner_id, thickness, driver }] nested-wall links
   // MATERIAL / BEAD (physical deposit; see Bead section)
   material: { bead_width: 3.0, contact_overlap: 0.75, return_overlap: 0.75, physical: true },
@@ -774,7 +772,8 @@ function _networkTrimmed() {
 // while the driving boundary is selected.
 function _drawDerivedWallFaces() {
   const sel = selectedId && layer.source_paths.find(p => p.id === selectedId);
-  const w = sel && sel.wall && sel.wall.thickness > 0 ? sel.wall : null;
+  const ew = sel ? _effectiveWall(sel).wall : null;
+  const w = ew && ew.thickness > 0 ? ew : null;
   if (!w) return;
   const faces = derivedPaths.filter(d => d.source_id === sel.id && String(d.id).startsWith(sel.id + '.wall'));
   for (const f of faces) {
@@ -3203,7 +3202,7 @@ function _computePrimitivePoints(path) {
 
 // Wall-network membership: source id → { label: 'N1', members: [...] }.
 // Wall-network membership: source paths that touch / cross (the networks
-// the designer builds). source id → { label: 'N1', ids, names, wall }.
+// the designer builds). source id → { label: 'N1', ids, names }.
 function _networkOf() {
   const out = {};
   ((networkInfo && networkInfo.source_networks) || []).forEach(c => {
@@ -3211,7 +3210,7 @@ function _networkOf() {
       const p = layer.source_paths.find(s => s.id === id);
       return p ? (p.label || p.id) : id;
     });
-    for (const id of c.sources) out[id] = { label: c.id, ids: c.sources, names, wall: c.wall };
+    for (const id of c.sources) out[id] = { label: c.id, ids: c.sources, names };
   });
   return out;
 }
@@ -3264,7 +3263,7 @@ function updatePathList() {
     }
     el.appendChild(item);
     // the wall's THICKNESS, editable without expanding the path
-    if (!_legacyWalls()) {
+    {
       const tr = document.createElement('div');
       tr.className = 'path-wall-row';
       tr.dataset.wall = p.id;
@@ -3416,10 +3415,9 @@ function _alignLabel(align, closed) {
   const a = (!align || align === 'auto') ? (closed ? 'inside' : 'center') : align;
   return Object.keys(ALIGN_UI).find(k => ALIGN_UI[k] === a) || (closed ? 'Inside' : 'Centered');
 }
-// Wall Thickness semantics: > 0 = a thick architectural wall; 0 = a SINGLE-
-// BEAD path (physical rules: its return-lane solution; never lattice). A path
-// in a thick-walled network inherits the network wall (path.wall = null) until
-// it overrides it — `{ thickness: 0 }` is the explicit single-bead override.
+// Wall Thickness semantics: > 0 = a thick architectural wall (the wall's own
+// `envelope`, or the envelope of the Wall System record listing it); none = a
+// THIN wall — a single bead (physical rules: its return-lane solution).
 function _effectiveWall(path) {
   const net = _networkOf()[path.id];
   if (path.envelope && path.envelope.thickness > 0)       // the wall's OWN envelope
@@ -3434,10 +3432,7 @@ function _effectiveWall(path) {
           from: 'system', net, sys }
       : { wall: null, from: 'system', net, sys };
   }
-  const nw = net ? _netWallFor(net.ids) : null;
-  if (path.wall && path.wall.thickness > 0) return { wall: path.wall, from: 'path', net, nw };
-  if (path.wall && nw) return { wall: null, from: 'single', net, nw };
-  return nw ? { wall: nw, from: 'network', net, nw } : { wall: null, from: null, net, nw };
+  return { wall: null, from: null, net };
 }
 
 function _addSubTitle(panel, text, color) {
@@ -3474,8 +3469,8 @@ function _addButton(panel, text, onclick, disabled) {
 // construction. A path in no system is a single bead. Skin + Web's web
 // lattice is materialised as infill records OWNED by the system (one per
 // connected group of members; ids kept, so Layer-Design lineage still keys
-// the lattice on them). Legacy walls (path.wall, Network Walls, wall infills,
-// the earlier membership-only systems) are migrated once by the backend.
+// the lattice on them). Older representations (path walls, Network Walls,
+// in-document records) are converted when a project file is opened.
 const WALL_SYSTEMS = {
   single: { label: 'Single / Out-and-Back Wall', params: [], noEnvelope: true },
   hollow: { label: 'Hollow / Skins Only', params: [] },
@@ -3630,10 +3625,6 @@ function _chainResolve(params, edited, thickness, bead) {
     set('loop_depth', r3(e.envelope), `Loop Depth limited to the envelope (${e.envelope.toFixed(2)} in)`);
   return { params: p, changed, notes };
 }
-function _wallSystemType(wall) {          // (legacy wall.system)
-  const t = wall && wall.system && wall.system.type;
-  return WALL_SYSTEMS[t] && t !== 'skin_web' ? t : 'skin_web';
-}
 function _wsOf(pid) { return (layer.wall_systems || []).find(s => s.members.includes(pid)) || null; }
 function _wsLabel(s) { return s.name || s.id; }
 function _newWallSystemId() {
@@ -3671,8 +3662,7 @@ function _wsNew(pids = []) {
 function _wallSystemOf(path) {
   const s = _wsOf(path.id);
   if (s && s.thickness != null) return s.thickness > 0 ? s.type : 'skin_web';
-  const eff = _effectiveWall(path);
-  return eff.wall ? _wallSystemType(eff.wall) : 'skin_web';
+  return 'skin_web';                       // (an envelope without a system: skins)
 }
 
 // SKIN + WEB: materialise each system's web as OWNED infill records — one per
@@ -3724,33 +3714,6 @@ function _syncSystemWebs() {
   layer.infills = layer.infills.filter(f => !f.owner || keep.has(f) ||
                                        (layer.wall_systems || []).some(s => s.id === f.owner && s.thickness == null));
   return changed || layer.infills.length !== n;
-}
-
-// MIGRATION (once per legacy design; not an undo step): the backend groups
-// every path's effective legacy wall into Wall Systems.
-let _wsMigrating = false;
-function _legacyWalls() {
-  return layer.source_paths.some(p => p.wall) || (layer.network_walls || []).length > 0 ||
-         (layer.wall_systems || []).some(s => s.thickness == null);
-}
-async function _maybeMigrateWallSystems() {
-  if (_wsMigrating || !_legacyWalls()) return;
-  _wsMigrating = true;
-  const ep = _projectEpoch;
-  try {
-    const res = await _post('/api/migrate_wall_systems', buildPayload());
-    if (!res || !res.migrated || !_legacyWalls() || ep !== _projectEpoch) return;   // (another project opened)
-    layer.wall_systems = res.wall_systems.map(w => ({ ...w, params: { ...(w.params || {}) },
-      members: [...(w.members || [])], web: { pattern: 'none', params: {}, variation_index: 0, ...(w.web || {}) } }));
-    for (const f of layer.infills || []) if (res.owners[f.id]) f.owner = res.owners[f.id];
-    for (const p of layer.source_paths) p.wall = null;
-    layer.network_walls = [];
-    if (_hist.current) _hist.current.state = _histState();   // the migrated design IS the current state
-    routeResult = null;
-    updatePathList(); updatePropPanel(); updateInfillList();
-    scheduleRefresh();
-    setStatus('Walls migrated to Wall Systems (same geometry).');
-  } catch (e) { /* keep the legacy design; it still resolves */ } finally { _wsMigrating = false; }
 }
 
 let _wsReportEls = [];            // live readouts of the shown panels: { el, id | sys, owner }
@@ -3947,42 +3910,6 @@ function _addWebRows(panel, s, rebuild, opts = {}) {
   _addNote(advPanel, '0 = automatic (1.375 × target). Wins over Target Spacing.');
   adv.appendChild(advPanel);
   panel.appendChild(adv);
-}
-
-// An older document (or fixture) still holding Wall Systems: adopted ONCE into
-// the per-wall form — each member wall receives its record's envelope, and the
-// construction becomes a project Wall System (same id) listing those walls
-// (the backend's split + walls migration, 1:1; not an undo step).
-function _adoptLegacyWallSystems() {
-  const legacy = layer.wall_systems;
-  if (!legacy || !legacy.length) {
-    if (legacy && !legacy.length) delete layer.wall_systems;
-    return false;
-  }
-  const clean = !!_hist.current && _histState() === _hist.current.state;
-  for (const w of legacy) {
-    for (const m of w.members || []) {
-      const p = layer.source_paths.find(x => x.id === m);
-      if (!p || !(w.thickness > 0)) continue;
-      p.envelope = { thickness: w.thickness, align: w.align || 'auto', print_reference: !!w.print_reference };
-    }
-  }
-  const P = typeof project !== 'undefined' ? project : null;
-  if (P) {
-    P.wall_systems = P.wall_systems || [];
-    for (const w of legacy) {
-      if (P.wall_systems.some(x => x.id === w.id)) continue;
-      const web = JSON.parse(JSON.stringify(w.web || {}));
-      const owned = (layer.infills || []).find(f => f.owner === w.id);
-      if (w.type === 'skin_web' && owned && web.pattern && web.pattern !== 'none')
-        Object.assign(web, { pattern: owned.pattern, params: JSON.parse(JSON.stringify(owned.params || {})) });
-      P.wall_systems.push({ id: w.id, name: w.name || w.id, type: w.type || 'skin_web',
-                            params: JSON.parse(JSON.stringify(w.params || {})), web, members: [...(w.members || [])] });
-    }
-  }
-  delete layer.wall_systems;
-  if (clean && _hist.current) _hist.current.state = _histState();
-  return true;
 }
 
 function updateWallSystemSection() { return updateWallGroupSection(); }
@@ -4308,11 +4235,6 @@ function _addBatchBar(el) {
 // reference, end cap. With several walls selected, edits apply to all.
 function _addWallRows(panel, path) {
   _addSubTitle(panel, multiSel.size > 1 && multiSel.has(path.id) ? `Wall · ${multiSel.size} walls selected` : 'Wall');
-  if (_legacyWalls()) {
-    const ew = _effectiveWall(path);
-    _addNote(panel, ew.wall ? `${ew.wall.thickness} in wall (older design — set in its Wall System)` : 'Single bead (older design)');
-    return;
-  }
   const row = document.createElement('div');
   row.className = 'prop-row';
   row.id = 'path-wall-row';
@@ -4348,11 +4270,6 @@ function _addWallRows(panel, path) {
       addPropRowNumTo(panel, 'End R', path.cap.corner_radius || 0,
                       v => setWallProps(_editTargets(path.id), { cap: { style: 'rounded_corners', corner_radius: Math.max(0, v) } }));
   }
-}
-
-// (legacy) Network Wall of a network — read only by the migration / old designs
-function _netWallFor(ids) {
-  return (layer.network_walls || []).find(w => ids.includes(w.path_id)) || null;
 }
 
 // WALL NETWORK — geometric CONNECTIVITY only (paths that touch / cross; the
@@ -4574,9 +4491,6 @@ function updateOffsetList() {
     rm.onclick = () => {
       const removedId = ot.id;
       layer.offset_treatments = layer.offset_treatments.filter(x => x.id !== removedId);
-      layer.lattice_instances = layer.lattice_instances.filter(
-        li => li.path_a_id !== removedId && li.path_b_id !== removedId
-      );
       routeResult = null; scheduleRefresh(); updateOffsetList(); updateInfillList(); repaint();
     };
     hdr.append(nm, rm);
@@ -4609,25 +4523,6 @@ function updateOffsetList() {
     block.appendChild(panel);
     el.appendChild(block);
   }
-}
-
-function addOffset() {
-  if (layer.source_paths.length === 0) { setStatus('Add at least one path first.'); return; }
-  // Source = the selected path (previously always the FIRST path, which
-  // made every new offset land on Rect 1 / Line 1 whatever was selected).
-  const src = layer.source_paths.find(p => p.id === selectedId) || layer.source_paths[0];
-  const closed = !!src.closed;
-  layer.offset_treatments.push({
-    id: newId(),
-    source_path_id: src.id,
-    distance: 10,
-    direction: closed ? 'inside' : 'left',
-    role: 'inner',
-    label: '',
-  });
-  routeResult = null;
-  scheduleRefresh();
-  updateOffsetList();
 }
 
 // ---------------------------------------------------------------------------
@@ -4943,13 +4838,11 @@ function addPropRowSelectTo(panel, label, value, options, onChange, labels = nul
 // Live derived-path refresh + auto-routing
 // ---------------------------------------------------------------------------
 
-// Any wall (own or network) using a non-default Wall System?
+// Any wall using a non-default Wall System?
 function _anyWallSystem() {
   if (_designerEnvelope()) return false;     // (envelopes: no construction is resolved)
   return layer.source_paths.some(p => p.envelope) ||       // (full preview: the project's constructions)
-         (layer.wall_systems || []).some(s => s.type !== 'skin_web') ||
-         layer.source_paths.some(p => p.wall && p.wall.thickness > 0 && _wallSystemType(p.wall) !== 'skin_web') ||
-         (layer.network_walls || []).some(w => _wallSystemType(w) !== 'skin_web');
+         (layer.wall_systems || []).some(s => s.type !== 'skin_web');
 }
 
 // REQUEST COALESCING: at most one resolve in flight; edits arriving meanwhile
@@ -5002,8 +4895,6 @@ let _refreshSupersede = false;  // the pending refresh supersedes a resolve in f
 function scheduleRefresh(opts = {}) {
   if (opts.supersede) _refreshSupersede = true;
   _syncRelations();
-  _adoptLegacyWallSystems();                   // (an older document: → Wall Groups + project Wall Systems)
-  _maybeMigrateWallSystems();
   historyCheckpoint();
   clearTimeout(_refreshTimer);
   if (layer.source_paths.length === 0) {
@@ -5027,7 +4918,7 @@ function scheduleRefresh(opts = {}) {
     _refreshTimer = setTimeout(fire(runRoute), ws ? 300 : 200);
   } else {
     // ≥ 2 paths may form a wall network (junction markers, trimmed faces)
-    const hasDerived = layer.offset_treatments.length > 0 || layer.lattice_instances.length > 0 ||
+    const hasDerived = layer.offset_treatments.length > 0 ||
                        (layer.infills || []).length > 0 ||
                        (layer.openings || []).length > 0 || (layer.trims || []).length > 0 ||
                        layer.source_paths.length > 1 || ws;
@@ -5149,7 +5040,6 @@ function buildPayload() {
         label: ot.label || '',
       };
     }),
-    lattice_instances: layer.lattice_instances.map(li => ({ ...li })),
     infills: (layer.infills || []).map(f => ({ ...f, params: { ...f.params } })),
     trims: (layer.trims || []).map(t => ({ ...t, start: [...t.start], end: [...t.end], inside: { ...t.inside } })),
     material: { ...(layer.material || { bead_width: BEAD_DEFAULT }) },
@@ -5157,9 +5047,8 @@ function buildPayload() {
     junction_style: layer.junction_style || 'miter',
     junction_radius: layer.junction_radius || 0,
     junction_overrides: (layer.junction_overrides || []).map(o => ({ ...o })),
-    network_walls: (layer.network_walls || []).map(w => ({ ...w })),
-    // ARCHITECTURE: the Wall Groups; (an older document's own Wall Systems
-    // until adopted); the project's Wall Systems only for the full preview
+    // ARCHITECTURE: the walls' envelopes (the paths carry them); the project's
+    // Wall Systems travel only for the full preview
     ...((layer.wall_systems || []).length
       ? { wall_systems: layer.wall_systems.map(w => ({ ...w, params: { ...(w.params || {}) },
                                                        members: [...w.members], web: { ...(w.web || {}) } })) }
@@ -5729,23 +5618,12 @@ function deletePath(id) {
   layer.wall_relations = (layer.wall_relations || []).filter(r => r.outer_id !== id && r.inner_id !== id);
   layer.source_paths = layer.source_paths.filter(p => p.id !== id);
   layer.offset_treatments = layer.offset_treatments.filter(ot => ot.source_path_id !== id);
-  layer.lattice_instances = layer.lattice_instances.filter(
-    li => li.path_a_id !== id && li.path_b_id !== id
-  );
   layer.openings = (layer.openings || []).filter(o => o.source_path_id !== id);
   // its own trims go with it; trims of OTHER paths bounded by it are kept
   // (they become unresolved and suppress nothing — Undo brings them back)
   layer.trims = (layer.trims || []).filter(t => t.source_path_id !== id);
   layer.region_overrides = (layer.region_overrides || []).filter(r => r.path_id !== id);
   layer.infills = (layer.infills || []).filter(f => f.path_id !== id);
-  // A network wall anchored to the deleted path moves to another member.
-  const net = _networkOf()[id];
-  for (const w of layer.network_walls || []) {
-    if (w.path_id !== id) continue;
-    const other = net && net.ids.find(x => x !== id && layer.source_paths.some(p => p.id === x));
-    w.path_id = other || null;
-  }
-  layer.network_walls = (layer.network_walls || []).filter(w => w.path_id);
   for (const s of layer.wall_systems || []) s.members = s.members.filter(m => m !== id);
   selectedId = null;
   selectedOpeningId = null;
@@ -5764,7 +5642,6 @@ function deletePath(id) {
 function clearAll() {
   layer.source_paths = [];
   layer.offset_treatments = [];
-  layer.lattice_instances = [];
   layer.openings = [];
   layer.trims = [];
   trimHover = null;
@@ -5772,7 +5649,6 @@ function clearAll() {
   originDrag = null;
   layer.region_overrides = [];
   layer.infills = [];
-  layer.network_walls = [];
   delete layer.wall_systems;
   layer.wall_relations = [];
   layer.return_paths = true;
@@ -7126,6 +7002,15 @@ async function openProjectText(text, fileName) {
 }
 
 // REPLACE the whole project with an opened (validated, migrated) one
+// A saved document omits empty collections older files always wrote (walls.py
+// LEGACY_EMPTY / LEGACY_REMOVED); the page keeps every collection as an array.
+function _normalizeLayerDoc(doc) {
+  for (const k of ['source_paths', 'offset_treatments', 'openings', 'trims', 'route_origins', 'region_overrides',
+                   'infills', 'junction_overrides', 'wall_relations'])
+    if (!Array.isArray(doc[k])) doc[k] = [];
+  return doc;
+}
+
 function applyProject(res, fileName) {
   const P = res.project, D = P.designer;
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -7153,6 +7038,8 @@ function applyProject(res, fileName) {
   const doc = project.active === root.id ? root.document : res.active_document;
   for (const k of Object.keys(layer)) delete layer[k];
   Object.assign(layer, clone(doc));
+  _normalizeLayerDoc(layer);
+  _normalizeLayerDoc(project.baseDoc);
   _markVariantSynced();
   _ensurePathPoints(layer);
   // derived results, interaction and view-derived state: reset

@@ -28,9 +28,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_pr
 
 import app  # noqa: F401  (path setup)
 import route_quality as RQ
+import wall_metrics as WM
 import wall_lattice as WL
 import wall_fixtures as WF
-from model import Vec2, PrintLayer, RectanglePath, RegionInfill, CirclePath, LinePath, WallSpec
+from model import Vec2, PrintLayer, RectanglePath, RegionInfill, CirclePath, LinePath
+from canon import thick
 from tests.test_networks import _assert_internal_inside
 
 
@@ -42,7 +44,7 @@ def M(name, sp=None):
     if key not in _CACHE:
         fn = WF.FIXTURES[name]
         L = fn() if sp is None else fn(sp)
-        _CACHE[key] = (L, RQ.wall_metrics(L))
+        _CACHE[key] = (L, WM.wall_metrics(L))
     return _CACHE[key]
 
 
@@ -101,8 +103,7 @@ def test_stitch_count_redistributes_the_remainder():
     # ~91 in at a 20 in target gets 5 stitches at ~18.2 in, evenly spread
     # (never 4 × 20 + a remainder stitch).
     W = LinePath(Vec2(0, 0), Vec2(101, 0), id='W')
-    W.wall = WallSpec(10)
-    L = PrintLayer('t', source_paths=[W],
+    L = PrintLayer('t', source_paths=[W], wall_systems=[thick('W', 10)],
                    infills=[RegionInfill('I', 'W', 'zigzag', {'spacing': 20})])
     (run,) = runs_of(L)
     assert run['length'] == pytest.approx(91, abs=0.1)
@@ -160,7 +161,7 @@ def test_dead_end_out_and_back_supports_each_face_evenly(sp):
     # support on EACH face is regular at ≈ the target — no alternating
     # tight / wide gaps (pass 7's quarter-cycle interleave gave ~S / ~3S).
     L = WF.arms(4, sp=sp)
-    q = RQ.wall_metrics(L)
+    q = WM.wall_metrics(L)
     for y in (195, 205):                       # both faces of the +x arm
         st = _face_stations(L, y)
         gaps = [b - a for a, b in zip(st, st[1:])]
@@ -186,7 +187,7 @@ def test_dead_end_networks_support_every_face_evenly(name, sp):
     L = WF.FIXTURES[name](sp)
     gaps = [g for ring in RQ.face_support(L) for g in ring['gaps']]
     assert max(gaps) <= 1.8 * sp
-    q = RQ.wall_metrics(L)
+    q = WM.wall_metrics(L)
     assert q['interior_retrace'] < 1e-6
     assert q['congestion_hotspots'] == 0 and q['tiny_cells'] == 0
 
@@ -279,7 +280,7 @@ def test_spacing_sweep_is_topologically_stable(name):
                          ids=['four_arms', 'curved_arms', 'loop'])
 def test_wave_shares_the_architecture(make):
     L = make()
-    q = RQ.wall_metrics(L)
+    q = WM.wall_metrics(L)
     assert q['interior_retrace'] < 1e-6 and q['tiny_cells'] == 0
     assert q['congestion_hotspots'] == 0 and q['cross_ratio'] >= 0.95
     assert q['runs'] == 1 and q['start_end_distance'] < 1e-6
@@ -420,7 +421,7 @@ def test_wave_is_smooth_away_from_structural_transitions(name, sp):
 def test_wave_keeps_structure(name):
     # smoothness never costs support, congestion or retrace
     L = WAVE_FIXTURES[name](20)
-    q = RQ.wall_metrics(L)
+    q = WM.wall_metrics(L)
     assert q['interior_retrace'] < 1e-6
     assert q['congestion_hotspots'] == 0 and q['tiny_cells'] == 0
     assert q['cross_ratio'] >= 0.95

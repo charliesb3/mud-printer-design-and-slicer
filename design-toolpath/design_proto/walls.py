@@ -34,7 +34,13 @@ Record ids are LABELS only (renaming one leaves the G-code byte-identical —
 measured 2026-10-15). `arch=True` composes the ARCHITECTURE only (Designer /
 Assembly envelopes): every thick wall a record of a generated type so its
 material rings resolve; never generated (`PrintLayer.envelope_only`).
-Documents with legacy `wall_systems` records are returned unchanged.
+A document already holding `wall_systems` records is returned unchanged.
+
+OLDER REPRESENTATIONS live only in the migration (`migrate_project`, run on
+every open / save): Wall Groups, per-path `wall` (WallSpec), `network_walls`
+(a thickness inherited over a source network), in-document build records,
+the pre-wall-lattice `lattice_instances`. The geometry pipeline sees only
+the per-wall form above.
 """
 from __future__ import annotations
 
@@ -48,16 +54,10 @@ OWN_PREFIX = 'wall:'
 
 
 def is_wall_document(doc) -> bool:
-    """A Designer document in the per-wall (or older grouped) form, not yet
-    composed. LEGACY documents carry their construction themselves (build
-    `wall_systems` records, per-path `wall`, `network_walls`) and are never
-    composed."""
-    if not isinstance(doc, dict) or 'wall_systems' in doc:
-        return False
-    paths = [p for p in doc.get('source_paths') or [] if isinstance(p, dict)]
-    if 'wall_groups' in doc or any(p.get('envelope') for p in paths):
-        return True
-    return not (any(p.get('wall') for p in paths) or doc.get('network_walls'))
+    """A Designer document as authored (per wall), not yet composed: one
+    holding `wall_systems` is already a BUILD document (compose is a no-op
+    on it)."""
+    return isinstance(doc, dict) and 'wall_systems' not in doc
 
 
 def envelope_of(group) -> dict | None:
@@ -98,10 +98,10 @@ def system_of(source_id, systems):
 
 
 def compose(doc, design_id=None, systems=None, arch=False) -> dict:
-    """The build document (legacy `wall_systems` records) of a per-wall
-    document — see the module doc. Unchanged for a legacy document.
-    (`design_id` is accepted for the callers' signature: construction never
-    depends on the Layer Design.)"""
+    """The build document (`wall_systems` records) of a per-wall document —
+    see the module doc. A document that already holds records is returned
+    unchanged. (`design_id` is accepted for the callers' signature:
+    construction never depends on the Layer Design.)"""
     if not is_wall_document(doc):
         return doc
     out = normalize_groups(copy.deepcopy(doc))
@@ -179,8 +179,92 @@ OWNED_DOC_SETTINGS = ('junction_style', 'junction_radius', 'cap_style', 'cap_cor
 OWNED_WALL_FIELDS = ('envelope', 'wall', 'corner_radius', 'cap')
 
 
+LEGACY_EMPTY = ('offset_treatments',)        # written only when non-empty (an older feature)
+LEGACY_REMOVED = ('lattice_instances', 'network_walls', 'wall_groups')   # never written any more
+
+
+def _construction_system(systems, sysd, member, report, name):
+    """A legacy per-path construction dict (`wall.system`) → the project
+    Wall System of that construction (one per distinct construction)."""
+    import json
+    typ = sysd.get('type') if isinstance(sysd, dict) else None
+    if typ not in TYPES or typ in ('skin_web', 'hollow', 'single'):
+        return
+    params = {k: v for k, v in sysd.items() if k != 'type'}
+    key = json.dumps([typ, params], sort_keys=True)
+    for s_ in systems:
+        if s_.get('_legacy_key') == key:
+            if member not in s_['members']:
+                s_['members'].append(member)
+            return
+    taken = {str(s_.get('id')) for s_ in systems}
+    sid = next(f'WS{n}' for n in range(1, 10000) if f'WS{n}' not in taken)
+    systems.append({'id': sid, 'name': f'Wall System {len(systems) + 1}', 'type': typ, 'params': params,
+                    'web': {}, 'members': [member], '_legacy_key': key})
+    report.append(f'{name}: wall {member} carried its own {typ} construction — now project Wall System {sid}.')
+
+
+def _legacy_walls(doc, systems, report, name, inherit=True):
+    """A pre-Wall-System document's `wall` (per path) and `network_walls`
+    (a thickness every wall of a source network inherits) → per-wall
+    envelopes; `lattice_instances` (the pre-wall-lattice pairwise lattice)
+    dropped. In place; only where such fields exist."""
+    paths = [p for p in doc.get('source_paths') or [] if isinstance(p, dict)]
+    nws = [w for w in (doc.pop('network_walls', None) or []) if isinstance(w, dict)]
+    if doc.pop('lattice_instances', None):
+        report.append(f'{name}: its legacy pairwise lattice (Boundary A / B lattice instances) is no longer '
+                      'supported — dropped (walls carry a Wall System / wall infill instead).')
+    if not paths or not (nws or any(isinstance(p.get('wall'), dict) for p in paths)):
+        return
+    root = None
+    if nws and inherit:
+        try:
+            from profile_cuts import _networks
+            root = _networks(doc)
+        except Exception:                           # (unresolvable geometry: anchors only)
+            root = None
+    for p in paths:
+        pid = str(p.get('id') or '')
+        w = p.pop('wall', None)
+        env, sysd = None, None
+        if isinstance(w, dict) and 'thickness' in w:   # its OWN wall (an explicit 0: a single bead)
+            t = float(w.get('thickness') or 0)
+            if t > 1e-9:
+                env = {'thickness': t, 'align': w.get('align') or 'auto',
+                       'print_reference': bool(w.get('print_reference'))}
+                sysd = w.get('system')
+        else:
+            nw = next((x for x in nws if str(x.get('path_id')) == pid or
+                       (root is not None and root(str(x.get('path_id'))) == root(pid))), None)
+            if nw is not None and float(nw.get('thickness') or 0) > 1e-9:
+                env = {'thickness': float(nw['thickness']), 'align': nw.get('align') or 'auto',
+                       'print_reference': bool(nw.get('print_reference'))}
+                sysd = nw.get('system')
+        if env is not None and not p.get('envelope'):
+            p['envelope'] = env
+            report.append(f'{name}: wall {pid} — its {"own" if w else "inherited network"} wall '
+                          f'{env["thickness"]:g} in is now the wall\'s envelope.')
+        if env is not None and sysd:
+            _construction_system(systems, sysd, pid, report, name)
+
+
+def _drop_state_construction(d, report):
+    """A Variant's LEGACY per-state construction / thickness patches
+    (`wall_systems`, `network_walls`) — dropped, reported (Base wins)."""
+    patch, name = d.get('patch') or {}, d.get('name') or d.get('id')
+    for coll, what in (('wall_systems', 'Wall System construction'), ('network_walls', 'network wall')):
+        if patch.get(coll):
+            report.append(f'{name}: changed {what} of {", ".join(sorted(map(str, patch[coll])))} '
+                          '— dropped (construction and wall properties belong to the walls in every state).')
+            patch.pop(coll)
+
+
 def migrate_project(P) -> list:
     """Schema 6 → 7, in place on a project dict; returns the REPORT (lines).
+    * pre-Wall-System documents: per-path `wall` / `network_walls` → each
+      wall's `envelope` (+ a project Wall System for a per-path construction);
+      in-document build records → Wall Groups (wall_groups.split_designs);
+      `lattice_instances` dropped;
     * Base's Wall Groups → each member wall's `envelope` (Base);
     * a Variant's group changes: a wall the Variant ADDED that its groups put
       in a group receives that envelope (it is the Variant's own wall); any
@@ -194,8 +278,30 @@ def migrate_project(P) -> list:
     * Planar Top Cuts: selected groups → explicit `sources`."""
     report = []
     D = (P.get('designer') or {}).get('designs') or []
+    systems = P.setdefault('wall_systems', []) if isinstance(P.get('wall_systems', []), list) else []
+    if any(d.get('parent') is None and isinstance((d.get('document') or {}).get('wall_systems'), list) for d in D):
+        # an in-document BUILD record set (the pre-schema-2 form): split into
+        # Wall Groups + project Wall Systems first (then converted below). A
+        # Variant's per-state construction is dropped BEFORE the split (Base
+        # wins — schema 7), so no per-state system variants are created.
+        from wall_groups import split_designs
+        for d in D:
+            if d.get('parent') is not None:
+                _drop_state_construction(d, report)
+        new, split_sys = split_designs(D)
+        D[:] = new
+        have = {str(s_.get('id')) for s_ in systems}
+        for s_ in split_sys:
+            if str(s_.get('id')) in have:
+                report.append(f'Wall System {s_.get("id")} of an older document duplicates a project '
+                              'Wall System — the project one is kept.')
+                continue
+            systems.append(s_)
+        report.append('In-document Wall System records of an older document — converted to per-wall '
+                      'envelopes and project Wall Systems.')
     base = next((d for d in D if d.get('parent') is None), None)
     bdoc = (base or {}).get('document') or {}
+    _legacy_walls(bdoc, systems, report, (base or {}).get('name') or 'Base')
     bgroups = {str(g.get('id')): g for g in bdoc.get('wall_groups') or []}
     members_of = {gid: [str(m) for m in g.get('members') or []] for gid, g in bgroups.items()}
     for d in D:
@@ -205,6 +311,9 @@ def migrate_project(P) -> list:
         patch, settings = d.setdefault('patch', {}), d.setdefault('settings', {})
         sp = patch.get('source_paths') or {}
         own = {rid for rid, r in sp.items() if isinstance(r, dict) and r.get('id') == rid}   # walls it added
+        _legacy_walls({'source_paths': [r for rid, r in sp.items() if rid in own],
+                       'lattice_instances': patch.pop('lattice_instances', None)}, systems, report, name,
+                      inherit=False)
         for gid, g in (patch.get('wall_groups') or {}).items():
             gid = str(gid)
             if g is None:
@@ -235,11 +344,7 @@ def migrate_project(P) -> list:
             if f in settings:
                 report.append(f'{name}: stored {f} = {settings[f]!r} — dropped (owned by the project / Base).')
                 settings.pop(f)
-        for coll, what in (('wall_systems', 'Wall System construction'), ('network_walls', 'network wall')):
-            if patch.get(coll):                    # (LEGACY documents: per-state construction / thickness)
-                report.append(f'{name}: changed {what} of {", ".join(sorted(map(str, patch[coll])))} '
-                              '— dropped (construction and wall properties belong to the walls in every state).')
-                patch.pop(coll)
+        _drop_state_construction(d, report)
         if patch.get('junction_overrides'):
             report.append(f'{name}: stored {len(patch["junction_overrides"])} junction override(s) — dropped (Base owns junctions).')
             patch.pop('junction_overrides')
@@ -253,7 +358,13 @@ def migrate_project(P) -> list:
                     sp.pop(rid)
     if base is not None:
         normalize_groups(bdoc)
+        for k in LEGACY_REMOVED:
+            bdoc.pop(k, None)
+        for k in LEGACY_EMPTY:
+            if k in bdoc and not bdoc[k]:
+                bdoc.pop(k)
     for s in P.get('wall_systems') or []:
+        s.pop('_legacy_key', None)
         mem = [str(m) for m in s.get('members') or []]
         for gid in s.pop('groups', None) or []:
             for m in members_of.get(str(gid), []):

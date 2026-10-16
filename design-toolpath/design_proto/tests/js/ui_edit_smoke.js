@@ -58,14 +58,18 @@ eval(src + `
   setTool('line'); onMouseDown(ev(50, 350, { altKey: true })); onMouseDown(ev(150, 350, { altKey: true }));
   const [R, L1, L2] = layer.source_paths;
   check(R.label === 'Rect 1' && L1.label === 'Line 1' && L2.label === 'Line 2', 'Rect 1, Line 1, Line 2 drawn');
-  selectedId = L1.id; addOffset();
-  check(layer.offset_treatments[0].source_path_id === L1.id, 'Add Offset uses the SELECTED path (Line 1), not the first path');
+  // (offset treatments are records in the document — the old Add Offset button went with addOffset())
+  const addOffsetTo = src => { layer.offset_treatments.push({ id: newId(), source_path_id: src.id, distance: 10,
+                                                              direction: src.closed ? 'inside' : 'left', role: 'inner', label: '' });
+                               routeResult = null; scheduleRefresh(); updateOffsetList(); };
+  addOffsetTo(L1);
+  check(layer.offset_treatments[0].source_path_id === L1.id, 'first offset owned by Line 1');
   check(layer.offset_treatments[0].direction === 'left', 'open source gets a left/right direction');
-  selectedId = L2.id; addOffset();
+  addOffsetTo(L2);
   check(layer.offset_treatments[1].source_path_id === L2.id, 'second offset owned by Line 2');
-  selectedId = L1.id; addOffset();
+  addOffsetTo(L1);
   check(layer.offset_treatments.filter(o => o.source_path_id === L1.id).length === 2, 'Line 1 owns two offsets');
-  selectedId = R.id; addOffset();
+  addOffsetTo(R);
   const pl = buildPayload().offset_treatments;
   check(pl.map(o => o.source_path_id).join() === [L1.id, L2.id, L1.id, R.id].join(), 'payload carries every source');
 
@@ -145,15 +149,13 @@ eval(src + `
   check(steps() === k0 && near(byId(A.id).start[0], 105), 'Cmd-Z inside an input is not a design undo');
   document.activeElement = null;
 
-  // wall thickness / alignment, network wall, infill, opening, junctions
+  // wall thickness / alignment (the wall's own envelope), infill, opening, junctions
   const P = byId(A.id);
-  P.wall = { thickness: 8, align: 'center', print_reference: false }; scheduleRefresh();
-  P.wall.align = 'left'; scheduleRefresh();
-  undo(); check(byId(A.id).wall.align === 'center', 'undo wall alignment');
-  undo(); check(!byId(A.id).wall || !byId(A.id).wall.thickness, 'undo wall thickness');
-  redo(); redo(); check(byId(A.id).wall.align === 'left', 'redo both');
-  layer.network_walls.push({ id: 'nw', path_id: A.id, thickness: 6, align: 'center' }); scheduleRefresh();
-  undo(); check(layer.network_walls.length === 0, 'undo network wall');
+  P.envelope = { thickness: 8, align: 'center', print_reference: false }; scheduleRefresh();
+  P.envelope.align = 'left'; scheduleRefresh();
+  undo(); check(byId(A.id).envelope.align === 'center', 'undo wall alignment');
+  undo(); check(!byId(A.id).envelope || !byId(A.id).envelope.thickness, 'undo wall thickness');
+  redo(); redo(); check(byId(A.id).envelope.align === 'left', 'redo both');
   selectedId = A.id; addInfill();
   check(layer.infills.length === 1, 'infill created');
   layer.infills[0].params.spacing = 30; scheduleRefresh();
@@ -400,9 +402,9 @@ eval(src + `
   check(nodes.some(n => n.id === 'relation-none') && !nodes.some(n => n.id === 'relation-picker'),
         'no candidate → an explanation, not a dead picker');
   // Wall Thickness still works
-  WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
-  check(buildPayload().source_paths[0].wall.thickness === 10, 'Wall Thickness kept in the payload');
-  WO.wall = null;
+  WO.envelope = { thickness: 10, align: 'inside', print_reference: false }; scheduleRefresh();
+  check(buildPayload().source_paths[0].envelope.thickness === 10, 'Wall Thickness kept in the payload');
+  delete WO.envelope;
   // a wall made THICK defaults to CENTERED (2026-10-15); a stored alignment is never rewritten
   setWallProps([WO.id], { thickness: 10 });
   check(WO.envelope.thickness === 10 && WO.envelope.align === 'center', 'a wall given a thickness defaults to Centered alignment');
@@ -415,19 +417,19 @@ eval(src + `
         'the path properties edit the wall itself: thickness + alignment (no group)');
   setWallProps([WO.id], { thickness: 0 });
   check(!WO.envelope, 'thickness 0 / empty: a THIN wall again (no envelope)');
-  WO.wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
+  WO.envelope = { thickness: 10, align: 'inside', print_reference: false }; scheduleRefresh();
   derivedPaths = [{ id: WO.id + '.wall', source_id: WO.id, treatment_id: WO.id + '.wall', closed: true,
                     points: [[110, 110], [290, 110], [290, 210], [110, 210]] }];
   _drawDerivedWallFaces();                       // selection trace + label (no throw)
   check(true, 'selected wall traces its derived face');
   derivedPaths = [];
-  WO.wall = { thickness: 12, align: 'inside' }; scheduleRefresh();
+  WO.envelope = { thickness: 12, align: 'inside', print_reference: false }; scheduleRefresh();
   undo();
-  check(byId(WO.id).wall.thickness === 10, 'undo a Wall Thickness change (12 → 10)');
+  check(byId(WO.id).envelope.thickness === 10, 'undo a Wall Thickness change (12 → 10)');
   redo();
-  check(byId(WO.id).wall.thickness === 12, 'redo it');
-  byId(WO.id).wall = { thickness: 10, align: 'inside' }; scheduleRefresh();
-  WO.wall = null; scheduleRefresh();
+  check(byId(WO.id).envelope.thickness === 12, 'redo it');
+  byId(WO.id).envelope = { thickness: 10, align: 'inside', print_reference: false }; scheduleRefresh();
+  delete byId(WO.id).envelope; scheduleRefresh();
   // a nested rectangle → link via the real controls
   setTool('rect'); onMouseDown(ev(130, 125)); onMouseDown(ev(270, 195));
   const WI = layer.source_paths[1];

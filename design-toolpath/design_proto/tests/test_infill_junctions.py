@@ -21,9 +21,10 @@ from graph import route_layer, compute_metrics
 import network as N
 from model import (
     Vec2, ExplicitPath, LinePath, CirclePath, RectanglePath, QuadBezierPath,
-    OffsetTreatment, LatticeInstance, PrintLayer, Opening, RegionInfill,
-    JunctionSetting, WallSpec, _processed_source_pts,
+    OffsetTreatment, PrintLayer, Opening, RegionInfill,
+    JunctionSetting, _processed_source_pts,
 )
+from tests.canon import thick
 from tests.test_networks import (
     _ot, _build, _route, _metrics, _pts, _segments, _sig,
     _assert_faces_bound_material, _assert_internal_inside,
@@ -35,11 +36,10 @@ from tests.test_networks import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _layer(srcs, offsets=(), infills=(), openings=(), lattices=(), **kw):
+def _layer(srcs, offsets=(), infills=(), openings=(), **kw):
     return PrintLayer(id='t', source_paths=list(srcs),
                       offset_treatments=list(offsets), infills=list(infills),
-                      openings=list(openings), lattice_instances=list(lattices),
-                      **kw)
+                      openings=list(openings), **kw)
 
 
 def _inf(pid, spacing=20.0, pattern='zigzag', fid='I', variation=0):
@@ -106,15 +106,6 @@ class TestA_IsolatedDoubleWall:
 
     def _ring(self, **kw):
         return _layer([ROOM()], [_ot('Ri', 'R', 10)], **kw)
-
-    def test_legacy_pairwise_lattice_output_unchanged(self):
-        # The old Boundary A/B lattice still produces exactly its old output
-        # (backend only — the UI no longer creates it).
-        lat = [LatticeInstance('LR', 'zigzag', 'R', 'Ri',
-                               {'segments': 12, 'connect_ends': 1})]
-        from tests.test_networks import _without_networks
-        L = self._ring(lattices=lat)
-        assert _sig(L.effective_paths()) == _sig(_without_networks(self._ring(lattices=lat)))
 
     def test_region_infill_struts_span_the_wall(self):
         L = self._ring(infills=[_inf('R', 20)])
@@ -234,21 +225,17 @@ class TestB_RectangleWithBranch:
         # ring is anchored by its corner motifs too (V1 = V2, reported as not
         # effective); a corner-less ring keeps its free phase.
         R = ROOM()
-        R.wall = WallSpec(10)
-        La = _layer([R], infills=[_inf('R', variation=0)])
+        La = _layer([R], infills=[_inf('R', variation=0)], wall_systems=[thick('R', 10)])
         a = _infill(La)[0]
         R2 = ROOM()
-        R2.wall = WallSpec(10)
-        b = _infill(_layer([R2], infills=[_inf('R', variation=1)]))[0]
+        b = _infill(_layer([R2], infills=[_inf('R', variation=1)], wall_systems=[thick('R', 10)]))[0]
         assert _sig(a) == _sig(b)
         assert La.network_summary()['infills'][0]['lattice']['variation_effective'] is False
         from model import CirclePath
         C = CirclePath(200, 200, 80, id='R')
-        C.wall = WallSpec(10)
-        c0 = _infill(_layer([C], infills=[_inf('R', variation=0)]))[0]
+        c0 = _infill(_layer([C], infills=[_inf('R', variation=0)], wall_systems=[thick('R', 10)]))[0]
         C2 = CirclePath(200, 200, 80, id='R')
-        C2.wall = WallSpec(10)
-        c1 = _infill(_layer([C2], infills=[_inf('R', variation=1)]))[0]
+        c1 = _infill(_layer([C2], infills=[_inf('R', variation=1)], wall_systems=[thick('R', 10)]))[0]
         assert _sig(c0) != _sig(c1)
 
 

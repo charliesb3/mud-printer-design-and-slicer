@@ -22,10 +22,10 @@ from app import app as flask_app
 def payload(trims=()):
     return {'id': 'l', 'source_paths': [
         {'id': 'R', 'type': 'RectanglePath', 'label': 'Rect 1', 'x': 100, 'y': 100, 'w': 240, 'h': 160,
-         'closed': True, 'wall': {'thickness': 10}},
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}},
         {'id': 'C', 'type': 'CirclePath', 'label': 'Circle 1', 'cx': 340, 'cy': 180, 'radius': 80,
-         'closed': True, 'wall': {'thickness': 10}}],
-        'offset_treatments': [], 'lattice_instances': [], 'trims': list(trims),
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}],
+        'trims': list(trims),
         'material': {'physical': True}}
 
 
@@ -77,7 +77,8 @@ def _trims_after(extra):
 
 
 def _line(a, b):
-    return [{'id': 'L', 'type': 'LinePath', 'start': list(a), 'end': list(b), 'closed': False, 'wall': {'thickness': 10}}]
+    return [{'id': 'L', 'type': 'LinePath', 'start': list(a), 'end': list(b), 'closed': False,
+             'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}]
 
 
 def test_attaching_to_visible_geometry_keeps_trims():

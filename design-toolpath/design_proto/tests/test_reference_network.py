@@ -168,20 +168,19 @@ def test_inherited_and_thin_walls():
 
 def test_single_bead_override_is_inherited_by_the_derived_design():
     lib = lib_of('wave', 'round', ('rect1_top',), line_thickness=0)
-    assert lib.document('gaps')['source_paths'][-1]['wall'] == {'thickness': 0, 'align': 'auto'}
+    assert 'envelope' not in lib.raw_document('gaps')['source_paths'][-1]       # a THIN line in every state
     assert lib.build('gaps').network['return_lanes'] == ['L1']
     c, mt, _ = route(lib, 'gaps')
     assert not c['open'] and mt['print_runs'] == 1
 
 
-def test_effective_walls_follow_network_membership():
-    """Semantic transforms / attribution see the Designer's wall rule: a
-    member inherits the Network Wall (not only its anchor path); an explicit
-    0 is a single bead — a return-lane pair under physical rules."""
-    w = ST.effective_walls(RN.document())
-    assert {k: v[0] for k, v in w.items()} == {'C1': 10.0, 'R1': 10.0, 'R2': 10.0, 'L1': 10.0}
-    w0 = ST.effective_walls(RN.document(line_thickness=0))
-    assert w0['L1'] == (0.0, 'auto', 'lanes') and w0['C1'][2] == 'wall'
+def test_effective_walls_report_the_single_bead_kinds():
+    """Semantic transforms / attribution judge every centre line as a single
+    bead (see semantic_transform.effective_walls): an open thin line under
+    physical rules is a return-lane pair ('lanes'), everything else 'single'."""
+    w = ST.effective_walls(RN.document(line_thickness=0))
+    assert w['L1'] == (0.0, 'auto', 'lanes') and w['C1'] == (0.0, 'auto', 'single')
+    assert {k: v[0] for k, v in ST.effective_walls(RN.document()).items()} == {'C1': 0.0, 'R1': 0.0, 'R2': 0.0, 'L1': 0.0}
 
 
 # -- derived junctions vs explicit connectors; the separation sweep ---------------
@@ -216,8 +215,10 @@ def test_junction_separation_sweep(with_line):
     transformed forms (derived: present only while they intersect — no
     stretched remnant, no invented bridge), ownership is deterministic and
     every connected piece closes. Without Line 1 the separated forms are two
-    pieces; with it (an explicit connector) Line 1 is regenerated between
-    them and the network stays one piece."""
+    pieces — the lone hollow circle prints as its two face loops (no web
+    joins them: travel between them, the known unavoidable case), so three
+    print runs; with Line 1 (an explicit connector) it is regenerated between
+    the forms and the network stays one piece."""
     lib = DesignLibrary([{'id': 'b', 'name': 'B', 'document': _doc(with_line)}])
     for dx, present in SWEEP:
         tf = {'C1': (1.0, dx, 0.0)}
@@ -238,8 +239,8 @@ def test_junction_separation_sweep(with_line):
             assert not gap, (dx, gap[:3])
         c, mt, _ = route(lib, 'b', tf)
         assert not c['open'], dx
-        pieces = 1 if (present or with_line) else 2
-        assert mt['print_runs'] == pieces, (dx, mt['print_runs'])
+        runs = 1 if (present or with_line) else 3
+        assert mt['print_runs'] == runs, (dx, mt['print_runs'])
         if with_line and dx:
             assert [x['source'] for x in b.semantic['connectors']] == ['L1']   # regenerated, kept
         # deterministic, source-derived ownership: the same tags twice

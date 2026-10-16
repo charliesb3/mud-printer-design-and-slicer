@@ -24,10 +24,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_pr
 
 import app  # noqa: F401  (path setup)
 import route_quality as RQ
+import wall_metrics as WM
 from graph import route_layer, compute_metrics
 from model import (Vec2, PrintLayer, RectanglePath, CirclePath, EllipsePath, RegionInfill,
-                   WallRelation, Opening, WallSpec, _point_in_polygon, _cum_lengths,
+                   WallRelation, Opening, _point_in_polygon, _cum_lengths,
                    _project_to_polyline)
+from canon import thick
 from tests.test_networks import _assert_internal_inside
 
 
@@ -144,7 +146,7 @@ def test_two_rooms_each_with_a_doorway_and_a_corner_doorway():
     faces = [p for p in paths if getattr(p, 'treatment_id', '') == 'opening_face']
     assert len(faces) == 6
     _assert_internal_inside(L)
-    assert RQ.wall_metrics(L)['interior_retrace'] < 1e-6
+    assert WM.wall_metrics(L)['interior_retrace'] < 1e-6
 
 
 def test_overlapping_openings_union_into_one_doorway():
@@ -196,7 +198,7 @@ def test_linked_rounded_rectangle_wall_doorway():
     caps = [p for p in paths if getattr(p, 'treatment_id', '') == 'wall_system']
     assert len(caps) == 2
     _assert_internal_inside(L)
-    assert RQ.wall_metrics(L)['congestion_hotspots'] == 0
+    assert WM.wall_metrics(L)['congestion_hotspots'] == 0
 
 
 def test_linked_ellipse_wall_doorway():
@@ -215,10 +217,9 @@ def test_parametric_wall_with_an_unrelated_room_inside():
     # arbitrary room B drawn inside: the doorway cuts O and its derived
     # face only — never across to B
     O = RectanglePath(0, 0, 300, 160, id='O')
-    O.wall = WallSpec(10, 'inside')
     B = RectanglePath(160, 30, 100, 100, id='B')
     L = PrintLayer('t', source_paths=[O, B], infills=[RegionInfill('F', 'O', 'zigzag', {'spacing': 20})],
-                   openings=[Opening('o', 'O', 70, 24)])
+                   openings=[Opening('o', 'O', 70, 24)], wall_systems=[thick('O', 10, align='inside')])
     paths, meta = L._build_effective()
     assert any(p.id == 'B' and p.closed for p in paths)
     assert not _any_inside(paths, meta, _box(58, 0, 82, 10))
@@ -244,7 +245,6 @@ def _wall_gap(L, pid='O'):
 @pytest.mark.parametrize('edit', ['none', 'resize', 'move', 'rotate', 'thickness', 'corner R'])
 def test_wall_thickness_is_parametric(edit):
     O = RectanglePath(0, 0, 200, 120, id='O')
-    O.wall = WallSpec(10, 'inside')
     t = 10
     if edit == 'resize':
         O.w, O.h = 260, 90
@@ -253,11 +253,10 @@ def test_wall_thickness_is_parametric(edit):
     elif edit == 'rotate':
         O.rotation = math.radians(27)
     elif edit == 'thickness':
-        O.wall = WallSpec(12, 'inside')
         t = 12
     elif edit == 'corner R':
         O.corner_radius = 25
-    L = PrintLayer('t', source_paths=[O])
+    L = PrintLayer('t', source_paths=[O], wall_systems=[thick('O', t, align='inside')])
     lo, hi, inside = _wall_gap(L)
     assert inside
     assert lo == pytest.approx(t, abs=1e-6) and hi == pytest.approx(t, abs=0.05)

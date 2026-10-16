@@ -71,7 +71,7 @@ def _seg_dist(p, a, b):
 def _combined():
     import reference_network as RN
     base = RN.document('wave')
-    base['infills'], base['network_walls'] = [], []
+    base['infills'] = []
     base['material'] = dict(MAT)
     base['wall_systems'] = [_ws('H', 'interleaved', ['R1', 'R2', 'C1']), _ws('B', 'chain', ['L1'])]
     cut = {'rect1_top': dict(zip(('source_path_id', 'center_s', 'width'), RN.OPENINGS['rect1_top']))}

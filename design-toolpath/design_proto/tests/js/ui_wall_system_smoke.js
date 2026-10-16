@@ -230,40 +230,7 @@ eval(src + `
         pl.envelope === true && !('wall_systems' in pl) && !('project_wall_systems' in pl),
         "payload: the walls' envelopes (no Wall Groups, no Wall Systems, no construction)");
   check(undo() && redo(), 'undo / redo');
-  // AN OLDER DOCUMENT's Wall Systems: adopted PER WALL (envelope) + project Wall Systems listing the walls
-  const A0 = layer.source_paths[0];
-  delete A0.envelope;
-  layer.wall_systems = [{ id: 'WS7', name: 'Rooms', type: 'interleaved', thickness: 9, align: 'inside', print_reference: false,
-                          params: { paths: 4 }, members: [A0.id], web: {} }];
-  project.wall_systems = [];
-  historyCheckpoint();
-  const depth0 = _hist.undo.length;
-  scheduleRefresh();
-  check(!layer.wall_systems && A0.envelope && A0.envelope.thickness === 9 && A0.envelope.align === 'inside' &&
-        project.wall_systems.length === 1 && project.wall_systems[0].type === 'interleaved' &&
-        project.wall_systems[0].members.join() === A0.id && !('groups' in project.wall_systems[0]) &&
-        project.wall_systems[0].params.paths === 4,
-        'an older document: its Wall System → the wall’s own envelope + a project Wall System listing it, id kept');
-  check(_hist.undo.length <= depth0 + 1, 'the adoption is no edit of its own');
-  // LEGACY MIGRATION (path walls → backend Wall Systems → per wall; not an undo step)
-  project.wall_systems = []; layer.infills = [];
-  delete A0.envelope;
-  A0.wall = { thickness: 8, align: 'inside' };
-  layer.infills.push({ id: 'old-infill', path_id: A0.id, kind: 'wall', pattern: 'zigzag', params: { spacing: 20 } });
-  historyCheckpoint();
-  const undoDepth = _hist.undo.length;
-  global.fetch = async (url) => ({ json: async () => (String(url).includes('migrate') ? {
-    migrated: true, owners: { 'old-infill': 'WS1' },
-    wall_systems: [{ id: 'WS1', name: 'Wall System 1', type: 'skin_web', thickness: 8, align: 'inside',
-                     print_reference: false, params: {}, members: [A0.id],
-                     web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } }] } : []) });
-  _maybeMigrateWallSystems().then(() => {
-    scheduleRefresh();
-    check(!A0.wall && A0.envelope && A0.envelope.thickness === 8 && A0.envelope.align === 'inside' &&
-          layer.infills[0].owner === 'WS1' && layer.infills[0].id === 'old-infill' &&
-          project.wall_systems.some(s => s.id === 'WS1' && s.type === 'skin_web' && s.web.pattern === 'zigzag' && s.members.join() === A0.id),
-          'migration: path wall → the wall’s own envelope + project Wall System (skin + web), wall infill → owned web (same id)');
-    check(_hist.undo.length <= undoDepth + 1, 'migration is not an edit of its own');
+  Promise.resolve().then(() => {
     // REQUEST COALESCING: edits during a resolve collapse into one follow-up
     let calls = 0, release;
     const slow = () => { calls++; return new Promise(r => { release = r; }); };

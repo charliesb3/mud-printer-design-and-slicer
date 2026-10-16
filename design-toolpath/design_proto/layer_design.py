@@ -152,19 +152,23 @@ def _track_map(doc0, transforms):
 
 # Collections of id-keyed records in a Designer document (key field).
 KEYED = {
-    'source_paths': 'id', 'offset_treatments': 'id', 'lattice_instances': 'id',
+    'source_paths': 'id', 'offset_treatments': 'id',
     'openings': 'id', 'trims': 'id', 'region_overrides': 'id', 'infills': 'id',
-    'network_walls': 'id', 'wall_systems': 'id', 'wall_groups': 'id', 'wall_relations': 'id',
+    'wall_systems': 'id', 'wall_relations': 'id',
     'junction_overrides': 'key',
     'route_origins': 'strand',
+    # legacy collections of older project files, accepted so that their
+    # deltas resolve until walls.migrate_project has converted them
+    'lattice_instances': 'id', 'network_walls': 'id', 'wall_groups': 'id',
 }
 MERGED_SETTINGS = ('material', 'constraints')
 # PERSISTENT WALL PROPERTIES (M1, 2026-10-15 — WALL_ARCHITECTURE.md): owned by
 # the lineage root (document-level) / the design that introduced the record —
 # never by a layout-state Variant. The Designer writes edits through to the
 # owner; a Variant that STORES one (older projects) is reported (divergences).
-OWNED_DOC_SETTINGS = ('junction_style', 'junction_radius', 'cap_style', 'cap_corner_radius', 'corner_radius', 'material')
-OWNED_RECORD_FIELDS = {'source_paths': ('envelope', 'wall', 'corner_radius', 'cap'),
+# (ONE definition: walls.py.)
+from walls import OWNED_DOC_SETTINGS, OWNED_WALL_FIELDS   # noqa: E402
+OWNED_RECORD_FIELDS = {'source_paths': OWNED_WALL_FIELDS,
                        'wall_groups': ('name', 'thickness', 'align', 'print_reference')}
 
 
@@ -370,16 +374,15 @@ class DesignLibrary:
     Resolution and builds are cached; any edit invalidates the cache."""
 
     def __init__(self, designs=(), wall_systems=None, arch=False):
-        """wall_systems: the PROJECT's Wall Systems (wall_groups.py) — given
-        (a list), Wall Group documents are composed into the build format
-        with them; `arch`: composed as ARCHITECTURE only (envelopes). Neither:
-        documents are served as authored (the Designer's editing endpoints,
-        legacy documents)."""
+        """wall_systems: the PROJECT's Wall Systems (walls.py) — `document()`
+        composes every per-wall document into the build format with them
+        (none given: no construction, every thick wall Hollow); `arch`:
+        composed as ARCHITECTURE only (envelopes). `raw_document()` is the
+        document as authored (what the Designer edits)."""
         self.designs: dict[str, LayerDesign] = {}
         self._cache, self._tbuilds = {}, OrderedDict()
         self.wall_systems = list(wall_systems or [])
         self.arch = bool(arch)
-        self._compose = wall_systems is not None or self.arch
         for d in designs:
             self.add(d if isinstance(d, LayerDesign) else LayerDesign.from_dict(d))
 
@@ -510,7 +513,7 @@ class DesignLibrary:
 
     def raw_document(self, design_id: str) -> dict:
         """The resolved Designer document of a design (inheritance applied),
-        as authored (Wall Groups not composed)."""
+        as authored (not composed)."""
         key = ('raw', design_id)
         if key not in self._cache:
             d = self.get(design_id)
@@ -523,12 +526,9 @@ class DesignLibrary:
         return copy.deepcopy(self._cache[key])
 
     def document(self, design_id: str) -> dict:
-        """The resolved document a build uses: the authored one, or — in a
-        composing library — its Wall Groups composed with the project's
-        Wall Systems (or as architecture only) into the build format
-        (wall_groups.compose)."""
-        if not self._compose:
-            return self.raw_document(design_id)
+        """The resolved document a build uses: the authored one composed
+        with the project's Wall Systems (or as architecture only) into the
+        build format (walls.compose)."""
         key = ('doc', design_id)
         if key not in self._cache:
             from walls import compose

@@ -12,9 +12,8 @@ ends and round joins — a straight open line is a capsule. The footprints
 of all printable centerlines together are the deposited material
 (overlapping beads simply union).
 
-First pass (2026-10-05): Bead Width is VISUALISATION ONLY. It is carried
-with the layer (an input the geometry generators can read later) but does
-not change walls, infill, lattice, routing, trims, openings or junctions.
+First pass (2026-10-05, superseded by the second pass below): Bead Width
+was visualisation only — carried with the layer, changing no geometry.
 
 Future rules (NOT implemented): bead height, minimum bend radius,
 congestion (too many beads meeting).

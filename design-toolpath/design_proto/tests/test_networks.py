@@ -21,7 +21,7 @@ from graph import route_layer, compute_metrics, build_graph, graph_info
 import network as N
 from model import (
     Vec2, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
-    QuadBezierPath, OffsetTreatment, LatticeInstance, PrintLayer, Opening,
+    QuadBezierPath, OffsetTreatment, PrintLayer, Opening,
     RegionOverride, RegionInfill, _processed_source_pts, _point_in_polygon,
 )
 
@@ -34,10 +34,10 @@ def _ot(oid, sid, d):
     return OffsetTreatment(id=oid, source_path_id=sid, distance=d)
 
 
-def _layer(srcs, offsets=(), lattices=(), openings=(), overrides=(), **kw):
+def _layer(srcs, offsets=(), infills=(), openings=(), overrides=(), **kw):
     return PrintLayer(id='t', source_paths=list(srcs),
                       offset_treatments=list(offsets),
-                      lattice_instances=list(lattices),
+                      infills=list(infills),
                       openings=list(openings),
                       region_overrides=list(overrides), **kw)
 
@@ -203,7 +203,7 @@ class TestA_TJunction:
         L = _layer([LinePath(Vec2(0, 0), Vec2(200, 0), id='M'),
                     LinePath(Vec2(50, 0), Vec2(80, 90), id='B')])
         summ = L.network_summary()
-        assert summ['components'] == [{'sources': ['B', 'M'], 'lattices': []}]
+        assert summ['components'] == [{'sources': ['B', 'M']}]
         assert [50, 0] in [[round(j['x'], 6), round(j['y'], 6)] for j in summ['junctions']]
 
     def test_thick_t_on_open_host_one_continuous_run(self):
@@ -571,61 +571,6 @@ class TestFG_OffsetsAtJunctions:
 # H  Lattice through a combined wall region
 # ---------------------------------------------------------------------------
 
-class TestH_LatticeInRegions:
-
-    def _t_lattice(self, gen='zigzag', params=None):
-        params = params or {'segments': 12, 'connect_ends': 1}
-        return _layer(
-            [ROOM(), LinePath(Vec2(200, 140), Vec2(230, 40), id='B')],
-            ROOM_OFFS() + [_ot('Bl', 'B', 8), _ot('Br', 'B', -8)],
-            [LatticeInstance('LR', gen, 'R', 'Ri', dict(params)),
-             LatticeInstance('LB', gen, 'Bl', 'Br', dict(params))])
-
-    @pytest.mark.parametrize('gen,params', [('zigzag', {'segments': 12, 'connect_ends': 1}),
-                                            ('wave', {'cycles': 6})])
-    def test_lattices_stay_in_the_combined_region(self, gen, params):
-        L = self._t_lattice(gen, params)
-        _assert_internal_inside(L)
-        _assert_faces_bound_material(L)
-
-    def test_lattices_connect_through_the_junction(self):
-        _, m, g, _ = _route(self._t_lattice())
-        assert g['component_count'] == 1
-        assert m['print_runs'] == 1 and m['travel_moves'] == 0
-
-    def test_lattice_continues_around_an_island(self):
-        # One region (C) between the outer wall and two islands (A, B).
-        # The lattice spans outer↔A and must not enter island B.
-        O = RectanglePath(0, 0, 300, 160, id='O')
-        A = RectanglePath(40, 50, 70, 60, id='A')
-        B = RectanglePath(180, 30, 80, 70, id='B')
-        L = _layer([O, A, B], lattices=[LatticeInstance(
-            'L', 'zigzag', 'O', 'A', {'segments': 10, 'connect_ends': 1})])
-        paths, meta = _build(L)
-        lat = [p for p in paths if p.role == 'lattice']
-        Bpts = B.sample_points()
-        for p in lat:
-            pts = _pts(p, meta)
-            for u, v in zip(pts, pts[1:]):
-                for k in range(1, 20):
-                    q = u.lerp(v, k / 20)
-                    assert not (180 + 1e-6 < q.x < 260 - 1e-6 and
-                                30 + 1e-6 < q.y < 100 - 1e-6), 'lattice inside island B'
-        # it continues on both sides of B (lands on B's wall)
-        _, _, G = None, None, _route(L)[3]
-        on_b = [n for n in G.nodes if N.dist_to_polyline(Vec2(*n), Bpts, True) < 1e-6
-                and G.degree(n) >= 3]
-        assert len(on_b) >= 2
-        assert _metrics(L)['travel_moves'] == 0
-
-    def test_lattice_without_foreign_contact_untouched(self):
-        # Ordinary wall + lattice (no other system): exactly the old output.
-        L = _layer([ROOM()], ROOM_OFFS(),
-                   [LatticeInstance('LR', 'zigzag', 'R', 'Ri',
-                                    {'segments': 12, 'connect_ends': 1})])
-        assert L.network_summary()['components'] == []
-
-
 # ---------------------------------------------------------------------------
 # I  Dead-end branches
 # ---------------------------------------------------------------------------
@@ -657,28 +602,12 @@ class TestI_DeadEnds:
         assert m['travel_moves'] == 0
         assert m['retrace_distance'] == pytest.approx(100.0)
 
-    def test_fallback_retrace_prefers_internal_geometry(self):
-        # With return paths disabled (the old model) the router retraces,
-        # mostly on lattice / centre lines. (Since lattice crossings are
-        # structural, not junctions, a little face retrace can appear in
-        # this opt-out mode — the default mode adds return paths instead.)
-        L = TestH_LatticeInRegions()._t_lattice()
-        L.return_paths = False
-        paths, meta = _build(L)
-        cls = {p.id: meta['cls'].get(id(p)) for p in paths}
-        moves = route_layer(L.to_routing_layer(paths, meta))
-        by = {}
-        for m in moves:
-            if m.kind == 'retrace':
-                by[cls[m.strand_id]] = by.get(cls[m.strand_id], 0) + m.length
-        assert by and by.get(N.INTERNAL, 0) > by.get(N.FACE, 0)
-
     def test_region_infill_repair_replaces_the_retrace(self):
         # With REGION infill the field is repaired locally, so nothing is
-        # printed twice. (Legacy pairwise lattice is not a repairable field.)
-        L = TestH_LatticeInRegions()._t_lattice()
-        L.lattice_instances = []
-        L.infills = [RegionInfill('I', 'R', 'zigzag', {'spacing': 20})]
+        # printed twice (a room with an attached branch, infilled).
+        L = _layer([ROOM(), LinePath(Vec2(200, 140), Vec2(230, 40), id='B')],
+                   ROOM_OFFS() + [_ot('Bl', 'B', 8), _ot('Br', 'B', -8)],
+                   [RegionInfill('I', 'R', 'zigzag', {'spacing': 20})])
         m = _metrics(L)
         assert m['retrace_distance'] == 0
         assert (m['print_runs'], m['travel_moves']) == (1, 0)
@@ -788,17 +717,14 @@ class TestLM_Preserved:
     @pytest.mark.parametrize('layer_fn', [
         lambda: _layer([ROOM()], ROOM_OFFS()),
         lambda: _layer([ROOM()], ROOM_OFFS(),
-                       [LatticeInstance('LR', 'zigzag', 'R', 'Ri',
-                                        {'segments': 12, 'connect_ends': 1})],
-                       [Opening('o1', 'R', 100, 30), Opening('o2', 'R', 400, 20)],
+                       openings=[Opening('o1', 'R', 100, 30), Opening('o2', 'R', 400, 20)],
                        cap_style='rounded_corners', cap_corner_radius=3),
         lambda: _layer([LinePath(Vec2(0, 0), Vec2(200, 0), id='L')],
                        [_ot('Ll', 'L', 10), _ot('Lm', 'L', 5)],
                        openings=[Opening('o', 'L', 100, 24)], cap_style='full_round'),
         lambda: _layer([CirclePath(100, 100, 60, id='C'),
                         CirclePath(400, 400, 30, id='D')],
-                       [_ot('Ci', 'C', 12)],
-                       [LatticeInstance('LC', 'wave', 'C', 'Ci', {'cycles': 4})]),
+                       [_ot('Ci', 'C', 12)]),
     ])
     def test_isolated_systems_identical_to_pre_network_output(self, layer_fn):
         assert _sig(layer_fn().effective_paths()) == _sig(_without_networks(layer_fn()))
@@ -813,17 +739,6 @@ class TestLM_Preserved:
                      offs, openings=ops).effective_paths()
         mine = [p for p in far if p.id.startswith('R')]
         assert _sig(mine) == _sig(alone)
-
-    def test_existing_retrace_case_still_one_run(self):
-        # The reported opening case (ring + zigzag + 1 opening, Flat).
-        L = _layer([RectanglePath(0, 0, 200, 120, id='R')], [_ot('Ri', 'R', 10)],
-                   [LatticeInstance('Z', 'zigzag', 'R', 'Ri',
-                                    {'segments': 8, 'connect_ends': 1})],
-                   [Opening('o', 'R', 60, 12)])
-        m = _metrics(L)
-        assert (m['print_runs'], m['travel_moves']) == (1, 0)
-        assert m['retrace_distance'] == pytest.approx(10 * math.sqrt(2), abs=0.01)
-
 
 # ---------------------------------------------------------------------------
 # N  Openings interacting with connected geometry
@@ -871,11 +786,9 @@ class TestN_OpeningsInNetworks:
 
     @pytest.mark.parametrize('gen', ['zigzag', 'wave'])
     def test_openings_near_a_junction_with_lattice(self, gen):
-        params = {'segments': 12, 'connect_ends': 1} if gen == 'zigzag' else {'cycles': 6}
         L = _layer([ROOM(), LinePath(Vec2(200, 140), Vec2(230, 40), id='B')],
                    ROOM_OFFS() + [_ot('Bl', 'B', 8), _ot('Br', 'B', -8)],
-                   [LatticeInstance('LR', gen, 'R', 'Ri', dict(params)),
-                    LatticeInstance('LB', gen, 'Bl', 'Br', dict(params))],
+                   [RegionInfill('LR', 'R', gen, {'spacing': 20})],
                    [Opening('o1', 'R', 130, 24), Opening('o2', 'B', 60, 20)])
         _assert_internal_inside(L)
         _assert_faces_bound_material(L)
@@ -887,8 +800,7 @@ class TestN_OpeningsInNetworks:
     def test_no_travel_or_retrace_crosses_a_doorway(self):
         L = _layer([ROOM(), LinePath(Vec2(200, 140), Vec2(200, 60), id='B')],
                    ROOM_OFFS() + [_ot('Bl', 'B', 5), _ot('Br', 'B', -5)],
-                   [LatticeInstance('LR', 'zigzag', 'R', 'Ri',
-                                    {'segments': 12, 'connect_ends': 1})],
+                   [RegionInfill('LR', 'R', 'zigzag', {'spacing': 20})],
                    [Opening('o', 'R', 270, 30)])
         moves, m, _, _ = _route(L)
         assert m['travel_moves'] == 0
@@ -911,9 +823,8 @@ class TestRegionOverrides:
         O = RectanglePath(0, 0, 300, 160, id='O')
         A = RectanglePath(40, 50, 70, 60, id='A')
         B = RectanglePath(180, 30, 80, 70, id='B')
-        return _layer([O, A, B], lattices=[LatticeInstance(
-            'L', 'zigzag', 'O', 'A', {'segments': 10, 'connect_ends': 1})],
-            overrides=overrides)
+        return _layer([O, A, B], infills=[RegionInfill('L', 'O', 'zigzag', {'spacing': 20})],
+                      overrides=overrides)
 
     def test_regions_are_reported_and_classified(self):
         summ = self._abc().network_summary()
@@ -1028,9 +939,7 @@ class TestRobustness:
 
     def test_complex_network_is_fast_enough(self):
         L = TestD_MultipleBranches()._layer(corner_radius=10)
-        L.lattice_instances = [
-            LatticeInstance('LR', 'wave', 'R', 'Ri', {'cycles': 10}),
-            LatticeInstance('LB', 'zigzag', 'B3l', 'B3r', {'segments': 8, 'connect_ends': 1})]
+        L.infills = [RegionInfill('LR', 'R', 'wave', {'spacing': 20})]
         t = time.time()
         _route(L)
         assert time.time() - t < 3.0

@@ -12,7 +12,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from model import (Vec2, PrintLayer, RectanglePath, LinePath, QuadBezierPath,
-                   RegionInfill, WallSpec, NetworkWall, Opening, ExplicitPath)
+                   RegionInfill, Opening, ExplicitPath)
+from canon import thick
 
 
 def _inf(pid, sp, pat='zigzag'):
@@ -21,23 +22,20 @@ def _inf(pid, sp, pat='zigzag'):
 
 def straight(sp=20, t=10, pat='zigzag'):
     L = LinePath(Vec2(40, 200), Vec2(320, 200), id='W')
-    L.wall = WallSpec(t)
-    return PrintLayer('t', source_paths=[L], infills=_inf('W', sp, pat))
+    return PrintLayer('t', source_paths=[L], wall_systems=[thick('W', t)], infills=_inf('W', sp, pat))
 
 
 def curved(sp=20, t=10, pat='zigzag'):
     C = QuadBezierPath(Vec2(40, 120), Vec2(200, 380), Vec2(360, 120), id='W')
-    C.wall = WallSpec(t)
-    return PrintLayer('t', source_paths=[C], infills=_inf('W', sp, pat))
+    return PrintLayer('t', source_paths=[C], wall_systems=[thick('W', t)], infills=_inf('W', sp, pat))
 
 
 def rect_branches(n=1, sp=20, t=10, pat='zigzag'):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(t)
     srcs = [R, LinePath(Vec2(200, 260), Vec2(200, 340), id='B1')]
     if n >= 2:
         srcs.append(LinePath(Vec2(300, 200), Vec2(380, 200), id='B2'))
-    return PrintLayer('t', source_paths=srcs, network_walls=[NetworkWall('W', 'B1', t)],
+    return PrintLayer('t', source_paths=srcs, wall_systems=[thick([p.id for p in srcs], t, sid='W')],
                       infills=_inf('R', sp, pat))
 
 
@@ -48,7 +46,7 @@ def arms(n=4, length=110, sp=20, t=10, lengths=None, rot=0.0, pat='zigzag'):
         a = rot + 2 * math.pi * k / n
         Lk = lengths[k] if lengths else length
         srcs.append(LinePath(c, Vec2(c.x + Lk * math.cos(a), c.y + Lk * math.sin(a)), id=f'A{k + 1}'))
-    return PrintLayer('t', source_paths=srcs, network_walls=[NetworkWall('W', 'A1', t)],
+    return PrintLayer('t', source_paths=srcs, wall_systems=[thick([p.id for p in srcs], t, sid='W')],
                       infills=_inf('A1', sp, pat))
 
 
@@ -61,7 +59,7 @@ def curved_arms(n=4, length=120, bend=0.45, sp=20, t=10, pat='zigzag'):
         end = Vec2(c.x + length * math.cos(a), c.y + length * math.sin(a))
         mid = Vec2(c.x + 0.55 * length * math.cos(a + bend), c.y + 0.55 * length * math.sin(a + bend))
         srcs.append(QuadBezierPath(c, mid, end, id=f'A{k + 1}'))
-    return PrintLayer('t', source_paths=srcs, network_walls=[NetworkWall('W', 'A1', t)],
+    return PrintLayer('t', source_paths=srcs, wall_systems=[thick([p.id for p in srcs], t, sid='W')],
                       infills=_inf('A1', sp, pat))
 
 
@@ -71,8 +69,7 @@ def star(sp=16, t=10, pat='zigzag'):
 
 def rect_loop(sp=20, t=10, pat='zigzag'):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(t)
-    return PrintLayer('t', source_paths=[R], infills=_inf('R', sp, pat))
+    return PrintLayer('t', source_paths=[R], wall_systems=[thick('R', t)], infills=_inf('R', sp, pat))
 
 
 def openings(sp=20, t=10, pat='zigzag'):
@@ -91,8 +88,7 @@ def unequal(sp=20, t=10, pat='zigzag'):
 
 def rounded_rect_loop(sp=20, t=10, r=20, pat='zigzag'):
     R = RectanglePath(100, 140, 200, 120, id='R', corner_radius=r)
-    R.wall = WallSpec(t)
-    return PrintLayer('t', source_paths=[R], infills=_inf('R', sp, pat))
+    return PrintLayer('t', source_paths=[R], wall_systems=[thick('R', t)], infills=_inf('R', sp, pat))
 
 
 def one_void(sp=16, pat='zigzag'):
@@ -114,8 +110,7 @@ def polygon_wall(n=3, radius=110, sp=20, t=10, pat='zigzag'):
     pts = [Vec2(200 + radius * math.cos(2 * math.pi * k / n + 0.3),
                 200 + radius * math.sin(2 * math.pi * k / n + 0.3)) for k in range(n)]
     P = ExplicitPath(pts, closed=True, id='P')
-    P.wall = WallSpec(t)
-    return PrintLayer('t', source_paths=[P], infills=_inf('P', sp, pat))
+    return PrintLayer('t', source_paths=[P], wall_systems=[thick('P', t)], infills=_inf('P', sp, pat))
 
 
 def curve_into_corner(sp=20, t=10, pat='zigzag'):
@@ -123,7 +118,7 @@ def curve_into_corner(sp=20, t=10, pat='zigzag'):
     # two sources meet end to end) and continues to a dead end
     C = QuadBezierPath(Vec2(60, 120), Vec2(260, 200), Vec2(120, 260), id='C')
     L = LinePath(Vec2(260, 200), Vec2(320, 80), id='L')
-    return PrintLayer('t', source_paths=[C, L], network_walls=[NetworkWall('W', 'C', t)],
+    return PrintLayer('t', source_paths=[C, L], wall_systems=[thick(['C', 'L'], t, sid='W')],
                       infills=_inf('C', sp, pat))
 
 

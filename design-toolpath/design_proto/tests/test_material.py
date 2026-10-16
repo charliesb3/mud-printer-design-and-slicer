@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
 
 from model import (Vec2, PrintLayer, LinePath, QuadBezierPath, CirclePath, RectanglePath,
-                   WallSpec, Opening, RegionInfill)
+                   Opening, RegionInfill)
+from canon import thick
 from material import MaterialSpec, in_footprint, DEFAULT_BEAD_WIDTH
 from trim_fixtures import circle_rect, pick
 from test_junction_rounding import manual_fixture, L_corner
@@ -80,16 +81,16 @@ class TestPrintable:
 
     def test_centred_wall_reference_line_gets_no_bead(self):
         L = LinePath(Vec2(100, 200), Vec2(300, 200), id='L')
-        L.wall = WallSpec(10, 'center')                   # reference not printed
-        cls = printable(PrintLayer('t', source_paths=[L]))
+        cls = printable(PrintLayer('t', source_paths=[L], wall_systems=[thick('L', 10, align='center')]))
+        # (the centred wall's reference line is not printed)
         assert 'L' not in [i for i, _, _ in cls]
         assert not covered(Vec2(200, 200), cls)           # centre of a 10 in wall: empty
         assert covered(Vec2(200, 205), cls) and covered(Vec2(200, 195), cls)   # both faces
 
     def test_thick_wall_faces_and_caps(self):
         L = LinePath(Vec2(100, 200), Vec2(300, 200), id='L')
-        L.wall = WallSpec(10, 'center')
-        cls = printable(PrintLayer('t', source_paths=[L], cap_style='full_round'))
+        cls = printable(PrintLayer('t', source_paths=[L], cap_style='full_round',
+                                   wall_systems=[thick('L', 10, align='center')]))
         assert covered(Vec2(95, 200), cls)                # full-round cap printed
 
     def test_trimmed_section_gets_no_bead(self):
@@ -103,8 +104,8 @@ class TestPrintable:
 
     def test_opening_gap_gets_no_bead(self):
         R = RectanglePath(100, 100, 200, 120, id='R', closed=True)
-        R.wall = WallSpec(10)
-        lay = PrintLayer('t', source_paths=[R], openings=[Opening('o', 'R', 100.0, 30.0)])
+        lay = PrintLayer('t', source_paths=[R], openings=[Opening('o', 'R', 100.0, 30.0)],
+                         wall_systems=[thick('R', 10)])
         cls = printable(lay)
         assert not covered(Vec2(200, 100), cls) and not covered(Vec2(200, 110), cls)
         assert covered(Vec2(130, 100), cls)
@@ -150,8 +151,8 @@ def test_api_returns_printable_and_material():
     flask_app.config['TESTING'] = True
     payload = {'id': 'l', 'source_paths': [
         {'id': 'L', 'type': 'LinePath', 'start': [100, 200], 'end': [300, 200],
-         'wall': {'thickness': 10, 'align': 'center'}}],
-        'offset_treatments': [], 'lattice_instances': [], 'material': {'bead_width': 4.5}}
+         'envelope': {'thickness': 10, 'align': 'center', 'print_reference': False}}],
+        'material': {'bead_width': 4.5}}
     with flask_app.test_client() as c:
         for url in ('/api/effective_paths', '/api/route'):
             d = c.post(url, json=payload).get_json()

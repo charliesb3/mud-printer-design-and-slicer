@@ -15,7 +15,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
 
 import network as N
-from model import Vec2, WallSpec, Opening, RegionInfill, NetworkWall
+from model import Vec2, Opening, RegionInfill
+from canon import thick
 from material import MaterialSpec
 import physical_fixtures as PF
 from trim_fixtures import circle_rect, pick
@@ -223,7 +224,7 @@ def test_two_pass_walls_join_as_a_network():
 
 def test_wall_with_thickness_is_not_turned_into_a_return_lane():
     lay = PF.dead_end_line()
-    lay.source_paths[0].wall = WallSpec(10, 'center')
+    lay.wall_systems = [thick('L', 10, align='center')]
     _, m = build(lay)
     assert m['network']['return_lanes'] == []
 
@@ -278,7 +279,7 @@ def test_api_physical_route():
     flask_app.config['TESTING'] = True
     payload = {'id': 'l', 'source_paths': [
         {'id': 'L', 'type': 'LinePath', 'start': [100, 200], 'end': [300, 200]}],
-        'offset_treatments': [], 'lattice_instances': [],
+        'offset_treatments': [],
         'material': {'bead_width': 3, 'contact_overlap': 0.75, 'return_overlap': 1.0, 'physical': True}}
     with flask_app.test_client() as c:
         d = c.post('/api/route', json=payload).get_json()

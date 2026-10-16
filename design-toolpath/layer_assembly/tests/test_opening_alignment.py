@@ -305,7 +305,7 @@ def test_designer_opening_on_a_curved_wall_follows_the_nearest_point(demo):
     from layer_assembly.designer_source import DesignerSource
     doc = {'id': 'c', 'material': dict(MAT),
            'source_paths': [{'id': 'C', 'type': 'CirclePath', 'label': 'Room', 'cx': 0, 'cy': 0, 'radius': 60,
-                             'closed': True, 'wall': {'thickness': 10}}],
+                             'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}],
            'openings': [{'id': 'win', 'type': 'opening', 'source_path_id': 'C', 'center_s': 30.0, 'width': 18,
                          'end_treatment': 'inherit', 'z_min': None, 'z_max': None, 'label': 'Window'}]}
     src = DesignerSource.from_designs(designs(doc))

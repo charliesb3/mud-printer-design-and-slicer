@@ -5,9 +5,7 @@ Tests cover:
 - Primitive identity: LinePath, CirclePath, EllipsePath, RectanglePath
 - ExplicitPath sample points
 - OffsetTreatment — generates offset without mutating source
-- ZigzagGenerator — correct number of paths, variation_index changes output
-- WaveGenerator — correct output structure
-- PrintLayer.effective_paths — assembles sources + offset + lattice
+- PrintLayer.effective_paths — assembles sources + offsets
 - PrintLayer.to_routing_layer — converts to Strand/Layer format
 - TraversalConstraints — stored separately from geometry
 """
@@ -19,9 +17,9 @@ import pytest
 from model import (
     Vec2, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
     QuadBezierPath,
-    OffsetTreatment, ZigzagGenerator, WaveGenerator, LatticeInstance,
+    OffsetTreatment,
     PrintLayer, TraversalConstraints, DerivedPath, _offset_polyline,
-    _resample, _point_in_polygon, _polygon_area, _lattice_valid_in_cavity,
+    _point_in_polygon, _polygon_area,
     _apply_corner_rounding, _fillet_vertex, _semicircle_cap,
     _eligible_for_rounding, _processed_source_pts, _wall_system_end_pts,
     _trim_offset, _segments_intersect,
@@ -198,162 +196,6 @@ class TestOffsetTreatment:
 
 
 # ---------------------------------------------------------------------------
-# ZigzagGenerator
-# ---------------------------------------------------------------------------
-
-class TestZigzagGenerator:
-    def _two_lines(self):
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='pa')
-        b = ExplicitPath([Vec2(0, 20), Vec2(100, 20)], id='pb')
-        return a, b
-
-    def test_returns_at_least_one_path(self):
-        gen = ZigzagGenerator()
-        a, b = self._two_lines()
-        result = gen.generate(a, b, {'segments': 4, 'connect_ends': False})
-        assert len(result) >= 1
-
-    def test_variation_changes_output(self):
-        gen = ZigzagGenerator()
-        a, b = self._two_lines()
-        r0 = gen.generate(a, b, {'segments': 4, 'connect_ends': False}, variation_index=0)
-        r1 = gen.generate(a, b, {'segments': 4, 'connect_ends': False}, variation_index=1)
-        pts0 = r0[0].sample_points()
-        pts1 = r1[0].sample_points()
-        # Variations should produce different starting points
-        assert pts0[0].y != pts1[0].y
-
-    def test_connect_ends_adds_path(self):
-        gen = ZigzagGenerator()
-        a, b = self._two_lines()
-        r_no = gen.generate(a, b, {'segments': 4, 'connect_ends': False})
-        r_yes = gen.generate(a, b, {'segments': 4, 'connect_ends': True})
-        assert len(r_yes) > len(r_no)
-
-    def test_parameters_declared(self):
-        specs = ZigzagGenerator().parameters()
-        names = [s.name for s in specs]
-        assert 'segments' in names
-        assert 'connect_ends' in names
-
-    def test_variation_count(self):
-        gen = ZigzagGenerator()
-        a, b = self._two_lines()
-        assert gen.variation_count(a, b, {}) == 2
-
-    def test_role_is_lattice(self):
-        gen = ZigzagGenerator()
-        a, b = self._two_lines()
-        result = gen.generate(a, b, {'segments': 4, 'connect_ends': False})
-        assert all(p.role == 'lattice' for p in result)
-
-
-# ---------------------------------------------------------------------------
-# WaveGenerator — redesigned: touches both boundaries, Cycles param
-# ---------------------------------------------------------------------------
-
-class TestWaveGenerator:
-    def _two_lines(self):
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='wa')
-        b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='wb')
-        return a, b
-
-    def test_returns_one_path(self):
-        gen = WaveGenerator()
-        a, b = self._two_lines()
-        result = gen.generate(a, b, {'cycles': 3.0})
-        assert len(result) == 1
-
-    def test_parameters_declared(self):
-        specs = WaveGenerator().parameters()
-        names = [s.name for s in specs]
-        assert 'cycles' in names
-        # Phase removed in UX pass 4 (breaks seam bridge; user-verified useless)
-        assert 'phase' not in names
-        # Old amplitude/samples/frequency must not be present
-        assert 'amplitude' not in names
-        assert 'samples' not in names
-        assert 'frequency' not in names
-
-    def test_variation_count(self):
-        gen = WaveGenerator()
-        a, b = self._two_lines()
-        assert gen.variation_count(a, b, {}) == 2
-
-    def test_variation_changes_output(self):
-        gen = WaveGenerator()
-        a, b = self._two_lines()
-        r0 = gen.generate(a, b, {'cycles': 3.0}, 0)
-        r1 = gen.generate(a, b, {'cycles': 3.0}, 1)
-        pts0 = r0[0].sample_points()
-        pts1 = r1[0].sample_points()
-        assert any(
-            abs(pts0[i].x - pts1[i].x) > 0.1 or abs(pts0[i].y - pts1[i].y) > 0.1
-            for i in range(len(pts0))
-        )
-
-    def test_wave_touches_boundary_a(self):
-        """Wave alpha=0 → point exactly on boundary A."""
-        gen = WaveGenerator()
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='wa')
-        b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='wb')
-        # V1: wave starts at alpha=0 → on A
-        result = gen.generate(a, b, {'cycles': 3.0}, 0)
-        pts = result[0].sample_points()
-        # First point: t=0, alpha = 0.5*(1-cos(0)) = 0 → on A (y=0)
-        assert abs(pts[0].y - 0.0) < 0.01
-
-    def test_wave_touches_boundary_b(self):
-        """Wave alpha=1 → point exactly on boundary B."""
-        gen = WaveGenerator()
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='wa')
-        b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='wb')
-        # V1: first minimum of alpha=1 at t = 0.5/cycles
-        result = gen.generate(a, b, {'cycles': 1.0}, 0)
-        pts = result[0].sample_points()
-        # At t=0.5 (midpoint), alpha = 0.5*(1-cos(π)) = 1 → on B (y=30)
-        mid_idx = len(pts) // 2
-        assert abs(pts[mid_idx].y - 30.0) < 0.5
-
-    def test_wave_all_points_between_boundaries(self):
-        """All wave points must lie between boundaries A and B (alpha ∈ [0,1])."""
-        gen = WaveGenerator()
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='wa')
-        b = ExplicitPath([Vec2(0, 50), Vec2(100, 50)], id='wb')
-        result = gen.generate(a, b, {'cycles': 5.0}, 0)
-        pts = result[0].sample_points()
-        for p in pts:
-            assert -0.01 <= p.y <= 50.01, f"Point y={p.y:.4f} outside [0, 50]"
-
-
-# ---------------------------------------------------------------------------
-# LatticeInstance
-# ---------------------------------------------------------------------------
-
-class TestLatticeInstance:
-    def test_generate_returns_paths(self):
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='la')
-        b = ExplicitPath([Vec2(0, 20), Vec2(100, 20)], id='lb')
-        li = LatticeInstance(id='li1', generator_name='zigzag',
-                             path_a_id='la', path_b_id='lb',
-                             params={'segments': 4, 'connect_ends': False})
-        from model import GENERATORS
-        gen = GENERATORS['zigzag']
-        result = li.generate(a, b, gen)
-        assert len(result) >= 1
-
-    def test_source_id_set(self):
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='la')
-        b = ExplicitPath([Vec2(0, 20), Vec2(100, 20)], id='lb')
-        li = LatticeInstance(id='li1', generator_name='zigzag',
-                             path_a_id='la', path_b_id='lb',
-                             params={'segments': 4})
-        from model import GENERATORS
-        result = li.generate(a, b, GENERATORS['zigzag'])
-        assert all(p.source_id == 'li1' for p in result)
-
-
-# ---------------------------------------------------------------------------
 # PrintLayer
 # ---------------------------------------------------------------------------
 
@@ -395,15 +237,6 @@ class TestPrintLayer:
         layer.effective_paths()
         assert len(layer.source_paths[0].sample_points()) == original_len
 
-    def test_lattice_adds_derived_paths(self):
-        layer = self._case_d_layer()
-        li = LatticeInstance(id='li1', generator_name='zigzag',
-                             path_a_id='perim', path_b_id='web',
-                             params={'segments': 4, 'connect_ends': False})
-        layer.lattice_instances.append(li)
-        paths = layer.effective_paths()
-        assert len(paths) > 2
-
     def test_to_routing_layer_returns_strands(self):
         layer = self._case_d_layer()
         rl = layer.to_routing_layer()
@@ -424,7 +257,7 @@ class TestPrintLayer:
         d = layer.to_dict()
         assert 'source_paths' in d
         assert 'offset_treatments' in d
-        assert 'lattice_instances' in d
+        assert 'lattice_instances' not in d                 # (the pre-wall-lattice pairwise lattice is gone)
         assert 'constraints' in d
 
 
@@ -534,30 +367,7 @@ class TestOffsetGeometry:
         assert result[1].y == pytest.approx(40.0, abs=1e-9)
 
 
-class TestLatticeWithOffsetBoundary:
-    """Verify that lattice can reference offset-derived paths as boundaries."""
-
-    def test_lattice_can_use_offset_derived_path(self):
-        """PrintLayer: source + offset + lattice where path_b_id = offset.id → lattice paths generated."""
-        src = RectanglePath(0, 0, 100, 100, id='wall')
-        ot = OffsetTreatment(id='inner', source_path_id='wall', distance=10)
-        li = LatticeInstance(
-            id='lat1', generator_name='zigzag',
-            path_a_id='wall', path_b_id='inner',
-            params={'segments': 4, 'connect_ends': False},
-        )
-        layer = PrintLayer(id='test')
-        layer.source_paths = [src]
-        layer.offset_treatments = [ot]
-        layer.lattice_instances = [li]
-
-        paths = layer.effective_paths()
-        ids = {p.id for p in paths}
-        # wall (source), inner (offset-derived), and at least one lattice path
-        assert 'wall' in ids
-        assert 'inner' in ids
-        lattice_paths = [p for p in paths if p.role == 'lattice']
-        assert len(lattice_paths) >= 1
+class TestOffsetDerivedIdentity:
 
     def test_offset_derived_id_is_treatment_id(self):
         """Derived path from OffsetTreatment must use the treatment's own id."""
@@ -566,194 +376,6 @@ class TestLatticeWithOffsetBoundary:
         ot = OffsetTreatment(id='my_offset_id', source_path_id='src', distance=5)
         derived = ot.generate(src.sample_points(128), src.closed)
         assert derived.id == 'my_offset_id'
-
-
-# ---------------------------------------------------------------------------
-# _resample — closed-path coverage
-# ---------------------------------------------------------------------------
-
-class TestResampleClosed:
-    def test_open_path_unchanged_behavior(self):
-        """Open path: n points from start to end inclusive."""
-        pts = [Vec2(0, 0), Vec2(100, 0)]
-        result = _resample(pts, 3, closed=False)
-        assert len(result) == 3
-        assert result[0].x == pytest.approx(0.0)
-        assert result[2].x == pytest.approx(100.0)
-
-    def test_closed_rectangle_full_perimeter(self):
-        """Closed rectangle: _resample with closed=True covers all 4 sides."""
-        # Rectangle perimeter = 400 units
-        pts = [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)]
-        # 5 evenly-spaced points → at 0, 100, 200, 300, 400 along perimeter
-        result = _resample(pts, 5, closed=True)
-        assert len(result) == 5
-        # pt[0] at position 0 → (0,0)
-        assert result[0].x == pytest.approx(0.0)
-        assert result[0].y == pytest.approx(0.0)
-        # pt[4] at position 400 = full perimeter = wrap-back to (0,0)
-        assert result[4].x == pytest.approx(0.0)
-        assert result[4].y == pytest.approx(0.0)
-        # pt[1] at position 100 → (100,0) (end of first side)
-        assert result[1].x == pytest.approx(100.0)
-        assert result[1].y == pytest.approx(0.0)
-
-    def test_closed_resample_covers_fourth_side(self):
-        """Closed rectangle: without closed=True, 4th side is missed."""
-        pts = [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)]
-        # With closed=True and 9 samples, should have points at all 4 corners
-        result = _resample(pts, 9, closed=True)
-        xs = [round(p.x, 1) for p in result]
-        ys = [round(p.y, 1) for p in result]
-        # The 4th side (x=0, y going from 100→0) must be sampled
-        has_fourth_side = any(x == pytest.approx(0.0, abs=1.0) and y < 99.0
-                              for x, y in zip(xs, ys))
-        assert has_fourth_side, "4th side not covered"
-
-    def test_open_vs_closed_different_results(self):
-        """Open and closed resampling of the same points produce different results."""
-        pts = [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)]
-        r_open = _resample(pts, 5, closed=False)
-        r_closed = _resample(pts, 5, closed=True)
-        # Closed version wraps back, open ends at (0,100)
-        assert r_open[-1].x == pytest.approx(0.0)
-        assert r_open[-1].y == pytest.approx(100.0)
-        assert r_closed[-1].x == pytest.approx(0.0)
-        assert r_closed[-1].y == pytest.approx(0.0)
-
-
-# ---------------------------------------------------------------------------
-# ZigzagGenerator — closed loop coverage
-# ---------------------------------------------------------------------------
-
-class TestZigzagClosedLoop:
-    def _concentric_rects(self):
-        outer = RectanglePath(0, 0, 100, 100, id='outer')
-        inner = RectanglePath(20, 20, 60, 60, id='inner')
-        return outer, inner
-
-    def _concentric_circles(self, r_outer=60, r_inner=40):
-        outer = CirclePath(200, 200, r_outer, id='outer')
-        inner = CirclePath(200, 200, r_inner, id='inner')
-        return outer, inner
-
-    def test_closed_rect_zigzag_has_all_four_sides(self):
-        """Zigzag on closed rectangle must visit all 4 sides (not stop at 3)."""
-        gen = ZigzagGenerator()
-        outer, inner = self._concentric_rects()
-        result = gen.generate(outer, inner, {'segments': 8, 'connect_ends': False}, 0)
-        assert len(result) >= 1
-        pts = result[0].sample_points()
-        # All zigzag points that land on the outer boundary must cover all 4 sides.
-        # Outer rect corners: (0,0),(100,0),(100,100),(0,100)
-        # Expect at least one outer point on each side
-        outer_pts = [pts[i] for i in range(0, len(pts), 2)]  # even = on outer A
-        # Check we have points near each side
-        near_bottom = any(p.y < 5 for p in outer_pts)
-        near_right   = any(p.x > 95 for p in outer_pts)
-        near_top     = any(p.y > 95 for p in outer_pts)
-        near_left    = any(p.x < 5 for p in outer_pts)
-        assert near_bottom, "No points on bottom side"
-        assert near_right,  "No points on right side"
-        assert near_top,    "No points on top side"
-        assert near_left,   "No points on left side"
-
-    def test_concentric_circles_zigzag_full_perimeter(self):
-        """Zigzag on concentric circles covers full 360°."""
-        gen = ZigzagGenerator()
-        outer, inner = self._concentric_circles()
-        result = gen.generate(outer, inner, {'segments': 12, 'connect_ends': False}, 0)
-        pts = result[0].sample_points()
-        outer_pts = [pts[i] for i in range(0, len(pts), 2)]
-        # Convert to angles
-        angles = [math.atan2(p.y - 200, p.x - 200) for p in outer_pts]
-        angle_range = max(angles) - min(angles)
-        # Full circle coverage: range of angles should span most of 2π
-        assert angle_range > math.pi, f"Angle range only {math.degrees(angle_range):.1f}°"
-
-    def test_zigzag_valid_in_cavity_concentric_circles(self):
-        """Zigzag between concentric circles: all segments must stay in the cavity."""
-        gen = ZigzagGenerator()
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        result = gen.generate(outer, inner, {'segments': 16, 'connect_ends': False}, 0)
-        assert _lattice_valid_in_cavity(result, outer, inner), \
-            "Zigzag segments leave the annular cavity"
-
-    def test_zigzag_auto_increases_segments_when_invalid(self):
-        """Low segment count on tight circles triggers auto-increase."""
-        gen = ZigzagGenerator()
-        # Very small gap between walls — low segments will produce chord through inner
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 55, id='inner')  # only 5 unit gap
-        # With 2 segments, the diagonal chords will likely cut through inner circle
-        result = gen.generate(outer, inner, {'segments': 2, 'connect_ends': False}, 0)
-        # Regardless of what was requested, the result must be valid
-        assert _lattice_valid_in_cavity(result, outer, inner), \
-            "Auto-increased zigzag still invalid in tight cavity"
-
-    def test_zigzag_rect_validity(self):
-        """Zigzag between nested rectangles: all segments inside cavity."""
-        gen = ZigzagGenerator()
-        outer, inner = self._concentric_rects()
-        result = gen.generate(outer, inner, {'segments': 10, 'connect_ends': False}, 0)
-        assert _lattice_valid_in_cavity(result, outer, inner)
-
-
-# ---------------------------------------------------------------------------
-# WaveGenerator — closed-loop boundary contact
-# ---------------------------------------------------------------------------
-
-class TestWaveClosedLoop:
-    def test_wave_concentric_circles_all_points_in_cavity(self):
-        """Wave between concentric circles: all points in annular cavity."""
-        gen = WaveGenerator()
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        result = gen.generate(outer, inner, {'cycles': 4.0, 'phase': 0.0}, 0)
-        pts = result[0].sample_points()
-        outer_pts = outer.sample_points(256)
-        inner_pts = inner.sample_points(256)
-        for p in pts:
-            r = math.hypot(p.x - 200, p.y - 200)
-            assert r <= 60.5, f"Point r={r:.3f} outside outer circle"
-            assert r >= 39.5, f"Point r={r:.3f} inside inner circle"
-
-    def test_wave_concentric_rects_all_points_in_cavity(self):
-        """Wave between nested rectangles: all points in cavity (including boundary)."""
-        gen = WaveGenerator()
-        outer = RectanglePath(0, 0, 100, 100, id='outer')
-        inner = RectanglePath(20, 20, 60, 60, id='inner')
-        result = gen.generate(outer, inner, {'cycles': 3.0}, 0)
-        pts = result[0].sample_points()
-        # Wave touches boundaries (alpha=0 → on outer, alpha=1 → on inner).
-        # Use axis-aligned bounds with small tolerance.
-        EPS = 0.5
-        for p in pts:
-            assert outer.x - EPS <= p.x <= outer.x + outer.w + EPS, \
-                f"Point x={p.x:.2f} outside outer rect x-bounds"
-            assert outer.y - EPS <= p.y <= outer.y + outer.h + EPS, \
-                f"Point y={p.y:.2f} outside outer rect y-bounds"
-            # Should not be strictly inside the inner rect (shrunk by EPS)
-            strictly_inside_inner = (
-                inner.x + EPS < p.x < inner.x + inner.w - EPS and
-                inner.y + EPS < p.y < inner.y + inner.h - EPS
-            )
-            assert not strictly_inside_inner, \
-                f"Point ({p.x:.1f},{p.y:.1f}) strictly inside inner rect"
-
-    def test_wave_both_variations_valid(self):
-        """Both wave variations must produce geometrically valid paths."""
-        gen = WaveGenerator()
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        for vi in [0, 1]:
-            result = gen.generate(outer, inner, {'cycles': 3.0}, vi)
-            pts = result[0].sample_points()
-            for p in pts:
-                r = math.hypot(p.x - 200, p.y - 200)
-                assert r <= 60.5 and r >= 39.5, \
-                    f"V{vi+1} point r={r:.3f} outside cavity"
 
 
 # ---------------------------------------------------------------------------
@@ -779,83 +401,6 @@ class TestPolygonHelpers:
         poly = cp.sample_points(64)
         assert _point_in_polygon(Vec2(0, 0), poly) is True
         assert _point_in_polygon(Vec2(60, 0), poly) is False
-
-
-# ---------------------------------------------------------------------------
-# Integration — route Case D geometry via routing engine
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# WaveGenerator — seam bridge (closed boundaries → zero travel)
-# ---------------------------------------------------------------------------
-
-class TestWaveSeamBridge:
-    def test_closed_boundaries_produce_two_paths(self):
-        """Wave on closed boundaries returns wave + seam bridge."""
-        gen = WaveGenerator()
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        result = gen.generate(outer, inner, {'cycles': 3.0}, 0)
-        assert len(result) == 2
-        labels = [dp.label for dp in result]
-        assert 'wave' in labels
-        assert 'wave_seam' in labels
-
-    def test_open_boundaries_produce_one_path(self):
-        """Wave on open boundaries returns only the wave (no seam bridge)."""
-        gen = WaveGenerator()
-        a = ExplicitPath([Vec2(0, 0), Vec2(100, 0)], id='a')
-        b = ExplicitPath([Vec2(0, 30), Vec2(100, 30)], id='b')
-        result = gen.generate(a, b, {'cycles': 3.0}, 0)
-        assert len(result) == 1
-
-    def test_seam_bridge_v1_endpoint_matches_path_b_start(self):
-        """V1 seam bridge end = path_b.sample_points()[0] exactly."""
-        gen = WaveGenerator()
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        result = gen.generate(outer, inner, {'cycles': 3.0}, 0)
-        bridge = next(dp for dp in result if dp.label == 'wave_seam')
-        bridge_pts = bridge.sample_points()
-        expected = inner.sample_points()[0]
-        assert bridge_pts[-1].x == pytest.approx(expected.x, abs=1e-9)
-        assert bridge_pts[-1].y == pytest.approx(expected.y, abs=1e-9)
-
-    def test_seam_bridge_v2_endpoint_matches_path_a_start(self):
-        """V2 seam bridge end = path_a.sample_points()[0] exactly."""
-        gen = WaveGenerator()
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        result = gen.generate(outer, inner, {'cycles': 3.0}, 1)
-        bridge = next(dp for dp in result if dp.label == 'wave_seam')
-        bridge_pts = bridge.sample_points()
-        expected = outer.sample_points()[0]
-        assert bridge_pts[-1].x == pytest.approx(expected.x, abs=1e-9)
-        assert bridge_pts[-1].y == pytest.approx(expected.y, abs=1e-9)
-
-    def test_wave_closed_zero_travel(self):
-        """Wave on concentric circles routes with zero travel moves."""
-        import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
-        from graph import route_layer, compute_metrics
-
-        outer = CirclePath(200, 200, 60, id='outer')
-        inner = CirclePath(200, 200, 40, id='inner')
-        li = LatticeInstance(
-            id='wli', generator_name='wave',
-            path_a_id='outer', path_b_id='inner',
-            params={'cycles': 3.0}, variation_index=0,
-        )
-        pl = PrintLayer(id='wave_test')
-        pl.source_paths = [outer, inner]
-        pl.lattice_instances = [li]
-        rl = pl.to_routing_layer()
-        moves = route_layer(rl)
-        metrics = compute_metrics(moves)
-        assert metrics['travel_moves'] == 0, \
-            f"Wave on closed circles should have 0 travel, got {metrics['travel_moves']}"
-        assert metrics['print_runs'] == 1, \
-            f"Wave on closed circles should have 1 run, got {metrics['print_runs']}"
 
 
 # ---------------------------------------------------------------------------
@@ -1010,52 +555,17 @@ class TestQuadBezierPath:
         assert metrics['travel_moves'] == 0
         assert metrics['print_runs'] == 1
 
-    def test_zigzag_between_curve_and_offset(self):
-        """Zigzag lattice can be placed between a curve and its offset."""
-        crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
-        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=20)
-        li = LatticeInstance(id='li1', generator_name='zigzag',
-                             path_a_id='crv', path_b_id='ot1',
-                             params={'segments': 6, 'connect_ends': False})
-        layer = PrintLayer(id='test')
-        layer.source_paths = [crv]
-        layer.offset_treatments = [ot]
-        layer.lattice_instances = [li]
-        paths = layer.effective_paths()
-        assert len([p for p in paths if p.role == 'lattice']) >= 1
-
-    def test_wave_between_curve_and_offset(self):
-        """Wave lattice can be placed between a curve and its offset."""
-        crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
-        ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=20)
-        li = LatticeInstance(id='li1', generator_name='wave',
-                             path_a_id='crv', path_b_id='ot1',
-                             params={'cycles': 3.0})
-        layer = PrintLayer(id='test')
-        layer.source_paths = [crv]
-        layer.offset_treatments = [ot]
-        layer.lattice_instances = [li]
-        paths = layer.effective_paths()
-        assert len([p for p in paths if p.role == 'lattice']) >= 1
-
     def test_delete_cascade_removes_dependents(self):
-        """Removing curve from layer removes dependent offset and lattice."""
+        """Removing curve from layer removes its dependent offset."""
         crv = QuadBezierPath(Vec2(0, 50), Vec2(200, 50), Vec2(100, 80), id='crv')
         ot = OffsetTreatment(id='ot1', source_path_id='crv', distance=20)
-        li = LatticeInstance(id='li1', generator_name='zigzag',
-                             path_a_id='crv', path_b_id='ot1',
-                             params={'segments': 4})
         layer = PrintLayer(id='test')
         layer.source_paths = [crv]
         layer.offset_treatments = [ot]
-        layer.lattice_instances = [li]
         # Simulate cascade delete
         layer.source_paths = [p for p in layer.source_paths if p.id != 'crv']
         layer.offset_treatments = [o for o in layer.offset_treatments
                                     if o.source_path_id != 'crv']
-        layer.lattice_instances = [l for l in layer.lattice_instances
-                                    if l.path_a_id not in ('crv', 'ot1')
-                                    and l.path_b_id not in ('crv', 'ot1')]
         assert layer.effective_paths() == []
 
     def test_to_dict_preserves_type(self):
@@ -1292,47 +802,6 @@ class TestCapStyles:
         ]
         rm = compute_metrics(reversed_moves)
         assert rm['travel_moves'] == 0
-
-
-# ---------------------------------------------------------------------------
-# Lattice interaction with rounded cavity
-# ---------------------------------------------------------------------------
-
-class TestLatticeWithRounding:
-    def test_lattice_inside_rounded_cavity(self):
-        """Zigzag lattice between rounded source + inner offset still generates paths."""
-        rect = RectanglePath(0, 0, 160, 160, id='r', role='outer')
-        ot = OffsetTreatment(id='in', source_path_id='r', distance=20, role='inner')
-        li = LatticeInstance(id='L', generator_name='zigzag',
-                             path_a_id='r', path_b_id='in',
-                             params={'segments': 8, 'connect_ends': False})
-        layer = PrintLayer(id='t', source_paths=[rect],
-                           offset_treatments=[ot], lattice_instances=[li],
-                           corner_radius=20.0)
-        paths = layer.effective_paths()
-        lattice = [p for p in paths if p.role == 'lattice']
-        assert len(lattice) >= 1
-
-    def test_lattice_contained_in_rounded_cavity(self):
-        """
-        Lattice between rounded outer and inner must be valid in the cavity:
-        every segment midpoint inside outer, outside inner, and no crossing of
-        either rounded boundary. Uses _lattice_valid_in_cavity (same rule the
-        zigzag auto-increase enforces) so boundary-touching endpoints are OK.
-        """
-        rect = RectanglePath(0, 0, 160, 160, id='r', role='outer')
-        ot = OffsetTreatment(id='in', source_path_id='r', distance=20, role='inner')
-        li = LatticeInstance(id='L', generator_name='zigzag',
-                             path_a_id='r', path_b_id='in',
-                             params={'segments': 6, 'connect_ends': False})
-        layer = PrintLayer(id='t', source_paths=[rect],
-                           offset_treatments=[ot], lattice_instances=[li],
-                           corner_radius=20.0)
-        paths = layer.effective_paths()
-        outer = next(p for p in paths if p.id == 'r')
-        inner = next(p for p in paths if p.id == 'in')
-        lattice = [p for p in paths if p.role == 'lattice']
-        assert _lattice_valid_in_cavity(lattice, outer, inner)
 
 
 # ---------------------------------------------------------------------------

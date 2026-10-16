@@ -18,9 +18,10 @@ from graph import (route_layer, compute_metrics, build_graph, route_ends,
 import network as N
 from model import (
     Vec2, LinePath, RectanglePath, CirclePath, ExplicitPath, OffsetTreatment,
-    PrintLayer, Opening, RegionInfill, WallSpec, NetworkWall,
+    PrintLayer, Opening, RegionInfill,
     _processed_source_pts,
 )
+from tests.canon import thick
 from tests.test_networks import (_build, _pts, _assert_internal_inside,
                                  _assert_faces_bound_material,
                                  _assert_no_duplicate_walls)
@@ -73,7 +74,7 @@ def STAR(infill=True, arms=6, **kw):
                            200 + 120 * math.sin(k * 2 * math.pi / arms + 0.2)),
                       id=f'L{k + 1}') for k in range(arms)]
     return PrintLayer('t', source_paths=lines,
-                      network_walls=[NetworkWall('W', 'L1', 10)],
+                      wall_systems=[thick([l.id for l in lines], 10, sid='W')],
                       junction_style='round', junction_radius=3,
                       cap_style='full_round',
                       infills=[RegionInfill('I', 'L1', 'zigzag', {'spacing': 16})]
@@ -82,12 +83,11 @@ def STAR(infill=True, arms=6, **kw):
 
 def RECT_BRANCHES(n, infill=True, **kw):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(10)
     srcs = [R, LinePath(Vec2(200, 260), Vec2(200, 340), id='B1')]
     if n == 2:
         srcs.append(LinePath(Vec2(300, 200), Vec2(380, 200), id='B2'))
     return PrintLayer('t', source_paths=srcs,
-                      network_walls=[NetworkWall('W', 'B1', 10)],
+                      wall_systems=[thick([p.id for p in srcs], 10, sid='W')],
                       infills=[RegionInfill('I', 'R', 'zigzag', {'spacing': 20})]
                       if infill else [], **kw)
 
@@ -108,8 +108,7 @@ def _old_and_new(make):
 
 def RING_INFILL(**kw):
     R = RectanglePath(100, 140, 200, 120, id='R')
-    R.wall = WallSpec(10)
-    return PrintLayer('t', source_paths=[R],
+    return PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)],
                       infills=[RegionInfill('I', 'R', 'zigzag', {'spacing': 20})], **kw)
 
 
@@ -243,20 +242,21 @@ class TestLayerEnds:
 
 
 # ---------------------------------------------------------------------------
-# Parametric wall thickness (WallSpec) and network walls
+# Parametric wall thickness (per-wall envelopes) and wall networks
 # ---------------------------------------------------------------------------
 
 def _offset_of(paths, oid):
     return next(p for p in paths if p.id == oid)
 
 
-class TestWallSpec:
+class TestWallEnvelope:
+    """The parametric wall of a path: its envelope (thickness + alignment),
+    given by the Wall System record listing it (walls.compose's build form)."""
 
     @pytest.mark.parametrize('w,h', [(200, 120), (260, 90), (150, 150)])
     def test_inner_boundary_stays_ten_inches_inside(self, w, h):
         R = RectanglePath(100, 100, w, h, id='R')
-        R.wall = WallSpec(10)
-        paths = PrintLayer('t', source_paths=[R]).effective_paths()
+        paths = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)]).effective_paths()
         inner = _offset_of(paths, 'R.wall').sample_points()
         src = _processed_source_pts(R, 0)
         for q in inner:
@@ -265,8 +265,7 @@ class TestWallSpec:
 
     def test_resizing_the_outer_updates_the_inner(self):
         R = RectanglePath(0, 0, 200, 120, id='R')
-        R.wall = WallSpec(10)
-        L = PrintLayer('t', source_paths=[R])
+        L = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)])
         before = _offset_of(L.effective_paths(), 'R.wall').sample_points()
         R.w, R.h, R.x = 300, 80, 40                     # edit the source only
         after = _offset_of(L.effective_paths(), 'R.wall').sample_points()
@@ -277,64 +276,50 @@ class TestWallSpec:
 
     def test_alignments(self):
         R = RectanglePath(0, 0, 100, 100, id='R')
-        R.wall = WallSpec(10, 'outside')
-        out = _offset_of(PrintLayer('t', source_paths=[R]).effective_paths(), 'R.wall')
+        out = _offset_of(PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10, align='outside')])
+                         .effective_paths(), 'R.wall')
         assert min(q.x for q in out.sample_points()) == pytest.approx(-10)
         Ln = LinePath(Vec2(0, 0), Vec2(100, 0), id='L')
-        Ln.wall = WallSpec(10)                          # auto: open → centre
-        ps = {p.id: p for p in PrintLayer('t', source_paths=[Ln]).effective_paths()}
+        ps = {p.id: p for p in PrintLayer('t', source_paths=[Ln], wall_systems=[thick('L', 10)])   # auto: open → centre
+              .effective_paths()}
         ys = sorted(ps[k].sample_points()[0].y for k in ('L.wall+', 'L.wall-'))
         assert ys == pytest.approx([-5, 5])
 
     def test_clockwise_rectangle_inside_is_still_inside(self):
         P = ExplicitPath([Vec2(0, 0), Vec2(0, 100), Vec2(100, 100), Vec2(100, 0)],
                          id='P', closed=True)
-        P.wall = WallSpec(10)
-        inner = _offset_of(PrintLayer('t', source_paths=[P]).effective_paths(), 'P.wall')
+        inner = _offset_of(PrintLayer('t', source_paths=[P], wall_systems=[thick('P', 10)]).effective_paths(), 'P.wall')
         assert all(0 < q.x < 100 and 0 < q.y < 100 for q in inner.sample_points())
 
     def test_wall_spec_and_extra_offsets_coexist(self):
         R = RectanglePath(0, 0, 100, 100, id='R')
-        R.wall = WallSpec(10)
-        L = PrintLayer('t', source_paths=[R],
+        L = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)],
                        offset_treatments=[OffsetTreatment('x', 'R', 5)])
         ids = {p.id for p in L.effective_paths()}
         assert {'R.wall', 'x'} <= ids
 
 
-class TestNetworkWall:
+class TestWallNetwork:
 
-    def test_star_gets_one_wall_thickness(self):
+    def test_star_walls_form_one_network(self):
         L = STAR(infill=False)
         ids = {p.id.split('~')[0] for p in L.effective_paths()}
         for k in range(1, 7):
             assert {f'L{k}.wall+', f'L{k}.wall-'} <= ids
         nets = L.network_summary()['source_networks']
-        assert nets == [{'id': 'N1', 'sources': [f'L{k}' for k in range(1, 7)],
-                         'wall': {'id': 'W', 'type': 'network_wall', 'path_id': 'L1',
-                                  'thickness': 10, 'align': 'auto',
-                                  'print_reference': False}}]
+        assert nets == [{'id': 'N1', 'sources': [f'L{k}' for k in range(1, 7)]}]
         _assert_faces_bound_material(L)
         _assert_no_duplicate_walls(L)
 
-    def test_path_wall_overrides_network_wall(self):
+    def test_a_wall_keeps_its_own_record_thickness_in_a_network(self):
         L = STAR(infill=False)
-        L.source_paths[2].wall = WallSpec(20)
+        L.wall_systems[0].members.remove('L3')
+        L.wall_systems.append(thick('L3', 20))
         src = L.source_paths[2]
         face = [q for p in L.effective_paths() if p.id.startswith('L3.wall+')
                 for q in p.sample_points()]
         far = max(face, key=lambda q: q.dist(Vec2(200, 200)))   # away from the hub
         assert N.dist_to_polyline(far, [src.start, src.end], False) == pytest.approx(10)
-
-    def test_newly_connected_path_inherits(self):
-        L = STAR(infill=False)
-        L.source_paths.append(LinePath(Vec2(200, 200), Vec2(200, 40), id='L7'))
-        assert 'L7.wall+' in {p.id.split('~')[0] for p in L.effective_paths()}
-
-    def test_disconnected_path_does_not_inherit(self):
-        L = STAR(infill=False)
-        L.source_paths.append(LinePath(Vec2(600, 600), Vec2(700, 600), id='X'))
-        assert not any(p.id.startswith('X.wall') for p in L.effective_paths())
 
     def test_network_is_defined_by_source_contact(self):
         L = PrintLayer('t', source_paths=[RectanglePath(0, 0, 100, 100, id='R'),
@@ -360,19 +345,17 @@ def test_api_round_trip_and_route_ends(client):
         'id': 't',
         'source_paths': [
             {'id': 'R', 'type': 'RectanglePath', 'x': 100, 'y': 140, 'w': 200, 'h': 120,
-             'closed': True, 'wall': {'thickness': 10, 'align': 'inside'}},
-            {'id': 'B1', 'type': 'LinePath', 'start': [200, 260], 'end': [200, 340]},
-            {'id': 'B2', 'type': 'LinePath', 'start': [300, 200], 'end': [380, 200]},
+             'closed': True, 'envelope': {'thickness': 10, 'align': 'inside', 'print_reference': False}},
+            {'id': 'B1', 'type': 'LinePath', 'start': [200, 260], 'end': [200, 340],
+             'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}},
+            {'id': 'B2', 'type': 'LinePath', 'start': [300, 200], 'end': [380, 200],
+             'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}},
         ],
-        'network_walls': [{'id': 'W', 'path_id': 'B1', 'thickness': 10, 'align': 'auto'}],
         'infills': [{'id': 'I', 'path_id': 'R', 'pattern': 'zigzag', 'params': {'spacing': 20}}],
         'return_paths': True, 'prefer_closed': True,
     }
     layer = design_app._deserialise_layer(payload)
     d = layer.to_dict()
-    assert d['source_paths'][0]['wall'] == {'thickness': 10.0, 'align': 'inside',
-                                            'print_reference': False}
-    assert d['network_walls'][0]['thickness'] == 10.0
     assert d['return_paths'] is True and d['prefer_closed'] is True
     r = client.post('/api/route', data=json.dumps(payload), content_type='application/json')
     out = r.get_json()

@@ -16,8 +16,7 @@ from app import app as flask_app
 def ring_payload(x=100, origins=None, infill=True, physical=True, extra=None):
     d = {'id': 'l', 'source_paths': [
         {'id': 'R', 'type': 'RectanglePath', 'x': x, 'y': 140, 'w': 200, 'h': 120,
-         'closed': True, 'wall': {'thickness': 10}}] + (extra or []),
-        'offset_treatments': [], 'lattice_instances': [],
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}] + (extra or []),
         'infills': [{'id': 'I', 'path_id': 'R', 'pattern': 'zigzag', 'params': {'spacing': 20},
                      'kind': 'wall'}] if infill else [],
         'material': {'physical': physical}}
@@ -101,7 +100,7 @@ def test_open_component_ignores_the_origin_and_keeps_start_and_end(client):
     """A component the rules could not close (here: legacy zero-width line,
     physical off) keeps its own start / end; the origin is not applied."""
     p = {'id': 'l', 'source_paths': [{'id': 'L', 'type': 'LinePath', 'start': [100, 200], 'end': [300, 200]}],
-         'offset_treatments': [], 'lattice_instances': [], 'material': {'physical': False},
+         'offset_treatments': [], 'material': {'physical': False},
          'route_origins': [{'strand': 'L', 'u': 0.5}]}
     d = route(client, p)
     mv = d['moves']

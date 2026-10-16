@@ -33,7 +33,7 @@ from layer_assembly.model import Assembly         # noqa: E402
 
 def base_document():
     d = RN.document('zigzag', openings=('rect1_top',))
-    d['infills'], d['network_walls'] = [], []
+    d['infills'] = []
     d['source_paths'] += [
         # an inset whose parent was deleted: its frozen points ARE its shape
         {'id': 'p7', 'type': 'InsetPath', 'label': 'Inset 1', 'parent_id': 'gone', 'distance': 6.0,
@@ -152,11 +152,28 @@ def test_save_writes_a_versioned_file(client):
     assert [d['id'] for d in f['project']['designer']['designs']] == ['base', 'd1', 'd2']
 
 
-def migrated_designs():
+def _migrated():
+    """The fixture as an opened file converts it: its in-document Wall System
+    records → per-wall envelopes + project Wall Systems (the plane cut's
+    `systems: ['WS1']` → that system's walls as `sources`); its Variant-stored
+    construction / wall properties dropped (reported)."""
     from walls import migrate_parts
-    ds, _, _, rep = migrate_parts(designs())
-    assert rep and all('dropped' in r for r in rep)
-    return ds
+    ds, systems, state, rep = migrate_parts(designs(), assembly_state=assembly_state())
+    assert rep and any('dropped' in r for r in rep) and any('In-document Wall System records' in r for r in rep)
+    assert [s['id'] for s in systems] == ['WS1', 'WS2', 'WS3']
+    return ds, systems, state
+
+
+def migrated_parts():
+    return _migrated()[:2]
+
+
+def migrated_state():
+    return _migrated()[2]
+
+
+def migrated_designs():
+    return migrated_parts()[0]
 
 
 def test_save_open_save_preserves_the_authoring_state(client):
@@ -173,21 +190,22 @@ def test_save_open_save_preserves_the_authoring_state(client):
     assert P['name'] == 'Courtyard house'
     # (schema 7: the fixture's Variant-stored wall properties / construction are
     # dropped on save — reported; the reference is the fixture as migrated)
-    assert P['designer']['designs'] == migrated_designs()
+    assert (P['designer']['designs'], P['wall_systems']) == migrated_parts()
     assert P['designer']['active_design'] == 'd1'
-    assert P['assembly']['state'] == assembly_state() and P['assembly']['header_counter'] == 2
+    assert P['assembly']['state'] == migrated_state() and P['assembly']['header_counter'] == 2
     # the open design's document = what the Layer Design library resolves
-    assert o['active_document'] == DesignLibrary(migrated_designs()).document('d1')
+    assert o['active_document'] == DesignLibrary(migrated_designs()).raw_document('d1')
     # the Assembly reads back to the same model
-    assert Assembly.from_dict(P['assembly']['state']).to_dict() == Assembly.from_dict(assembly_state()).to_dict()
+    assert Assembly.from_dict(P['assembly']['state']).to_dict() == Assembly.from_dict(migrated_state()).to_dict()
 
 
 def test_every_design_resolves_to_the_same_document(client):
     _, r = save(client, project())
     _, o = open_(client, PF.dumps(r['file']))
-    a, b = DesignLibrary(migrated_designs()), DesignLibrary(o['project']['designer']['designs'])
+    a = DesignLibrary(*migrated_parts())
+    b = DesignLibrary(o['project']['designer']['designs'], o['project']['wall_systems'])
     for did in ('base', 'd1', 'd2'):
-        assert a.document(did) == b.document(did)
+        assert a.document(did) == b.document(did) and a.document(did)['wall_systems']
     doc = b.document('base')
     inset = next(p for p in doc['source_paths'] if p['id'] == 'p7')
     assert inset['points'] == [[400, 400], [460, 400], [460, 440], [400, 440]]     # frozen shape kept
@@ -197,10 +215,11 @@ def test_opened_project_resolves_to_the_same_geometry(client):
     """The Base document from the file prints exactly what the original did."""
     _, r = save(client, project())
     _, o = open_(client, PF.dumps(r['file']))
-    doc0 = base_document()
+    doc0 = base_document()                                       # (the build format, as authored by the fixture)
     doc1 = next(d for d in o['project']['designer']['designs'] if d['id'] == 'base')['document']
+    assert 'wall_systems' not in doc1 and all('envelope' in p for p in doc1['source_paths'] if p['id'] in ('R1', 'L1', 'p8'))
     g0 = client.post('/api/effective_paths', json=doc0).get_json()
-    g1 = client.post('/api/effective_paths', json=doc1).get_json()
+    g1 = client.post('/api/effective_paths', json=dict(doc1, project_wall_systems=o['project']['wall_systems'])).get_json()
     assert not g0.get('error') and g0['printable'] == g1['printable']
 
 
@@ -223,7 +242,7 @@ def test_opening_base_as_active(client):
     _, r = save(client, project(active='base'))
     _, o = open_(client, PF.dumps(r['file']))
     assert o['project']['designer']['active_design'] == 'base'
-    assert o['active_document'] == base_document()
+    assert o['active_document'] == DesignLibrary(migrated_designs()).raw_document('base')
 
 
 # --- counters / references ----------------------------------------------------------------

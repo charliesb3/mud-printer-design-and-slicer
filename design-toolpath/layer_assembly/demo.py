@@ -18,8 +18,9 @@ def demo_designs() -> list:
     base_doc = {
         'id': 'l', 'source_paths': [
             {'id': 'W', 'type': 'RectanglePath', 'label': 'Wall', 'x': 100, 'y': 140,
-             'w': 200, 'h': 120, 'closed': True, 'wall': {'thickness': 10}}],
-        'offset_treatments': [], 'lattice_instances': [],
+             'w': 200, 'h': 120, 'closed': True,
+             'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}],
+        'offset_treatments': [],
         'infills': [{'id': 'I', 'path_id': 'W', 'pattern': 'wave', 'params': {'spacing': 20},
                      'kind': 'wall', 'variation_index': 0}],
         'material': {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75,

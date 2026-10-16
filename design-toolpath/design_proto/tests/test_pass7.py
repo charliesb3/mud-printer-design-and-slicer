@@ -24,11 +24,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_pr
 
 import app as design_app
 import route_quality as RQ
+import wall_metrics as WM
 import solid as SO
 import wall_lattice as WL
 import wall_fixtures as WF
 from model import (Vec2, PrintLayer, RectanglePath, CirclePath, EllipsePath, LinePath,
-                   RegionInfill, WallRelation, InsetPath, WallSpec)
+                   RegionInfill, WallRelation, InsetPath)
 from tests.test_networks import _assert_internal_inside
 
 _C = {}
@@ -39,7 +40,7 @@ def CM(name, sp=None):
     if key not in _C:
         fn = WF.CORNER_FIXTURES[name]
         L = fn() if sp is None else fn(sp)
-        _C[key] = (L, RQ.wall_metrics(L))
+        _C[key] = (L, WM.wall_metrics(L))
     return _C[key]
 
 
@@ -183,7 +184,7 @@ def test_turnaround_lands_on_the_cap_and_is_not_a_rung():
 
 def test_lone_wall_ends_are_supported_and_route_stays_open():
     L = WF.straight()
-    q = RQ.wall_metrics(L)
+    q = WM.wall_metrics(L)
     cs = RQ.corner_support(L)
     assert max(c[3] for c in cs) <= q['thickness'] + 1e-6       # cap corners
     assert q['start_end_distance'] > 200                        # still an open zigzag
@@ -341,7 +342,7 @@ class TestWallRelation:
         O, I = RectanglePath(0, 0, 200, 120, id='O'), RectanglePath(30, 20, 100, 60, id='I')
         L = _rel_layer(O, I)
         L.infills = [RegionInfill('I1', 'O', 'zigzag', {'spacing': 20})]
-        q = RQ.wall_metrics(L, 20)
+        q = WM.wall_metrics(L, 20)
         assert q['thickness'] == pytest.approx(10, abs=0.3)   # a 10 in wall between them
         assert q['interior_retrace'] < 1e-6 and q['runs'] == 1
 

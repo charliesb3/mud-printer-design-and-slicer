@@ -239,7 +239,7 @@ trims[]  →  { id, source, between: [J_a, J_b], side: {wall: inside?} }
 ## 6. Construction junction model — continuous excursion
 
 **Code facts:**
-- Today's mixed-system junction already SPLICES an out-and-back branch into ONE host path (`wall_systems.connect_branch`, `:1836`):
+- Today's mixed-system junction already SPLICES an out-and-back branch into ONE host path (`wall_systems.connect_branch`, `:1836`) *(diagnosis-time code: `connect_branch` was no longer reached by the pipeline and was deleted in the 2026-10-16 cleanup; M7's `splice_excursions` kept its host search as `_resolve_host`)*:
   - both lanes run straight to the host's real generated geometry;
   - the pair of hits must lie on one host path, close along it;
   - the short host stretch between them is cut out — "branch and host become one circuit".
@@ -343,7 +343,7 @@ trims[]  →  { id, source, between: [J_a, J_b], side: {wall: inside?} }
 
 **Compatibility.**
 - Without divergences, the printed geometry is identical (golden tests, §11).
-- Older readers (schema 1–6 migrations, legacy `wall_systems` documents, `path.wall`, `network_walls`) stay as one-way migration code.
+- Older readers (schema 1–6 migrations, legacy `wall_systems` documents, `path.wall`, `network_walls`) stay as one-way migration code. Since the 2026-10-16 cleanup `walls.migrate_project` is the ONLY reader of those forms (and drops pairwise `lattice_instances` with a report): the model, the Designer page and the Assembly read per-wall `envelope`s and project Wall Systems only.
 
 ---
 
@@ -526,7 +526,7 @@ M0–M4 is listed in the M0–M4 implementation notes below.
 - **Persistence:**
   - `project['junctions'] = {mode: 'shadow', counter, records}`, rebuilt in `project_file.validate` (on failure: the stored one kept + a warning);
   - the Designer carries it opaquely (`projectState` / `applyProject`), so ids survive Save / Open / Save.
-  - **Storage choice:** PROJECT-level in shadow mode, so no document, payload or `.mudjob` byte changes. M5 moves the records into the lineage-owned documents (§4).
+  - **Storage choice:** PROJECT-level in shadow mode, so no document, payload or `.mudjob` byte changes. M5 was expected to move the records into the lineage-owned documents (§4) — it did NOT: they stay project-level (registry mode 'trims'); the move is still open (schema 8 / junction-shape ownership).
 - **Production untouched:**
   - network.resolve records `junction_walls`; the model keeps `_production_junctions` / `_contact_sources` — internal attributes, never serialised;
   - stages 1–1b of `_build_effective` are extracted to `_contact_stage()` unchanged;
@@ -647,7 +647,7 @@ M0–M4 is listed in the M0–M4 implementation notes below.
 ### M7 — continuous Out-and-Back excursions (2026-10-16; manually reviewed and checkpointed (2026-10-16), with M6)
 
 - **Old behaviour:** a thin Out-and-Back branch meeting a GENERATED host (Interleaved / Linked / Parallel / Chained Loop) was extended straight THROUGH the host's paths and capped inside (`wall_systems.extend_through`). It joined the route wherever it crossed anything (the router merges nodes at crossings): any wave, any lobe. No host identity.
-- **Now** (`wall_systems.splice_excursion` on the shared `_splice` core of `connect_branch`; `model._connect_skins`, per built layer):
+- **Now** (`wall_systems.splice_excursion`, first built on the `_splice` core of `connect_branch` — both deleted in the 2026-10-16 cleanup, the host search living on as `_resolve_host`; `model._connect_skins`, per built layer):
   1. **Host strand** = the generated strand BOTH lanes reach first, continuing straight along the branch (`_ray_hits`; both landings on ONE strand, close along it). It is resolved geometrically on THIS layer, never stored (§F3); Assembly layers resolve their own.
   2. That strand is cut between the landings p1, p2 (the short stretch between them). Its pieces keep its place, so every other strand keeps its id.
   3. The EXCURSION (p1, lane, U-turn, lane, p2) is its own strand `…x<k>` with `join_group = 'exc:<id>'` and `join_points = [p1, p2]`. The router may enter / leave it only there, so the route is host → excursion → the SAME host, continuing its trajectory. Every incidental crossing (another wave, a chain lobe, the host elsewhere) is a pass-over (the router's existing join-group rule, `toolpath_proto/graph.py`). Nothing global changed in the router.
@@ -667,7 +667,7 @@ M0–M4 is listed in the M0–M4 implementation notes below.
 - **Tests:** `layer_assembly/tests/test_m7_excursions.py` (24): every generated construction straight + curved, Parallel exposed lane, Skin + Web / Hollow, crossing ≠ connection (the crossed wave byte-identical), multiple branches, near a corner, near a trimmed junction, Variant-only, bead / R, per-layer host, PrintPlan / `.mudjob`.
 - **Supersedes** the pass-10 (2026-10-07) "meet by crossing, nothing of the host cut" rule for OUT-AND-BACK branches only. Other incoming walls (hollow, generated) still meet by crossing. `test_wall_systems.py::test_t_junction_walls_touch_by_crossing[*-single-*]` now asserts the excursion; the routing assertions (one run, no travel / retrace) are unchanged and pass.
 - **Operator project (`test 4` export):** its Line 1 is an Out-and-Back into the Interleaved host. Each layer's old crossing loop (~12 in) became a short excursion, so the print is ~0.25 % shorter; the relaxed structural fidelity test allows that.
-- **Not done (later milestones):** contact overlap at the landings (M8); transform-junction resolution (M9); excursions for thick (non-thin) incoming walls (unchanged `connect_branch`).
+- **Not done (later milestones):** contact overlap at the landings (M8); transform-junction resolution (M9); excursions for thick (non-thin) incoming walls (they still meet by crossing — the pass-10 rule; `connect_branch` is gone).
 
 ### M7 correction pass after manual review (2026-10-16; manually reviewed and checkpointed (2026-10-16), with M6 + M7)
 
@@ -678,7 +678,7 @@ M0–M4 is listed in the M0–M4 implementation notes below.
 - **Why Base / layers / pitch differed:** the loop pattern re-fits to every envelope change: pitch, a Variant opening, an Assembly cut. That moved the necks relative to the branch and changed which stretch each arm reached. The architecture never changed; the old search's outcome did. Reproduced on a copy of `test6` + a vertical line (old code: Base excursion, Variant bracket at pitch 7; the ending branch also failed at pitch 6). The new code gives excursions on Base, the Variant and every Assembly layer.
 - **Now (`wall_systems.splice_excursions`, `model._connect_skins`):**
   - All Out-and-Back arms of a part are resolved TOGETHER on the unspliced generated geometry (`_resolve_host`, the unchanged host search of `_splice`), so the result is order-independent.
-  - The kiss guard is not applied to excursions. Cutting through a neck is valid: each piece stays one polyline, and the other pass keeps the vertex. `connect_branch` (thick incoming walls) keeps the guard.
+  - The kiss guard is not applied to excursions. Cutting through a neck is valid: each piece stays one polyline, and the other pass keeps the vertex. The guard survives only as `_resolve_host`'s `touch_guard` option (off for excursions; `connect_branch` was deleted 2026-10-16).
   - Each host strand is cut ONCE for all its landings (`_compose_cuts`): landings sorted along the strand are paired alternately, so every landing keeps exactly one host end. A closed strand uses the pairing that removes less.
     - One excursion → its short stretch, exactly as before.
     - Two arms on the same stretch from opposite sides → the stretch between them is KEPT: host → excursion A → back along it → excursion B → host, every bead once. Coincident landings are snapped to one exact point (one routing node).
@@ -705,6 +705,13 @@ M0–M4 is listed in the M0–M4 implementation notes below.
   - Thin wall-to-wall bridges (above).
   - Parallel Walls polish: prefer the lane-transition seam away from junctions / corners / openings where practical (not a correctness issue).
   - Full-wall ↔ full-wall junctions (circle + rectangle both carrying complex systems): separate architecture discussion, never patched with M7 excursions.
+
+### Cleanup after M7 (2026-10-16; behaviour-preserving; manually reviewed and checkpointed 2026-10-16)
+
+- **Removed from production** (zero callers verified, strict golden 23/23 byte-identical (no re-baseline), PrintPlan / `.mudjob` identical): `PrintLayer._connect_generated` / `_kiss_into_skin`, `wall_systems.connect_branch` / `_splice` (M7 never used them; `_resolve_host`, `_sub`, `_trim_from`, `_lane_start`, `_ray_hits` kept), the pairwise Zigzag / Wave lattice, `Path.wall` / `WallSpec.system`, `NetworkWall` / `network_walls`, the in-page migration, `app.js addOffset`, `route_quality.wall_metrics` (test-only → `tests/wall_metrics.py`).
+- **Migration boundary:** `walls.migrate_project` converts every pre-schema-7 form once (incl. Variants' added paths) and no longer writes empty `offset_treatments` or the removed collections. `DesignLibrary` always composes; `designer_source.grouped()` is gone.
+- **Milestone namespace:** M-numbers in this document (M0–M10) are not those of `DEFERRED_TOOLPATH_ARCHITECTURE.md` (deferred print paths M0–M5; M0–M2 done, M3+ archived).
+- **Deliberately NOT done here** (each its own reviewed step): junction override removal, `trim.junctions` write-only, M6 attach unification, `tolerances.py` / Vec2 consolidation, schema 8, the pass-10 contact machinery, full-wall junctions, M8, M9.
 
 ### Before M5 — to decide
 

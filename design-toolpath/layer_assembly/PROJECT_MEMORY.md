@@ -77,6 +77,7 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
   - Golden changes: `real_test3` / `real_test3b` (M6; the operator's `test 4` export relaxed to structural equality — re-export it), `syn_excursion_*` + `real_test3b` (M7).
   - Correction pass (after review): through walls = one excursion per side; resolution order-independent and pitch-stable; no crossing-loop fallback for Out-and-Back. Golden unchanged.
   - Tests: `test_m6_source_attachment.py`, `test_m7_excursions.py`, `test_m7_through_walls.py`.
+- **Cleanup 2026-10-16 (behaviour-preserving; strict golden 23/23 byte-identical (no re-baseline); manually reviewed and checkpointed 2026-10-16):** `designer_source.grouped()` removed — every design set is architectural (`arch_library`; `architectural(d)` = the adapter has an envelope library); `web._resolve_stack` and `_construction_checks` legacy branches removed; an envelope resolve builds no canonical geometry (nothing legacy needs it). Pre-Wall-System project files are converted once by `walls.migrate_project` (`tests/test_walls_migration.py`).
 - **Shadow junctions** (`design_proto/junctions.py`, `junction_shadow.py`, `POST /api/assembly/junctions_shadow`): project-level `junctions` registry, stable ids, overrides mapped; consistency with production + per-layer presence (ceasing / appearing = valid). Nothing builds from it.
 - Verified: tests below each milestone + golden; production geometry / PrintPlan / `.mudjob` unchanged apart from the reported 10xtest1 divergence.
 
@@ -444,9 +445,9 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
 
 ## Next steps
 
--2. Manual review of the Wall Groups / Wall Systems workspace (2026-10-11); (placement pivot decided 2026-10-11: architectural envelope).
--3. **Design + Toolpath is PAUSED (2026-10-14) on the stable baseline (see "ACTIVE BASELINE"); development focus is the Raspberry Pi interface.** The items below are historical context, not a plan of record; M3+ / junction / end-cap / motif work (archived on `main` and the archive branch) is NOT the current direction.
--1. ~~Manual review of DEFERRED PRINT PATHS~~ (reviewed; M0–M2 are part of the baseline). M3+ of `DEFERRED_TOOLPATH_ARCHITECTURE.md`: not the current direction (archived attempt, see "ACTIVE BASELINE").
+-3. ~~Manual review of the Wall Groups / Wall Systems workspace (2026-10-11)~~ — superseded: Wall Groups removed 2026-10-15 (schema 7); the per-wall workspace was reviewed with M0–M4. (Placement pivot decided 2026-10-11: architectural envelope.)
+-2. **Design + Toolpath is ACTIVE on `restart/post-print-simulation`** (the 2026-10-14 pause on the `dd70148` baseline ended 2026-10-15): `../WALL_ARCHITECTURE.md` M0–M7 implemented, manually reviewed and checkpointed; 2026-10-16 behaviour-preserving cleanup (legacy representations → `walls.migrate_project`; `DesignerSource` always architectural). Next: the full-wall junction architecture discussion, then M8 / M9 (Designer memory → Next Steps). The numbered items below are older context, kept for reference.
+-1. ~~Manual review of DEFERRED PRINT PATHS~~ (reviewed; M0–M2 are part of the baseline). NOTE — two milestone namespaces: `DEFERRED_TOOLPATH_ARCHITECTURE.md` M0–M5 (deferred print paths; M3+ archived, not the direction) and `WALL_ARCHITECTURE.md` M0–M10 (the active plan). An unqualified "M5" / "M6" / "M7" in this memory since 2026-10-15 means WALL_ARCHITECTURE.
 
 0. Manual review of the Assembly Profiles correction pass (2026-10-08); then period / phase carry-over for the generated wave / chain constructions at cuts (the remaining non-local case); the local join technique may also help item 1.
 1. Transformed-junction lattice coherence (Designer side; see the Designer memory).

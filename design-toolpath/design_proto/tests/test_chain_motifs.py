@@ -35,7 +35,7 @@ MAT = {'bead_width': BEAD, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'phy
 
 
 def doc(paths, members=None, openings=(), **kw):
-    d = {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'lattice_instances': [], 'infills': [],
+    d = {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'infills': [],
          'openings': list(openings), 'trims': [], 'material': dict(MAT),
          'wall_systems': [{'id': 'WS1', 'name': 'WS1', 'type': 'chain',
                            'members': members or [p['id'] for p in paths], 'thickness': T, 'params': {}}]}
@@ -325,7 +325,7 @@ def test_reference_network_all_chain(client, prm):
     host at both ends."""
     import reference_network as RN
     d = RN.document('zigzag')
-    d['infills'], d['network_walls'] = [], []
+    d['infills'] = []
     d['material'] = dict(MAT)
     d['wall_systems'] = [
         {'id': 'H', 'name': 'Host', 'type': 'chain', 'thickness': 10, 'align': 'auto', 'params': dict(prm),
@@ -345,7 +345,7 @@ def test_reference_network_round_junctions_no_worse(client, monkeypatch, prm):
     before) — the motifs change nothing about runs / travel / retrace."""
     import reference_network as RN
     d = RN.document('zigzag')
-    d['infills'], d['network_walls'] = [], []
+    d['infills'] = []
     d['material'] = dict(MAT)
     d['wall_systems'] = [
         {'id': 'H', 'name': 'Host', 'type': 'chain', 'thickness': 10, 'align': 'auto', 'params': dict(prm),

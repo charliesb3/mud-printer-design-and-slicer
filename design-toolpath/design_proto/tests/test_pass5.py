@@ -20,7 +20,8 @@ import pytest
 import app as design_app
 from model import (Vec2, PrintLayer, RectanglePath, CirclePath, EllipsePath,
                    ExplicitPath, LinePath, InsetPath, RegionInfill, OffsetTreatment,
-                   WallSpec, _polygon_area, _point_in_polygon)
+                   _polygon_area, _point_in_polygon)
+from tests.canon import thick
 import route_quality as RQ
 import solid as SO
 
@@ -200,8 +201,7 @@ class TestInset:
     def test_inset_as_wall_geometry(self):
         R = RectanglePath(0, 0, 200, 100, id='R')
         C = InsetPath('R', 20, id='C')
-        C.wall = WallSpec(thickness=6, align='inside')
-        L = PrintLayer('t', source_paths=[R, C])
+        L = PrintLayer('t', source_paths=[R, C], wall_systems=[thick('C', 6, align='inside')])
         ids = {p.id for p in L.effective_paths()}
         assert 'C.wall' in ids
 
@@ -431,8 +431,7 @@ class TestSolidInfill:
         # identical wall-infill output with kind omitted vs kind='wall'
         def lay(**kw):
             R = RectanglePath(0, 0, 200, 120, id='R')
-            R.wall = WallSpec(thickness=12, align='inside')
-            return PrintLayer('t', source_paths=[R],
+            return PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 12, align='inside')],
                               infills=[RegionInfill('W', 'R', 'zigzag', {'spacing': 20}, **kw)])
         sig = lambda L: sorted((p.id, tuple(_pts(p))) for p in L.effective_paths())
         assert sig(lay()) == sig(lay(kind='wall'))
@@ -440,9 +439,8 @@ class TestSolidInfill:
 
     def test_wall_and_solid_together(self):
         R = RectanglePath(0, 0, 200, 120, id='R')
-        R.wall = WallSpec(thickness=12, align='inside')
         C = CirclePath(100, 60, 30, id='C')
-        L = PrintLayer('t', source_paths=[R, C], infills=[
+        L = PrintLayer('t', source_paths=[R, C], wall_systems=[thick('R', 12, align='inside')], infills=[
             RegionInfill('W', 'R', 'zigzag', {'spacing': 20}),
             RegionInfill('S', 'C', 'rectilinear', {'spacing': 10}, kind='solid')])
         tids = {getattr(p, 'treatment_id', '') for p in L.effective_paths()}

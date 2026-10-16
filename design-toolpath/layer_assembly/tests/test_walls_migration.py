@@ -70,11 +70,92 @@ class TestCompose:
         assert env['A'] == env['B'] == {'thickness': 12.0, 'align': 'auto', 'print_reference': False}
         assert 'wall_groups' not in out
 
-    def test_legacy_documents_untouched(self):
-        for doc in ({'source_paths': [path('A')], 'wall_systems': []},
-                    {'source_paths': [path('A', wall={'thickness': 10})]},
-                    {'source_paths': [path('A')], 'network_walls': [{'id': 'n'}]}):
-            assert W.compose(doc, None, []) is doc
+    def test_a_build_document_is_not_composed_again(self):
+        doc = {'source_paths': [path('A')], 'wall_systems': []}
+        assert W.compose(doc, None, []) is doc
+
+
+class TestPreWallSystemDocuments:
+    """Documents older than the Wall Systems (per-path `wall`, `network_walls`
+    inheriting a thickness over a source network, the pairwise lattice,
+    in-document build records) are converted ONCE at the migration boundary;
+    the geometry pipeline reads only per-wall envelopes."""
+
+    def _project(self, doc, systems=()):
+        return {'designer': {'designs': [{'id': 'base', 'name': 'Base', 'parent': None, 'document': doc}]},
+                'wall_systems': list(systems), 'assembly': {'state': {}}}
+
+    def test_own_path_walls_become_envelopes(self):
+        doc = {'source_paths': [path('A', wall={'thickness': 10, 'align': 'inside'}),
+                                path('T', wall={'thickness': 0}),            # the explicit single-bead override
+                                path('L', wall={'thickness': 8, 'align': 'auto',
+                                                'system': {'type': 'linked', 'paths': 4}})]}
+        P = self._project(doc)
+        rep = W.migrate_project(P)
+        env = {p['id']: p.get('envelope') for p in doc['source_paths']}
+        assert env['A'] == {'thickness': 10.0, 'align': 'inside', 'print_reference': False}
+        assert env['T'] is None and env['L']['thickness'] == 8.0
+        assert not any('wall' in p for p in doc['source_paths'])
+        (sysr,) = P['wall_systems']
+        assert sysr['type'] == 'linked' and sysr['params'] == {'paths': 4} and sysr['members'] == ['L']
+        assert '_legacy_key' not in sysr and any('own wall 10' in r for r in rep)
+        assert W.migrate_project(P) == []                                   # idempotent
+
+    def test_network_walls_are_inherited_over_the_source_network(self):
+        import reference_network as RN
+        d = RN.document('zigzag')
+        for p in d['source_paths']:
+            p.pop('envelope', None)
+        d['network_walls'] = [{'id': 'NW1', 'path_id': 'R1', 'thickness': 10, 'align': 'auto'}]
+        far = {'id': 'X', 'type': 'LinePath', 'start': [900, 900], 'end': [980, 900]}      # touches nothing
+        own = {'id': 'Y', 'type': 'LinePath', 'start': [100, 100], 'end': [100, 40], 'wall': {'thickness': 0}}
+        d['source_paths'] += [far, own]
+        P = self._project(d)
+        W.migrate_project(P)
+        env = {p['id']: (p.get('envelope') or {}).get('thickness') for p in d['source_paths']}
+        assert env == {'C1': 10.0, 'R1': 10.0, 'R2': 10.0, 'L1': 10.0, 'X': None, 'Y': None}
+        assert 'network_walls' not in d
+        # the converted document prints exactly like the per-wall reference fixture
+        from layer_design import DesignLibrary
+        a = DesignLibrary([{'id': 'b', 'name': 'B', 'document': d}]).build('b').printable
+        ref = RN.document('zigzag')
+        ref['source_paths'] += [dict(far), {k: v for k, v in own.items() if k != 'wall'}]
+        b = DesignLibrary([{'id': 'b', 'name': 'B', 'document': ref}]).build('b').printable
+        assert a == b
+
+    def test_pairwise_lattice_instances_are_dropped_and_reported(self):
+        doc = {'source_paths': [path('A', envelope=ENV10)],
+               'lattice_instances': [{'id': 'li', 'generator': 'zigzag', 'path_a_id': 'A', 'path_b_id': 'A',
+                                      'params': {}}]}
+        P = self._project(doc)
+        rep = W.migrate_project(P)
+        assert 'lattice_instances' not in doc and any('pairwise lattice' in r for r in rep)
+
+    def test_in_document_build_records_split_into_envelopes_and_project_systems(self):
+        doc = {'source_paths': [path('A'), path('B')],
+               'wall_systems': [{'id': 'WS1', 'name': 'Rooms', 'type': 'interleaved', 'thickness': 9,
+                                 'align': 'inside', 'print_reference': False, 'params': {'paths': 4},
+                                 'members': ['A'], 'web': {}}]}
+        P = self._project(doc)
+        rep = W.migrate_project(P)
+        base = P['designer']['designs'][0]['document']
+        env = {p['id']: p.get('envelope') for p in base['source_paths']}
+        assert env['A'] == {'thickness': 9.0, 'align': 'inside', 'print_reference': False} and env['B'] is None
+        assert 'wall_systems' not in base and 'wall_groups' not in base
+        (sysr,) = P['wall_systems']
+        assert sysr['id'] == 'WS1' and sysr['type'] == 'interleaved' and sysr['members'] == ['A']
+        assert any('In-document Wall System records' in r for r in rep)
+
+    def test_empty_legacy_collections_are_not_written(self):
+        doc = {'source_paths': [path('A', envelope=ENV10)], 'offset_treatments': [], 'lattice_instances': [],
+               'network_walls': [], 'wall_groups': [], 'wall_relations': [], 'junction_overrides': []}
+        P = self._project(doc)
+        W.migrate_project(P)
+        assert not any(k in doc for k in ('offset_treatments', 'lattice_instances', 'network_walls', 'wall_groups'))
+        assert 'wall_relations' in doc and 'junction_overrides' in doc            # current features stay
+        kept = {'source_paths': [path('A')], 'offset_treatments': [{'id': 'o', 'source_path_id': 'A', 'distance': 5}]}
+        W.migrate_project(self._project(kept))
+        assert kept['offset_treatments']                                            # a non-empty one is kept
 
 
 def project(base_doc, variants=(), systems=(), profiles=()):

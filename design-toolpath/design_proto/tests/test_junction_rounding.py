@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
 
-from model import Vec2, LinePath, NetworkWall, WallSpec, PrintLayer, Opening
+from model import Vec2, LinePath, PrintLayer, Opening
+from canon import thick
 import network as N
 from trim_fixtures import circle_rect, pick
 import test_infill_junctions as TJ
@@ -33,11 +34,11 @@ def manual_fixture(R, cx=340.0, cy=150.0, rad=95.0, rect=(100, 100, 240, 160), w
     """The manual case: Circle + Rectangle, one network wall, the
     overlapping sections trimmed, rounded junctions."""
     base = circle_rect(cx=cx, cy=cy, r=rad, rect=rect)
-    base.network_walls = [NetworkWall('NW', 'R', w)]
+    base.wall_systems = [thick(['R', 'C'], w, sid='NW')]
     trims = [pick(base, 'C', lambda s: s['inside'].get('R') is True, 't1'),
              pick(base, 'R', lambda s: s['inside'].get('C') is True, 't2')] if trim else []
     lay = circle_rect(cx=cx, cy=cy, r=rad, rect=rect, trims=trims)
-    lay.network_walls = [NetworkWall('NW', 'R', w)]
+    lay.wall_systems = [thick(['R', 'C'], w, sid='NW')]
     lay.junction_style, lay.junction_radius = 'round', R
     return lay
 
@@ -46,9 +47,8 @@ def L_corner(R, w=W, opening=None):
     """Two thick straight walls meeting end to end (a wall turn, hub)."""
     a = LinePath(Vec2(100, 100), Vec2(300, 100), id='A')
     b = LinePath(Vec2(300, 100), Vec2(300, 300), id='B')
-    a.wall = WallSpec(w, 'center')
-    b.wall = WallSpec(w, 'center')
-    lay = PrintLayer('t', source_paths=[a, b], junction_style='round', junction_radius=R)
+    lay = PrintLayer('t', source_paths=[a, b], junction_style='round', junction_radius=R,
+                     wall_systems=[thick(['A', 'B'], w, align='center')])
     if opening:
         lay.openings = [Opening('o', 'A', *opening)]
     return lay
@@ -137,9 +137,7 @@ def check_invariants(lay, expect_runs=None):
 
 
 def wall_thickness(lay):
-    if lay.network_walls:
-        return lay.network_walls[0].thickness
-    return next(p.wall.thickness for p in lay.source_paths if p.wall)
+    return lay.wall_systems[0].thickness
 
 
 # ---------------------------------------------------------------------------

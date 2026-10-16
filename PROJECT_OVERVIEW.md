@@ -139,14 +139,15 @@ The approximate current/future information flow is:
 Design + Toolpath
   ├─ Designer (design_proto): reusable 2D LAYER DESIGNS
   │         ↓ narrow interface (LayerSource: design info + resolved 2D printable geometry)
-  │         (WALL GROUPS since 2026-10-11: members, thickness, alignment — the architecture;
-  │          the Designer shows wall envelopes, no construction / lattice / route)
+  │         (PER-WALL ARCHITECTURE since 2026-10-15, schema 7: each wall owns its thickness,
+  │          alignment, caps and Corner R — Wall Groups removed; the Designer shows wall
+  │          envelopes, no construction / lattice / route)
   ├─ Layer Assembly (layer_assembly): stacks Layer Designs by physical height → layers + Z
   │         (edited on ARCHITECTURAL ENVELOPES: walls / junctions / openings / cuts, no Wall
   │          System lattice or routing; preliminary envelope-level support)
   └─ WALL SYSTEMS workspace (2026-10-11): the project's printable constructions (Single /
-            Hollow / Skin + Web / Parallel / waves / Chained Loop) assigned to walls or Wall
-            Groups; "Generate Wall Systems" (explicit) = the existing full pipeline for the whole
+            Hollow / Skin + Web / Parallel / waves / Chained Loop) assigned per wall (a
+            members checklist); "Generate Wall Systems" (explicit) = the existing full pipeline for the whole
             building + bead-level support; status NOT GENERATED / GENERATING / CURRENT / OUTDATED
         ↓ (only CURRENT generated geometry)
   PRINT PLAN (layer_assembly/print_plan.py, 2026-10-09): every layer routed and
@@ -435,7 +436,7 @@ The whole-print plan (ordered layers → continuous runs, travels and layer tran
 
 ### Active Design + Toolpath baseline (2026-10-14)
 
-**ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface (2026-10-14). Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE".
+**ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface on 2026-10-14; Design + Toolpath development RESUMED on 2026-10-15 on this branch with `design-toolpath/WALL_ARCHITECTURE.md` (its §F decisions supersede the "explicitly deferred" list above — junction / corner / cap ownership is the active work; M0–M7 implemented, manually reviewed and checkpointed). Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE".
 
 ### Architectural editing is separate from print-path generation (2026-10-11)
 
@@ -643,7 +644,7 @@ Important unresolved questions currently include:
 - What constraints arise from the physical scale of the machine? (Machine profiles exist from 2026-10-15; the real printable X / Y and maximum building Z are still unmeasured, and where the print origin sits relative to the frame's printable area — the envelope convention — is provisional.)
 - What constraints arise from material behavior and the hose-fed printing process?
 - What should the boundary between design and toolpath generation ultimately be?
-- Wall / junction / corner / cap ownership: `design-toolpath/WALL_ARCHITECTURE.md` approved (revision 4, §F final decisions); milestones M0–M4 implemented 2026-10-15, manually reviewed and checkpointed (`b4ccd16`); M5 (trims bounded by persistent junctions — a branch joining a junction or crossing a removed section no longer resurrects trimmed geometry) implemented, reviewed and checkpointed (`dce9366`); M6 (source-wall attachment) + M7 (continuous Out-and-Back excursions) implemented 2026-10-16 (with the through-wall / Chained Loop correction), manually reviewed and checkpointed — walls own their properties, no Wall Groups, persistent junction records (authoritative for trim boundaries since M5, otherwise shadow). M8+ not started; open points in "Before M5 — to decide".
+- Wall / junction / corner / cap ownership: `design-toolpath/WALL_ARCHITECTURE.md` approved (revision 4, §F final decisions); milestones M0–M4 implemented 2026-10-15, manually reviewed and checkpointed (`b4ccd16`); M5 (trims bounded by persistent junctions — a branch joining a junction or crossing a removed section no longer resurrects trimmed geometry) implemented, reviewed and checkpointed (`dce9366`); M6 (source-wall attachment) + M7 (continuous Out-and-Back excursions) implemented 2026-10-16 (with the through-wall / Chained Loop correction), manually reviewed and checkpointed — walls own their properties, no Wall Groups, persistent junction records (authoritative for trim boundaries since M5, otherwise shadow). M8+ not started; open points in "Before M5 — to decide". 2026-10-16 cleanup after the M7 checkpoint (behaviour-preserving; strict golden 23/23 byte-identical (no re-baseline), PrintPlan / `.mudjob` identical): the pre-Wall-System representations (`path.wall`, `network_walls`, the pairwise `lattice_instances`, in-document Wall System records, the in-page migration) were removed from production and live only in `walls.migrate_project` (one-way, on every open / save). NOTE — two milestone namespaces: `WALL_ARCHITECTURE.md` M0–M10 (the active plan) and `DEFERRED_TOOLPATH_ARCHITECTURE.md` M0–M5 (deferred print paths, 2026-10-11; M0–M2 done, M3+ archived).
 
 ### Raspberry Pi / Printer Interface
 
@@ -695,6 +696,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-16 (Design + Toolpath cleanup checkpoint)
+
+Behaviour-preserving cleanup after the WALL ARCHITECTURE M0–M7 checkpoint (manually reviewed in the browser, committed): dead splice helpers, the pairwise lattice, per-path / network wall records and the in-page migration removed from production (legacy project files still open — `walls.migrate_project` converts them once); documentation consolidated (Design + Toolpath is active, not paused; Wall Groups gone; the two M-numbering schemes distinguished). Strict golden 23/23 strict byte-identical (no re-baseline); PrintPlan / `.mudjob` unchanged. Details: `design-toolpath/PROJECT_MEMORY.md` → Last Updated 2026-10-16.
 
 2026-10-15 (checkpoint)
 

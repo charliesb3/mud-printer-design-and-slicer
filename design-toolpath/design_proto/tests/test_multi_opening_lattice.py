@@ -15,13 +15,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_proto'))
 
-from app import _deserialise_layer
+from canon import layer as _authored_layer
 from graph import route_layer, compute_metrics, build_graph, closure_report
 import multi_opening_fixtures as F
 
 
 def build(doc):
-    lay = _deserialise_layer(doc)
+    lay = _authored_layer(doc)
     paths, meta = lay._build_effective()
     faces = [[(q.x, q.y) for q in p.sample_points()] for p in paths if getattr(p, 'treatment_id', '') != 'infill']
     lat = [[(q.x, q.y) for q in p.sample_points()] for p in paths if getattr(p, 'treatment_id', '') == 'infill']

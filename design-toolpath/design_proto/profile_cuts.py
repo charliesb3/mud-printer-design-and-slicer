@@ -126,14 +126,9 @@ def _edge(d, edge):
 
 
 def _thicknesses(doc) -> dict:
-    """Effective wall thickness per source: its Wall System's envelope, else
-    the document-level wall rule (semantic_transform.effective_walls)."""
+    """Wall thickness per source: its Wall System build record's envelope
+    (0 = a thin wall)."""
     out = {}
-    try:
-        import semantic_transform as ST
-        out = {k: v[0] for k, v in ST.effective_walls(doc).items()}
-    except Exception:                      # thickness is only shown / used for jamb margins
-        out = {}
     for ws in doc.get('wall_systems') or []:
         th = ws.get('thickness')
         if th:
@@ -274,17 +269,14 @@ def _networks(doc):
 
 
 def _remove_source(out, doc, sid):
-    """Remove a source and the records that belong to it alone; re-anchor
-    shared records (Network Wall, owned web) on another member."""
+    """Remove a source and the records that belong to it alone; re-anchor a
+    shared record (an owned web) on another member."""
     out['source_paths'] = [d for d in out.get('source_paths') or [] if d.get('id') != sid]
     alive = {d.get('id') for d in out['source_paths']}
     for coll, f in (('openings', 'source_path_id'), ('trims', 'source_path_id'),
                     ('offset_treatments', 'source_path_id'), ('region_overrides', 'path_id')):
         if out.get(coll):
             out[coll] = [r for r in out[coll] if r.get(f) != sid]
-    if out.get('lattice_instances'):
-        out['lattice_instances'] = [r for r in out['lattice_instances']
-                                    if sid not in (r.get('path_a_id'), r.get('path_b_id'))]
     root = None
     systems = {}
     for ws in out.get('wall_systems') or []:
@@ -292,14 +284,6 @@ def _remove_source(out, doc, sid):
         if sid in mem:
             ws['members'] = [m for m in mem if m != sid]
         systems[ws.get('id')] = [m for m in ws.get('members') or [] if m in alive]
-    for nw in list(out.get('network_walls') or []):
-        if nw.get('path_id') == sid:
-            root = root or _networks(doc)
-            alt = next((d for d in sorted(alive) if root(d) == root(sid)), None)
-            if alt is None:
-                out['network_walls'].remove(nw)
-            else:
-                nw['path_id'] = alt
     keep = []
     for f in out.get('infills') or []:
         if f.get('path_id') != sid:

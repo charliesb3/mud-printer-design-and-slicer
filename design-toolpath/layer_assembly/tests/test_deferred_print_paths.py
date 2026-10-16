@@ -213,16 +213,16 @@ def test_envelope_contents_attribution_walls_systems_openings():
 def test_plain_and_hollow_walls_without_rings_are_their_face_beads():
     from layer_design import DesignLibrary
 
-    def doc(system):
+    def doc():
         return {'id': 'd', 'source_paths': [
             {'id': 'W', 'type': 'RectanglePath', 'x': 100, 'y': 140, 'w': 200, 'h': 120, 'closed': True,
-             'wall': {'thickness': 12, 'align': 'auto', **({'system': system} if system else {})}},
+             'envelope': {'thickness': 12, 'align': 'auto', 'print_reference': False}},
             {'id': 'L', 'type': 'LinePath', 'start': [100, 330], 'end': [300, 330], 'closed': False,
-             'wall': {'thickness': 10, 'align': 'center'}}],
-            'offset_treatments': [], 'lattice_instances': [], 'infills': [], 'openings': [],
+             'envelope': {'thickness': 10, 'align': 'center', 'print_reference': False}}],
+            'infills': [], 'openings': [],
             'material': {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'physical': True}}
-    for sysd in (None, {'type': 'hollow'}):
-        lib = DesignLibrary([{'id': 'base', 'name': 'Base', 'document': doc(sysd)}])
+    for systems in ([], [{'id': 'S', 'type': 'hollow', 'members': ['W'], 'params': {}, 'web': {}}]):
+        lib = DesignLibrary([{'id': 'base', 'name': 'Base', 'document': doc()}], systems)
         e = lib.envelope('base')
         full = lib.build('base')
         assert e.rings == rings_of(full) == []
@@ -317,12 +317,14 @@ def test_print_preparation_returns_the_bead_level_support_and_is_unchanged_by_ed
     p1 = post(client, '/api/assembly/print_plan', body)
     prn = post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': ds})
     assert p1['support']['level'] == 'bead' and p1['support'] == prn['support']
-    # a fresh server: envelope EDITING first (canonical builds shared), then print preparation
+    # a fresh server: envelope EDITING first (the design set's shared canonical store
+    # registered; the envelopes themselves come from the architecture library, so no
+    # canonical build is needed for editing), then print preparation
     from layer_assembly import web
     for reg in (web._SOURCES, web._ENV_SOURCES, web._CANON, web._PLANS):
         reg.clear()
     post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': ds, 'envelope': True})
-    assert web._CANON and all(web._CANON.values())
+    assert web._CANON
     p2 = post(client, '/api/assembly/print_plan', body)
     assert json.dumps(p2, sort_keys=True) == json.dumps(p1, sort_keys=True)   # byte-identical plan + support
 
@@ -336,7 +338,7 @@ def test_project_save_open_keeps_envelope_editing_identical(client):
             'assembly': {'state': asm, 'header_counter': 0}}
     f = post(client, '/api/project/save', {'project': proj})['file']
     text = json.dumps(f)
-    assert '"ring_sources"' not in text and '"rings"' not in text and '"envelope"' not in text   # authoring state only
+    assert '"ring_sources"' not in text and '"rings"' not in text and '"strands"' not in text   # authoring state only (per-wall `envelope` fields are authored)
     opened = client.post('/api/project/open', data=text.encode()).get_json()
     p2 = opened['project'] if 'project' in opened else opened
     ds2, asm2 = p2['designer']['designs'], p2['assembly']['state']
@@ -345,7 +347,7 @@ def test_project_save_open_keeps_envelope_editing_identical(client):
     # project as the migration leaves it)
     from walls import migrate_parts
     ds, _, asm, rep = migrate_parts(ds, [], asm)
-    assert rep and all('dropped' in r for r in rep)
+    assert rep and any('dropped' in r for r in rep)      # (+ the in-document records converted)
     r1 = post(client, '/api/assembly/resolve', {'assembly': asm, 'designs': ds, 'envelope': True})
     r2 = post(client, '/api/assembly/resolve', {'assembly': asm2, 'designs': ds2, 'envelope': True})
     assert r1['instances'] == r2['instances'] and r1['support'] == r2['support'] and r1['profiles'] == r2['profiles']

@@ -35,7 +35,7 @@ def _params(t):
 
 
 def doc(paths, systems):
-    return {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'lattice_instances': [], 'infills': [],
+    return {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'infills': [],
             'openings': [], 'trims': [], 'material': dict(MAT), 'wall_systems': systems}
 
 
@@ -106,7 +106,7 @@ def test_line_through_the_reference_network(client, x):
     """The manual case: an Interleaved Waves network (both rectangles, the
     circle, Line 1) and a new straight line across it."""
     d = RN.document('zigzag')
-    d['infills'], d['network_walls'] = [], []
+    d['infills'] = []
     d['material'] = dict(MAT)
     d['wall_systems'] = [ws('H', 'interleaved', ['R1', 'R2', 'C1', 'L1'])]
     d['source_paths'].append({'id': 'p9', 'type': 'LinePath', 'start': [x, 60], 'end': [x, 340]})

@@ -18,8 +18,7 @@ from model import Vec2, _clip_to_rings
 def base_doc(w=200):
     return {'id': 'l', 'source_paths': [
         {'id': 'W', 'type': 'RectanglePath', 'label': 'Wall', 'x': 100, 'y': 140, 'w': w, 'h': 120,
-         'closed': True, 'wall': {'thickness': 10}}],
-        'offset_treatments': [], 'lattice_instances': [],
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}],
         'infills': [{'id': 'I', 'path_id': 'W', 'pattern': 'wave', 'params': {'spacing': 20},
                      'kind': 'wall', 'variation_index': 0}],
         'junction_style': 'miter', 'material': {'bead_width': 3.0, 'physical': True}}
@@ -43,7 +42,7 @@ def test_apply_derivation_semantics():
         'infills': {'I': None}},
         {'junction_style': 'round', 'material': {'contact_overlap': 1.0}})
     W = doc['source_paths'][0]
-    assert W['w'] == 300 and W['h'] == 120 and W['wall'] == {'thickness': 10}   # field merge
+    assert W['w'] == 300 and W['h'] == 120 and W['envelope']['thickness'] == 10   # field merge
     assert [p['id'] for p in doc['source_paths']] == ['W', 'L']                    # order + add
     assert doc['infills'] == []                                                    # remove
     assert doc['junction_style'] == 'round'
@@ -98,10 +97,10 @@ def test_a_design_alone_is_the_normal_designer_build():
     """A lattice family of ONE design is planned normally. (Superseded
     2026-10-06: Base WITH variants now prints the lineage scaffold — its
     braces at the variants' end walls — see test_lineage_scaffold.py.)"""
-    from app import _deserialise_layer
+    from canon import layer as authored_layer
     built = DesignLibrary([{'id': 'base', 'name': 'Base', 'document': base_doc()}]).build('base')
-    paths, meta = _deserialise_layer(base_doc())._build_effective()
-    assert built.printable == _deserialise_layer(base_doc()).printable_centerlines(paths, meta)
+    paths, meta = authored_layer(base_doc())._build_effective()
+    assert built.printable == authored_layer(base_doc()).printable_centerlines(paths, meta)
 
 
 def test_derived_design_keeps_the_parent_lattice_away_from_the_change():

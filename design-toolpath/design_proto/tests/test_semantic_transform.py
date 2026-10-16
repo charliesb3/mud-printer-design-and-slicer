@@ -73,7 +73,7 @@ def test_disconnected_shapes_transform_independently():
     assert (C['cx'], C['cy'], C['radius']) == (480, 180, 48) and math.isclose(R['w'], 192)
     xs = [x for p in strands(b, 'C') for x, _ in p['pts']]
     assert math.isclose(max(xs), 528, abs_tol=0.01)                  # outer face of the scaled circle
-    assert C['wall'] == F.document(())['source_paths'][1]['wall']    # thickness is physical
+    assert C['envelope'] == F.document(())['source_paths'][1]['envelope']    # thickness is physical
 
 
 def test_the_connector_is_regenerated_as_a_constant_thickness_wall_on_its_hosts():
@@ -82,7 +82,7 @@ def test_the_connector_is_regenerated_as_a_constant_thickness_wall_on_its_hosts(
     assert con['source'] == 'L' and con['hosts'] == ['R', 'C']
     L = next(p for p in b.document['source_paths'] if p['id'] == 'L')
     assert L['start'] == [316.0, 180.0] and L['end'] == [432.0, 180.0]          # T_R(340,180), T_C(400,180)
-    assert L['wall'] == {'thickness': 10}                                        # same wall
+    assert L['envelope'] == {'thickness': 10, 'align': 'auto', 'print_reference': False}   # same wall
     R = next(p for p in b.document['source_paths'] if p['id'] == 'R')
     assert math.isclose(R['x'] + R['w'], 316.0)                                  # ON the rectangle's right edge
     C = next(p for p in b.document['source_paths'] if p['id'] == 'C')

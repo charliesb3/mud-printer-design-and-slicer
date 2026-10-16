@@ -36,7 +36,7 @@ MAT = {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'phys
 
 
 def doc(paths, members, openings=(), params=None, thickness=T):
-    return {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'lattice_instances': [], 'infills': [],
+    return {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'infills': [],
             'openings': list(openings), 'trims': [], 'material': dict(MAT),
             'wall_systems': [{'id': 'WS1', 'name': 'WS1', 'type': 'chain', 'members': members,
                               'thickness': thickness, 'params': dict(params or {})}]}

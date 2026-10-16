@@ -1833,15 +1833,6 @@ def extend_through(chain, d1, d2, c1, c2, depth_in, bead):
     return [X1] + chain[i1:i2 + 1] + [X2, X1]
 
 
-def connect_branch(polys, chain, d1, d2, radius, bead, reach):
-    """(see _splice) — the incoming wall and the host joined into one polyline."""
-    r = _splice(polys, chain, d1, d2, radius, bead, reach)
-    if r is None:
-        return None
-    i, keep, inc, info = r
-    return _join(polys[:i] + polys[i + 1:] + keep + [inc]), info
-
-
 def splice_excursions(polys, branches, radius, bead, reach):
     """M7 — CONTINUOUS OUT-AND-BACK EXCURSIONS (WALL_ARCHITECTURE.md §6, §F3).
 
@@ -1870,8 +1861,8 @@ def splice_excursions(polys, branches, radius, bead, reach):
 
     A Chained Loop's necks are vertices the strand visits twice; cutting
     through one is valid here (each piece stays one polyline; the other pass
-    keeps the vertex), so the Parallel-kiss guard of connect_branch is NOT
-    applied — it made the result depend on whether a neck fell between the
+    keeps the vertex), so the Parallel-kiss `touch_guard` of _resolve_host is
+    NOT applied — it made the result depend on whether a neck fell between the
     lanes, i.e. on the pitch.
 
     Each EXCURSION (p1, lane, U-turn, lane, p2) is returned SEPARATELY so
@@ -2030,12 +2021,12 @@ def _compose_cuts(recs, L, closed):
 
 
 def _resolve_host(polys, chain, d1, d2, bead, reach, touch_guard=True):
-    """The HOST SEARCH of _splice: each lane of `chain` continues straight
-    along its direction (d1 / d2) to the generated geometry; the host is the
-    first pair of hits on ONE path, close along it. `touch_guard`: refuse a
-    stretch holding a vertex the path visits twice (connect_branch: a
-    Parallel Walls kiss). → (path index, (s, arc, X1), (s, arc, X2), i1, i2)
-    or None (no straight lanes / no contact)."""
+    """The HOST SEARCH of an excursion (M7, splice_excursions): each lane of
+    `chain` continues straight along its direction (d1 / d2) to the generated
+    geometry; the host is the first pair of hits on ONE path, close along it.
+    `touch_guard`: refuse a stretch holding a vertex the path visits twice (a
+    Parallel Walls kiss) — off for excursions. → (path index, (s, arc, X1),
+    (s, arc, X2), i1, i2) or None (no straight lanes / no contact)."""
     s1 = _lane_start(chain, d1, bead)
     s2 = _lane_start(list(reversed(chain)), d2, bead)
     if s1 is None or s2 is None:
@@ -2084,76 +2075,6 @@ def _resolve_host(polys, chain, d1, d2, bead, reach, touch_guard=True):
         return None
     (sA, i, aA, X1), (sB, _, aB, X2) = best
     return i, (sA, aA, X1), (sB, aB, X2), i1, i2
-
-
-def _splice(polys, chain, d1, d2, radius, bead, reach):
-    """MIXED-SYSTEM JUNCTION — printed material to printed material.
-
-    `chain`: the incoming wall's printed beads as one polyline from its end at
-    the host (chain[0]) round to its other end at the host (chain[-1]) — e.g.
-    a single / out-and-back branch: lane, U-turn, lane. d1 / d2: the
-    ARCHITECTURAL junction direction at each end (the source wall's direction,
-    pointing into the host). The architectural envelope only says where the
-    wall may exist; the lanes therefore do NOT stop at the host's nominal face:
-    each continues STRAIGHT along its direction until it reaches the host
-    system's ACTUAL generated geometry (a wave crest early, a trough deeper).
-    The two contacts are chosen on one host path, close along it (the first
-    such pair); the short host stretch between them is cut out, so branch and
-    host become one circuit. radius > 0 rounds each contact corner (Junction R
-    applied at the real contact — it never pulls the walls apart).
-    Returns (host index, the host's kept pieces, the incoming polyline from
-    contact to contact, info) or None (no straight lanes / no contact)."""
-    r = _resolve_host(polys, chain, d1, d2, bead, reach)
-    if r is None:
-        return None
-    i, (sA, aA, X1), (sB, aB, X2), i1, i2 = r
-    pl = polys[i]
-    cum = [0.0]
-    for u, v in zip(pl, pl[1:]):
-        cum.append(cum[-1] + u.dist(v))
-    L = cum[-1]
-    closed = pl[0].dist(pl[-1]) < 1e-6
-    (lo, Plo), (hi, Phi) = sorted([(aA, X1), (aB, X2)], key=lambda x: x[0])
-    if closed and hi - lo <= L - (hi - lo):
-        keep = [_sub(pl, cum, hi, L) + _sub(pl, cum, 0.0, lo)[1:]]
-        keep[0][0], keep[0][-1] = Phi, Plo
-    elif closed:
-        keep = [_sub(pl, cum, lo, hi)]
-        keep[0][0], keep[0][-1] = Plo, Phi
-    else:
-        keep = [x for x in (_sub(pl, cum, 0.0, lo), _sub(pl, cum, hi, L))
-                if sum(u.dist(v) for u, v in zip(x, x[1:])) > 1e-9]
-        for x in keep:
-            if x[-1].dist(Plo) < 1e-9:
-                x[-1] = Plo
-            if x[0].dist(Phi) < 1e-9:
-                x[0] = Phi
-    inc = [X1] + chain[i1:i2 + 1] + [X2]
-    if radius > 1e-9:
-        # Junction R at the REAL contact: a tangent blend from the incoming
-        # lane into the host path on each side of the cut
-        for end in (0, -1):
-            X = inc[end]
-            nxt = inc[1] if end == 0 else inc[-2]
-            pk = next((k for k, x in enumerate(keep) if x[0].dist(X) < 1e-9 or x[-1].dist(X) < 1e-9), None)
-            if pk is None:
-                continue
-            plen = sum(u.dist(v) for u, v in zip(keep[pk], keep[pk][1:]))
-            dl = min(radius, 0.45 * X.dist(nxt))
-            dh = min(radius, 0.45 * plen)
-            if dl < 1e-6 or dh < 1e-6:
-                continue
-            keep[pk], B = _trim_from(keep[pk], X, dh)
-            A = X + (nxt - X) * (dl / X.dist(nxt))
-            n = 8
-            bez = [B * ((1 - t) ** 2) + X * (2 * t * (1 - t)) + A * (t * t)
-                   for t in (k / n for k in range(n + 1))]
-            if end == 0:
-                inc = bez + inc[1:]
-            else:
-                inc = inc[:-1] + list(reversed(bez))
-    return i, keep, inc, {'contacts': [(round(X1.x, 4), round(X1.y, 4)), (round(X2.x, 4), round(X2.y, 4))],
-                          'depth': [round(sA, 3), round(sB, 3)]}
 
 
 def _simplify(pl, tol=0.01):

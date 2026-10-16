@@ -18,16 +18,15 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from model import (Vec2, PrintLayer, RectanglePath, CirclePath, LinePath,
-                   QuadBezierPath, WallSpec, Trim, RegionInfill, Opening)
+                   QuadBezierPath, Trim, RegionInfill, Opening)
+from canon import thick
 
 
 def circle_rect(wall=0.0, cx=340.0, cy=180.0, r=80.0, rect=(100, 100, 240, 160), trims=()):
     R = RectanglePath(*rect, id='R', label='Rect 1', closed=True)
     C = CirclePath(cx, cy, r, id='C', label='Circle 1', closed=True)
-    if wall:
-        R.wall = WallSpec(wall)
-        C.wall = WallSpec(wall)
-    return PrintLayer('t', source_paths=[R, C], trims=list(trims))
+    return PrintLayer('t', source_paths=[R, C], trims=list(trims),
+                      wall_systems=[thick(['R', 'C'], wall)] if wall else [])
 
 
 def strip_circle(trims=(), dx=0.0):
@@ -39,10 +38,8 @@ def strip_circle(trims=(), dx=0.0):
 def line_rect(trims=(), wall=0.0):
     R = RectanglePath(100, 100, 200, 120, id='R', label='Rect 1', closed=True)
     L = LinePath(Vec2(40, 160), Vec2(360, 160), id='L', label='Line 1')
-    if wall:
-        R.wall = WallSpec(wall)
-        L.wall = WallSpec(wall)
-    return PrintLayer('t', source_paths=[R, L], trims=list(trims))
+    return PrintLayer('t', source_paths=[R, L], trims=list(trims),
+                      wall_systems=[thick(['R', 'L'], wall)] if wall else [])
 
 
 def curve_line(trims=()):

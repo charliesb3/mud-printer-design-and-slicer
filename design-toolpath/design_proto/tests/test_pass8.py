@@ -23,9 +23,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'toolpath_pr
 
 import app  # noqa: F401  (path setup)
 import route_quality as RQ
+import wall_metrics as WM
 from graph import route_layer, compute_metrics
 from model import (Vec2, PrintLayer, RectanglePath, CirclePath, EllipsePath,
-                   RegionInfill, WallRelation, InsetPath, Opening, WallSpec)
+                   RegionInfill, WallRelation, InsetPath, Opening)
 from tests.test_networks import _assert_internal_inside
 
 
@@ -105,7 +106,7 @@ def test_opening_cuts_both_faces_of_a_two_path_wall(kind, on):
     assert [p for p in paths if getattr(p, 'treatment_id', '') == 'infill']
     _assert_internal_inside(L)
     assert m['print_runs'] == 1 and m['travel_moves'] == 0
-    assert RQ.wall_metrics(L)['interior_retrace'] < 1e-6
+    assert WM.wall_metrics(L)['interior_retrace'] < 1e-6
 
 
 def test_wall_infill_region_with_several_voids_is_cut_through():
@@ -143,7 +144,7 @@ def test_multiple_and_overlapping_openings_through_two_path_wall():
     assert not _crosses_box(paths, meta, (52, 68, 0.5, 9.5))
     assert not _crosses_box(paths, meta, (111, 129, 110.5, 119.5))      # top: s 400 → x 120 (CCW)
     _assert_internal_inside(L)
-    assert RQ.wall_metrics(L)['interior_retrace'] < 1e-6
+    assert WM.wall_metrics(L)['interior_retrace'] < 1e-6
 
 
 def test_opening_spanning_a_corner_of_a_two_path_wall():
@@ -184,7 +185,7 @@ def test_wave_infill_clipped_by_two_path_opening():
     L = two_face('relation', ops=(('O', 100, 24),), pattern='wave')
     paths, meta, mv, m = _route(L)
     assert not _crosses_box(paths, meta, (90, 110, 0.5, 9.5))
-    assert RQ.wall_metrics(L)['congestion_hotspots'] == 0
+    assert WM.wall_metrics(L)['congestion_hotspots'] == 0
 
 
 # ---------------------------------------------------------------------------

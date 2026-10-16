@@ -205,7 +205,7 @@ eval(src + `
   check(layer.infills.length === 0, 'deleting the anchor path removes its infill');
   clearAll();
   check(networkInfo === null && layer.region_overrides.length === 0, 'clear all resets network state');
-  check(layer.network_walls.length === 0 && layer.return_paths === true, 'clear all resets walls / routing');
+  check(layer.return_paths === true, 'clear all resets routing');
   // --- interactive shape tools: clicking a tool creates nothing
   for (const t of ['line', 'rect', 'circle', 'ellipse']) {
     setTool(t);

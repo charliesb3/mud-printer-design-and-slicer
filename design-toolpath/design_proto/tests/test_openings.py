@@ -17,7 +17,7 @@ import networkx as nx
 from graph import route_layer, compute_metrics, build_graph
 from model import (
     Vec2, ExplicitPath, LinePath, CirclePath, EllipsePath, RectanglePath,
-    QuadBezierPath, OffsetTreatment, LatticeInstance, PrintLayer, Opening,
+    QuadBezierPath, OffsetTreatment, PrintLayer, Opening,
     _processed_source_pts, _cum_lengths, _locate_s, _project_to_polyline,
     _segments_intersect,
 )
@@ -27,12 +27,11 @@ from model import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _layer(src, offsets=(), openings=(), lattices=(), **kw):
+def _layer(src, offsets=(), openings=(), **kw):
     srcs = src if isinstance(src, list) else [src]
     return PrintLayer(id='t', source_paths=srcs,
                       offset_treatments=list(offsets),
-                      openings=list(openings),
-                      lattice_instances=list(lattices), **kw)
+                      openings=list(openings), **kw)
 
 
 def _ot(oid, sid, d):
@@ -489,97 +488,6 @@ class TestRoutingTopology:
 # 19–21  Lattice around openings
 # ---------------------------------------------------------------------------
 
-def _ring(gen, params, opening_s=100, width=40, cap_style='flat', r=0.0):
-    c = CirclePath(0, 0, 100, id='C')
-    return c, _layer(c, [_ot('a', 'C', 20)],
-                     [Opening('o', 'C', opening_s, width)],
-                     [LatticeInstance('li', gen, 'C', 'a', params)],
-                     cap_style=cap_style, cap_corner_radius=r)
-
-
-ZIG = ('zigzag', {'segments': 12, 'connect_ends': 1})
-WAVE = ('wave', {'cycles': 4})
-
-
-class TestLatticeAroundOpenings:
-
-    @pytest.mark.parametrize('gen', [ZIG, WAVE], ids=['zigzag', 'wave'])
-    @pytest.mark.parametrize('centre', [100, 0], ids=['mid', 'seam'])
-    def test_no_lattice_inside_opening(self, gen, centre):
-        c, layer = _ring(*gen, opening_s=centre)
-        src, cum = _src_frame(c)
-        a = (centre - 20) % cum[-1]
-        _assert_no_lattice_in_gap(layer.effective_paths(), src, cum, True,
-                                  a, a + 40)
-
-    @pytest.mark.parametrize('gen', [ZIG, WAVE], ids=['zigzag', 'wave'])
-    def test_lattice_does_not_bridge_the_opening(self, gen):
-        """No lattice segment crosses either cut face."""
-        _, layer = _ring(*gen)
-        paths = layer.effective_paths()
-        faces = [p.sample_points() for p in paths
-                 if p.role == 'cap' and p.label in ('cap_start', 'cap_end')]
-        for p in paths:
-            if p.role != 'lattice':
-                continue
-            pts = p.sample_points()
-            for u, v in zip(pts, pts[1:]):
-                for f in faces:
-                    for c0, c1 in zip(f, f[1:]):
-                        assert not _segments_intersect(u, v, c0, c1)
-
-    def test_narrow_opening_removes_spanning_lattice_segment(self):
-        """A zigzag diagonal whose ends are both outside a narrow opening
-        but passes through it must still be cut."""
-        c, layer = _ring('zigzag', {'segments': 6, 'connect_ends': 0},
-                         opening_s=60, width=8)
-        src, cum = _src_frame(c)
-        _assert_no_lattice_in_gap(layer.effective_paths(), src, cum, True,
-                                  56, 64)
-
-    @pytest.mark.parametrize('gen', [ZIG, WAVE], ids=['zigzag', 'wave'])
-    def test_lattice_terminates_on_the_opening_caps(self, gen):
-        _, layer = _ring(*gen)
-        paths = layer.effective_paths()
-        cap_vertices = {_xy(q, 9) for p in paths if p.role == 'cap'
-                        for q in p.sample_points()}
-        wall_vertices = {_xy(q, 9) for p in paths
-                         if p.role not in ('cap', 'lattice')
-                         for q in p.sample_points()}
-        face_ends = 0
-        for p in paths:
-            if p.role != 'lattice' or '~' not in p.id:
-                continue
-            for q in (p.sample_points()[0], p.sample_points()[-1]):
-                if _xy(q, 9) in cap_vertices and _xy(q, 9) not in wall_vertices:
-                    face_ends += 1
-        assert face_ends == 2      # one landing on each opening face
-        # Landed lattice and walls form ONE connected assembly.
-        assert nx.number_connected_components(_graph(layer)) == 1
-
-    def test_lattice_landing_with_rounded_caps_has_extension(self):
-        _, layer = _ring(*ZIG, cap_style='rounded_corners', r=6.0)
-        paths = layer.effective_paths()
-        exts = [p for p in paths if p.label.endswith('_ext')]
-        assert len(exts) == 2
-        lattice_ends = {_xy(q, 9) for p in paths if p.role == 'lattice'
-                        for q in (p.sample_points()[0], p.sample_points()[-1])}
-        for e in exts:
-            ep = e.sample_points()
-            assert _xy(ep[0], 9) in lattice_ends
-            assert e.sample_points()[0].dist(ep[1]) > 1e-6
-        assert nx.number_connected_components(_graph(layer)) == 1
-
-    def test_lattice_without_openings_unchanged(self):
-        c = CirclePath(0, 0, 100, id='C')
-        layer = _layer(c, [_ot('a', 'C', 20)],
-                       lattices=[LatticeInstance('li', *ZIG[:1], 'C', 'a',
-                                                 ZIG[1])])
-        lat = [p for p in layer.effective_paths() if p.role == 'lattice']
-        assert all('~' not in p.id for p in lat)
-        assert _metrics(layer)['travel_moves'] == 0
-
-
 # ---------------------------------------------------------------------------
 # 22–25  End treatment at openings (inherits the layer cap style)
 # ---------------------------------------------------------------------------
@@ -776,7 +684,6 @@ class TestSerialisation:
             'offset_treatments': [{'id': 'a', 'source_path_id': 'L',
                                    'distance': 10, 'role': 'inner',
                                    'label': ''}],
-            'lattice_instances': [],
             'constraints': {'start_path_id': None, 'start_t': None,
                             'reverse_direction': False,
                             'component_order': None},
@@ -866,38 +773,6 @@ class TestEdgeCases:
                          (wp.sample_points()[-1], 56)):
             assert _project_to_polyline(q, src, cum, True)[0] == \
                 pytest.approx(s_cut, abs=1e-6)
-
-    def test_lattice_lands_on_both_faces_with_every_cap_style(self):
-        for style, r in (('flat', 0), ('rounded_corners', 6), ('full_round', 0)):
-            _, layer = _ring(*ZIG, cap_style=style, r=r)
-            paths = layer.effective_paths()
-            lattice_ends = {_xy(q, 9) for p in paths if p.role == 'lattice'
-                            for q in (p.sample_points()[0],
-                                      p.sample_points()[-1])}
-            for cid in ('C~0_cs', 'C~0_ce'):
-                touched = {_xy(q, 9) for p in paths
-                           if p.id == cid or p.id.startswith(cid + '_x')
-                           for q in p.sample_points()}
-                assert lattice_ends & touched, (style, cid)
-            assert nx.number_connected_components(_graph(layer)) == 1
-
-    def test_lattice_between_independent_walls_is_clipped(self):
-        """Opening in wall A of a lattice spanning to a separate wall B:
-        the lattice is cut along A's cross-section through the opening."""
-        a = LinePath(Vec2(0, 0), Vec2(200, 0), id='A')
-        b = LinePath(Vec2(0, 30), Vec2(200, 30), id='B')
-        layer = _layer([a, b], openings=[Opening('o', 'A', 100, 30)],
-                       lattices=[LatticeInstance('li', 'zigzag', 'A', 'B',
-                                                 {'segments': 10,
-                                                  'connect_ends': 0})])
-        paths = layer.effective_paths()
-        for p in paths:
-            if p.role == 'lattice':
-                for u, v in zip(p.sample_points(), p.sample_points()[1:]):
-                    for k in range(41):
-                        q = u.lerp(v, k / 40)
-                        assert not (85 + 1e-6 < q.x < 115 - 1e-6), q
-        assert _pieces(paths, 'B') == []            # B itself is not cut
 
     def test_double_wall_ellipse_one_opening_continuous(self):
         e = EllipsePath(0, 0, 150, 90, id='E')
@@ -1000,35 +875,23 @@ def _assert_moves_avoid_openings(layer, moves, src_id):
                     f'{m.kind} move through opening at {q}'
 
 
-def _reported_case(cap='flat', r=0.0, lattice=True, openings=None):
-    """UI defaults: 120 in rect, 10 in inside offset, zigzag (6 segs,
-    connect ends), one 12 in opening on the bottom side."""
+def _reported_case(cap='flat', r=0.0, openings=None):
+    """UI defaults: 120 in rect, 10 in inside offset, one 12 in opening on
+    the bottom side."""
     R = RectanglePath(140, 140, 120, 120, id='p1')
-    lat = ([LatticeInstance('li', 'zigzag', 'p1', 'p2',
-                            {'segments': 6, 'connect_ends': 1})]
-           if lattice else [])
     return _layer(R, [_ot('p2', 'p1', 10)],
-                  openings or [Opening('o', 'p1', 60, 12)], lat,
+                  openings or [Opening('o', 'p1', 60, 12)],
                   cap_style=cap, cap_corner_radius=r)
 
 
 class TestReportedRoutingCase:
     """
     Reported: Requires backtracking, 3 runs, 2 travels. Diagnosis: ONE
-    connected component with 4 odd-degree nodes (zigzag start corner,
-    inner corner on the end connector, the two lattice landings on the
-    opening faces). Euler: no trail covers every edge exactly once (> 2 odd
-    nodes), so some re-traversal is unavoidable — but zero TRAVEL is
-    possible because the graph is connected. The old router paired all
-    odd nodes with straight travel jumps (one of them across the opening).
+    connected component; the old router paired odd nodes with straight
+    travel jumps (one of them across the opening). (The pairwise-lattice
+    variants of this case went with that lattice in the 2026-10-16 cleanup;
+    the wall lattice has its own opening tests.)
     """
-
-    @pytest.mark.parametrize('cap,r', [('flat', 0), ('rounded_corners', 3),
-                                       ('full_round', 0)])
-    def test_one_component_four_odd_nodes(self, cap, r):
-        G = _graph(_reported_case(cap, r))
-        assert nx.number_connected_components(G) == 1
-        assert sum(1 for _, d in G.degree() if d % 2) == 4
 
     @pytest.mark.parametrize('cap,r', [('flat', 0), ('rounded_corners', 3),
                                        ('full_round', 0)])
@@ -1036,29 +899,13 @@ class TestReportedRoutingCase:
         m = _metrics(_reported_case(cap, r))
         assert m['print_runs'] == 1 and m['travel_moves'] == 0
 
-    def test_flat_retrace_is_the_proven_minimum(self):
-        layer = _reported_case()
-        m = _metrics(layer)
-        # The only unavoidable repeat: the 10√2 in zigzag end connector.
-        assert m['retrace_distance'] == pytest.approx(10 * math.sqrt(2),
-                                                      abs=0.01)
-        assert m['retrace_distance'] == pytest.approx(
-            _min_open_trail_retrace(layer), abs=0.01)
-
-    @pytest.mark.parametrize('cap,r', [('rounded_corners', 3),
-                                       ('full_round', 0)])
-    def test_retrace_is_minimal_for_other_caps(self, cap, r):
-        layer = _reported_case(cap, r)
-        assert _metrics(layer)['retrace_distance'] == pytest.approx(
-            _min_open_trail_retrace(layer), abs=0.01)
-
     def test_no_move_crosses_the_opening(self):
         layer = _reported_case()
         _assert_moves_avoid_openings(
             layer, route_layer(layer.to_routing_layer()), 'p1')
 
     def test_one_opening_without_lattice_is_a_clean_loop(self):
-        layer = _reported_case(lattice=False)
+        layer = _reported_case()
         G = _graph(layer)
         assert all(d % 2 == 0 for _, d in G.degree())
         m = _metrics(layer)
@@ -1270,25 +1117,6 @@ class TestMultipleOpenings:
                     s = _project_to_polyline(q, pts, cum, True)[0]
                     for a, b in removed:
                         assert not _in_interval(s, a, b, L, True, 1e-3)
-
-    @pytest.mark.parametrize('gen', [ZIG, WAVE], ids=['zigzag', 'wave'])
-    def test_lattice_respects_all_openings(self, gen):
-        c = CirclePath(0, 0, 100, id='C')
-        ops = [Opening('a', 'C', 60, 30), Opening('b', 'C', 300, 30),
-               Opening('c', 'C', 0, 30)]                    # one on the seam
-        layer = _layer(c, [_ot('a2', 'C', 20)], ops,
-                       [LatticeInstance('li', gen[0], 'C', 'a2', gen[1])])
-        paths = layer.effective_paths()
-        src, cum = _src_frame(c)
-        for a, b in _removed(layer, 'C')[0]:
-            _assert_no_lattice_in_gap(paths, src, cum, True, a, b)
-        # Three openings split the ring into three assemblies; lattice never
-        # reconnects them.
-        assert nx.number_connected_components(_graph(layer)) == 3
-        m = _metrics(layer)
-        assert m['print_runs'] == 3 and m['travel_moves'] == 2
-        _assert_moves_avoid_openings(layer,
-                                     route_layer(layer.to_routing_layer()), 'C')
 
     def test_serialisation_preserves_multiple_openings(self):
         ops = [{'id': f'o{k}', 'source_path_id': 'L', 'center_s': 30 + 50 * k,

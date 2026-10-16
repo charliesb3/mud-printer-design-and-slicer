@@ -53,7 +53,8 @@ def line_doc(system='plain', params=None, length=120.0, extra=()):
     """A free-standing straight wall L (0,0)→(length,0), 10 in, in a Wall
     System of the given construction (plain = the path's own wall)."""
     paths = [{'id': 'L', 'type': 'LinePath', 'label': 'Wall', 'start': [0, 0], 'end': [length, 0],
-              **({'wall': {'thickness': T}} if system == 'plain' else {})}] + [dict(e) for e in extra]
+              **({'envelope': {'thickness': T, 'align': 'auto', 'print_reference': False}}
+                 if system == 'plain' else {})}] + [dict(e) for e in extra]
     doc = {'id': 'l', 'source_paths': paths, 'material': dict(MAT)}
     if system != 'plain':
         doc['wall_systems'] = [{'id': 'WS1', 'type': system, 'members': [p['id'] for p in paths],
@@ -671,7 +672,8 @@ def test_short_local_buttress_taper(system):
     attached start). The room and the rest of the buttress stay the layers
     below; routes close; support finds nothing."""
     rect = {'id': 'R', 'type': 'RectanglePath', 'label': 'Room', 'x': 0, 'y': 0, 'w': 120, 'h': 120, 'closed': True}
-    doc = line_doc(system, length=80, extra=[rect] if system != 'plain' else [dict(rect, wall={'thickness': T})])
+    doc = line_doc(system, length=80, extra=[rect] if system != 'plain'
+                   else [dict(rect, envelope={'thickness': T, 'align': 'auto', 'print_reference': False})])
     doc['source_paths'][0].update(start=[120, 60], end=[200, 60])
     src = DesignerSource.from_designs(designs(doc))
     (w,) = [t for t in src.walls('A') if t['source'] == 'L']

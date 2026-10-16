@@ -332,7 +332,8 @@ class TestWalls:
         wall stubs; an end on a single bead is still capped (no T host)."""
         secs = [s for s in sections(line_rect()).values() if s['source'] == 'L']
         lay = line_rect(trims=[trim_of(secs[1])])
-        lay.source_paths[1].wall = __import__('model').WallSpec(10, 'center')
+        from canon import thick
+        lay.wall_systems = [thick('L', 10, align='center')]
         paths, _ = build(lay)
         assert [p for p in paths if p.id.startswith('L~') and getattr(p, 'treatment_id', '') == 'wall_system']
 
@@ -393,7 +394,7 @@ def test_api_round_trip_trims():
         'id': 'l', 'source_paths': [
             {'id': 'R', 'type': 'RectanglePath', 'x': 100, 'y': 100, 'w': 240, 'h': 160, 'closed': True},
             {'id': 'C', 'type': 'CirclePath', 'cx': 340, 'cy': 180, 'radius': 80, 'closed': True}],
-        'offset_treatments': [], 'lattice_instances': [],
+        'offset_treatments': [],
     }
     with flask_app.test_client() as c:
         net = c.post('/api/effective_paths', json=payload).get_json()['network']

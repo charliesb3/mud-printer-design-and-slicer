@@ -10,8 +10,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from model import (Vec2, PrintLayer, LinePath, RectanglePath, RegionInfill, WallSpec,
-                   NetworkWall, CirclePath)
+from model import (Vec2, PrintLayer, LinePath, RectanglePath, RegionInfill, CirclePath)
 from material import MaterialSpec
 import wall_fixtures as WF
 

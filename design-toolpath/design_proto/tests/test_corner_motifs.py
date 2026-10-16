@@ -28,8 +28,9 @@ import app  # noqa: F401,E402  (path setup)
 import wall_lattice as WL                          # noqa: E402
 import wall_fixtures as WF                         # noqa: E402
 import physical_fixtures as PF                     # noqa: E402
-from model import (Vec2, PrintLayer, RectanglePath, RegionInfill, WallSpec, Opening,   # noqa: E402
+from model import (Vec2, PrintLayer, RectanglePath, RegionInfill, Opening,   # noqa: E402
                    CirclePath)
+from canon import thick                            # noqa: E402
 from graph import route_layer, compute_metrics, build_graph, closure_report   # noqa: E402
 
 
@@ -49,8 +50,8 @@ def plan(rings, pattern='zigzag', S=20.0, phys=True):
 
 def rect_layer(w=200, h=120, openings=(), pattern='zigzag'):
     R = RectanglePath(100, 140, w, h, id='R')
-    R.wall = WallSpec(10)
-    lay = PrintLayer('t', source_paths=[R], infills=[RegionInfill('I', 'R', pattern, {'spacing': 20})])
+    lay = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)],
+                     infills=[RegionInfill('I', 'R', pattern, {'spacing': 20})])
     lay.openings = [Opening(f'o{k}', 'R', c, wd) for k, (c, wd) in enumerate(openings)]
     return PF._phys(lay)
 
@@ -194,8 +195,8 @@ def test_a_corner_beside_a_dead_end_is_still_anchored():
 
 def _circle(R):
     C = CirclePath(200, 200, R, id='C')
-    C.wall = WallSpec(10)
-    return PF._phys(PrintLayer('t', source_paths=[C], infills=[RegionInfill('I', 'C', 'zigzag', {'spacing': 20})]))
+    return PF._phys(PrintLayer('t', source_paths=[C], wall_systems=[thick('C', 10)],
+                               infills=[RegionInfill('I', 'C', 'zigzag', {'spacing': 20})]))
 
 
 @pytest.mark.parametrize('layer', [

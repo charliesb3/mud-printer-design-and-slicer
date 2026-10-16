@@ -23,9 +23,10 @@ SHADOW MODE: the records are DETECTED exactly as the design geometry is
 contacted today (trim.contacts on the processed source polylines — the same
 segment-contact primitives as the wall networks), PERSISTED (project-level
 `junctions` registry, ids kept across saves) and the existing junction
-treatment overrides (corner keys) are MAPPED onto them. NOTHING reads them
-for geometry: production junctions still come from the wall-network face
-contacts (network.py). `consistency` compares the two; `layer_presence`
+treatment overrides (corner keys) are MAPPED onto them. Only the TRIM
+BOUNDARIES (M5, trim.py `_by_junctions`) read them; production junction
+geometry still comes from the wall-network face contacts (network.py).
+`consistency` compares the two; `layer_presence`
 reports, per resolved Assembly layer, which junctions exist there — a
 junction may cease / appear where transformed walls stop / start
 intersecting (§F1: valid topology, never an error).
@@ -40,8 +41,9 @@ Registry (project['junctions']):
       'shape': 'inherit' | {'style', 'radius'} | 'per_corner',
       'overrides': [{'corner', 'treatment', 'radius'}]   (the mapped legacy keys)
      }]}
-(Shadow storage is project-level so no document / payload / .mudjob byte
-changes; M5 moves the records into the lineage-owned documents.)
+(Storage is project-level so no document / payload / .mudjob byte changes;
+moving the records into the lineage-owned documents is still open — M5 did
+not do it.)
 """
 from __future__ import annotations
 

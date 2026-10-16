@@ -14,7 +14,7 @@ from app import app as flask_app
 
 
 def designs():
-    base = {'id': 'l', 'source_paths': [], 'offset_treatments': [], 'lattice_instances': [],
+    base = {'id': 'l', 'source_paths': [], 'offset_treatments': [],
             'material': {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'physical': True}}
     return [{'id': 'base', 'name': 'Base', 'parent': None, 'document': base},
             {'id': 'd1', 'name': 'Gaps', 'parent': 'base', 'patch': {}, 'settings': {}},

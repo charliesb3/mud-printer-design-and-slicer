@@ -84,54 +84,33 @@ _WALLS: dict = {}
 
 
 def effective_walls(doc) -> dict:
-    """{source id: (thickness, align, kind)} — each source's EFFECTIVE wall,
-    the Designer's rule (model.PrintLayer._wall_offsets): its own wall, else
-    the Network Wall of the SOURCE NETWORK it belongs to (sources whose
-    centre lines touch / cross, transitively — network.find_contacts), else
-    none. kind: 'wall' (thickness > 0); 'single' (a single bead — no wall, or
-    the explicit Wall Thickness 0 override inside a thick-walled network);
-    'lanes' (a single-bead path that physical rules print as two return
-    lanes: open, or a closed one opened by an opening)."""
-    key = json.dumps([doc.get('source_paths'), doc.get('network_walls'), doc.get('openings'),
-                      doc.get('infills'), doc.get('material')], sort_keys=True)
+    """{source id: (thickness, align, kind)} — how each source's centre line
+    prints for the purposes of attachment and attribution. kind: 'single'
+    (a single bead) or 'lanes' (a single-bead path that physical rules print
+    as two return lanes: open, or a closed one opened by an opening).
+
+    NOTE (behaviour kept at the 2026-10-16 cleanup, deliberately): this rule
+    predates the per-wall envelopes and never read a wall's thickness from
+    its Wall System build record, so every wall is judged as a single bead
+    here — the thickness / 'wall' kind only ever came from the removed legacy
+    `path.wall` / `network_walls` fields. Reading the envelope here would
+    change the semantic-transform attachment band and the attribution seam
+    (real geometry); that is a separate, deliberate change."""
+    key = json.dumps([doc.get('source_paths'), doc.get('openings'), doc.get('infills'), doc.get('material')],
+                     sort_keys=True)
     hit = _WALLS.get(key)
     if hit is not None:
         return hit
-    import network as N
-    from model import Vec2
-    srcs = [d for d in doc.get('source_paths') or [] if d.get('id')]
-    lines = {d['id']: _centreline(d) for d in srcs
-             if not (d.get('type') == 'InsetPath' and not d.get('points'))}
-    beads = [N.Bead(sid, [Vec2(*q) for q in pts], False, N.WIRE, f'S:{sid}')
-             for sid, pts in lines.items() if len(pts) >= 2]
-    uf = N.UnionFind()
-    for b in beads:
-        uf.find(b.element)
-    for a, b in N.find_contacts(beads):
-        uf.union(a, b)
-    nws = doc.get('network_walls') or []
     mat = doc.get('material') or {}
     physical = bool(mat.get('physical'))
     opened = {o.get('source_path_id') for o in doc.get('openings') or []} - \
         {f.get('path_id') for f in doc.get('infills') or []}
     extra = {o.get('source_path_id') for o in doc.get('offset_treatments') or []}
     out = {}
-    for d in srcs:
+    for d in [d for d in doc.get('source_paths') or [] if d.get('id')]:
         sid = d['id']
-        w = d.get('wall')
-        if isinstance(w, dict) and 'thickness' in w:
-            t, align = max(0.0, float(w.get('thickness') or 0)), w.get('align') or 'auto'
-        else:
-            nw = next((x for x in nws if x.get('path_id') in lines and sid in lines
-                       and uf.find(f"S:{x['path_id']}") == uf.find(f'S:{sid}')), None)
-            t, align = (float(nw.get('thickness') or 0), nw.get('align') or 'auto') if nw else (0.0, 'auto')
-        if t > 1e-9:
-            kind = 'wall'
-        elif physical and (_is_open(d) or sid in opened) and sid not in extra:
-            kind = 'lanes'
-        else:
-            kind = 'single'
-        out[sid] = (t if kind == 'wall' else 0.0, align, kind)
+        kind = 'lanes' if physical and (_is_open(d) or sid in opened) and sid not in extra else 'single'
+        out[sid] = (0.0, 'auto', kind)
     if len(_WALLS) > 64:
         _WALLS.clear()
     _WALLS[key] = out
@@ -398,8 +377,7 @@ def relations(doc, atts=None) -> dict:
         lines, no attachment between them): their junction is DERIVED
         geometry, recomputed by the Designer from the transformed forms; it
         shrinks and disappears when they separate (no bridge is invented)."""
-    key = json.dumps([doc.get('source_paths'), doc.get('network_walls'), doc.get('material')],
-                     sort_keys=True)                                 # per DESIGN, not per layer
+    key = json.dumps([doc.get('source_paths'), doc.get('material')], sort_keys=True)   # per DESIGN, not per layer
     hit = _RELATIONS.get(key)
     if hit is not None:
         return hit

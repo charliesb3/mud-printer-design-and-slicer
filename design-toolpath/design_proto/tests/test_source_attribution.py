@@ -18,13 +18,14 @@ MAT = {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'phys
 
 
 def doc(paths, infill_on):
-    return {'id': 'l', 'source_paths': paths, 'offset_treatments': [], 'lattice_instances': [],
+    return {'id': 'l', 'source_paths': paths,
             'infills': [{'id': 'I', 'path_id': infill_on, 'pattern': 'zigzag', 'params': {'spacing': 20},
                          'kind': 'wall', 'variation_index': 0}], 'material': MAT}
 
 
 def line(i, a, b):
-    return {'id': i, 'type': 'LinePath', 'label': i, 'start': list(a), 'end': list(b), 'wall': {'thickness': 10}}
+    return {'id': i, 'type': 'LinePath', 'label': i, 'start': list(a), 'end': list(b),
+            'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}
 
 
 def lattice_tags(d):

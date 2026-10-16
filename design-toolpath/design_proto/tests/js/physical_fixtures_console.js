@@ -25,16 +25,15 @@ function physicalFixture(name) {
     layer.source_paths.push(p);
     return p;
   };
-  const wall = t => ({ wall: { thickness: t, align: 'auto', print_reference: false } });
+  const wall = t => ({ envelope: { thickness: t, align: 'auto', print_reference: false } });
   const line = (a, b, label, extra) => add('LinePath', { start: a, end: b }, label, extra);
   const infill = (p, pattern) => { selectedId = p.id; addInfill(); layer.infills[layer.infills.length - 1].pattern = pattern; };
   const arms = (n, len, rot) => {
     const ps = [];
     for (let k = 0; k < n; k++) {
       const a = rot + 2 * Math.PI * k / n;
-      ps.push(line([200, 200], [200 + len * Math.cos(a), 200 + len * Math.sin(a)], `Arm ${k + 1}`));
+      ps.push(line([200, 200], [200 + len * Math.cos(a), 200 + len * Math.sin(a)], `Arm ${k + 1}`, wall(10)));
     }
-    layer.network_walls.push({ id: newId(), path_id: ps[0].id, thickness: 10, align: 'auto' });
     infill(ps[0], 'zigzag');
   };
   switch (name) {
@@ -53,8 +52,7 @@ function physicalFixture(name) {
     }
     case 'branch': {
       const R = add('RectanglePath', { x: 100, y: 140, w: 200, h: 120, rotation: 0 }, 'Rect 1', wall(10));
-      const B = line([200, 260], [200, 340], 'Branch');
-      layer.network_walls.push({ id: newId(), path_id: B.id, thickness: 10, align: 'auto' });
+      line([200, 260], [200, 340], 'Branch', wall(10));
       infill(R, 'zigzag'); break;
     }
     case 'rect_branch': case 'rect_branch_closed': {

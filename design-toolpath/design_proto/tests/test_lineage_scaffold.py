@@ -27,8 +27,7 @@ import multi_opening_fixtures as F
 def base_doc():
     return {'id': 'l', 'source_paths': [
         {'id': 'W', 'type': 'RectanglePath', 'label': 'Wall', 'x': 100, 'y': 140, 'w': 200, 'h': 120,
-         'closed': True, 'wall': {'thickness': 10}}],
-        'offset_treatments': [], 'lattice_instances': [],
+         'closed': True, 'envelope': {'thickness': 10, 'align': 'auto', 'print_reference': False}}],
         'infills': [{'id': 'I', 'path_id': 'W', 'pattern': 'wave', 'params': {'spacing': 20},
                      'kind': 'wall', 'variation_index': 0}],
         'material': {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'physical': True}}
@@ -258,7 +257,7 @@ def test_lattice_edit_on_a_descendant_changes_the_whole_lineage():
     LINEAGE's — it lands in Base (the owner), Door stores only its opening,
     and Base, Door and Window print one vertically registered scaffold."""
     L = lineage()
-    doc = L.document('door')
+    doc = L.raw_document('door')                    # (the Designer edits the authored document)
     doc['infills'][0].update(pattern='zigzag', params={'spacing': 30})
     assert L.set_document('door', doc) == {'base': ['I']}
     assert set(L.get('door').patch) == {'openings'}                 # no copy of the lattice in Door

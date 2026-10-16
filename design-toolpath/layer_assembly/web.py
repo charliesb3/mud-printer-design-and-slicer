@@ -92,14 +92,10 @@ _ARCH_LIBS: OrderedDict = OrderedDict()   # designs JSON → the ARCHITECTURE li
 
 
 def _arch_lib(designs, dkey):
-    """The architecture library of a design set (Wall Group documents
-    composed without construction) — shared by its editing adapters for
-    every set of Wall Systems: a Wall System edit never rebuilds an envelope.
-    None for legacy documents (their envelopes come from the adapter's own
-    library, as before)."""
-    from .designer_source import grouped, arch_library
-    if not grouped(designs):
-        return None
+    """The architecture library of a design set (the documents composed
+    without construction) — shared by its editing adapters for every set of
+    Wall Systems: a Wall System edit never rebuilds an envelope."""
+    from .designer_source import arch_library
     lib = _ARCH_LIBS.get(dkey)
     if lib is None:
         lib = _ARCH_LIBS[dkey] = arch_library(designs)
@@ -172,17 +168,11 @@ def _resolve_stack(data, lap=lambda name: None, envelope=False) -> dict:
     if data.get('designs'):
         src = _source(data['designs'], envelope, data.get('wall_systems'))
         used = {s.design_id for s in assembly.sections} & set(src.design_ids())
-        # ARCHITECTURE (Wall Group designs, 2026-10-11): placement pivots
-        # (footprints), transform groups and labels come from the canonical
-        # ENVELOPES — never from a construction, so a Wall System change
-        # cannot move the Assembly; legacy documents: the printed canonical
-        # geometry, as before
-        isarch = getattr(src, 'architectural', lambda d: False)
-        arch = any(isarch(d) for d in used)
-        legacy = sorted(d for d in used if not isarch(d))
-        if envelope and legacy and hasattr(src, 'prefetch_plain'):
-            src.prefetch_plain(legacy)          # (legacy: canonical builds in parallel)
-        archg = lambda d: src.envelope(d) if isarch(d) else src.geometry(d)
+        # ARCHITECTURE (2026-10-11): placement pivots (footprints), transform
+        # groups and labels come from the canonical ENVELOPES — never from a
+        # construction, so a Wall System change cannot move the Assembly
+        arch = bool(used)
+        archg = src.envelope
         labels = {}
         for d in used:
             a = archg(d)
@@ -190,7 +180,7 @@ def _resolve_stack(data, lap=lambda name: None, envelope=False) -> dict:
             b = bbox_of(a.polylines)
             if b:
                 fps[d] = Footprint.of_bbox(*b)
-            g = a if (envelope and isarch(d)) else src.geometry(d)  # (print: the canonical PRINTED geometry)
+            g = a if envelope else src.geometry(d)      # (print: the canonical PRINTED geometry)
             geo[d] = (g.polylines, g.bead_width)
         if assembly.center_mode == 'multiple':
             parent_of = {d: src.info(d).parent for d in src.design_ids()}
@@ -715,7 +705,7 @@ def _inspection(st, geo, rep):
     try:
         egeo, key_of, _ = _envelope_stack(st)
         arch = _support_report(st, egeo, level='envelope', key_of=lambda i: key_of[i.index]).to_dict()
-    except Exception as e:                     # (no architecture library: legacy documents)
+    except Exception as e:                     # (reported, never blocks the generation)
         arch = {'findings': [], 'level': 'envelope', 'error': str(e)}
     bead = st['bead']
     out = []
@@ -762,13 +752,10 @@ def _construction_checks(st):
     if not A.profiles or not hasattr(src, 'construction_walls'):
         return []
     ct, adds = {}, False
-    for d, tg in st['targets'].items():
-        if src.architectural(d):
-            cw = src.construction_walls(d)
-            ct[d] = {t.key: t for t in map(WallTarget.from_dict, cw)}
-            adds = adds or any(w.get('min_length') for w in cw)
-        else:
-            ct[d] = tg
+    for d in st['targets']:
+        cw = src.construction_walls(d)
+        ct[d] = {t.key: t for t in map(WallTarget.from_dict, cw)}
+        adds = adds or any(w.get('min_length') for w in cw)
     if not adds:
         return []
     _, cres = apply_profiles(st['res0'], A.profiles, ct, st['bead'], A.max_overhang, st['sources_out'],

@@ -18,7 +18,7 @@ function trimFixture(name, wall = 0) {
     const p = { id: newId(), type, label, closed: !['LinePath', 'QuadBezierPath'].includes(type),
                 role: 'free', visible: true, ...fields };
     _computePrimitivePoints(p);
-    if (wall) p.wall = { thickness: wall, align: 'auto', print_reference: false };
+    if (wall) p.envelope = { thickness: wall, align: 'auto', print_reference: false };
     layer.source_paths.push(p);
     return p;
   };

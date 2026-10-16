@@ -331,7 +331,9 @@ def test_project_file_migrates_planes_as_linear_and_round_trips_types():
     v5['project'].pop('machine_profile')
     out = PF.load(json.dumps(v5))
     got = out['project']['assembly']['state']['profiles'][0]
-    assert out['migrated_from'] == 5 and got['shape'] == 'linear' and {k: v for k, v in got.items() if k != 'shape'} == plane
+    # (schema 7: a plane selects WALLS — the in-document record WS1 is converted, its member C becomes a source)
+    assert out['migrated_from'] == 5 and got['shape'] == 'linear'
+    assert {k: v for k, v in got.items() if k != 'shape'} == dict(plane, sources=['C'], systems=[])
     # identical geometry: the migrated plane resolves to exactly the old ops
     a0 = Assembly.from_dict(proj['assembly']['state'])
     a1 = Assembly.from_dict(out['project']['assembly']['state'])
@@ -339,7 +341,14 @@ def test_project_file_migrates_planes_as_linear_and_round_trips_types():
                    'points': [[60 * math.cos(k / 8 * math.pi), 60 * math.sin(k / 8 * math.pi)] for k in range(16)]}]}
     r0, _ = apply_profiles(resolve(a0, ['A']), a0.profiles, {'A': {}}, 3.0, 1.5, srcs)
     r1, _ = apply_profiles(resolve(a1, ['A']), a1.profiles, {'A': {}}, 3.0, 1.5, srcs)
-    assert [i.cuts for i in r0.instances] == [i.cuts for i in r1.instances]
+    def _ops(inst):                     # (the migrated plane spells its selection as explicit sources)
+        out = []
+        for c in inst.cuts:
+            spec = json.loads(c[1])
+            spec.pop('sources', None), spec.pop('systems', None)
+            out.append((c[0], json.dumps(spec, sort_keys=True)) + tuple(c[2:]))
+        return out
+    assert [_ops(i) for i in r0.instances] == [_ops(i) for i in r1.instances]
     # stepped / curved round trip through Save / Open
     for extra in ({'shape': 'stepped', 'span': 160.0, 'step_run': 24.0},
                   {'shape': 'curved', 'span': 160.0, 'control': [0.7, 0.25]}):

@@ -281,10 +281,10 @@ def validate(project, check_document=None) -> tuple[dict, dict, list]:
     warnings += migrate_project(P)
     designs = D['designs']
     try:
-        docs = {did: DesignLibrary(designs).document(did) for did in ids}
+        docs = {did: DesignLibrary(designs).raw_document(did) for did in ids}
         designs = _without_derived_points(designs, docs)
         lib = DesignLibrary(designs)
-        docs = {did: lib.document(did) for did in ids}
+        docs = {did: lib.raw_document(did) for did in ids}
     except (LayerDesignError, KeyError, TypeError, ValueError, AttributeError) as e:
         raise ProjectFileError(f'The Layer Designs cannot be resolved: {e}')
     # ---- the project's WALL SYSTEMS (printable construction; schema 2) ------------

@@ -40,13 +40,13 @@ def _system(sid, kind, members):
 
 def building(kind='hollow', cap='flat', extra=()):
     """A circle (WS1) and a rectangle (WS2) of `kind`, and an UNSELECTED line
-    (its own plain wall) — disconnected."""
+    (its own hollow wall record WU — a BUILD document, as the Wall Systems
+    page's generation receives it) — disconnected."""
     doc = {'id': 'b', 'material': dict(MAT), 'cap_style': cap, 'source_paths': [
         {'id': 'C', 'type': 'CirclePath', 'label': 'Circle', 'cx': 0, 'cy': 0, 'radius': 60, 'closed': True},
         {'id': 'R', 'type': 'RectanglePath', 'label': 'Rect', 'x': 100, 'y': -40, 'w': 100, 'h': 80, 'closed': True},
-        {'id': 'U', 'type': 'LinePath', 'label': 'Unselected', 'start': [-110, -60], 'end': [-110, 60],
-         'wall': {'thickness': T}}] + list(extra),
-        'wall_systems': [_system('WS1', kind, ['C']), _system('WS2', kind, ['R'])]}
+        {'id': 'U', 'type': 'LinePath', 'label': 'Unselected', 'start': [-110, -60], 'end': [-110, 60]}] + list(extra),
+        'wall_systems': [_system('WS1', kind, ['C']), _system('WS2', kind, ['R']), _system('WU', 'hollow', ['U'])]}
     if kind == 'skin_web':
         for ws, host in ((doc['wall_systems'][0], 'C'), (doc['wall_systems'][1], 'R')):
             ws['web'] = {'pattern': 'zigzag', 'params': {'spacing': 20}, 'variation_index': 0}
@@ -219,7 +219,8 @@ def test_one_plane_cuts_two_wall_systems_exactly(kind):
 
 def test_straight_single_wall_trimmed_along_the_plane():
     doc = {'id': 'l', 'material': dict(MAT), 'source_paths': [
-        {'id': 'L', 'type': 'LinePath', 'label': 'Wall', 'start': [0, 0], 'end': [120, 0], 'wall': {'thickness': T}}]}
+        {'id': 'L', 'type': 'LinePath', 'label': 'Wall', 'start': [0, 0], 'end': [120, 0],
+         'envelope': {'thickness': T, 'align': 'auto', 'print_reference': False}}]}
     src = DesignerSource.from_designs([{'id': 'A', 'name': 'A', 'document': doc}])
     p = plane_from_high_low('P', 180.0, (-120.0, 0.0, (0.0, 0.0)), z_high=72.0, z_low=12.0, sources=('L',))
     a = Assembly(1.5, [Section('A', 84)], profiles=[p])
@@ -339,7 +340,7 @@ def test_unselected_assembly_unchanged_and_endpoint_reports_the_plane():
     out = c.post('/api/assembly/resolve', json=body).get_json()
     assert 'error' not in out and out['profiles'][0]['valid'] and out['profiles'][0]['kind'] == 'plane'
     srcs = {r['source']: r for r in out['profile_sources']['A']}
-    assert srcs['C']['system'] == 'WS1' and srcs['C']['closed'] and srcs['U']['system'] is None
+    assert srcs['C']['system'] == 'WS1' and srcs['C']['closed'] and srcs['U']['system'] == 'WU'   # (its own hollow record)
     cutv = [v for v in out['variants'].values() if any(x['op'] == 'plane' for x in v.get('cuts') or [])]
     assert cutv and all(any(x['op'] == 'plane' and x.get('applied') for x in v['profile']) for v in cutv)
     none = c.post('/api/assembly/resolve', json=dict(body, assembly=dict(body['assembly'], profiles=[]))).get_json()
