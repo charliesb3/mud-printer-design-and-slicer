@@ -26,7 +26,21 @@ for p in (os.path.join(ROOT, 'design_proto'), ROOT):
 MAT = {'bead_width': 3.0, 'contact_overlap': 0.75, 'return_overlap': 0.75, 'physical': True}
 H = 1.5
 
-# expected-to-change milestones (anything else must stay byte-identical)
+# expected-to-change milestones (anything else must stay byte-identical).
+# 2026-10-17 RE-BASELINE (WALL_ARCHITECTURE.md Z.6): 16 cases changed as predicted by the
+# PHYSICAL WALL WIDTH decision (2026-10-16: Hollow / Skin + Web skins print ½ bead
+# inside the unchanged envelope — bboxes shrink 1.5 in, skin lengths / support
+# findings change; real_10xtest1's 6 in Skin + Web walls have NO cavity any more,
+# so their web is gone and the print is ~half as long) and by SKIN + WEB PASS A
+# (curved runs are never corners: real_test3b, syn_circrect_interleaved). All
+# reviewed as class B (expected); none changed topology (junction / trim / polyline
+# counts identical except real_10xtest1's vanished web and real_test3's +4 branch
+# pieces at its inset host).
+PHYSICAL_WIDTH_2026_10_16 = ('real_10xtest1', 'real_test3', 'syn_branch_across_trim', 'syn_branch_at_junction',
+                             'syn_circrect_hollow', 'syn_excursion_skin', 'syn_mixed_systems', 'syn_mixed_thickness',
+                             'syn_profiles_curved', 'syn_profiles_linear', 'syn_profiles_stepped',
+                             'syn_transform_multi', 'syn_transform_whole', 'syn_variant_walls')
+PASS_A_2026_10_16 = ('real_test3b', 'syn_circrect_interleaved')
 CHANGES_AT = {
     'syn_branch_at_junction': 'M5', 'syn_branch_across_trim': 'M5',
     'syn_mixed_thickness': 'M6 (Centered: unchanged at M6)', 'real_test3': 'M6 (Auto = Inside host: Line 1 no longer cuts the exterior face)',

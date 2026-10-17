@@ -18,17 +18,17 @@
   }
  },
  "designer.base": {
-  "geom": "47e9924d0d74631a222d130afb58e5e0d02be476d2730ab7dc0dcf8636242b85",
-  "hash": "210f1b9577e44bb9d998a986a00d5f247876679dcd0a73369ab4939ffd51fb68",
+  "geom": "5e2eef36ca9efbd9c0030feb8f2df2e405f7197870ae21bb6e58f6b859647a4d",
+  "hash": "aed1650c60e4e5a9547177a853dc9d640551f55e50d54edcf7f5bf35bfbb80e3",
   "summary": {
    "bbox": [
     -43.46,
-    -45.0,
-    325.0,
-    45.0
+    -43.5,
+    323.5,
+    43.5
    ],
    "junctions": 4,
-   "length": 1728.43,
+   "length": 1734.43,
    "points": 974,
    "polylines": 7,
    "trims": {}
@@ -47,17 +47,17 @@
   }
  },
  "mudjob": {
-  "geom": "cc4d269516c4597a546f128d86c821a95b5c971f8632783b9fa3928c4016f97e",
-  "hash": "cc4d269516c4597a546f128d86c821a95b5c971f8632783b9fa3928c4016f97e",
+  "geom": "b8a37953e5d3e283c5593f89208cf69e2a06afb3404c9786fa85d350b57c6c6f",
+  "hash": "b8a37953e5d3e283c5593f89208cf69e2a06afb3404c9786fa85d350b57c6c6f",
   "summary": {
    "gcode_lines": 12372,
-   "gcode_sha": "d60fb6f611804e26",
+   "gcode_sha": "fc953fe2db76e9d1",
    "lifts": 1
   }
  },
  "plan": {
-  "geom": "d0d0d907c7f15a0c2f49242749a9cfeecca361b45786b35e31379632b0a1f574",
-  "hash": "815d1b5644df4720b9d6534c7ca3dd00a58dfc299ed11bac2ac0358e7c79c6fa",
+  "geom": "5115bc41ab90a1b6bf6b424ceb4c4eecad0563b94208162159f200aed12993dd",
+  "hash": "a09430911b322cb9099766991aba69acc5aafdfdb5d1b2c611f5156fe9e1ef0c",
   "summary": {
    "estimate": {
     "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
@@ -92,13 +92,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -107,18 +107,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -135,10 +135,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 958.860177,
-      "transition_length": 229.050913,
+      "total_time": 960.20907,
+      "transition_length": 228.144271,
       "travel_length": 63.081891,
-      "travel_time": 48.688801
+      "travel_time": 48.537694
      },
      {
       "design_id": "base",
@@ -167,13 +167,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -182,18 +182,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -210,7 +210,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -242,13 +242,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -257,18 +257,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -285,7 +285,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -317,13 +317,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -332,18 +332,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -360,7 +360,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -392,13 +392,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -407,18 +407,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -435,7 +435,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -467,13 +467,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -482,18 +482,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -510,7 +510,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -542,13 +542,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -557,18 +557,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -585,7 +585,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -617,13 +617,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -632,18 +632,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -660,7 +660,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -692,13 +692,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -707,18 +707,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -735,7 +735,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -767,13 +767,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -782,18 +782,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -810,7 +810,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -842,13 +842,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -857,18 +857,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -885,7 +885,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -917,13 +917,13 @@
         "stage": 2
        }
       ],
-      "print_length": 1820.342753,
-      "print_time": 910.171376,
+      "print_length": 1823.342753,
+      "print_time": 911.671376,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 470.0,
+        "length": 485.0,
         "sources": [
          "Hb",
          "S"
@@ -932,18 +932,18 @@
          "S3",
          "wall:Hb"
         ],
-        "time": 235.0
+        "time": 242.5
        },
        {
         "index": 1,
-        "length": 440.0,
+        "length": 428.0,
         "sources": [
          "S"
         ],
         "systems": [
          "S3"
         ],
-        "time": 220.0
+        "time": 214.0
        },
        {
         "index": 2,
@@ -960,7 +960,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 920.685025,
+      "total_time": 922.185025,
       "transition_length": 63.081891,
       "travel_length": 0,
       "travel_time": 10.513648
@@ -976,32 +976,32 @@
       "last_layer": 11,
       "layers": 12,
       "passes": 36,
-      "print_time": 10922.056517,
+      "print_time": 10940.056517,
       "reposition_in": null,
       "stages": [
        0,
        1,
        2
       ],
-      "total_time": 11086.395451,
-      "travel_time": 164.338934,
+      "total_time": 11104.244344,
+      "travel_time": 164.187827,
       "z_bottom": 0.0,
       "z_top": 18.0
      }
     ],
-    "print_length": 21844.113033,
-    "print_time": 10922.056517,
+    "print_length": 21880.113033,
+    "print_time": 10940.056517,
     "retrace_length": 0.0,
     "runs": 36,
     "sections": [
      {
       "index": 0,
       "layers": 12,
-      "print_length": 21844.113033,
-      "print_time": 10922.056517,
-      "total_time": 11086.395451,
-      "travel_length": 986.033604,
-      "travel_time": 164.338934
+      "print_length": 21880.113033,
+      "print_time": 10940.056517,
+      "total_time": 11104.244344,
+      "travel_length": 985.126962,
+      "travel_time": 164.187827
      }
     ],
     "speeds": {
@@ -1033,8 +1033,8 @@
        10,
        11
       ],
-      "print_time": 2820.0,
-      "total_time": 2820.0,
+      "print_time": 2910.0,
+      "total_time": 2910.0,
       "travel_time": 0.0,
       "z_bottom": 0.0,
       "z_top": 18.0
@@ -1062,9 +1062,9 @@
        22,
        23
       ],
-      "print_time": 2640.0,
-      "total_time": 2651.60699,
-      "travel_time": 11.60699,
+      "print_time": 2568.0,
+      "total_time": 2579.284823,
+      "travel_time": 11.284823,
       "z_bottom": 0.0,
       "z_top": 18.0
      },
@@ -1092,16 +1092,16 @@
        35
       ],
       "print_time": 5462.056517,
-      "total_time": 5614.78846,
-      "travel_time": 152.731944,
+      "total_time": 5614.959521,
+      "travel_time": 152.903004,
       "z_bottom": 0.0,
       "z_top": 18.0
      }
     ],
-    "total_time": 11086.395451,
-    "transition_length": 922.951713,
+    "total_time": 11104.244344,
+    "transition_length": 922.045071,
     "travel_length": 63.081891,
-    "travel_time": 164.338934
+    "travel_time": 164.187827
    },
    "layers": 12
   }

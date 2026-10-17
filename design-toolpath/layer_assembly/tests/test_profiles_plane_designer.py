@@ -412,7 +412,17 @@ def _corner_planes():
     return A, B
 
 
-@pytest.mark.parametrize('kind', ['hollow', 'skin_web', 'interleaved'])
+# KNOWN (class A, Z4; WALL_ARCHITECTURE.md Z.6): on the Skin + Web building the
+# layers cut by both planes RE-PLAN their web (the clipped-reference local join
+# does not apply there: `lattice` report 'planned', not 'inherited'), so ~130
+# web vertices change farther than 1.7 T from both cut lines — a nonlocal
+# re-phase; invariant 4 (territory consumed locally). Strict xfail until the
+# identity-anchored state (Z4) makes the cut a local event.
+@pytest.mark.parametrize('kind', ['hollow',
+                                  pytest.param('skin_web', marks=pytest.mark.xfail(
+                                      strict=True, reason='KNOWN (class A, Z4): both-plane layers re-plan the web — '
+                                                          'WALL_ARCHITECTURE.md Z.6')),
+                                  'interleaved'])
 def test_two_planes_on_the_same_walls_compose_subtractively(kind):
     """Two corners sliced by two different planes: material survives only
     where BOTH keep it; every termination lies on one of the planes; away

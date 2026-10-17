@@ -97,17 +97,17 @@
   }
  },
  "mudjob": {
-  "geom": "5d17d944ab0de8c13d4060de7b433235c1075c245e15b2c8f608dbea17220290",
-  "hash": "5d17d944ab0de8c13d4060de7b433235c1075c245e15b2c8f608dbea17220290",
+  "geom": "9ee867a802e7fc6563c7be5656b4a1102960f335bfd2e18df00a7d805c7c19f6",
+  "hash": "9ee867a802e7fc6563c7be5656b4a1102960f335bfd2e18df00a7d805c7c19f6",
   "summary": {
-   "gcode_lines": 373961,
-   "gcode_sha": "85afff71be62155d",
+   "gcode_lines": 374185,
+   "gcode_sha": "5a84b1c970c6f260",
    "lifts": 7
   }
  },
  "plan": {
-  "geom": "a38a3f358b37e43355f80851de19073d6b677ab1d4d72d6a85124ec6dc08c446",
-  "hash": "7d7824ec82a5fd62ae8c79d89e27d125f296bfaf6eaf738cf44de802e768c573",
+  "geom": "4d9dbda7618f1bd4046e5f2a1832bead405682b2632c25643dba661fab0fb54f",
+  "hash": "eac6eaedbc9becdc56eda0a7aca701a221006bd8e74cb91b1e7f97c4f7582a89",
   "summary": {
    "estimate": {
     "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
@@ -3045,10 +3045,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2559.243247,
-      "transition_length": 373.372295,
+      "total_time": 2559.265876,
+      "transition_length": 373.50807,
       "travel_length": 0,
-      "travel_time": 62.228716
+      "travel_time": 62.251345
      },
      {
       "design_id": "d1",
@@ -3190,10 +3190,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2481.063934,
-      "transition_length": 4.092322,
+      "total_time": 2481.063928,
+      "transition_length": 4.092283,
       "travel_length": 0,
-      "travel_time": 0.682054
+      "travel_time": 0.682047
      },
      {
       "design_id": "d1",
@@ -3335,10 +3335,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2464.044834,
-      "transition_length": 4.064858,
+      "total_time": 2464.044828,
+      "transition_length": 4.064819,
       "travel_length": 0,
-      "travel_time": 0.677476
+      "travel_time": 0.67747
      },
      {
       "design_id": "d1",
@@ -3395,8 +3395,8 @@
         "stage": 18
        }
       ],
-      "print_length": 4880.564173,
-      "print_time": 2440.282086,
+      "print_length": 4889.413677,
+      "print_time": 2444.706839,
       "retrace_length": 0,
       "runs": [
        {
@@ -3456,14 +3456,14 @@
        },
        {
         "index": 5,
-        "length": 1387.506,
+        "length": 1396.356,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 693.753225
+        "time": 698.177977
        },
        {
         "index": 6,
@@ -3480,10 +3480,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2441.153556,
-      "transition_length": 5.228819,
+      "total_time": 2445.578302,
+      "transition_length": 5.22878,
       "travel_length": 0,
-      "travel_time": 0.87147
+      "travel_time": 0.871463
      },
      {
       "design_id": "d1",
@@ -3540,20 +3540,20 @@
         "stage": 18
        }
       ],
-      "print_length": 4831.0208,
-      "print_time": 2415.5104,
+      "print_length": 4848.560626,
+      "print_time": 2424.280313,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 433.697,
+        "length": 442.431,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 216.848328
+        "time": 221.215548
        },
        {
         "index": 1,
@@ -3601,14 +3601,14 @@
        },
        {
         "index": 5,
-        "length": 1382.571,
+        "length": 1391.377,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 691.285653
+        "time": 695.688345
        },
        {
         "index": 6,
@@ -3625,10 +3625,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2416.679427,
-      "transition_length": 7.014163,
+      "total_time": 2425.449334,
+      "transition_length": 7.014125,
       "travel_length": 0,
-      "travel_time": 1.169027
+      "travel_time": 1.169021
      },
      {
       "design_id": "d1",
@@ -3685,20 +3685,20 @@
         "stage": 18
        }
       ],
-      "print_length": 4796.139991,
-      "print_time": 2398.069996,
+      "print_length": 4813.77941,
+      "print_time": 2406.889705,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 430.59,
+        "length": 439.291,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 215.295003
+        "time": 219.645289
        },
        {
         "index": 1,
@@ -3746,14 +3746,14 @@
        },
        {
         "index": 5,
-        "length": 1377.305,
+        "length": 1386.243,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 688.652321
+        "time": 693.121746
        },
        {
         "index": 6,
@@ -3770,10 +3770,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2398.959032,
-      "transition_length": 5.334216,
+      "total_time": 2407.778734,
+      "transition_length": 5.334177,
       "travel_length": 0,
-      "travel_time": 0.889036
+      "travel_time": 0.88903
      },
      {
       "design_id": "d1",
@@ -3830,20 +3830,20 @@
         "stage": 18
        }
       ],
-      "print_length": 4769.00817,
-      "print_time": 2384.504085,
+      "print_length": 4777.773163,
+      "print_time": 2388.886582,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 427.735,
+        "length": 436.5,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 213.867521
+        "time": 218.250018
        },
        {
         "index": 1,
@@ -3915,10 +3915,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2385.218071,
-      "transition_length": 4.283917,
+      "total_time": 2389.600561,
+      "transition_length": 4.283878,
       "travel_length": 0,
-      "travel_time": 0.713986
+      "travel_time": 0.71398
      },
      {
       "design_id": "d1",
@@ -3975,20 +3975,20 @@
         "stage": 18
        }
       ],
-      "print_length": 4767.484693,
-      "print_time": 2383.742347,
+      "print_length": 4775.887917,
+      "print_time": 2387.943958,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 428.335,
+        "length": 436.739,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 214.167732
+        "time": 218.369344
        },
        {
         "index": 1,
@@ -4060,10 +4060,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2383.915074,
-      "transition_length": 1.036363,
+      "total_time": 2388.116679,
+      "transition_length": 1.036325,
       "travel_length": 0,
-      "travel_time": 0.172727
+      "travel_time": 0.172721
      },
      {
       "design_id": "d1",
@@ -4205,10 +4205,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2405.106411,
-      "transition_length": 1.394631,
+      "total_time": 2405.106405,
+      "transition_length": 1.394593,
       "travel_length": 0,
-      "travel_time": 0.232439
+      "travel_time": 0.232432
      },
      {
       "design_id": "d1",
@@ -4265,8 +4265,8 @@
         "stage": 18
        }
       ],
-      "print_length": 4832.343313,
-      "print_time": 2416.171656,
+      "print_length": 4840.848675,
+      "print_time": 2420.424338,
       "retrace_length": 0,
       "runs": [
        {
@@ -4326,14 +4326,14 @@
        },
        {
         "index": 5,
-        "length": 1373.404,
+        "length": 1381.91,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 686.702228
+        "time": 690.95491
        },
        {
         "index": 6,
@@ -4350,10 +4350,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2416.532018,
-      "transition_length": 2.162168,
+      "total_time": 2420.784073,
+      "transition_length": 2.158413,
       "travel_length": 0,
-      "travel_time": 0.360361
+      "travel_time": 0.359735
      },
      {
       "design_id": "d1",
@@ -4410,8 +4410,8 @@
         "stage": 18
        }
       ],
-      "print_length": 4873.097924,
-      "print_time": 2436.548962,
+      "print_length": 4881.562429,
+      "print_time": 2440.781215,
       "retrace_length": 0,
       "runs": [
        {
@@ -4471,14 +4471,14 @@
        },
        {
         "index": 5,
-        "length": 1374.865,
+        "length": 1383.329,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 687.432416
+        "time": 691.664669
        },
        {
         "index": 6,
@@ -4495,10 +4495,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2437.014631,
-      "transition_length": 2.794012,
+      "total_time": 2441.221386,
+      "transition_length": 2.641026,
       "travel_length": 0,
-      "travel_time": 0.465669
+      "travel_time": 0.440171
      },
      {
       "design_id": "d1",
@@ -4555,8 +4555,8 @@
         "stage": 18
        }
       ],
-      "print_length": 4904.649605,
-      "print_time": 2452.324803,
+      "print_length": 4913.135705,
+      "print_time": 2456.567853,
       "retrace_length": 0,
       "runs": [
        {
@@ -4616,14 +4616,14 @@
        },
        {
         "index": 5,
-        "length": 1376.022,
+        "length": 1384.508,
         "sources": [
          "p2"
         ],
         "systems": [
          "S1"
         ],
-        "time": 688.010993
+        "time": 692.254043
        },
        {
         "index": 6,
@@ -4640,10 +4640,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2452.861847,
-      "transition_length": 3.222268,
+      "total_time": 2457.056733,
+      "transition_length": 2.93328,
       "travel_length": 0,
-      "travel_time": 0.537045
+      "travel_time": 0.48888
      },
      {
       "design_id": "d1",
@@ -4785,10 +4785,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2546.861969,
-      "transition_length": 454.294345,
+      "total_time": 2546.875329,
+      "transition_length": 454.374506,
       "travel_length": 0,
-      "travel_time": 75.715724
+      "travel_time": 75.729084
      },
      {
       "design_id": "d1",
@@ -4930,10 +4930,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2488.235139,
-      "transition_length": 1.894595,
+      "total_time": 2488.235133,
+      "transition_length": 1.894557,
       "travel_length": 0,
-      "travel_time": 0.315766
+      "travel_time": 0.315759
      },
      {
       "design_id": "d1",
@@ -5075,10 +5075,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2504.580134,
-      "transition_length": 2.506681,
+      "total_time": 2504.580128,
+      "transition_length": 2.506643,
       "travel_length": 0,
-      "travel_time": 0.41778
+      "travel_time": 0.417774
      },
      {
       "design_id": "d1",
@@ -5220,10 +5220,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2520.904008,
-      "transition_length": 2.721359,
+      "total_time": 2520.904002,
+      "transition_length": 2.721321,
       "travel_length": 0,
-      "travel_time": 0.45356
+      "travel_time": 0.453554
      },
      {
       "design_id": "d1",
@@ -5365,10 +5365,10 @@
        }
       ],
       "section_index": 0,
-      "total_time": 2537.672939,
-      "transition_length": 2.444487,
+      "total_time": 2537.672933,
+      "transition_length": 2.444448,
       "travel_length": 0,
-      "travel_time": 0.407414
+      "travel_time": 0.407408
      },
      {
       "design_id": "base",
@@ -6749,7 +6749,7 @@
       "last_layer": 47,
       "layers": 12,
       "passes": 84,
-      "print_time": 29172.792076,
+      "print_time": 29216.118543,
       "reposition_in": {
        "at": [
         359.29212,
@@ -6771,8 +6771,8 @@
        17,
        18
       ],
-      "total_time": 29241.792082,
-      "travel_time": 69.000005,
+      "total_time": 29285.066838,
+      "travel_time": 68.948295,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -6788,8 +6788,8 @@
       "print_time": 32133.083831,
       "reposition_in": {
        "at": [
-        219.55869,
-        152.11883
+        219.6097,
+        152.1989
        ],
        "frame_z_from": 54.0,
        "frame_z_to": 72.0,
@@ -6809,8 +6809,8 @@
        26,
        27
       ],
-      "total_time": 32212.161934,
-      "travel_time": 79.078103,
+      "total_time": 32212.175268,
+      "travel_time": 79.091438,
       "z_bottom": 72.0,
       "z_top": 90.0
      },
@@ -6875,19 +6875,19 @@
       "z_top": 109.5
      }
     ],
-    "print_length": 388705.748606,
-    "print_time": 194352.874303,
+    "print_length": 388792.401539,
+    "print_time": 194396.200769,
     "retrace_length": 0.0,
     "runs": 286,
     "sections": [
      {
       "index": 0,
       "layers": 53,
-      "print_length": 275294.464741,
-      "print_time": 137647.232371,
-      "total_time": 137949.201943,
-      "travel_length": 1811.817437,
-      "travel_time": 301.969573
+      "print_length": 275381.117674,
+      "print_time": 137690.558837,
+      "total_time": 137992.490034,
+      "travel_length": 1811.587181,
+      "travel_time": 301.931197
      },
      {
       "index": 1,
@@ -7261,8 +7261,8 @@
        127,
        128
       ],
-      "print_time": 2652.935177,
-      "total_time": 2654.191536,
+      "print_time": 2670.236791,
+      "total_time": 2671.49315,
       "travel_time": 1.256359,
       "z_bottom": 54.0,
       "z_top": 72.0
@@ -7406,9 +7406,9 @@
        187,
        188
       ],
-      "print_time": 8315.925462,
-      "total_time": 8324.658768,
-      "travel_time": 8.733306,
+      "print_time": 8341.950314,
+      "total_time": 8350.609352,
+      "travel_time": 8.659037,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -7436,8 +7436,8 @@
        200
       ],
       "print_time": 14954.532037,
-      "total_time": 14982.604042,
-      "travel_time": 28.072005,
+      "total_time": 14982.6266,
+      "travel_time": 28.094563,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -7458,8 +7458,8 @@
        205
       ],
       "print_time": 6233.205757,
-      "total_time": 6233.241804,
-      "travel_time": 0.036047,
+      "total_time": 6233.241772,
+      "travel_time": 0.036015,
       "z_bottom": 72.0,
       "z_top": 79.5
      },
@@ -7480,8 +7480,8 @@
        210
       ],
       "print_time": 3469.517564,
-      "total_time": 3488.032279,
-      "travel_time": 18.514715,
+      "total_time": 3488.045645,
+      "travel_time": 18.528081,
       "z_bottom": 72.0,
       "z_top": 79.5
      },
@@ -7724,10 +7724,10 @@
       "z_top": 109.5
      }
     ],
-    "total_time": 194656.922638,
-    "transition_length": 1824.29001,
+    "total_time": 194700.210728,
+    "transition_length": 1824.059754,
     "travel_length": 0.0,
-    "travel_time": 304.048335
+    "travel_time": 304.009959
    },
    "layers": 73
   }

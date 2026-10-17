@@ -9,10 +9,10 @@
   }
  },
  "assembly": {
-  "geom": "c9ad648cc6aa840b48eeb9ead6a1a218266a77e1ebf592ab85e5f3674731baa2",
-  "hash": "a28f05cc29910503f6bd87c17d02d4a66b139b0a73357cb136c86e27164cf550",
+  "geom": "f0e60aacf8a07f8b7f9301abe2382cd00a91b130ca78093674ab0d1c108ec0a2",
+  "hash": "7c0a6e4a999502afea4e720322a737783b659620796bc036657d00834ea64996",
   "summary": {
-   "findings": 6,
+   "findings": 2,
    "instances": 20,
    "profiles": [
     [
@@ -27,14 +27,14 @@
   }
  },
  "designer.base": {
-  "geom": "9a28f899cad4b2e11c138821f93f352db9bae52406c0f855a214cb6b5905b9d6",
-  "hash": "039adc6d084a5d1326d4044284a3f07bbb13c477a7401ba98cd40105fa991924",
+  "geom": "69c6084974b58fa4e2102ed37207be4396571fe50cc50c60beaa91dcfbe2517c",
+  "hash": "a7bc67676a5916232d52b0468d71a61fec7398643a79cec5b0e6b2386d3d096e",
   "summary": {
    "bbox": [
-    -5.0,
-    -5.0,
-    165.002,
-    85.002
+    -3.5,
+    -3.5,
+    163.501,
+    83.501
    ],
    "junctions": 4,
    "length": 891.302,
@@ -62,17 +62,17 @@
   }
  },
  "mudjob": {
-  "geom": "86c520b60caaedbcc17eb0f0e576fc3c059eede82d8984645f9f0fa6679029e9",
-  "hash": "86c520b60caaedbcc17eb0f0e576fc3c059eede82d8984645f9f0fa6679029e9",
+  "geom": "f4622200f55cebb82913409cb5d8466f392475c4ccf927982922ee5193da4c1e",
+  "hash": "f4622200f55cebb82913409cb5d8466f392475c4ccf927982922ee5193da4c1e",
   "summary": {
-   "gcode_lines": 2848,
-   "gcode_sha": "4f57bee525456a99",
+   "gcode_lines": 2828,
+   "gcode_sha": "25aa6cb63045ec2b",
    "lifts": 2
   }
  },
  "plan": {
-  "geom": "d733e92d5962ba58f0d893fdfe6cbf1403748cfec7fcdebb323af5f5d58c61d8",
-  "hash": "d0f392ff2414c2e41826f0574a6e332ff0632897bd213f71e0a658336e32deb0",
+  "geom": "f21efe1621b1038499dd7d4df2756e0d7015d4dd649cc91008cf56da6cc9720f",
+  "hash": "177bc8ef184e8914f789566ec614fecbc81fe792efa67299d9dd7b0393a2ada8",
   "summary": {
    "estimate": {
     "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
@@ -93,13 +93,13 @@
         "stage": 0
        }
       ],
-      "print_length": 894.802217,
-      "print_time": 447.401109,
+      "print_length": 888.802206,
+      "print_time": 444.401103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 894.802,
+        "length": 888.802,
         "sources": [
          "C",
          "R"
@@ -108,11 +108,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 447.401109
+        "time": 444.401103
        }
       ],
       "section_index": 0,
-      "total_time": 447.401109,
+      "total_time": 444.401103,
       "transition_length": 0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -130,13 +130,13 @@
         "stage": 0
        }
       ],
-      "print_length": 897.802217,
-      "print_time": 448.901109,
+      "print_length": 891.802206,
+      "print_time": 445.901103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 897.802,
+        "length": 891.802,
         "sources": [
          "C",
          "R"
@@ -145,11 +145,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 448.901109
+        "time": 445.901103
        }
       ],
       "section_index": 0,
-      "total_time": 448.901109,
+      "total_time": 445.901103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -167,13 +167,13 @@
         "stage": 0
        }
       ],
-      "print_length": 900.802217,
-      "print_time": 450.401109,
+      "print_length": 894.802206,
+      "print_time": 447.401103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 900.802,
+        "length": 894.802,
         "sources": [
          "C",
          "R"
@@ -182,11 +182,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 450.401109
+        "time": 447.401103
        }
       ],
       "section_index": 0,
-      "total_time": 450.401109,
+      "total_time": 447.401103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -204,13 +204,13 @@
         "stage": 0
        }
       ],
-      "print_length": 903.802217,
-      "print_time": 451.901109,
+      "print_length": 897.802206,
+      "print_time": 448.901103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 903.802,
+        "length": 897.802,
         "sources": [
          "C",
          "R"
@@ -219,11 +219,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 451.901109
+        "time": 448.901103
        }
       ],
       "section_index": 0,
-      "total_time": 451.901109,
+      "total_time": 448.901103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -241,13 +241,13 @@
         "stage": 0
        }
       ],
-      "print_length": 906.802217,
-      "print_time": 453.401109,
+      "print_length": 900.802206,
+      "print_time": 450.401103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 906.802,
+        "length": 900.802,
         "sources": [
          "C",
          "R"
@@ -256,11 +256,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 453.401109
+        "time": 450.401103
        }
       ],
       "section_index": 0,
-      "total_time": 453.401109,
+      "total_time": 450.401103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -278,13 +278,13 @@
         "stage": 0
        }
       ],
-      "print_length": 909.802217,
-      "print_time": 454.901109,
+      "print_length": 903.802206,
+      "print_time": 451.901103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 909.802,
+        "length": 903.802,
         "sources": [
          "C",
          "R"
@@ -293,11 +293,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 454.901109
+        "time": 451.901103
        }
       ],
       "section_index": 0,
-      "total_time": 454.901109,
+      "total_time": 451.901103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -322,13 +322,13 @@
         "stage": 2
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -337,11 +337,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -350,14 +350,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        }
       ],
       "section_index": 0,
-      "total_time": 447.351099,
-      "transition_length": 10.199941,
+      "total_time": 446.864402,
+      "transition_length": 7.279793,
       "travel_length": 0,
-      "travel_time": 1.69999
+      "travel_time": 1.213299
      },
      {
       "design_id": "base",
@@ -379,13 +379,13 @@
         "stage": 2
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -394,11 +394,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -407,11 +407,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -436,13 +436,13 @@
         "stage": 2
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -451,11 +451,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -464,11 +464,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -493,13 +493,13 @@
         "stage": 2
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -508,11 +508,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -521,11 +521,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -550,13 +550,13 @@
         "stage": 2
        }
       ],
-      "print_length": 891.560788,
-      "print_time": 445.780394,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -565,11 +565,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 410.199,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -578,11 +578,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 205.09929
+        "time": 210.326667
        }
       ],
       "section_index": 0,
-      "total_time": 445.780394,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -607,13 +607,13 @@
         "stage": 2
        }
       ],
-      "print_length": 899.379128,
-      "print_time": 449.689564,
+      "print_length": 894.291409,
+      "print_time": 447.145704,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -622,11 +622,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 418.017,
+        "length": 423.643,
         "sources": [
          "C",
          "R"
@@ -635,11 +635,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 209.00846
+        "time": 211.821268
        }
       ],
       "section_index": 0,
-      "total_time": 449.689564,
+      "total_time": 447.145704,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -658,13 +658,13 @@
         "stage": 3
        }
       ],
-      "print_length": 906.303288,
-      "print_time": 453.151644,
+      "print_length": 900.206457,
+      "print_time": 450.103229,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 424.941,
+        "length": 429.558,
         "sources": [
          "C",
          "R"
@@ -673,11 +673,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 212.47054
+        "time": 214.778792
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -686,14 +686,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 454.818813,
+      "total_time": 451.270247,
       "transition_length": 0.0,
-      "travel_length": 10.003013,
-      "travel_time": 1.667169
+      "travel_length": 7.002109,
+      "travel_time": 1.167018
      },
      {
       "design_id": "base",
@@ -709,13 +709,13 @@
         "stage": 3
        }
       ],
-      "print_length": 911.466018,
-      "print_time": 455.733009,
+      "print_length": 904.571432,
+      "print_time": 452.285716,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -724,11 +724,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        },
        {
         "index": 1,
-        "length": 430.104,
+        "length": 433.923,
         "sources": [
          "C",
          "R"
@@ -737,14 +737,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 215.051905
+        "time": 216.961279
        }
       ],
       "section_index": 0,
-      "total_time": 457.400178,
+      "total_time": 453.452734,
       "transition_length": 0.0,
-      "travel_length": 10.003013,
-      "travel_time": 1.667169
+      "travel_length": 7.002109,
+      "travel_time": 1.167018
      },
      {
       "design_id": "base",
@@ -760,13 +760,13 @@
         "stage": 3
        }
       ],
-      "print_length": 915.367602,
-      "print_time": 457.683801,
+      "print_length": 907.628161,
+      "print_time": 453.81408,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 434.005,
+        "length": 436.979,
         "sources": [
          "C",
          "R"
@@ -775,11 +775,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 217.002697
+        "time": 218.489644
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -788,14 +788,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 459.35097,
+      "total_time": 454.981098,
       "transition_length": 0.0,
-      "travel_length": 10.003013,
-      "travel_time": 1.667169
+      "travel_length": 7.002109,
+      "travel_time": 1.167018
      },
      {
       "design_id": "base",
@@ -817,38 +817,38 @@
         "stage": 5
        }
       ],
-      "print_length": 905.387958,
-      "print_time": 452.693979,
+      "print_length": 895.145317,
+      "print_time": 447.572659,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 251.246,
+        "length": 245.246,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 125.622911
+        "time": 122.622911
        }
       ],
       "section_index": 0,
-      "total_time": 454.165591,
-      "transition_length": 8.82967,
+      "total_time": 448.99521,
+      "transition_length": 8.535308,
       "travel_length": 0,
-      "travel_time": 1.471612
+      "travel_time": 1.422551
      },
      {
       "design_id": "base",
@@ -870,38 +870,38 @@
         "stage": 5
        }
       ],
-      "print_length": 880.862622,
-      "print_time": 440.431311,
+      "print_length": 870.619982,
+      "print_time": 435.309991,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 226.72,
+        "length": 220.72,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 113.360243
+        "time": 110.360243
        }
       ],
       "section_index": 0,
-      "total_time": 441.534817,
-      "transition_length": 6.621032,
+      "total_time": 436.376703,
+      "transition_length": 6.400272,
       "travel_length": 0,
-      "travel_time": 1.103505
+      "travel_time": 1.066712
      },
      {
       "design_id": "base",
@@ -923,38 +923,38 @@
         "stage": 5
        }
       ],
-      "print_length": 855.234677,
-      "print_time": 427.617338,
+      "print_length": 844.970115,
+      "print_time": 422.485058,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 201.093,
+        "length": 195.071,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 100.546271
+        "time": 97.53531
        }
       ],
       "section_index": 0,
-      "total_time": 428.720844,
-      "transition_length": 6.621032,
+      "total_time": 423.55177,
+      "transition_length": 6.400272,
       "travel_length": 0,
-      "travel_time": 1.103505
+      "travel_time": 1.066712
      },
      {
       "design_id": "base",
@@ -976,38 +976,38 @@
         "stage": 5
        }
       ],
-      "print_length": 827.403625,
-      "print_time": 413.701812,
+      "print_length": 817.160984,
+      "print_time": 408.580492,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 173.261,
+        "length": 167.261,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 86.630745
+        "time": 83.630745
        }
       ],
       "section_index": 0,
-      "total_time": 415.172119,
-      "transition_length": 8.821838,
+      "total_time": 410.001775,
+      "transition_length": 8.527698,
       "travel_length": 0,
-      "travel_time": 1.470306
+      "travel_time": 1.421283
      },
      {
       "design_id": "base",
@@ -1029,38 +1029,38 @@
         "stage": 5
        }
       ],
-      "print_length": 795.641309,
-      "print_time": 397.820654,
+      "print_length": 785.398668,
+      "print_time": 392.699334,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 141.499,
+        "length": 135.499,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 70.749587
+        "time": 67.749587
        }
       ],
       "section_index": 0,
-      "total_time": 399.290961,
-      "transition_length": 8.821838,
+      "total_time": 394.120617,
+      "transition_length": 8.527698,
       "travel_length": 0,
-      "travel_time": 1.470306
+      "travel_time": 1.421283
      }
     ],
     "lifts": [
@@ -1073,15 +1073,15 @@
       "last_layer": 11,
       "layers": 12,
       "passes": 18,
-      "print_time": 5384.981043,
+      "print_time": 5364.307837,
       "reposition_in": null,
       "stages": [
        0,
        1,
        2
       ],
-      "total_time": 5386.681033,
-      "travel_time": 1.69999,
+      "total_time": 5365.521136,
+      "travel_time": 1.213299,
       "z_bottom": 0.0,
       "z_top": 18.0
      },
@@ -1094,11 +1094,11 @@
       "last_layer": 19,
       "layers": 8,
       "passes": 13,
-      "print_time": 3498.83355,
+      "print_time": 3462.850558,
       "reposition_in": {
        "at": [
-        121.71729,
-        74.95634
+        121.79092,
+        76.45498
        ],
        "frame_z_from": 0.0,
        "frame_z_to": 18.0,
@@ -1112,25 +1112,25 @@
        4,
        5
       ],
-      "total_time": 3510.454291,
-      "travel_time": 11.620741,
+      "total_time": 3472.750154,
+      "travel_time": 9.899596,
       "z_bottom": 18.0,
       "z_top": 30.0
      }
     ],
-    "print_length": 17767.629186,
-    "print_time": 8883.814593,
+    "print_length": 17654.31679,
+    "print_time": 8827.158395,
     "retrace_length": 0.0,
     "runs": 34,
     "sections": [
      {
       "index": 0,
       "layers": 20,
-      "print_length": 17767.629186,
-      "print_time": 8883.814593,
-      "total_time": 8897.135324,
-      "travel_length": 79.92439,
-      "travel_time": 13.320732
+      "print_length": 17654.31679,
+      "print_time": 8827.158395,
+      "total_time": 8838.27129,
+      "travel_length": 66.677367,
+      "travel_time": 11.112895
      }
     ],
     "speeds": {
@@ -1156,8 +1156,8 @@
        4,
        5
       ],
-      "print_time": 2706.906651,
-      "total_time": 2706.906651,
+      "print_time": 2688.906618,
+      "total_time": 2688.906618,
       "travel_time": 0.0,
       "z_bottom": 0.0,
       "z_top": 9.0
@@ -1181,8 +1181,8 @@
        10,
        11
       ],
-      "print_time": 1444.086625,
-      "total_time": 1444.086625,
+      "print_time": 1411.946618,
+      "total_time": 1411.946618,
       "travel_time": 0.0,
       "z_bottom": 9.0,
       "z_top": 18.0
@@ -1206,9 +1206,9 @@
        16,
        17
       ],
-      "print_time": 1233.987767,
-      "total_time": 1235.687758,
-      "travel_time": 1.69999,
+      "print_time": 1263.454601,
+      "total_time": 1264.6679,
+      "travel_time": 1.213299,
       "z_bottom": 9.0,
       "z_top": 18.0
      },
@@ -1226,9 +1226,9 @@
        19,
        20
       ],
-      "print_time": 1366.568454,
-      "total_time": 1371.569961,
-      "travel_time": 5.001506,
+      "print_time": 1356.203025,
+      "total_time": 1359.704079,
+      "travel_time": 3.501054,
       "z_bottom": 18.0,
       "z_top": 22.5
      },
@@ -1250,9 +1250,9 @@
        24,
        25
       ],
-      "print_time": 1635.355339,
-      "total_time": 1635.723464,
-      "travel_time": 0.368125,
+      "print_time": 1624.748737,
+      "total_time": 1625.10459,
+      "travel_time": 0.355852,
       "z_bottom": 22.5,
       "z_top": 30.0
      },
@@ -1274,17 +1274,17 @@
        29,
        30
       ],
-      "print_time": 496.909756,
-      "total_time": 503.160867,
-      "travel_time": 6.25111,
+      "print_time": 481.898796,
+      "total_time": 487.941485,
+      "travel_time": 6.042689,
       "z_bottom": 22.5,
       "z_top": 30.0
      }
     ],
-    "total_time": 8897.135324,
-    "transition_length": 49.915351,
-    "travel_length": 30.009038,
-    "travel_time": 13.320732
+    "total_time": 8838.27129,
+    "transition_length": 45.67104,
+    "travel_length": 21.006327,
+    "travel_time": 11.112895
    },
    "layers": 20
   }

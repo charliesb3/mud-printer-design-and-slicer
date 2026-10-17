@@ -20,6 +20,7 @@ M0 + M1): Assembly editing on ARCHITECTURAL ENVELOPES, print preparation
 """
 import copy
 import json
+import math
 import os
 import sys
 import threading
@@ -92,13 +93,76 @@ def distinct_requests(designs, asm):
     return out
 
 
-def assert_envelopes_equal(designs, reqs):
+def _seg_d(p, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+    return math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
+
+
+def _boundary_d(p, rings):
+    """Distance from p to the nearest ring boundary."""
+    return min(_seg_d(p, r[i], r[(i + 1) % len(r)]) for comp in rings for r in comp for i in range(len(r)))
+
+
+def assert_envelope_holds_the_print(env, full, bead, where):
+    """PHYSICAL WALL WIDTH (2026-10-16): the ARCHITECTURAL envelope is the
+    finished deposited width and never moves; a SKIN construction (Hollow,
+    Skin + Web) prints its skins half a bead inside it, so the full build's
+    material regions are the envelope's rings INSET by ½ bead — the same
+    components, every print-ring vertex within √2 · ½ bead of the envelope
+    boundary (a convex corner of an inset ring) and never the other way
+    round. Generated constructions keep centrelines inside the faces and
+    their regions equal the envelope exactly.
+    JUNCTION ZONES (within 2.5 × the thickest wall of a network junction)
+    are excluded: there the print build's regions come from the member walls'
+    inset bands meeting in their own corners, fillets and mouths — up to a
+    wall thickness off a pure inset (measured ≤ 1.93 T from the junction on
+    the untransformed reference network, a little more on its transformed
+    'gaps' variants). Not derivable from the envelope until the
+    canonical wall / junction motifs (WALL_ARCHITECTURE.md Z6 / Z7). The
+    region TOPOLOGY may differ there too (the lens between a circle and a
+    rectangle with rounded junctions is one component in one build and two
+    in the other), so components are not counted — a component missing
+    outside every junction zone fails the vertex checks."""
+    rings = rings_of(full)
+    if env.rings == rings:
+        return
+    # (+0.2: the arcs of rounded corners are sampled polylines — chord sag
+    # between the two rings' samples)
+    tol = 0.5 * bead * math.sqrt(2) + 0.2
+    T = max((float((w or {}).get('thickness') or 0.0) for w in env.walls.values()), default=10.0) or 10.0
+    js = [(j['x'], j['y']) for j in env.junctions or []]
+
+    def in_junction_zone(q):
+        return any(math.dist(q, j) <= 2.5 * T for j in js)
+    checked = 0
+    for A, B in ((rings, env.rings), (env.rings, rings)):
+        for comp in A:
+            for r in comp:
+                for q in r:
+                    if in_junction_zone(q):
+                        continue
+                    checked += 1
+                    d = _boundary_d(q, B)
+                    assert d <= tol, (where, q, d)
+    assert checked, where
+
+
+def assert_envelopes_equal(designs, reqs, skin=None):
+    """Every request's envelope is the full build's architectural stage:
+    equal rings (generated constructions) — or, where a SKIN construction
+    insets its printed skins, the rings the print build insets by half a bead
+    (assert_envelope_holds_the_print)."""
     from layer_design import DesignLibrary
     lib = DesignLibrary(designs)
     for d, tr, cu in reqs:
         env = lib.envelope(d, tr or None, cu or None)
         full = lib.build(d, transforms=tr or None, cuts=cu or None)
-        assert env.rings == rings_of(full), (d, tr, cu)
+        if skin is False:
+            assert env.rings == rings_of(full), (d, tr, cu)
+        else:
+            assert_envelope_holds_the_print(env, full, env.bead_width or 3.0, (d, tr, cu))
         assert env.rings or env.strands
 
 
@@ -147,7 +211,9 @@ def test_envelope_rings_equal_the_full_build_plane_and_opening_fixture(kind):
     reqs = distinct_requests(ds, asm)
     cut = [r for r in reqs if any(c.get('op') in ('plane', 'opening') for c in r[2] or [])]
     assert cut
-    assert_envelopes_equal(ds, [reqs[0]] + cut[::max(1, len(cut) // 4)][:4])
+    # (Skin + Web: the print build's regions are the envelope inset ½ bead —
+    # physical wall width; Hollow has no rings, generated kinds equal exactly)
+    assert_envelopes_equal(ds, [reqs[0]] + cut[::max(1, len(cut) // 4)][:4], skin=(kind == 'skin_web' or None))
 
 
 def test_lattice_only_cut_ops_do_not_change_the_envelope():
@@ -226,10 +292,21 @@ def test_plain_and_hollow_walls_without_rings_are_their_face_beads():
         e = lib.envelope('base')
         full = lib.build('base')
         assert e.rings == rings_of(full) == []
-        faces = {s['id'] for s in e.strands}
-        printed = {p['id'] for p in full.printable}
-        assert faces and faces <= printed                                # the very face beads it prints
-        assert {s['src'][0] for s in e.strands} == {'W', 'L'}
+        # the envelope's strands are the ARCHITECTURAL faces (finished width:
+        # the authored reference `W` + its offset `W.wall`, the line's two
+        # faces + caps); the print puts every skin half a bead inside them
+        # (`W.wall_near` / `W.wall`, physical wall width 2026-10-16) — same
+        # sources, every printed vertex within ½ bead of an envelope face
+        assert e.strands and {s['src'][0] for s in e.strands} == {'W', 'L'}
+        env_by_src = {}
+        for s in e.strands:
+            env_by_src.setdefault(s['src'][0], []).append(s['pts'])
+        printed = [(full.strand_sources.get(p['id']), p) for p in full.printable]
+        assert {src for src, _ in printed} == {'W', 'L'}
+        for src, p in printed:
+            segs = [(a, b) for pts in env_by_src[src] for a, b in zip(pts, pts[1:])]
+            for q in p['pts']:                            # (√2 · ½ bead at a convex corner)
+                assert min(_seg_d(q, a, b) for a, b in segs) <= 1.5 * math.sqrt(2) + 0.05, (src, p['id'], q)
 
 
 # ---- M1: Assembly editing on envelopes ---------------------------------------------------

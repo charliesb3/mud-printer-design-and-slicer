@@ -76,8 +76,20 @@ def test_a_thick_wall_in_no_wall_system_gets_no_web(thickness):
 
 def test_ticking_the_wall_gives_it_the_web():
     from layer_design import DesignLibrary
-    lib, lay, paths, meta = build(line_thickness=6.0, member=True)
+    # (8 in: a cavity between the printed skins. A 6 in Skin + Web wall has
+    # NONE — its two 3 in skins print 3 in apart, touching — so it is skins
+    # only; physical wall width 2026-10-16, see the test below)
+    lib, lay, paths, meta = build(line_thickness=8.0, member=True)
     assert _web_in_line(paths)
+    assert DesignLibrary._open_ends(lay, paths, meta) == []
+
+
+def test_a_member_too_thin_for_a_cavity_prints_skins_only():
+    """6 in wall, 3 in bead: skins half a bead inside the faces are one bead
+    apart — no cavity, no web (wall_lattice NO CAVITY rule), still one route."""
+    from layer_design import DesignLibrary
+    lib, lay, paths, meta = build(line_thickness=6.0, member=True)
+    assert not _web_in_line(paths)
     assert DesignLibrary._open_ends(lay, paths, meta) == []
 
 

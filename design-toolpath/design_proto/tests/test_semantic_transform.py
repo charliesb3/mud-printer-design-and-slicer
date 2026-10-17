@@ -72,7 +72,9 @@ def test_disconnected_shapes_transform_independently():
     R = next(p for p in b.document['source_paths'] if p['id'] == 'R')
     assert (C['cx'], C['cy'], C['radius']) == (480, 180, 48) and math.isclose(R['w'], 192)
     xs = [x for p in strands(b, 'C') for x, _ in p['pts']]
-    assert math.isclose(max(xs), 528, abs_tol=0.01)                  # outer face of the scaled circle
+    # the scaled envelope's outer face is at x 528; the printed outer skin lies
+    # half a bead (1.5 in) inside it (physical wall width, 2026-10-16)
+    assert math.isclose(max(xs), 528 - 1.5, abs_tol=0.01)
     assert C['envelope'] == F.document(())['source_paths'][1]['envelope']    # thickness is physical
 
 
@@ -90,7 +92,9 @@ def test_the_connector_is_regenerated_as_a_constant_thickness_wall_on_its_hosts(
     faces = strands(b, 'L.wall')
     assert len(faces) == 2
     ys = sorted({round(y, 9) for p in faces for _, y in p['pts']})
-    assert len(ys) == 2 and math.isclose(ys[1] - ys[0], 10.0)                    # two straight, parallel faces …
+    # two straight, parallel skins: the 10 in envelope's faces, each printed
+    # half a bead inside → centrelines 10 − 3 = 7 in apart (physical wall width)
+    assert len(ys) == 2 and math.isclose(ys[1] - ys[0], 7.0)
     plain = lib().build('b')
     py = sorted({round(y, 9) for p in strands(plain, 'L.wall') for _, y in p['pts']})
     assert math.isclose(py[1] - py[0], ys[1] - ys[0])                            # … exactly as far apart as before
@@ -105,7 +109,10 @@ def test_rounded_and_miter_junctions_are_regenerated_as_ordinary_junctions():
         j1 = sorted((j['key'], j['treatment'], j['actual_radius']) for j in moved.network['junctions'])
         assert j1 == j0 and all(t == style for _, t, _ in j1), style
         xs = sorted(round(j['x'], 3) for j in moved.network['junctions'])
-        assert xs[:2] == [316.0, 316.0] and all(431 < x < 433 for x in xs[2:]), style   # at the new attachments
+        # at the new attachments — on the hosts' PRINTED skins, half a bead inside
+        # the attachment points (physical wall width): 316 − 1.5 on the rectangle,
+        # ≈ 432 + 1.6 on the circle's inward-offset skin
+        assert xs[:2] == [314.5, 314.5] and all(433 < x < 434.5 for x in xs[2:]), style
 
 
 def test_the_connector_lattice_is_resolved_inside_the_new_wall():

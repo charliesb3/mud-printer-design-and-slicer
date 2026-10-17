@@ -48,12 +48,21 @@ def runs(moves):
     return out + ([cur] if cur else [])
 
 
+# PHYSICAL WALL WIDTH (2026-10-16): the ring's authored reference line `R` is
+# an architectural face, no longer a printed strand — the skins print half a
+# bead (1.5 in) inside the 10 in envelope as `R.wall_near` / `R.wall`. Origins
+# sit on PRINTED strands; one stored on the reference reports `missing` and
+# falls back (open product question: re-attach to the near skin, or keep the
+# "never moved onto other geometry" rule — WALL_ARCHITECTURE.md Z.6).
+NEAR = 'R.wall_near'          # the printed near skin: rectangle x 101.5..298.5, y 141.5..258.5
+
+
 def test_origin_moves_the_start_but_not_the_geometry(client):
     auto = route(client, ring_payload())
-    d = route(client, ring_payload(origins=[{'strand': 'R', 'u': 0.25}]))
-    assert d['origins'] == [{'strand': 'R', 'u': 0.25, 'x': 260.0, 'y': 140.0, 'status': 'ok'}]
+    d = route(client, ring_payload(origins=[{'strand': NEAR, 'u': 0.25}]))
+    assert d['origins'] == [{'strand': NEAR, 'u': 0.25, 'x': 258.5, 'y': 141.5, 'status': 'ok'}]
     mv = d['moves']
-    assert mv[0]['start'] == [260.0, 140.0] and mv[-1]['end'] == [260.0, 140.0]   # start = end = origin
+    assert mv[0]['start'] == [258.5, 141.5] and mv[-1]['end'] == [258.5, 141.5]   # start = end = origin
     assert auto['moves'][0]['start'] != mv[0]['start']
     # same printed geometry (the origin only splits one segment collinearly)
     assert d['metrics']['print_distance'] == auto['metrics']['print_distance']
@@ -63,19 +72,21 @@ def test_origin_moves_the_start_but_not_the_geometry(client):
 
 
 def test_origin_persists_through_a_rebuild(client):
-    p = ring_payload(origins=[{'strand': 'R', 'u': 0.6}])
+    p = ring_payload(origins=[{'strand': NEAR, 'u': 0.6}])
     a, b = route(client, p), route(client, p)
-    assert a['moves'] == b['moves'] and a['moves'][0]['start'] == [236.0, 260.0]
+    assert a['moves'] == b['moves'] and a['moves'][0]['start'] == pytest.approx([235.7, 258.5])
 
 
 def test_origin_follows_its_strand_when_geometry_moves(client):
-    d = route(client, ring_payload(x=130, origins=[{'strand': 'R', 'u': 0.25}]))
-    assert d['origins'][0]['status'] == 'ok' and d['moves'][0]['start'] == [290.0, 140.0]
+    d = route(client, ring_payload(x=130, origins=[{'strand': NEAR, 'u': 0.25}]))
+    assert d['origins'][0]['status'] == 'ok' and d['moves'][0]['start'] == [288.5, 141.5]
 
 
 def test_unresolvable_origin_falls_back_to_automatic(client):
     auto = route(client, ring_payload())
-    for o in ({'strand': 'gone', 'u': 0.4}, {'strand': 'I~0.0', 'u': 0.5}):
+    # (`R`, the authored reference face, is not printed since the physical
+    # wall width: an origin stored on it is `missing` too — see NEAR above)
+    for o in ({'strand': 'gone', 'u': 0.4}, {'strand': 'I~0.0', 'u': 0.5}, {'strand': 'R', 'u': 0.25}):
         d = route(client, ring_payload(origins=[o], infill=False))
         assert d['origins'][0]['status'] == 'missing'
         assert d['closure']['open'] == [] and d['metrics']['retrace_moves'] == 0   # automatic, still closed
@@ -88,11 +99,11 @@ def test_each_disconnected_closed_component_has_its_own_origin(client):
     d0 = route(client, ring_payload(extra=[island]))
     ids = {m['strand_id'] for m in d0['moves'] if m['strand_id']}
     assert 'S' in ids and len(runs(d0['moves'])) == 2
-    d = route(client, ring_payload(extra=[island], origins=[{'strand': 'R', 'u': 0.25},
+    d = route(client, ring_payload(extra=[island], origins=[{'strand': NEAR, 'u': 0.25},
                                                            {'strand': 'S', 'u': 0.5}]))
     starts = [r[0]['start'] for r in runs(d['moves'])]
     ends = [r[-1]['end'] for r in runs(d['moves'])]
-    assert sorted(map(tuple, starts)) == sorted([(260.0, 140.0), (60.0, 340.0)])
+    assert sorted(map(tuple, starts)) == sorted([(258.5, 141.5), (60.0, 340.0)])
     assert starts == ends                                  # each closed run begins and ends at its origin
 
 

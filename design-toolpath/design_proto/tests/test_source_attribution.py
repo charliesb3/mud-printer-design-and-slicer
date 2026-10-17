@@ -48,10 +48,13 @@ def test_a_two_wall_corner_splits_along_the_miter():
 
 
 def test_at_a_T_the_host_keeps_its_full_thickness():
-    # host H along y = 100 (faces 95 / 105), branch B up from (100,100)
+    # host H along y = 100 (envelope faces 95 / 105; its PRINTED near skin at
+    # 103.5 — half a bead inside the face, physical wall width 2026-10-16),
+    # branch B up from (100,100). The branch's landings on the host's printed
+    # skin (y 103.5) are the boundary: the host owns everything below it.
     vs = lattice_tags(doc([line('H', (0, 100), (200, 100)), line('B', (100, 100), (100, 200))], 'H'))
-    assert all(t == 'H' for (x, y), t in vs if y < 105 - 1e-6)
-    assert all(t == 'B' for (x, y), t in vs if y > 105 + 1e-6)
+    assert all(t == 'H' for (x, y), t in vs if y < 103.5 - 1e-6)
+    assert all(t == 'B' for (x, y), t in vs if y > 103.5 + 1e-6)
 
 
 def test_attribution_is_deterministic():

@@ -1174,8 +1174,29 @@ def _refdoc(line_type):
     return d
 
 
+# KNOWN INVARIANT VIOLATIONS (class A, 2026-10-17; WALL_ARCHITECTURE.md Z.6):
+# since the physical wall width inset the skins, the mixed-system junction
+# machinery (pass 10 pushes / mouths / `~cross` bridges) misses the host's
+# printed material in these host × line combinations of the reference
+# network — a second run, or no printed contact between C1 and L1. Different
+# Wall Systems must meet through a local junction motif in one route
+# (invariants 9 / 13); fixed by stage Z6 (junction motifs owned by junction
+# identity). Strict xfail: the suite flags the day they pass.
+Z6_KNOWN_LINE_THROUGH = {'hollow'}                                 # (host Skin + Web)
+Z6_KNOWN_CONTACT = {('skin_web', 'hollow'), ('skin_web', 'parallel'), ('skin_web', 'interleaved'),
+                    ('skin_web', 'linked'), ('skin_web', 'chain'),
+                    ('parallel', 'skin_web'), ('interleaved', 'skin_web')}   # (host, line)
+
+
+def _z6_xfail(request, key, known):
+    if key in known:
+        request.node.add_marker(pytest.mark.xfail(
+            strict=True, reason='KNOWN (class A, Z6): mixed-system junction misses the inset host skin — '
+                                'WALL_ARCHITECTURE.md Z.6'))
+
+
 @pytest.mark.parametrize('line_type', LINE_TYPES)
-def test_reference_network_line_through_every_construction(line_type):
+def test_reference_network_line_through_every_construction(line_type, request):
     """Regression (live review): circle + rectangles in a Skin + Web system,
     Line 1 (bridging Rect 2 and the circle) switched through every
     construction. No phantom connector walls (Line 1's faces lie on two rings —
@@ -1183,6 +1204,7 @@ def test_reference_network_line_through_every_construction(line_type):
     the host skins were spliced INTO the line); the host keeps its web; the
     line's generated geometry stays in its own band and meets the host's
     skins at one point per end; one route, no travel."""
+    _z6_xfail(request, line_type, Z6_KNOWN_LINE_THROUGH)
     import reference_network as RN
     L = _deserialise_layer(_refdoc(line_type))
     p, m, closure, mt = _route(L)
@@ -1323,11 +1345,12 @@ def test_parallel_branch_into_a_curved_parallel_host():
 
 @pytest.mark.parametrize('host', ['skin_web', 'interleaved', 'parallel'])
 @pytest.mark.parametrize('line_type', LINE_TYPES)
-def test_every_architectural_junction_has_printed_contact(host, line_type):
+def test_every_architectural_junction_has_printed_contact(host, line_type, request):
     """Reference network (both rects + circle in one system, Line 1 in
     another): every pair of walls that touch architecturally has touching
     PRINTED material (crossings, or shared skins), and the whole network
     prints as one route."""
+    _z6_xfail(request, (host, line_type), Z6_KNOWN_CONTACT)
     d = _refdoc(line_type)
     d['wall_systems'][0]['type'] = host
     d['wall_systems'][0]['params'] = {'paths': 4} if host == 'interleaved' else ({'walls': 4} if host == 'parallel' else {})

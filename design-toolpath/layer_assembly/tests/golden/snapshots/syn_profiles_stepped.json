@@ -9,8 +9,8 @@
   }
  },
  "assembly": {
-  "geom": "af30a9ba798508ee5faff3344deb315747f7935b8325b1f785c1a857d2d74cb4",
-  "hash": "6c3c820f44af34fac46d959be6c2596d03d2737957e687711da51b4045b64cfe",
+  "geom": "ea62953f67a9671931d4d20386aa0e3e3a1b661c01af335a3feac84127280ff2",
+  "hash": "ce218644235d8e6bfa9c10aff533dd541716c0945b2c5cc08f51bed8fb52364c",
   "summary": {
    "findings": 4,
    "instances": 20,
@@ -23,14 +23,14 @@
   }
  },
  "designer.base": {
-  "geom": "9a28f899cad4b2e11c138821f93f352db9bae52406c0f855a214cb6b5905b9d6",
-  "hash": "039adc6d084a5d1326d4044284a3f07bbb13c477a7401ba98cd40105fa991924",
+  "geom": "69c6084974b58fa4e2102ed37207be4396571fe50cc50c60beaa91dcfbe2517c",
+  "hash": "a7bc67676a5916232d52b0468d71a61fec7398643a79cec5b0e6b2386d3d096e",
   "summary": {
    "bbox": [
-    -5.0,
-    -5.0,
-    165.002,
-    85.002
+    -3.5,
+    -3.5,
+    163.501,
+    83.501
    ],
    "junctions": 4,
    "length": 891.302,
@@ -58,17 +58,17 @@
   }
  },
  "mudjob": {
-  "geom": "ffd03653c77dda0c9e409b5eec52623639510a9733711f2dda4ff7b72c1a1934",
-  "hash": "ffd03653c77dda0c9e409b5eec52623639510a9733711f2dda4ff7b72c1a1934",
+  "geom": "c79de3d0a341bf900804e28f988eff9b8e218a806a26387b4318d7fa6ced183f",
+  "hash": "c79de3d0a341bf900804e28f988eff9b8e218a806a26387b4318d7fa6ced183f",
   "summary": {
-   "gcode_lines": 2946,
-   "gcode_sha": "3d526a2e796a7c2b",
+   "gcode_lines": 2910,
+   "gcode_sha": "cd0a8c8c89649e9b",
    "lifts": 2
   }
  },
  "plan": {
-  "geom": "57a4f68e25fcd06129c4a7314bf59e8602698728107cdcd3f127297b1897b1e7",
-  "hash": "209b1472ed1d18249a9da960acdcfb6e2e9c17033051b3be77feebab615cad49",
+  "geom": "5cd194244ca728ab978c07b9f20edda88b459da5722c59e3a86e4cba17925133",
+  "hash": "477efd239b01cf774c2071d694c73e61ea897102683dcf60f980474e17ddfe95",
   "summary": {
    "estimate": {
     "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
@@ -96,13 +96,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -111,11 +111,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -124,14 +124,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 447.318277,
-      "transition_length": 10.003013,
+      "total_time": 446.818121,
+      "transition_length": 7.002109,
       "travel_length": 0,
-      "travel_time": 1.667169
+      "travel_time": 1.167018
      },
      {
       "design_id": "base",
@@ -153,13 +153,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -168,11 +168,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -181,11 +181,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -210,13 +210,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -225,11 +225,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -238,11 +238,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -267,13 +267,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -282,11 +282,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -295,11 +295,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -324,13 +324,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -339,11 +339,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -352,11 +352,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -381,13 +381,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -396,11 +396,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -409,11 +409,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -438,13 +438,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -453,11 +453,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -466,11 +466,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -495,13 +495,13 @@
         "stage": 1
        }
       ],
-      "print_length": 891.302217,
-      "print_time": 445.651109,
+      "print_length": 891.302206,
+      "print_time": 445.651103,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 409.94,
+        "length": 420.653,
         "sources": [
          "C",
          "R"
@@ -510,11 +510,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 204.970004
+        "time": 210.326667
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -523,11 +523,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 445.651109,
+      "total_time": 445.651103,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -552,13 +552,13 @@
         "stage": 1
        }
       ],
-      "print_length": 898.420183,
-      "print_time": 449.210091,
+      "print_length": 893.332464,
+      "print_time": 446.666232,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 417.058,
+        "length": 422.684,
         "sources": [
          "C",
          "R"
@@ -567,11 +567,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 208.528987
+        "time": 211.341796
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -580,11 +580,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 449.210091,
+      "total_time": 446.666232,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -609,13 +609,13 @@
         "stage": 1
        }
       ],
-      "print_length": 898.420183,
-      "print_time": 449.210091,
+      "print_length": 893.332464,
+      "print_time": 446.666232,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 417.058,
+        "length": 422.684,
         "sources": [
          "C",
          "R"
@@ -624,11 +624,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 208.528987
+        "time": 211.341796
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -637,11 +637,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 449.210091,
+      "total_time": 446.666232,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -666,13 +666,13 @@
         "stage": 1
        }
       ],
-      "print_length": 898.420183,
-      "print_time": 449.210091,
+      "print_length": 893.332464,
+      "print_time": 446.666232,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 417.058,
+        "length": 422.684,
         "sources": [
          "C",
          "R"
@@ -681,11 +681,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 208.528987
+        "time": 211.341796
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -694,11 +694,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 449.210091,
+      "total_time": 446.666232,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -723,13 +723,13 @@
         "stage": 1
        }
       ],
-      "print_length": 898.420183,
-      "print_time": 449.210091,
+      "print_length": 893.332464,
+      "print_time": 446.666232,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 417.058,
+        "length": 422.684,
         "sources": [
          "C",
          "R"
@@ -738,11 +738,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 208.528987
+        "time": 211.341796
        },
        {
         "index": 1,
-        "length": 481.362,
+        "length": 470.649,
         "sources": [
          "C",
          "R"
@@ -751,11 +751,11 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 240.681104
+        "time": 235.324436
        }
       ],
       "section_index": 0,
-      "total_time": 449.210091,
+      "total_time": 446.666232,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -774,24 +774,24 @@
         "stage": 2
        }
       ],
-      "print_length": 915.414569,
-      "print_time": 457.707284,
+      "print_length": 907.67559,
+      "print_time": 453.837795,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 271.058,
+        "length": 265.131,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 135.5291
+        "time": 132.565697
        },
        {
         "index": 1,
-        "length": 644.356,
+        "length": 642.544,
         "sources": [
          "C",
          "R"
@@ -800,14 +800,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 322.178184
+        "time": 321.272098
        }
       ],
       "section_index": 0,
-      "total_time": 458.443324,
+      "total_time": 454.207955,
       "transition_length": 0.0,
-      "travel_length": 4.416239,
-      "travel_time": 0.73604
+      "travel_length": 2.220959,
+      "travel_time": 0.37016
      },
      {
       "design_id": "base",
@@ -823,13 +823,13 @@
         "stage": 2
        }
       ],
-      "print_length": 915.414569,
-      "print_time": 457.707284,
+      "print_length": 907.67559,
+      "print_time": 453.837795,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 644.356,
+        "length": 642.544,
         "sources": [
          "C",
          "R"
@@ -838,25 +838,25 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 322.178184
+        "time": 321.272098
        },
        {
         "index": 1,
-        "length": 271.058,
+        "length": 265.131,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 135.5291
+        "time": 132.565697
        }
       ],
       "section_index": 0,
-      "total_time": 458.443324,
+      "total_time": 454.207955,
       "transition_length": 0.0,
-      "travel_length": 4.416239,
-      "travel_time": 0.73604
+      "travel_length": 2.220959,
+      "travel_time": 0.37016
      },
      {
       "design_id": "base",
@@ -872,24 +872,24 @@
         "stage": 2
        }
       ],
-      "print_length": 915.414569,
-      "print_time": 457.707284,
+      "print_length": 907.67559,
+      "print_time": 453.837795,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 271.058,
+        "length": 265.131,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 135.5291
+        "time": 132.565697
        },
        {
         "index": 1,
-        "length": 644.356,
+        "length": 642.544,
         "sources": [
          "C",
          "R"
@@ -898,14 +898,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 322.178184
+        "time": 321.272098
        }
       ],
       "section_index": 0,
-      "total_time": 458.443324,
+      "total_time": 454.207955,
       "transition_length": 0.0,
-      "travel_length": 4.416239,
-      "travel_time": 0.73604
+      "travel_length": 2.220959,
+      "travel_time": 0.37016
      },
      {
       "design_id": "base",
@@ -921,13 +921,13 @@
         "stage": 2
        }
       ],
-      "print_length": 915.414569,
-      "print_time": 457.707284,
+      "print_length": 907.67559,
+      "print_time": 453.837795,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 644.356,
+        "length": 642.544,
         "sources": [
          "C",
          "R"
@@ -936,25 +936,25 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 322.178184
+        "time": 321.272098
        },
        {
         "index": 1,
-        "length": 271.058,
+        "length": 265.131,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 135.5291
+        "time": 132.565697
        }
       ],
       "section_index": 0,
-      "total_time": 458.443324,
+      "total_time": 454.207955,
       "transition_length": 0.0,
-      "travel_length": 4.416239,
-      "travel_time": 0.73604
+      "travel_length": 2.220959,
+      "travel_time": 0.37016
      },
      {
       "design_id": "base",
@@ -970,24 +970,24 @@
         "stage": 2
        }
       ],
-      "print_length": 915.414569,
-      "print_time": 457.707284,
+      "print_length": 907.67559,
+      "print_time": 453.837795,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 271.058,
+        "length": 265.131,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 135.5291
+        "time": 132.565697
        },
        {
         "index": 1,
-        "length": 644.356,
+        "length": 642.544,
         "sources": [
          "C",
          "R"
@@ -996,14 +996,14 @@
          "wall:C",
          "wall:R"
         ],
-        "time": 322.178184
+        "time": 321.272098
        }
       ],
       "section_index": 0,
-      "total_time": 458.443324,
+      "total_time": 454.207955,
       "transition_length": 0.0,
-      "travel_length": 4.416239,
-      "travel_time": 0.73604
+      "travel_length": 2.220959,
+      "travel_time": 0.37016
      },
      {
       "design_id": "base",
@@ -1025,38 +1025,38 @@
         "stage": 4
        }
       ],
-      "print_length": 841.65254,
-      "print_time": 420.82627,
+      "print_length": 831.409899,
+      "print_time": 415.70495,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 187.51,
+        "length": 181.51,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 93.755202
+        "time": 90.755202
        }
       ],
       "section_index": 0,
-      "total_time": 425.096551,
-      "transition_length": 25.621687,
+      "total_time": 419.448969,
+      "transition_length": 22.464116,
       "travel_length": 0,
-      "travel_time": 4.270281
+      "travel_time": 3.744019
      },
      {
       "design_id": "base",
@@ -1078,35 +1078,35 @@
         "stage": 4
        }
       ],
-      "print_length": 841.65254,
-      "print_time": 420.82627,
+      "print_length": 831.409899,
+      "print_time": 415.70495,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 187.51,
+        "length": 181.51,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 93.755202
+        "time": 90.755202
        }
       ],
       "section_index": 0,
-      "total_time": 420.82627,
+      "total_time": 415.70495,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -1131,35 +1131,35 @@
         "stage": 4
        }
       ],
-      "print_length": 841.65254,
-      "print_time": 420.82627,
+      "print_length": 831.409899,
+      "print_time": 415.70495,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 654.142,
+        "length": 649.899,
         "sources": [
          "R"
         ],
         "systems": [
          "wall:R"
         ],
-        "time": 327.071068
+        "time": 324.949747
        },
        {
         "index": 1,
-        "length": 187.51,
+        "length": 181.51,
         "sources": [
          "C"
         ],
         "systems": [
          "wall:C"
         ],
-        "time": 93.755202
+        "time": 90.755202
        }
       ],
       "section_index": 0,
-      "total_time": 420.82627,
+      "total_time": 415.70495,
       "transition_length": 0.0,
       "travel_length": 0,
       "travel_time": 0.0
@@ -1175,14 +1175,14 @@
       "last_layer": 11,
       "layers": 12,
       "passes": 24,
-      "print_time": 5362.049234,
+      "print_time": 5351.873752,
       "reposition_in": null,
       "stages": [
        0,
        1
       ],
-      "total_time": 5363.716403,
-      "travel_time": 1.667169,
+      "total_time": 5353.04077,
+      "travel_time": 1.167018,
       "z_bottom": 0.0,
       "z_top": 18.0
      },
@@ -1195,11 +1195,11 @@
       "last_layer": 19,
       "layers": 8,
       "passes": 11,
-      "print_time": 3551.015232,
+      "print_time": 3516.303823,
       "reposition_in": {
        "at": [
-        122.20812,
-        -4.9473
+        122.1345,
+        83.44866
        ],
        "frame_z_from": 0.0,
        "frame_z_to": 18.0,
@@ -1213,25 +1213,25 @@
        3,
        4
       ],
-      "total_time": 3558.965711,
-      "travel_time": 7.95048,
+      "total_time": 3521.898642,
+      "travel_time": 5.594819,
       "z_bottom": 18.0,
       "z_top": 30.0
      }
     ],
-    "print_length": 17826.128931,
-    "print_time": 8913.064465,
+    "print_length": 17736.355151,
+    "print_time": 8868.177576,
     "retrace_length": 0.0,
     "runs": 40,
     "sections": [
      {
       "index": 0,
       "layers": 20,
-      "print_length": 17826.128931,
-      "print_time": 8913.064465,
-      "total_time": 8922.682114,
-      "travel_length": 57.705893,
-      "travel_time": 9.617649
+      "print_length": 17736.355151,
+      "print_time": 8868.177576,
+      "total_time": 8874.939413,
+      "travel_length": 40.571021,
+      "travel_time": 6.761837
      }
     ],
     "speeds": {
@@ -1263,8 +1263,8 @@
        10,
        11
       ],
-      "print_time": 2473.875985,
-      "total_time": 2473.875985,
+      "print_time": 2527.980516,
+      "total_time": 2527.980516,
       "travel_time": 0.0,
       "z_bottom": 0.0,
       "z_top": 18.0
@@ -1292,9 +1292,9 @@
        22,
        23
       ],
-      "print_time": 2888.173249,
-      "total_time": 2889.840418,
-      "travel_time": 1.667169,
+      "print_time": 2823.893236,
+      "total_time": 2825.060255,
+      "travel_time": 1.167018,
       "z_bottom": 0.0,
       "z_top": 18.0
      },
@@ -1314,9 +1314,9 @@
        27,
        28
       ],
-      "print_time": 2288.536421,
-      "total_time": 2292.21662,
-      "travel_time": 3.680199,
+      "print_time": 2269.188974,
+      "total_time": 2271.039774,
+      "travel_time": 1.850799,
       "z_bottom": 18.0,
       "z_top": 25.5
      },
@@ -1336,9 +1336,9 @@
        30,
        31
       ],
-      "print_time": 981.213203,
-      "total_time": 981.581328,
-      "travel_time": 0.368125,
+      "print_time": 974.849242,
+      "total_time": 974.863559,
+      "travel_time": 0.014317,
       "z_bottom": 25.5,
       "z_top": 30.0
      },
@@ -1358,17 +1358,17 @@
        33,
        34
       ],
-      "print_time": 281.265607,
-      "total_time": 285.167763,
-      "travel_time": 3.902157,
+      "print_time": 272.265607,
+      "total_time": 275.995309,
+      "travel_time": 3.729703,
       "z_bottom": 25.5,
       "z_top": 30.0
      }
     ],
-    "total_time": 8922.682114,
-    "transition_length": 35.6247,
-    "travel_length": 22.081193,
-    "travel_time": 9.617649
+    "total_time": 8874.939413,
+    "transition_length": 29.466225,
+    "travel_length": 11.104797,
+    "travel_time": 6.761837
    },
    "layers": 20
   }

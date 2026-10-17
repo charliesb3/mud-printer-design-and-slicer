@@ -38,8 +38,8 @@
   }
  },
  "designer.d1": {
-  "geom": "b3f08ca3bce4fedf38113687fcbdc69888bdd9560d30ee840bff6d26880859d1",
-  "hash": "cbbb78233745952388a8e35b2b875f448affae8b889ca2aa1678ff31ef0e7f0c",
+  "geom": "c20bc9ee31aa58cecb1113e8def9fbcf2f75fa5620bf7c115b6faa712524b225",
+  "hash": "45cfbb20b8df250aad1873e0505279bdc5bc258f1fbdf963761c92b0bf307a84",
   "summary": {
    "bbox": [
     -3.5,
@@ -48,8 +48,8 @@
     83.5
    ],
    "junctions": 4,
-   "length": 1923.436,
-   "points": 1645,
+   "length": 1935.56,
+   "points": 1652,
    "polylines": 4,
    "trims": {
     "tC": "ok",
@@ -88,17 +88,17 @@
   }
  },
  "mudjob": {
-  "geom": "bc9fafac8b21cc61205bd214a5a7cb1936e90a869eebb732053f14269e2cc1e2",
-  "hash": "bc9fafac8b21cc61205bd214a5a7cb1936e90a869eebb732053f14269e2cc1e2",
+  "geom": "fa028945b836ca95baba30a23f0b5646fedb4025256cf8c7688925ed3bdcd467",
+  "hash": "fa028945b836ca95baba30a23f0b5646fedb4025256cf8c7688925ed3bdcd467",
   "summary": {
-   "gcode_lines": 22608,
-   "gcode_sha": "36298b735aa6cd79",
+   "gcode_lines": 22734,
+   "gcode_sha": "ba54e17d4dc31ba7",
    "lifts": 1
   }
  },
  "plan": {
-  "geom": "02666c488fc137b4e99e13318290079d5997ce3b0db08080e258e29f94d0aea1",
-  "hash": "b5d0be81e3c1b93ef3cb80cf02fb0252482fc7649d0b319adef4a41eefb2460b",
+  "geom": "b04a6769d58c78616c67d44f31a3d6de477bba19f8cb65382c3ef62d1b9cef9d",
+  "hash": "31ca91e6229bca279b34d1b777989a16faeb473db830d6fe45ac5b5d14086cc1",
   "summary": {
    "estimate": {
     "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
@@ -126,8 +126,8 @@
         "stage": 1
        }
       ],
-      "print_length": 1945.15399,
-      "print_time": 972.576995,
+      "print_length": 1954.212227,
+      "print_time": 977.106113,
       "retrace_length": 0,
       "runs": [
        {
@@ -144,18 +144,18 @@
        },
        {
         "index": 1,
-        "length": 1026.482,
+        "length": 1035.54,
         "sources": [
          "R"
         ],
         "systems": [
          "S1"
         ],
-        "time": 513.241114
+        "time": 517.770232
        }
       ],
       "section_index": 0,
-      "total_time": 976.999387,
+      "total_time": 981.528505,
       "transition_length": 26.534349,
       "travel_length": 0,
       "travel_time": 4.422392
@@ -180,20 +180,20 @@
         "stage": 0
        }
       ],
-      "print_length": 1945.15399,
-      "print_time": 972.576995,
+      "print_length": 1954.212227,
+      "print_time": 977.106113,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1026.482,
+        "length": 1035.54,
         "sources": [
          "R"
         ],
         "systems": [
          "S1"
         ],
-        "time": 513.241114
+        "time": 517.770232
        },
        {
         "index": 1,
@@ -209,7 +209,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 976.999387,
+      "total_time": 981.528505,
       "transition_length": 26.534349,
       "travel_length": 0,
       "travel_time": 4.422392
@@ -234,8 +234,8 @@
         "stage": 1
        }
       ],
-      "print_length": 1945.15399,
-      "print_time": 972.576995,
+      "print_length": 1954.212227,
+      "print_time": 977.106113,
       "retrace_length": 0,
       "runs": [
        {
@@ -252,18 +252,18 @@
        },
        {
         "index": 1,
-        "length": 1026.482,
+        "length": 1035.54,
         "sources": [
          "R"
         ],
         "systems": [
          "S1"
         ],
-        "time": 513.241114
+        "time": 517.770232
        }
       ],
       "section_index": 0,
-      "total_time": 976.999387,
+      "total_time": 981.528505,
       "transition_length": 26.534349,
       "travel_length": 0,
       "travel_time": 4.422392
@@ -288,20 +288,20 @@
         "stage": 0
        }
       ],
-      "print_length": 1945.15399,
-      "print_time": 972.576995,
+      "print_length": 1954.212227,
+      "print_time": 977.106113,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1026.482,
+        "length": 1035.54,
         "sources": [
          "R"
         ],
         "systems": [
          "S1"
         ],
-        "time": 513.241114
+        "time": 517.770232
        },
        {
         "index": 1,
@@ -317,7 +317,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 976.999387,
+      "total_time": 981.528505,
       "transition_length": 26.534349,
       "travel_length": 0,
       "travel_time": 4.422392
@@ -342,8 +342,8 @@
         "stage": 1
        }
       ],
-      "print_length": 1945.15399,
-      "print_time": 972.576995,
+      "print_length": 1954.212227,
+      "print_time": 977.106113,
       "retrace_length": 0,
       "runs": [
        {
@@ -360,18 +360,18 @@
        },
        {
         "index": 1,
-        "length": 1026.482,
+        "length": 1035.54,
         "sources": [
          "R"
         ],
         "systems": [
          "S1"
         ],
-        "time": 513.241114
+        "time": 517.770232
        }
       ],
       "section_index": 0,
-      "total_time": 976.999387,
+      "total_time": 981.528505,
       "transition_length": 26.534349,
       "travel_length": 0,
       "travel_time": 4.422392
@@ -396,20 +396,20 @@
         "stage": 0
        }
       ],
-      "print_length": 1945.15399,
-      "print_time": 972.576995,
+      "print_length": 1954.212227,
+      "print_time": 977.106113,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1026.482,
+        "length": 1035.54,
         "sources": [
          "R"
         ],
         "systems": [
          "S1"
         ],
-        "time": 513.241114
+        "time": 517.770232
        },
        {
         "index": 1,
@@ -425,7 +425,7 @@
        }
       ],
       "section_index": 0,
-      "total_time": 976.999387,
+      "total_time": 981.528505,
       "transition_length": 26.534349,
       "travel_length": 0,
       "travel_time": 4.422392
@@ -657,30 +657,30 @@
       "last_layer": 11,
       "layers": 12,
       "passes": 18,
-      "print_time": 11923.709659,
+      "print_time": 11950.884369,
       "reposition_in": null,
       "stages": [
        0,
        1,
        2
       ],
-      "total_time": 11950.26444,
+      "total_time": 11977.43915,
       "travel_time": 26.55478,
       "z_bottom": 0.0,
       "z_top": 18.0
      }
     ],
-    "print_length": 23847.419318,
-    "print_time": 11923.709659,
+    "print_length": 23901.768738,
+    "print_time": 11950.884369,
     "retrace_length": 0.0,
     "runs": 18,
     "sections": [
      {
       "index": 0,
       "layers": 6,
-      "print_length": 11670.92394,
-      "print_time": 5835.46197,
-      "total_time": 5861.99632,
+      "print_length": 11725.273361,
+      "print_time": 5862.63668,
+      "total_time": 5889.17103,
       "travel_length": 159.206096,
       "travel_time": 26.534349
      },
@@ -740,8 +740,8 @@
        9,
        10
       ],
-      "print_time": 3079.446683,
-      "total_time": 3092.713858,
+      "print_time": 3106.621393,
+      "total_time": 3119.888568,
       "travel_time": 13.267175,
       "z_bottom": 0.0,
       "z_top": 9.0
@@ -773,7 +773,7 @@
       "z_top": 18.0
      }
     ],
-    "total_time": 11950.26444,
+    "total_time": 11977.43915,
     "transition_length": 159.328683,
     "travel_length": 0.0,
     "travel_time": 26.55478

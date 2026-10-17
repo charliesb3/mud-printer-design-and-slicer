@@ -8,15 +8,15 @@ by its transform group. Every layer is a transformed variant whose lattice
 is planned against the untransformed one (cross-Z tracking: counts, sides,
 seam carried).
 
-DEFERRED BUG (open, 2026-10-16): strict xfail reproduction. Observed: the planner re-detected the run's CORNERS on
-every layer; the circle (radius ≈ 2.4 thicknesses) turns close to the corner
-threshold, so "corners" on it appeared / vanished from layer to layer, the
-run's segments no longer matched the reference and its stations were
-re-planned — the web's landings on the circle jumped by up to 16 in (web
-pitch 20 in) between successive layers, a tangle instead of a stack. (A
-diagnosis, not yet a decided fix: the planner re-detects the run's corners
-per layer; a circle of radius ≈ 2.4 thicknesses sits near the corner
-threshold.)
+HISTORY: a strict-xfail reproduction from 2026-10-16 (max drift 3.18 / 3.83 in
+between successive layers on a11fcc1). Cause: the planner re-detected the
+run's CORNERS on every layer; the circle (radius ≈ 2.4 thicknesses) turned
+close to the corner threshold, so "corners" on it appeared / vanished from
+layer to layer, the run's segments no longer matched the reference and its
+stations were re-planned — the web's landings on the circle jumped by up to
+16 in. FIXED by Skin + Web Pass A (2026-10-16, shared corner detection: a
+continuous curve is never a corner) — a passing regression since 2026-10-17.
+The general cross-Z measurement lives in test_stack_coherence.py.
 """
 import math
 import os
@@ -116,11 +116,10 @@ def _drift(v, web, below):
             if math.dist(q, c) < CR * k + 6 and (q[0] < 10 or q[1] > 110)]
 
 
-@pytest.mark.xfail(strict=True, reason='DEFERRED: Skin + Web phase not coherent through Z on a gradually scaled circle (open bug)')
 @pytest.mark.parametrize('variant', [True, False], ids=['lineage-scaffold', 'planned-alone'])
 def test_web_evolves_continuously_on_a_gradually_scaled_circle(client, variant):
-    """Measured 2026-10-16 on a11fcc1: max 3.18 / 3.83 in between successive
-    layers (most layers > 0.5 in); the untransformed control drifts 0.155 in."""
+    """Before Pass A: max 3.18 / 3.83 in between successive layers (most
+    layers > 0.5 in); the untransformed control drifts 0.155 in."""
     layers = _stack(client, variant)
     assert all(v and v.get('transforms') for v, _ in layers[1:])          # every layer a transformed variant
     d = []
