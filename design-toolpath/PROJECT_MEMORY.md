@@ -1572,6 +1572,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 
 ## Last Updated
 
+2026-10-16 — WALL SYSTEMS MATERIAL CONTROLS (manually reviewed, checkpointed): the Wall Systems sidebar has a compact "Material · shared with Designer" section (Bead Width, Contact Overlap, Parallel Wall Overlap). It edits the SAME project material state as the Designer through `window.Designer.setMaterial` → `setMaterialField` (bead via `setProjectBeadWidth`, overlaps via `_applyMaterial`); key `return_overlap` kept; no copy on Wall Systems; no geometry change. Test: `ui_wallsystems_smoke.js` MATERIAL block.
+
 2026-10-16 — PHYSICAL WALL WIDTH (manually reviewed, checkpointed): Wall Thickness = finished deposited width; Hollow / Skin + Web skins inset ½ bead in print builds (envelope unchanged); "Return-lane overlap" renamed Parallel Wall Overlap in the UI (key `return_overlap` kept). FAST had 20 known failures at the checkpoint (see Current State → "PHYSICAL WALL WIDTH"); goldens not re-baselined. Deferred: alignment-independent connectivity, canonical wall centreline (full-wall junction work), Skin + Web / Wall System through-Z coherence.
 
 2026-10-16 — Small fixes after the cleanup (uncommitted, pending review): transform-group support / header frames, Skin + Web webs restricted to their own Wall System, THIN width test, SHOW BEAD view. Three bugs deferred (open): unassigned Out-and-Back tilt under group transforms, opening locality of generated constructions, Skin + Web through-Z coherence on curved walls. Also open: Wall Thickness should mean the finished deposited outside-to-outside width (clarified by the user; not implemented). See `WALL_ARCHITECTURE.md` → "Small fixes after the cleanup".

@@ -453,6 +453,34 @@ eval(src + `
           '… and the Variant stores no copy of them');
     await editDesign('base');
   }
+  // ---- MATERIAL shared with the Designer (2026-10-16): Bead Width, Contact Overlap,
+  //      Parallel Wall Overlap (return_overlap) — the SAME values, no Wall-System copy ----
+  {
+    setWorkspace('wallsystems'); await wsysShow();
+    check(html.includes('id="wsys-material"') && html.includes('Material · shared with Designer') &&
+          html.includes('Parallel wall overlap'), 'Wall Systems: a Material section shared with the Designer');
+    check(el('wsys-bead-width').value === _material().bead_width.toFixed(2) &&
+          el('wsys-parallel-overlap').value === _material().return_overlap.toFixed(2), 'it shows the project values');
+    const wsBefore = JSON.stringify(project.wall_systems);
+    el('wsys-bead-width').value = '3.5'; wsysSetMaterial('bead_width', el('wsys-bead-width'));
+    el('wsys-contact-overlap').value = '1.0'; wsysSetMaterial('contact_overlap', el('wsys-contact-overlap'));
+    el('wsys-parallel-overlap').value = '0.5'; wsysSetMaterial('return_overlap', el('wsys-parallel-overlap'));
+    check(projectBeadWidth() === 3.5 && layer.material.contact_overlap === 1.0 && layer.material.return_overlap === 0.5,
+          'edits from Wall Systems change the ONE project material (return_overlap underneath)');
+    check(el('bead-width').value === '3.50' && el('contact-overlap').value === '1.00' && el('return-overlap').value === '0.50',
+          "… and the Designer's own controls show them at once");
+    check(JSON.stringify(project.wall_systems) === wsBefore && !JSON.stringify(project.wall_systems).includes('overlap'),
+          '… no Wall-System copy of any material value');
+    el('return-overlap').value = '0.75'; onMaterialChange('return_overlap');
+    el('bead-width').value = '3'; onBeadWidthChange();
+    el('contact-overlap').value = '0.75'; onMaterialChange('contact_overlap');
+    check(el('wsys-parallel-overlap').value === '0.75' && el('wsys-bead-width').value === '3.00' &&
+          el('wsys-contact-overlap').value === '0.75', 'Designer edits show in Wall Systems (the same state)');
+    el('wsys-parallel-overlap').value = '9'; wsysSetMaterial('return_overlap', el('wsys-parallel-overlap'));
+    check(layer.material.return_overlap === 2.75 && el('wsys-parallel-overlap').value === '2.75',
+          'clamped exactly as in the Designer (< bead width)');
+    el('return-overlap').value = '0.75'; onMaterialChange('return_overlap');
+  }
   console.log('UI WALL SYSTEMS SMOKE PASSED');
 })().catch(e => { console.error(e); process.exit(1); });
 `);

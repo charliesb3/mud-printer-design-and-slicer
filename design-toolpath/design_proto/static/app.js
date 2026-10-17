@@ -5330,16 +5330,30 @@ function _material() {
 }
 
 function onMaterialChange(field) {
-  const m = _material();
-  if (field === 'physical') {
-    m.physical = !!document.getElementById('phys-rules').checked;
-  } else {
+  if (field !== 'physical') {
     const el = document.getElementById(field === 'contact_overlap' ? 'contact-overlap' : 'return-overlap');
-    const v = parseFloat(el.value);
-    m[field] = Number.isFinite(v) ? Math.round(v / BEAD_STEP) * BEAD_STEP : m[field];
+    setMaterialField(field, el.value);
+    return;
   }
+  const m = _material();
+  m.physical = !!document.getElementById('phys-rules').checked;
   layer.material = m;
   _applyMaterial();
+}
+
+// ONE setter for the project material values (bead_width, contact_overlap,
+// return_overlap = "Parallel Wall Overlap") — the Designer's Material panel and
+// the Wall Systems workspace (window.Designer.setMaterial) both edit through it,
+// so there is never a second copy. Returns the value actually stored (snapped,
+// clamped by _applyMaterial).
+function setMaterialField(field, v) {
+  if (field === 'bead_width') return setProjectBeadWidth(v);
+  const m = _material();
+  const x = parseFloat(v);
+  m[field] = Number.isFinite(x) ? Math.round(x / BEAD_STEP) * BEAD_STEP : m[field];
+  layer.material = m;
+  _applyMaterial();
+  return _material()[field];
 }
 
 // clamp the overlaps to the bead width (visibly), sync the controls, regenerate
@@ -5367,6 +5381,10 @@ function _syncMaterialControls() {
   set('contact-overlap', 'value', m.contact_overlap.toFixed(2));
   set('return-overlap', 'value', m.return_overlap.toFixed(2));
   set('phys-rules', 'checked', m.physical);
+  // (the Wall Systems workspace shows the same values: index.html #wsys-material)
+  set('wsys-bead-width', 'value', m.bead_width.toFixed(2));
+  set('wsys-contact-overlap', 'value', m.contact_overlap.toFixed(2));
+  set('wsys-parallel-overlap', 'value', m.return_overlap.toFixed(2));
   const W = m.bead_width;
   const rs = Math.max(RETURN_MIN, W - m.return_overlap);
   set('material-derived', 'textContent', m.physical
@@ -7121,6 +7139,7 @@ window.Designer = {
   saveProject, openProjectDialog, newProject,
   designsForBackend, createDerivedDesign, editDesign, renameDesign, setWorkspace,
   beadWidth: projectBeadWidth, setBeadWidth: setProjectBeadWidth,   // ONE project material value
+  material: _material, setMaterial: setMaterialField,                // (the same material, every field)
   wallSystems: () => project.wall_systems || (project.wall_systems = []),   // the project's constructions
   setWallSystems: list => { project.wall_systems = list; },
   wallCatalog, setWallThickness, archThickness, setArchThickness,
