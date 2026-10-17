@@ -237,3 +237,7 @@ layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[reference_net
 layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[real_test3b]
 layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[real_10xtest1]
 layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[mixed_benchmark]
+# CONSTRUCTION IDENTITY through the Assembly (WALL_ARCHITECTURE.md §Z.2, stage Z2, 2026-10-17): whole stacks built in process.
+layer_assembly/tests/test_identity_stack.py::test_scaled_circle_stack_keeps_every_name_on_all_twenty_layers
+layer_assembly/tests/test_identity_stack.py::test_reference_network_stack_reports_its_topology_events_and_nothing_else
+layer_assembly/tests/test_identity_stack.py::test_real_project_names_its_three_junctions_and_the_thin_line_stays_out

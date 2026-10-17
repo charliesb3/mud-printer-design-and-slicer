@@ -1201,7 +1201,7 @@ def corner_stations(centre, L, cycle, th, lo, hi, end_margin):
 
 def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
          max_unsupported=None, contact=0.0, closed=False, stations=None, track=None, track_map=None,
-         bead=0.0, truss=None, web_angle=None):
+         bead=0.0, truss=None, web_angle=None, identity=None):
     """
     Route-aware wall lattice for one wall region (rings: material on the
     left). Returns a LatticePlan, or None if the region is not wall-like
@@ -1237,6 +1237,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         web): the pitch is derived from the measured cavity between the
         contact rails (web_pitch; 10. in the module doc) and `spacing` is
         ignored. None = the fixed Target Spacing (legacy wall infill).
+      identity — CONSTRUCTION IDENTITY (construction_identity.py, stage Z2):
+        {'anchors': [...], 'walls': {wall id: (pts, closed)}} of this
+        region's architecture. The report then names every skeleton run and
+        segment by the anchors at its ends / corners (report['identity']).
+        Identity only: the geometry is the same with or without it.
     """
     rings = [r for r in rings if len(r) >= 3]
     if not rings:
@@ -3119,7 +3124,28 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 motif_list.append({'kind': kind, 'outer': _xy(O), 'inner': _xy(I),
                                    't1': _xy(c['t1']), 't2': _xy(c['t2']),
                                    'landings': {k_: _xy(q) for k_, q in ld}})
+    ident = None
+    if identity is not None:
+        import construction_identity as CI
+        descs = []
+        for ri, r in enumerate(runs):
+            L = r.length
+            ccw = None
+            if r.cycle and r.chords:
+                # cyclic order round a loop, independent of how the skeleton
+                # happened to orient the run: forward = the OUTER ring (ring 0)
+                # on the left
+                i0, i1 = r.chords[0]
+                outer0, outer1 = sk.ring_of[i0] == 0, sk.ring_of[i1] == 0
+                if outer0 != outer1:
+                    ccw = outer0 == (geo._side_sign(r, 0) > 0)
+            descs.append({'cycle': r.cycle, 'length': L,
+                          'ends': None if r.cycle else [(r.a[0], geo.centre(r, 0.0)), (r.b[0], geo.centre(r, L))],
+                          'corners': [(c['s'], geo.centre(r, c['s'] % L if r.cycle else c['s'])) for c in corners(r)],
+                          'mid': geo.centre(r, 0.5 * L), 'ccw': ccw})
+        ident = CI.resolve_runs(identity, descs, thick)
     report = {
+        'identity': ident,
         'corner_motifs': dict(motif_report, double=sum(len(corners(r)) for ri, r in enumerate(runs)
                                                        if seqs[ri][0] == 'two'),
                               motifs=motif_list) if MOTIFS else 0,

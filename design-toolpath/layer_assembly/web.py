@@ -105,7 +105,7 @@ def _arch_lib(designs, dkey):
     return lib
 
 
-def _source(designs, envelope=False, wall_systems=None):
+def _source(designs, envelope=False, wall_systems=None, junctions=None):
     """The Designer adapter for this set of designs (+ the project's Wall
     Systems, 2026-10-11), reused while they are unchanged (a layer-height /
     transform / header edit never rebuilds a design). `envelope`: the
@@ -118,7 +118,7 @@ def _source(designs, envelope=False, wall_systems=None):
     if key in reg:
         reg.move_to_end(key)
         return reg[key]
-    src = DesignerSource.from_designs(designs, wall_systems)
+    src = DesignerSource.from_designs(designs, wall_systems, junctions)
     if envelope:
         src.env_lib = _arch_lib(designs, dkey)
     else:                                  # (print adapters: their OWN architecture library — the
@@ -166,7 +166,7 @@ def _resolve_stack(data, lap=lambda name: None, envelope=False) -> dict:
     fps = {k: Footprint.of_bbox(*b) for k, b in (data.get('footprints') or {}).items() if b}
     geo, grp = {}, None
     if data.get('designs'):
-        src = _source(data['designs'], envelope, data.get('wall_systems'))
+        src = _source(data['designs'], envelope, data.get('wall_systems'), data.get('junctions'))
         used = {s.design_id for s in assembly.sections} & set(src.design_ids())
         # ARCHITECTURE (2026-10-11): placement pivots (footprints), transform
         # groups and labels come from the canonical ENVELOPES — never from a
@@ -376,7 +376,8 @@ def _envelope_geometry_locked(data):
     (`ids`) or of envelope variants (`variants`: design id + transforms +
     cuts) — what the Assembly page draws while editing."""
     try:
-        src = _source(data['designs'], envelope=True, wall_systems=data.get('wall_systems'))
+        src = _source(data['designs'], envelope=True, wall_systems=data.get('wall_systems'),
+                      junctions=data.get('junctions'))
         ids = data.get('ids') or ([] if data.get('variants') else src.design_ids())
         tf = lambda v: {s_: tuple(t) for s_, t in (v.get('transforms') or {}).items()}    # noqa: E731
         out = {}
@@ -398,7 +399,7 @@ def _envelope_geometry_locked(data):
 
 def _geometry_locked(data):
     try:
-        src = _source(data['designs'], wall_systems=data.get('wall_systems'))
+        src = _source(data['designs'], wall_systems=data.get('wall_systems'), junctions=data.get('junctions'))
         ids = data.get('ids') or ([] if data.get('variants') else src.design_ids())
         out = {}
         req = data.get('variants') or {}

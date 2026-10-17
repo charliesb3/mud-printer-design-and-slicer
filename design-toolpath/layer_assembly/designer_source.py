@@ -52,7 +52,9 @@ def _geometry_of(built):
     return (polys, mat.get('bead_width'),
             {'lattice': built.network.get('lattice'), 'trims': built.network.get('trims'),
              'semantic': built.semantic, 'profile': (built.semantic or {}).get('profile', []),
-             'routing': built.routing, 'timing': timing, 'wall_systems': ws_rep}, labels)
+             'routing': built.routing, 'timing': timing, 'wall_systems': ws_rep,
+             # CONSTRUCTION IDENTITY (stage Z2): anchors / domains / segments of this layer
+             'identity': built.network.get('identity')}, labels)
 
 
 def _variant_worker(designs_json, design_id, transforms, cuts=None):
@@ -64,7 +66,8 @@ def _variant_worker(designs_json, design_id, transforms, cuts=None):
     if lib is None:
         _WORKER_LIBS.clear()
         spec = json.loads(designs_json)         # designs + the project's Wall Systems
-        lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False))
+        lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False),
+                            spec.get('junctions'))
         _WORKER_LIBS[designs_json] = lib
     return _geometry_of(lib.build(design_id, transforms=transforms or None, cuts=cuts or None))
 
@@ -114,11 +117,12 @@ class DesignerSource:
         self.env_lib = None
 
     @staticmethod
-    def from_designs(designs, wall_systems=None) -> 'DesignerSource':
+    def from_designs(designs, wall_systems=None, junctions=None) -> 'DesignerSource':
         """wall_systems: the project's Wall Systems the documents are composed
-        with (none given: no construction, every thick wall Hollow)."""
+        with (none given: no construction, every thick wall Hollow);
+        junctions: the project's junction registry (none: built from the designs)."""
         from layer_design import DesignLibrary
-        return DesignerSource(DesignLibrary(designs, wall_systems))
+        return DesignerSource(DesignLibrary(designs, wall_systems, junctions=junctions))
 
     def design_ids(self):
         return list(self.lib.designs)
@@ -294,8 +298,8 @@ class DesignerSource:
         project's Wall Systems)."""
         import json
         designs = [x.to_dict() for x in self.lib.designs.values()]
-        return json.dumps({'designs': designs, 'wall_systems': self.lib.wall_systems, 'arch': self.lib.arch},
-                          sort_keys=True)
+        return json.dumps({'designs': designs, 'wall_systems': self.lib.wall_systems, 'arch': self.lib.arch,
+                           'junctions': self.lib.registry()}, sort_keys=True)
 
     def envelope(self, design_id, transforms=None, cuts=None):
         """The ARCHITECTURAL ENVELOPE of a layer (deferred print paths,

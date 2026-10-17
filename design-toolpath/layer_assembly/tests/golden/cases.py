@@ -41,6 +41,10 @@ PHYSICAL_WIDTH_2026_10_16 = ('real_10xtest1', 'real_test3', 'syn_branch_across_t
                              'syn_profiles_curved', 'syn_profiles_linear', 'syn_profiles_stepped',
                              'syn_transform_multi', 'syn_transform_whole', 'syn_variant_walls')
 PASS_A_2026_10_16 = ('real_test3b', 'syn_circrect_interleaved')
+# 2026-10-17 (stage Z2, construction identity): FULL hashes of every `designer.*` component
+# re-baselined — the Designer response gained the `identity` report and `junction` ids on junction
+# corners (label keys, harness.LABEL_KEYS); `geom` hashes, `plan` and `.mudjob` were identical.
+IDENTITY_2026_10_17 = 'all designer.* components (labels only)'
 CHANGES_AT = {
     'syn_branch_at_junction': 'M5', 'syn_branch_across_trim': 'M5',
     'syn_mixed_thickness': 'M6 (Centered: unchanged at M6)', 'real_test3': 'M6 (Auto = Inside host: Line 1 no longer cuts the exterior face)',

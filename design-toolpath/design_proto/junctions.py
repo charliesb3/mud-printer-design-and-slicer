@@ -85,14 +85,31 @@ def observe(doc, production=False) -> dict:
     'junctions': [{'x', 'y', 'members': {wall: {'at', 's'?}}}],
     'production': [network junction nodes] (with `production`, which builds
     the envelope), 'widths': {wall: width}}."""
-    import trim as TR
-    from model import _cum_lengths, _project_to_polyline
     layer = _layer_of(doc)
     if production:
         layer._build_effective()
         srcs, proc = layer._contact_sources
     else:
         proc, srcs, _ = layer._contact_stage()
+    out = observe_contacts(srcs, proc)
+    res = {'walls': [p.id for p in srcs], 'junctions': out, 'widths': _widths(doc),
+           'overrides': [{'corner': o.key, 'treatment': o.treatment, 'radius': o.radius}
+                         for o in layer.junction_overrides]}
+    if production:
+        res['production'] = [dict(j, walls=[w[2:] if w.startswith('S:') else w for w in j['walls']])
+                             for j in getattr(layer, '_production_junctions', [])]
+    return res
+
+
+def observe_contacts(srcs, proc) -> list:
+    """The junction observations of a layer's contact stage (the visible
+    sources and their processed polylines, model.PrintLayer._contact_stage):
+    [{'x', 'y', 'members': {wall: {'at', 's'?}}}] — every point where two or
+    more source lines touch, with each member's role there. Used by
+    `observe` (documents) and, per built layer, by construction_identity
+    (anchors: the same contacts the build itself found, no re-resolve)."""
+    import trim as TR
+    from model import _cum_lengths, _project_to_polyline
     C = TR.contacts(srcs, proc)
     by_pt: dict = {}
     for sid, lst in C.items():
@@ -121,13 +138,7 @@ def observe(doc, production=False) -> dict:
                 members[w] = {'at': 'through', 's': round(((s % L) / L) if L > 0 else 0.0, HINT_ROUND)}
         if len(members) >= 2:
             out.append({'x': pt.x, 'y': pt.y, 'members': members})
-    res = {'walls': [p.id for p in srcs], 'junctions': out, 'widths': _widths(doc),
-           'overrides': [{'corner': o.key, 'treatment': o.treatment, 'radius': o.radius}
-                         for o in layer.junction_overrides]}
-    if production:
-        res['production'] = [dict(j, walls=[w[2:] if w.startswith('S:') else w for w in j['walls']])
-                             for j in getattr(layer, '_production_junctions', [])]
-    return res
+    return out
 
 
 def kind_of(members) -> str:

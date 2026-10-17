@@ -373,18 +373,45 @@ class DesignLibrary:
     """The set of Layer Designs of one project, resolved on demand.
     Resolution and builds are cached; any edit invalidates the cache."""
 
-    def __init__(self, designs=(), wall_systems=None, arch=False):
+    def __init__(self, designs=(), wall_systems=None, arch=False, junctions=None):
         """wall_systems: the PROJECT's Wall Systems (walls.py) — `document()`
         composes every per-wall document into the build format with them
         (none given: no construction, every thick wall Hollow); `arch`:
         composed as ARCHITECTURE only (envelopes). `raw_document()` is the
-        document as authored (what the Designer edits)."""
+        document as authored (what the Designer edits). junctions: the
+        project's persistent junction registry (junctions.py; None: built on
+        demand from the designs — the same ids in every process)."""
         self.designs: dict[str, LayerDesign] = {}
         self._cache, self._tbuilds = {}, OrderedDict()
         self.wall_systems = list(wall_systems or [])
         self.arch = bool(arch)
+        self._junctions = junctions if isinstance(junctions, dict) else None
+        self._junctions_stale = False
         for d in designs:
             self.add(d if isinstance(d, LayerDesign) else LayerDesign.from_dict(d))
+
+    # -- construction identity (stage Z2): junction records per design state ----
+    def registry(self) -> dict:
+        """The persistent junction registry the builds name their junctions
+        by (construction_identity): the one given, else built from the
+        designs (ids kept across edits: rebuilt with the previous one)."""
+        if self._junctions is None or self._junctions_stale:
+            import junctions as J
+            self._junctions = J.build_registry([d.to_dict() for d in self.designs.values()],
+                                               self.wall_systems, self._junctions)[0]
+            self._junctions_stale = False
+        return self._junctions
+
+    def junction_records(self, design_id: str) -> list:
+        return [r for r in (self.registry().get('records') or []) if design_id in (r.get('states') or [])]
+
+    def _layer(self, doc, design_id):
+        """A PrintLayer of a build-format document of `design_id`, carrying
+        the junction records of its state (identity only)."""
+        from app import _deserialise_layer
+        layer = _deserialise_layer(doc)
+        layer.junction_records = self.junction_records(design_id)
+        return layer
 
     # -- editing ------------------------------------------------------------
     def add(self, design: LayerDesign):
@@ -396,6 +423,7 @@ class DesignLibrary:
         self._check_cycles()
         self._cache = {}
         self._tbuilds = OrderedDict()
+        self._junctions_stale = True
 
     def edit(self, design_id: str, document=None, patch=None, settings=None):
         d = self.get(design_id)
@@ -407,6 +435,7 @@ class DesignLibrary:
             d.settings = settings
         self._cache = {}
         self._tbuilds = OrderedDict()
+        self._junctions_stale = True
 
     def set_document(self, design_id: str, document: dict) -> dict:
         """Store a design edited in the Designer. A base design takes the
@@ -634,10 +663,9 @@ class DesignLibrary:
                 if ref:
                     tracking = (_merged_track(ref['report']), _track_map(doc0, transforms))
 
-            def make(sdoc=sdoc, lines=lines, inf=f['id'], tracking=tracking):
-                from app import _deserialise_layer
+            def make(sdoc=sdoc, lines=lines, inf=f['id'], tracking=tracking, g=g):
                 from model import Vec2
-                lay = _deserialise_layer(sdoc)
+                lay = self._layer(sdoc, g)
                 lay.lattice_stations = {inf: [(Vec2(*a), Vec2(*b)) for a, b in lines]}
                 if tracking:
                     lay.lattice_track = {inf: tracking}
@@ -646,12 +674,23 @@ class DesignLibrary:
                          if getattr(p, 'treatment_id', '') == 'infill' and p.source_id == inf]
                 regs = ((meta.get('network') or {}).get('lattice') or {}).get(inf, {}).get('regions', [])
                 return polys, [{k: r.get(k) for k in ('runs', 'jambs', 'pitch_min', 'pitch_max',
-                                                      'max_unsupported', 'max_unsupported_limit', 'track')}
+                                                      'max_unsupported', 'max_unsupported_limit', 'track',
+                                                      'identity')}
                                for r in regs]
             polys, reports = _shared(('scaffold', json.dumps(sdoc, sort_keys=True), f['id'], tuple(lines),
                                       json.dumps(doc0, sort_keys=True) if tracking else ''), make)
             out[f['id']] = {'polylines': polys, 'stations': lines, 'members': sorted(fam), 'generator': g,
                             'report': reports}
+        return out
+
+    def _scaffold_identity(self, design_id, transforms=None) -> dict:
+        """{infill id: [segment ids]} of the lineage scaffold's own plan — the
+        construction segments of every member printing it (identity, Z2)."""
+        out = {}
+        for inf, sc in self.scaffold(design_id, transforms).items():
+            segs = sorted({sid for r in sc.get('report') or [] for sid in ((r.get('identity') or {}).get('segments') or [])})
+            if segs:
+                out[inf] = segs
         return out
 
     def lattice_lineage(self, design_id, transforms=None, cuts=None) -> dict:
@@ -725,9 +764,9 @@ class DesignLibrary:
         out = {'closes': True, 'at': []}
         sc = self.scaffold(design_id, transforms)
         if sc:
-            from app import _deserialise_layer
-            layer = _deserialise_layer(self.transformed(design_id, transforms, cuts)[0])
+            layer = self._layer(self.transformed(design_id, transforms, cuts)[0], design_id)
             layer.lattice_reference = {k: v['polylines'] for k, v in sc.items()}
+            layer.lattice_identity = self._scaffold_identity(design_id, transforms) or None
             paths, meta = layer._build_effective()
             ends = self._open_ends(layer, paths, meta)
             out = {'closes': not ends, 'at': ends}
@@ -771,13 +810,12 @@ class DesignLibrary:
                 return hit
         elif key in self._cache:
             return self._cache[key]
-        from app import _deserialise_layer
         import time as _t
         tm = {}
         t0 = _t.perf_counter()
         doc, trep = self.transformed(design_id, transforms, cuts)
         tm['semantic_transform'] = _t.perf_counter() - t0
-        layer = _deserialise_layer(doc)
+        layer = self._layer(doc, design_id)
         if any(c.get('op') in ('opening', 'extent', 'plane', 'move') for c in cuts or []):
             # generated Wall Systems keep the UNCUT layer's pattern (period,
             # phase, lanes, loop stations) and solve only their new ends
@@ -801,6 +839,8 @@ class DesignLibrary:
             # and checks closure; that resolve is reused below)
             layer.lattice_reference = self.lattice_reference(design_id, transforms, cuts) or None
             layer.lattice_lineage = self.lattice_lineage(design_id, transforms, cuts) or None
+            if layer.lattice_reference:
+                layer.lattice_identity = self._scaffold_identity(design_id, transforms) or None
         tm['scaffold_resolve_closure_check'] = _t.perf_counter() - t0
         t0 = _t.perf_counter()
         if tkey != '[]' and not layer.lattice_reference:
@@ -850,9 +890,8 @@ class DesignLibrary:
         if hit is not None:
             env[1].move_to_end(key)
             return hit
-        from app import _deserialise_layer
         doc, trep = self.transformed(design_id, transforms, cuts)
-        layer = _deserialise_layer(doc)
+        layer = self._layer(doc, design_id)
         layer.envelope_only = True
         result, meta = layer._build_effective()
         out = from_stage(design_id, doc, trep, layer, result, meta)
@@ -896,11 +935,14 @@ class DesignLibrary:
         src = {k: v for k, v in src.items() if v}
         if not src:
             return None
-        from app import _deserialise_layer
-        layer = _deserialise_layer(doc)
+        layer = self._layer(doc, design_id)
         layer.lattice_reference = src
         layer.lattice_join = True
-        layer.wall_system_reference = self.build(design_id, True, transforms, base_cuts).ws_frames or None
+        ref_b = self.build(design_id, True, transforms, base_cuts)      # (the uncut layer: cached)
+        layer.lattice_identity = {d['infill']: list(d.get('segments') or [])
+                                  for d in ((ref_b.network.get('identity') or {}).get('domains') or [])
+                                  if d.get('segments')} or None
+        layer.wall_system_reference = ref_b.ws_frames or None
         paths, meta = layer._build_effective()
         if self._open_ends(layer, paths, meta):
             return None

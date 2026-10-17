@@ -65,9 +65,12 @@ def _round(o):
     return o
 
 
-# identifiers / labels — not geometry (see the module doc)
+# identifiers / labels — not geometry (see the module doc). 'identity' /
+# 'junction' (2026-10-17, stage Z2): the construction identity report and the
+# persistent junction id of a junction corner — NAMES of construction, never
+# positions (construction_identity.py)
 LABEL_KEYS = {'id', 'source_id', 'treatment_id', 'label', 'name', 'system', 'system_id', 'systems', 'strand', 'owner',
-              'lineage_infill', 'lineage_owner'}
+              'lineage_infill', 'lineage_owner', 'identity', 'junction'}
 
 
 def _strip(o):

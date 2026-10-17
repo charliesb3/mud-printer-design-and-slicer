@@ -2119,6 +2119,15 @@ class PrintLayer:
     # material rings exactly as a full build resolves them — before Wall
     # Systems, the wall lattice, region infill and routing (envelope.py).
     envelope_only: bool = False
+    # CONSTRUCTION IDENTITY (construction_identity.py, stage Z2): the
+    # persistent junction records (junctions.py registry) active in this
+    # layer's design state — the layer's own contacts are named by them
+    # (network 'identity' / 'junctions'[k]['junction']). None: junctions
+    # named by their member signature only. Identity only, never geometry.
+    junction_records: Optional[list] = None
+    # with a lattice_reference: {infill id: [segment ids]} of the reference's
+    # own plan (the layer prints it clipped, so those are its segments)
+    lattice_identity: Optional[dict] = None
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -2741,9 +2750,17 @@ class PrintLayer:
                         if npc is not None:
                             npc.cap_ids[which].append(xp.id)
 
+        # 8b) CONSTRUCTION IDENTITY (stage Z2): the layer's architectural
+        # anchors — its junctions named by the persistent records, wall
+        # corners by ordinal, free ends, opening jambs. Names only.
+        import construction_identity as CI
+        self._anchors = CI.anchors(self, source_paths_in_order, processed, self.junction_records,
+                                   (getattr(self, '_contact_sources', None) or (None, None))[1])
+
         # 9) Wall networks.
         result, network = self._apply_networks(
             N, result, cls_of, elem_of, pts_of, net_pieces, plans, offsets_by_source, processed)
+        network['identity'] = {'anchors': [dict(a) for a in self._anchors], 'domains': []}
         regions = network.pop('_rings', [])
         jobs = network.pop('_infill_jobs', [])
         network['wall_systems'] = []
@@ -2831,12 +2848,20 @@ class PrintLayer:
                     rep_['regions'].append({'inherited': True, 'pieces': len(pieces),
                                             'reference_polylines': len(ref),
                                             **({'joined': joined} if joined is not None else {})})
+                    # (identity: the domain is named; its segments are the
+                    # reference's — the clipped lattice has no plan of its own
+                    # here. Folded into the per-layer plan at stage Z4.)
+                    network['identity']['domains'].append(dict(
+                        self._region_identity(N, result, cls_of, job, processed)['domain'],
+                        segments=list((self.lattice_identity or {}).get(inf.id) or []),
+                        runs=[], unresolved=0, inherited=True))
                     continue
                 phys = self.material.physical
                 # a Skin + Web web (owned record): TARGET WEB ANGLE — the
                 # pitch follows the cavity (its legacy `spacing` is ignored)
                 web_angle = None if not inf.owner or pattern == 'truss' else \
                     float(inf.params.get('web_angle') or WL.WEB_ANGLE_DEFAULT)
+                dom = self._region_identity(N, result, cls_of, job, processed)
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
                              self.prefer_closed or phys,
                              float(inf.params.get('max_unsupported', 0) or 0) or None,
@@ -2847,8 +2872,14 @@ class PrintLayer:
                              track_map=((self.lattice_track or {}).get(inf.id) or (None, None))[1],
                              bead=self.material.bead_width if phys else 0.0,
                              truss=inf.params if pattern == 'truss' else None,
-                             web_angle=web_angle)
+                             web_angle=web_angle, identity=dom['identity'])
                 if lp is not None:
+                    ident = lp.report.get('identity') or {}
+                    network['identity']['domains'].append(dict(
+                        dom['domain'], segments=ident.get('segments') or [],
+                        runs=[dict(run, segments=[sg['id'] for sg in run['segments']])
+                              for run in ident.get('runs') or []],
+                        unresolved=ident.get('unresolved', 0)))
                     for j, poly in enumerate(lp.polylines):
                         dp = DerivedPath(poly, closed=False, role='lattice',
                                          label=inf.pattern, source_id=inf.id,
@@ -3080,6 +3111,32 @@ class PrintLayer:
                 if len(srcs_) > 1:
                     msid[id(p)] = '__J'
         return members, msid
+
+    def _region_identity(self, N, result, cls_of, job, processed) -> dict:
+        """{'domain', 'identity'} of one lattice region (construction_identity,
+        stage Z2): the DOMAIN = this region's web (its Wall System / infill)
+        over the walls bounding it (THIN walls are never faces of it,
+        fillets '__J' excluded); the planner's identity input = the layer's
+        anchors on those walls (+ every junction with a wall of the region)
+        and the walls' processed polylines."""
+        inf = job['infill']
+        _, msid = self._region_faces(N, result, cls_of, job['rings'])
+        bounding = sorted({s for s in msid.values() if s != '__J' and s in processed})
+        sw = getattr(self, '_source_walls', {}) or {}
+        # the domain's walls are its THICK walls; a THIN wall whose lanes reach
+        # the region (an Out-and-Back excursion) bounds it locally but is never
+        # a member of the construction (invariant 8) — named apart
+        walls = [w for w in bounding if float((sw.get(w) or {}).get('thickness') or 0.0) > 1e-9]
+        thin = [w for w in bounding if w not in walls]
+        by_id = {p.id: p for p in self.source_paths}
+        wset = set(walls)
+        A = [a for a in (getattr(self, '_anchors', None) or [])
+             if a['kind'] == 'junction' and (wset & set(a['walls'])) or
+             a['kind'] != 'junction' and set(a['walls']) <= wset]
+        return {'domain': {'id': job['key'], 'system': inf.owner or inf.id, 'infill': inf.id, 'walls': walls,
+                           'thin': thin},
+                'identity': {'anchors': A,
+                             'walls': {w: (processed[w], bool(getattr(by_id.get(w), 'closed', False))) for w in walls}}}
 
     def _web_envelope(self, N, rings, members, msid):
         """The rings of a region's SKIN + WEB walls alone: every wall of the
@@ -4578,13 +4635,13 @@ class PrintLayer:
             prod = self.__dict__.setdefault('_production_junctions', [])
             for k, p in enumerate(res.junctions):
                 c = corner_at.pop((p.x, p.y), None)
-                summary['junctions'].append(self._junction_info(p, c))
-                prod.append({'x': p.x, 'y': p.y, 'corner': c.key if c else None,
-                             'walls': list(res.junction_walls[k]) if k < len(res.junction_walls) else []})
+                walls_ = list(res.junction_walls[k]) if k < len(res.junction_walls) else []
+                summary['junctions'].append(self._junction_info(p, c, walls_))
+                prod.append({'x': p.x, 'y': p.y, 'corner': c.key if c else None, 'walls': walls_})
             for c in corner_at.values():
-                summary['junctions'].append(self._junction_info(c.pt, c))
-                prod.append({'x': c.pt.x, 'y': c.pt.y, 'corner': c.key,
-                             'walls': sorted({rb.bead.element for rb, _, _ in c.ends})})
+                walls_ = sorted({rb.bead.element for rb, _, _ in c.ends})
+                summary['junctions'].append(self._junction_info(c.pt, c, walls_))
+                prod.append({'x': c.pt.x, 'y': c.pt.y, 'corner': c.key, 'walls': walls_})
             # Region infill: one coherent field per wall-material region.
             comps, comp_of = N.material_components(res)
             summary.setdefault('_rings', []).extend(
@@ -4611,9 +4668,20 @@ class PrintLayer:
         out.extend(appended)
         return out, summary
 
-    def _junction_info(self, p, corner) -> dict:
+    def _junction_info(self, p, corner, walls=()) -> dict:
         info = {'x': p.x, 'y': p.y, 'key': None, 'corner': False,
                 'treatment': None, 'radius': None}
+        # the PERSISTENT junction this production node / corner belongs to
+        # (construction_identity: the nearest junction anchor whose members
+        # include its walls, within reach) — identity only; the treatment
+        # lookup below still uses the legacy face-pair key (Z6 / Z8)
+        import construction_identity as CI
+        wall_ids = [w[2:] if str(w).startswith('S:') else w for w in walls]
+        sw = getattr(self, '_source_walls', {}) or {}
+        ja = CI.junction_of(getattr(self, '_anchors', None) or [], p, wall_ids,
+                            2.0 * max([float((sw.get(w) or {}).get('thickness') or 0.0) for w in wall_ids] +
+                                      [self.material.bead_width]))
+        info['junction'] = ja['id'] if ja else None
         if corner is not None:
             js = next((j for j in self.junction_overrides
                        if j.key == corner.key), None)
