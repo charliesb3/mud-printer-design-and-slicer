@@ -230,3 +230,10 @@ layer_assembly/tests/test_wall_system_z_coherence.py::test_web_evolves_continuou
 layer_assembly/tests/test_wall_system_z_coherence.py::test_web_evolves_continuously_on_a_gradually_scaled_circle[planned-alone]
 layer_assembly/tests/test_wall_systems_corrections.py::test_assembly_transform_column_never_scrolls_sideways
 layer_assembly/tests/test_wallsystems_ui.py::test_wall_systems_ui
+# CROSS-Z COHERENCE / SUPPORT HARNESS (WALL_ARCHITECTURE.md §Z.5, 2026-10-17): whole stacks built in process.
+layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[scaled_circle_skin_web]
+layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[scaled_circle_interleaved]
+layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[reference_network_wave]
+layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[real_test3b]
+layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[real_10xtest1]
+layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[mixed_benchmark]

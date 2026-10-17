@@ -1,0 +1,826 @@
+{
+ "pairs": [
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.36,
+    "median": 0.125,
+    "n": 1601,
+    "p95": 0.178
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    0,
+    1
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 1.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.245,
+    "median": 0.124,
+    "n": 1601,
+    "p95": 0.177
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    1,
+    2
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 3.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.923,
+    "median": 0.136,
+    "n": 1601,
+    "p95": 0.471
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    2,
+    3
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 4.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.751,
+    "median": 0.132,
+    "n": 1599,
+    "p95": 0.364
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    3,
+    4
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 6.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.237,
+    "median": 0.124,
+    "n": 1591,
+    "p95": 0.176
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    4,
+    5
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 7.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.315,
+    "median": 0.124,
+    "n": 1601,
+    "p95": 0.177
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    5,
+    6
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 9.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.533,
+    "median": 0.123,
+    "n": 1608,
+    "p95": 0.172
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    6,
+    7
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 10.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.768,
+    "median": 0.126,
+    "n": 1605,
+    "p95": 0.195
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    7,
+    8
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 12.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.997,
+    "median": 0.136,
+    "n": 1602,
+    "p95": 0.455
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    8,
+    9
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 13.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.77,
+    "median": 0.125,
+    "n": 1597,
+    "p95": 0.212
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    9,
+    10
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 15.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.692,
+    "median": 0.13,
+    "n": 1608,
+    "p95": 0.365
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    10,
+    11
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 16.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.334,
+    "median": 0.127,
+    "n": 1593,
+    "p95": 0.213
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    11,
+    12
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 18.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.474,
+    "median": 0.123,
+    "n": 1601,
+    "p95": 0.196
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    12,
+    13
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 19.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.829,
+    "median": 0.126,
+    "n": 1598,
+    "p95": 0.19
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    13,
+    14
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 21.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.412,
+    "median": 0.122,
+    "n": 1585,
+    "p95": 0.188
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    14,
+    15
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 22.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.442,
+    "median": 0.125,
+    "n": 1585,
+    "p95": 0.172
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    15,
+    16
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 24.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.883,
+    "median": 0.133,
+    "n": 1590,
+    "p95": 0.451
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    16,
+    17
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 25.5
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.73,
+    "median": 0.129,
+    "n": 1584,
+    "p95": 0.354
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    17,
+    18
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 27.0
+  },
+  {
+   "architecture": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 0,
+    "p95": 0.0
+   },
+   "construction": {
+    "max": 0.295,
+    "median": 0.125,
+    "n": 1589,
+    "p95": 0.179
+   },
+   "events": {
+    "clusters": 0,
+    "list": [],
+    "nonlocal_clusters": 0,
+    "nonlocal_vertices": 0,
+    "vertices": 0
+   },
+   "landings": {
+    "above": 0,
+    "below": 0,
+    "change": 0
+   },
+   "moving_boundary": {
+    "clusters": 0,
+    "points": 0,
+    "reach": 16.0
+   },
+   "pair": [
+    18,
+    19
+   ],
+   "support": {
+    "findings": 0,
+    "kinds": [],
+    "span": 0
+   },
+   "z": 28.5
+  }
+ ],
+ "summary": {
+  "architecture": {
+   "max": 0.0,
+   "median": 0.0,
+   "n": 0,
+   "p95": 0.0
+  },
+  "bead": 3.0,
+  "construction": {
+   "max": 0.997,
+   "median": 0.127,
+   "n": 30339,
+   "p95": 0.249
+  },
+  "events": {
+   "clusters": 0,
+   "nonlocal_clusters": 0,
+   "nonlocal_vertices": 0,
+   "pairs_with_events": 0,
+   "pairs_with_nonlocal": 0,
+   "vertices": 0
+  },
+  "landings": {
+   "changes": 0,
+   "max": 0,
+   "min": 0,
+   "pairs_changed": 0
+  },
+  "layers": 20,
+  "max_overhang": 1.0,
+  "pairs": 19,
+  "support": {
+   "bridge": 0,
+   "findings": 0,
+   "layers": [],
+   "overlap": 0,
+   "span": 0
+  },
+  "worst_pair": [
+   8,
+   9
+  ]
+ }
+}
