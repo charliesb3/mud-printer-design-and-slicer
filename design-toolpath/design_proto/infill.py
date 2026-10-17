@@ -66,8 +66,22 @@ TRUSS_PARAMETERS = [
 ]
 
 
+# SKIN + WEB web (zigzag / wave): the pitch follows from the angle and the
+# measured cavity between the contact rails (wall_lattice.web_pitch); a
+# stored legacy `spacing` is ignored. Default: wall_lattice.WEB_ANGLE_DEFAULT.
+WEB_PARAMETERS = [
+    {'name': 'web_angle', 'label': 'Target Web Angle', 'default': 20.0, 'min': 10.0, 'max': 75.0,
+     'step': 1.0, 'unit': '°'},
+]
+
+
 def parameters_for(pattern):
     return TRUSS_PARAMETERS if pattern == 'truss' else PARAMETERS
+
+
+def web_parameters_for(pattern):
+    """The parameters of a SKIN + WEB web of this pattern."""
+    return TRUSS_PARAMETERS if pattern == 'truss' else WEB_PARAMETERS
 
 
 CORNER_TURN = math.radians(35.0)    # sharper ring turns are always samples

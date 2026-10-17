@@ -78,8 +78,6 @@ DEFAULTS = {
     'chain': {'pitch': 0.0, 'loop_depth': 0.0, 'loop_width': 0.0, 'neck': 0.0, 'phase': 0.0},
 }
 LIMITS = {'paths': (1, 12), 'period': (2.0, 600.0)}
-CORNER_TURN = math.radians(30.0)     # as wall_lattice: turn within 2 t …
-CORNER_LOCAL = 0.75                  # … concentrated (3 t vs 6 t): a corner, not a curve
 CORNER_ZONE = 0.6                    # × thickness either side of a corner: the mitred lanes
 FRAME_STEP = 0.5                     # in: the cached strip frame's resolution
 CHAIN_NECK = 0.12                    # chain: default neck height / loop depth (0 → this)
@@ -290,13 +288,11 @@ def _samples(lo, hi, step):
 # ---------------------------------------------------------------------------
 
 def _corners(st):
-    """[(s, t_in, t_out)] corners of a run: the centre line turns ≥ 30°
-    within 2 t, concentrated (≥ CORNER_LOCAL of its 6 t turn within 3 t),
-    with room for the corner zone and its fade on both sides."""
+    """[(s, t_in, t_out)] corners of a run: the lattice's rule
+    (wall_lattice.corner_stations — ≥ 30° within 2 t, concentrated against
+    its flanks: a continuous curve is never a corner), with room for the
+    corner zone and its fade on both sides."""
     run, L, th = st.run, st.L, st.thick
-    d = max(0.5, 0.25 * th)
-    n = max(4, int(L / d))
-    ss = [L * k / n for k in range(n + 1)]
 
     def ang(x):
         if not run.cycle:
@@ -304,29 +300,9 @@ def _corners(st):
         a = st.centre(x - 0.5 * th) if (run.cycle or x - 0.5 * th > 0) else st.centre(0.0)
         b = st.centre(x + 0.5 * th) if (run.cycle or x + 0.5 * th < L) else st.centre(L)
         return math.atan2(b.y - a.y, b.x - a.x)
-
-    def turn(x, w):
-        t = ang(x + w / 2) - ang(x - w / 2)
-        return abs((t + math.pi) % (2 * math.pi) - math.pi)
-    W = 2.0 * th
-    tv = [turn(x, W) for x in ss]
-    lo, hi = st.lo, st.hi
+    cand, _ = WL.corner_stations(st.centre, L, run.cycle, th, st.lo, st.hi, 1.5 * th)
     out = []
-    wn = int(W / d)
-    for k, x in enumerate(ss):
-        if tv[k] < CORNER_TURN:
-            continue
-        if not run.cycle and (x < lo + 1.5 * th or x > hi - 1.5 * th):
-            continue
-        if run.cycle and k == len(ss) - 1:
-            continue
-        m = len(ss) - 1
-        nb = [tv[j % m] for j in range(k - wn, k + wn + 1)] if run.cycle else \
-            [tv[j] for j in range(max(0, k - wn), min(len(ss), k + wn + 1)) if lo <= ss[j] <= hi]
-        if tv[k] + 1e-12 < max(nb):
-            continue
-        if (run.cycle or (x - 3 * th > 0 and x + 3 * th < L)) and turn(x, 3 * th) < CORNER_LOCAL * turn(x, 6 * th):
-            continue
+    for x, _t in cand:
         if out and abs(x - out[-1]) < 2.5 * th:
             continue
         out.append(x)

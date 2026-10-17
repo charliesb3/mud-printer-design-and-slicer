@@ -362,6 +362,15 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 **Summary (2026-10-06):** the Designer is checkpointed (5ed967d). On top of it, an UNCOMMITTED Z-phase batch adds Layer Designs (inheritance, shared lineage lattice, project bead width), semantic transforms for the Layer Assembly, and the Assembly subsystem (`layer_assembly/`, own memory). Start with "Z PHASE — CURRENT ARCHITECTURE" below; known open problem: transformed-junction lattice coherence (support findings at moving junctions). Testing tiers: same section → "Testing workflow".
 
+### SKIN + WEB SINGLE-LAYER CORRECTION — Pass A (2026-10-16; manually reviewed, checkpointed — details `WALL_ARCHITECTURE.md` → "Skin + Web single-layer correction — Pass A")
+
+- **Corners vs curves:** one shared detector (`wall_lattice.corner_stations`, used by the lattice, `wall_systems._corners` and the truss): unwrapped heading, same-sign turn readings, concentration against flanks clipped at run ends / junction kinks. A continuous curve is never a corner (circles at any radius: 0); sharp / tightly rounded corners unchanged; the lobe building keeps a constant corner set under scaling. Motif outer-wrap guard against a self-crossing hairpin.
+- **Target Web Angle** (decision: replaces fixed pitch for Skin + Web zigzag / wave): S = (measured skin separation − 2 (W − O)) · cot(angle), floor W/2 (reported `limited`). Default 20°; `web_angle` param; a saved web's `spacing` is ignored (kept), no migration; unowned legacy wall infill keeps Target Spacing; truss unchanged.
+- **Curves (decision 2026-10-16):** the CONCAVE skin owns the angle — braces leave the inside contact rail at the angle to its local tangent and run straight to the convex rail (convex landing / angle derived). Local station rule in `_Geo.table`; straight walls, corner motifs, junction / end zones byte-identical to the reviewed rule.
+- **Short territories:** NOT solved (Pass B, approved rule: descend from the pattern below / branch back out — stack-aware). Cross-Z tracking unchanged.
+- **Open:** dense web at very thin cavities (floor rule = product question); one derived pitch per region (median cavity); Truss Corner-R 20 at T 10 now a curve (review).
+- **Tests:** `tests/test_skin_web_single_layer.py` (92) + Wall Systems UI smoke block.
+
 ### PHYSICAL WALL WIDTH (2026-10-16; manually reviewed, checkpointed — details `WALL_ARCHITECTURE.md` → "Physical wall width")
 
 - **Contract (user decision 2026-10-16):** Wall Thickness = the FINISHED DEPOSITED width, outside bead edge to outside bead edge — never centreline spacing. Bead Width = one pass; toolpaths are bead CENTRELINES. Contact Overlap (O) = overlap where a bead intentionally LANDS against another (centrelines W − O); never crossings. PARALLEL WALL OVERLAP = the new user-facing name of `return_overlap` (R, storage key unchanged): the MAXIMUM overlap of paths running alongside each other (THIN Out-and-Back lanes, Parallel Walls lanes) — a maximum, not a target. THIN = 2W − R (5.25 in at W 3, R 0.75), derived, never a free thickness.
@@ -369,7 +378,7 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 - **Fix:** in a physical PRINT build only, skin constructions (`model.SKIN_SYSTEMS`: Hollow, Skin + Web, and an unassigned thick wall = Hollow) get faces inset ½ bead (`WallSpec.offsets(inset)`). The architectural envelope (`envelope_only`: Designer / Assembly / preliminary support) is UNCHANGED. Skin + Web webs land W − O off the corrected skins (unchanged lattice rule). Measured: Hollow / Skin + Web 10.000 → 7.000 for Center / Outside / Inside; generated systems unchanged; THIN 5.25.
 - **Local junction adaptations (no junction redesign):** an aligned skin wall's reference (a finished face) leaves the printed face list but stays the piece's attachment reference (`NetPiece.ref` / `arch`); ends on an inset wall's finished face / band still attach and join its network; M6 sends an end drawn to the host's finished face on its own side to the near printed skin (reproduces the old junction faces); pushes into an inset host use its printed band.
 - **Known consequences left OPEN (FAST: 20 failing tests at the checkpoint, listed in `WALL_ARCHITECTURE.md`):** the envelope ≠ full-build regions for skin walls (documented invariant to revisit); Route Origins on an aligned skin wall's reference strand report `missing`; reference-network courtyard / mixed generated ↔ skin junction cases; a few unverified expectation tests. Goldens NOT re-baselined: 14 cases with skin walls are expected to change.
-- **Product questions:** Parallel Walls default 3 lanes in 7 in overlap 1.0 in > 0.75 max (rule needed: lane count vs report); a Skin + Web web needs T ≥ 3W − 2O (7.5 in) to keep W − O off both skins.
+- **Product questions:** Parallel Walls default 3 lanes in 7 in overlap 1.0 in > 0.75 max (rule needed: lane count vs report); a Skin + Web web needs T ≥ 3W − 2O (7.5 in) to keep W − O off both skins *(superseded by Pass A: angle-driven, no minimum thickness)*.
 - **Tests:** `design_proto/tests/test_physical_wall_width.py` (58).
 
 ### DRAWING CORRECTNESS + ARCHITECTURAL SNAP UX (Pass 1, 2026-10-15; manually reviewed, checkpoint 2026-10-15)
@@ -1571,6 +1580,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-16 — SKIN + WEB SINGLE-LAYER CORRECTION, Pass A (manually reviewed, checkpointed; FAST had the same 20 known failures): shared corner detection — continuous curves are never corners (circles 0 at any radius; lobe classification stable under scaling); Skin + Web pitch derived from a Target Web Angle (default 20°) and the measured cavity; legacy `spacing` ignored for Skin + Web; on curves the concave skin owns the angle. Cross-Z tracking / short territories deferred to Pass B. Goldens not re-baselined (Skin + Web cases expected to change).
 
 2026-10-16 — WALL SYSTEMS MATERIAL CONTROLS (manually reviewed, checkpointed): the Wall Systems sidebar has a compact "Material · shared with Designer" section (Bead Width, Contact Overlap, Parallel Wall Overlap). It edits the SAME project material state as the Designer through `window.Designer.setMaterial` → `setMaterialField` (bead via `setProjectBeadWidth`, overlaps via `_applyMaterial`); key `return_overlap` kept; no copy on Wall Systems; no geometry change. Test: `ui_wallsystems_smoke.js` MATERIAL block.
 

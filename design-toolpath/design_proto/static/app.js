@@ -3643,7 +3643,7 @@ function _wsSetType(s, v) {
   if (v === 'interleaved' || v === 'linked') s.params.paths = 4;   // even: closes at wall ends
   if (v === 'parallel') s.params.walls = 4;
   if (v === 'skin_web' && (!s.web || !s.web.pattern || s.web.pattern === 'none'))
-    s.web = { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 };
+    s.web = { pattern: 'zigzag', params: { web_angle: 20 }, variation_index: 0 };
 }
 let wallSystemPick = null;                  // the system shown in the Wall System panel
 function _wsNew(pids = []) {
@@ -3652,7 +3652,7 @@ function _wsNew(pids = []) {
   while (layer.wall_systems.some(s => s.name === `Wall System ${k}`)) k++;
   const s = { id: _newWallSystemId(), name: `Wall System ${k}`, type: 'skin_web', thickness: 10, align: 'auto',
               print_reference: false, params: {}, members: [],
-              web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } };
+              web: { pattern: 'zigzag', params: { web_angle: 20 }, variation_index: 0 } };
   layer.wall_systems.push(s);
   for (const pid of pids) _wsSetMember(pid, s);
   wallSystemPick = s.id;
@@ -3681,7 +3681,7 @@ function _syncSystemWebs() {
     if (s.type === 'skin_web' && (!web.pattern || web.pattern === 'none')) {
       // (earlier designs: Skin + Web with web "None" IS Hollow / Skins Only)
       s.type = 'hollow';
-      Object.assign(web, { pattern: 'zigzag', params: { spacing: 20, ...web.params }, variation_index: 0 });
+      Object.assign(web, { pattern: 'zigzag', params: { web_angle: 20, ...web.params }, variation_index: 0 });
       changed = true;
     }
     const active = s.type === 'skin_web' && web.pattern && web.pattern !== 'none';
@@ -3851,18 +3851,20 @@ function _addWebRows(panel, s, rebuild, opts = {}) {
   const onParam = opts.onParam || (() => { _syncSystemWebs(); routeResult = null; scheduleRefresh(); repaint(); });
   addPropRowSelectTo(panel, 'Web', web.pattern, _patternsFor('wall'), v => {
     web.pattern = v;
-    for (const prm of _paramsFor({ pattern: v, kind: 'wall' }))
+    for (const prm of _webParamsFor(v))
       if (web.params[prm.name] == null) web.params[prm.name] = prm.default;
     if (v === 'truss' && web.params.seed == null) web.params.seed = 0;
     if (!opts.onParam) _syncSystemWebs();
     rebuild();
   }, PATTERN_LABELS);
-  for (const prm of _paramsFor({ pattern: web.pattern, kind: 'wall' })) {
+  for (const prm of _webParamsFor(web.pattern)) {
     addPropRowNumTo(panel, prm.label, web.params[prm.name] ?? prm.default, v => {
       web.params[prm.name] = Math.max(prm.min ?? -1e9, Math.min(prm.max ?? 1e9, v));
       onParam();
     }, prm.unit ?? 'in');
   }
+  if (web.pattern === 'zigzag' || web.pattern === 'wave')
+    _addNote(panel, 'Pitch follows from the Target Web Angle and the cavity between the skins (contact rails).');
   // readouts of the materialised web (the first owned record)
   const f = opts.onParam ? null : (layer.infills || []).find(x => x.owner === s.id);
   if (f) {
@@ -3907,7 +3909,7 @@ function _addWebRows(panel, s, rebuild, opts = {}) {
     web.params.max_unsupported = Math.max(0, v);           // 0 = automatic
     onParam();
   }, 'in');
-  _addNote(advPanel, '0 = automatic (1.375 × target). Wins over Target Spacing.');
+  _addNote(advPanel, '0 = automatic (1.375 × the derived pitch). Wins over the Target Web Angle.');
   adv.appendChild(advPanel);
   panel.appendChild(adv);
 }
@@ -4762,7 +4764,7 @@ function addInfill() {
   const ws = selectedId && _wsOf(selectedId);
   if (ws && ws.thickness != null) {
     if (ws.type === 'skin_web' && (!ws.web || ws.web.pattern === 'none'))
-      ws.web = { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 };
+      ws.web = { pattern: 'zigzag', params: { web_angle: 20 }, variation_index: 0 };
     wallSystemPick = ws.id;
     _syncSystemWebs();
     routeResult = null; scheduleRefresh(); updatePropPanel(); updateInfillList();
@@ -6269,6 +6271,14 @@ function _paramsFor(f) {
   return (pat && pat.parameters) ||
     [{ name: 'spacing', label: f.kind === 'solid' ? 'Spacing' : 'Target Spacing', default: 20 }];
 }
+// SKIN + WEB web parameters: Target Web Angle (zigzag / wave; the pitch is
+// derived from the cavity), the truss its own (a legacy `spacing` is ignored)
+const _WEB_FALLBACK = [{ name: 'web_angle', label: 'Target Web Angle', default: 20, min: 10, max: 75, step: 1, unit: '°' }];
+function _webParamsFor(pattern) {
+  const pat = infillPatterns[pattern];
+  if (pat && pat.web_parameters) return pat.web_parameters;
+  return pattern === 'truss' ? _paramsFor({ pattern, kind: 'wall' }) : _WEB_FALLBACK;
+}
 function _setInfillKind(f, kind) {
   f.kind = kind;
   const names = _patternsFor(kind);
@@ -6313,7 +6323,10 @@ function _latticeActual(f) {
     if (reduced) t += ` · Bond reduced at ${reduced} stitch${reduced > 1 ? 'es' : ''}`;
     return t;
   }
-  let txt = `Actual: ${a === b ? a : a + '–' + b} in`;
+  const wa = lat.web_angle && lat.web_angle[0];
+  let txt = wa ? `Pitch: ${a === b ? a : a + '–' + b} in (Target Web Angle ${wa.target}° across a ${wa.cavity.toFixed(2)} in cavity)`
+               : `Actual: ${a === b ? a : a + '–' + b} in`;
+  if (wa && wa.limited) txt += ` · angle limited to ${wa.angle.toFixed(1)}° (landings on a skin kept a bead apart)`;
   if (lat.max_unsupported != null)
     txt += ` · Max unsupported: ${lat.max_unsupported.toFixed(1)} in (limit ${lat.max_unsupported_limit.toFixed(1)})`;
   return txt;

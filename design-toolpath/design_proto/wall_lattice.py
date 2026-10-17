@@ -134,11 +134,17 @@ designs the topology first:
    corners are HARD anchors with one fixed treatment; the ordinary lattice
    is fitted BETWEEN them (integer stitches nearest Target Spacing — the
    spacing never degrades a corner).
-     - A corner concentrates its turn: ≥ 30° within 2 t (as before) AND
-       ≥ CORNER_LOCAL of its 6 t turn within 3 t — sharp and tightly
-       rounded corners (centre-line R ≲ 2 t) are corners, even arcs /
-       generous radii / circles carry the ordinary pattern. Near a dead end
-       the cap's turn readings no longer out-rank a real corner.
+     - A corner concentrates its turn (corner_stations, shared with
+       wall_systems): ≥ 30° one way within 2 t AND a mean curvature over
+       its 3 t core ≥ CORNER_CONTRAST × its 1.5 t flanks' (same-way) —
+       sharp and tightly rounded corners are corners; a CONTINUOUS CURVE
+       (circle, arc, lobe) is never one, at any radius (2026-10-16:
+       unwrapped heading, same-sign readings, flanks clipped at run ends /
+       junction kinks instead of skipped; it replaced the 3 t / 6 t share
+       test, which wrapped on tight rings, was skipped near run ends and
+       let opposite junction kinks cancel an arc's flanks). Adaptive Truss
+       uses the same test. Near a dead end the cap's turn readings no
+       longer out-rank a real corner.
      - SINGLE PASS: Ia → Oa → Ob → Ib — inner face MOTIF_INNER·t before the
        inner corner, outer face MOTIF_OUTER·t either side of the outer corner
        (the Oa → Ob stitch wraps the outer corner along the contact rails),
@@ -151,7 +157,18 @@ designs the topology first:
      - DOUBLE PASS: unchanged production rule, now applied to every
        detected corner — both mirrored phases land the corner station, one
        on the inner corner, one on the outer.
-   Adaptive Truss keeps its own corner handling (§8, unchanged).
+   Adaptive Truss keeps its own corner handling (§8; corner DETECTION is
+   the shared test above since 2026-10-16).
+
+10. TARGET WEB ANGLE (Skin + Web zigzag / wave; 2026-10-16). The web's
+   intent is a diagonal across the cavity, so the pitch is DERIVED:
+   S = w · cot(angle), w = the cavity between the contact rails (measured
+   skin separation − 2 · contact; web_pitch), floored at half a bead
+   (reported 'limited'). Thinner cavity → tighter pitch; a gradual
+   thickness change → a gradual pitch change. The integer stitch fitting,
+   corners, tracking and everything downstream are unchanged — S simply
+   replaces the fixed Target Spacing. Legacy (unowned) wall infill keeps
+   Target Spacing; a Skin + Web web's stored `spacing` is ignored.
 
 Wide regions (local thickness ≫ spacing — not a wall but an area) are not
 stitched here; the caller falls back to the field generator (infill.py).
@@ -181,11 +198,35 @@ DMAX_RATIO = 1.375    # default maximum unsupported distance = 1.375 × target
 CORNER_TURN = math.radians(30.0)   # centre line turning within CORNER_WIN (a 140° interior corner turns ~35° there)
 CORNER_WIN = 2.0      # × thickness: window over which a corner turns
 
+# CORNERS vs CURVES (corner_stations; see 9. in the module doc)
+CORNER_CONTRAST = 3.0     # a corner's mean curvature over 3 t ≥ this × its flanks' (same-sign) mean
+CORNER_FLANK_MIN = 0.25   # × thickness: a flank shorter than this (run end) is not measured
+CORNER_DEADBAND = math.radians(0.5)   # per-sample heading change read as straight (same-sign sums)
+CORNER_KINK = math.radians(15.0)      # a flank ends where the wall has turned back this much (another feature)
 # CANONICAL CORNER MOTIFS (zigzag / wave; see 9. in the module doc)
-CORNER_LOCAL = 0.75       # a corner turns ≥ this share of its 6 t turn within 3 t (else: a curve)
 MOTIF_INNER = 0.55        # × thickness: single-pass inner contacts, along the inner face from the inner corner
 MOTIF_OUTER = 0.30        # × thickness: single-pass outer contacts, along the outer face from the outer corner
 MOTIF_SI, MOTIF_SO = 0.55, 0.25   # × thickness: their station positions (centre line) either side of the corner
+
+# TARGET WEB ANGLE (Skin + Web zigzag / wave; see 10. in the module doc)
+WEB_ANGLE_DEFAULT = 20.0          # degrees from the wall line, between the contact rails
+WEB_ANGLE_RANGE = (10.0, 75.0)
+WEB_WIDE_REF = 20.0               # in: the wall / area test is not tied to the angle (the old default target)
+
+
+def web_pitch(sep, contact, bead, angle):
+    """TARGET WEB ANGLE → pitch. sep: skin-centreline separation; the web
+    crosses the CAVITY between the contact rails, w = sep − 2·contact, so a
+    straight-wall stitch advancing S rises at atan(w / S) = the angle:
+    S = w · cot(angle). Floor: half a bead (consecutive landings on one
+    skin, 2 S apart, stay separate beads) — below it the angle is limited.
+    Returns (S, w, limited)."""
+    a = math.radians(min(max(float(angle), WEB_ANGLE_RANGE[0]), WEB_ANGLE_RANGE[1]))
+    w = max(0.0, sep - 2.0 * contact)
+    s_min = max(1.0, 0.5 * bead)
+    S = w / math.tan(a)
+    return max(S, s_min), w, S < s_min
+
 
 # ADAPTIVE TRUSS (pattern 'truss', see 8. in the module doc). Defaults are
 # prototype values from the wall-web experiment, NOT calibrated machine values.
@@ -727,6 +768,8 @@ class _Geo:
         self.cache = {}
         self.mids = {}
         self.phase = None             # ADAPTIVE TRUSS: (cot θ, bond, contact, a_min, S_eff)
+        self.web = None               # TARGET WEB ANGLE: (cot θ, contact, a_min, S)
+        self.corner_fn = None         # (web angle) run → its corners: zones kept on the reviewed rule
 
     def centre(self, run, s):
         mids = self.mids.get(id(run))
@@ -864,6 +907,123 @@ class _Geo:
                     w = max(0.0, 0.5 * (p0[k].dist(p1[k]) + p0[k + 1].dist(p1[k + 1])) - 2.0 * c)
                     a = max(a_min, w * cot + bond)
                     us.append(us[-1] + s_eff * ds / a)
+            elif self.web is not None:
+                # TARGET WEB ANGLE on curves: the CONCAVE skin owns the angle.
+                # A web brace leaves the concave contact rail at θ to that
+                # rail's LOCAL tangent and runs STRAIGHT to the convex rail;
+                # where it lands there (and at what angle) follows from the
+                # geometry. a(s) = the station advance of that brace —
+                # forward and backward (the return brace arrives at the next
+                # concave landing at θ too), averaged; u = ∫ a_straight / a
+                # ds with a_straight = w · cot θ (a straight wall of the local
+                # cavity), so the pitch per unit u stays S. The concave side
+                # is the rail advancing less, sample by sample (it changes
+                # side continuously where the curvature changes sign).
+                # Straight: a = a_straight, u = s.
+                cot, c, a_min, S_ = self.web
+                sin_t = 1.0 / math.sqrt(1.0 + cot * cot)
+                cos_t = cot * sin_t
+                cyc = run.cycle
+
+                def rails(k):
+                    q0, q1 = p0[k], p1[k]
+                    d_ = q0.dist(q1)
+                    if d_ < 1e-9:
+                        return q0, q1, 0.0
+                    f = min(0.5, c / d_)
+                    return q0.lerp(q1, f), q1.lerp(q0, f), max(0.0, d_ - 2.0 * c)
+                R_ = [rails(k) for k in range(n + 1)]
+                m = max(1, int(round(0.3 * self.sk.thickness / dh)))     # tangent / λ over ±0.3 t (sampling noise)
+
+                def idx(j):
+                    return j % n if cyc else max(0, min(n, j))
+
+                def s_at(j):                  # unwrapped station of sample j (a loop: past the seam)
+                    return ss[j % n] + (j // n) * L if cyc else ss[j]
+
+                def hit(k, cv, P, d, step):
+                    """Station advance (≥ 0) to where the ray P + λ d meets
+                    the convex rail cv, walking its samples from k."""
+                    for g in range(n):
+                        j0 = k + step * g
+                        j1 = j0 + step
+                        if not cyc and not (0 <= j1 <= n):
+                            return None
+                        A, B = R_[idx(j0)][cv], R_[idx(j1)][cv]
+                        ex, ey = B.x - A.x, B.y - A.y
+                        den = d.x * ey - d.y * ex
+                        if abs(den) < 1e-12:
+                            continue
+                        wx, wy = A.x - P.x, A.y - P.y
+                        lam_ = (wx * ey - wy * ex) / den
+                        mu = (wx * d.y - wy * d.x) / den
+                        if lam_ > 1e-9 and -1e-9 <= mu <= 1 + 1e-9:
+                            sj = s_at(j0) + mu * (s_at(j1) - s_at(j0))
+                            adv = (sj - ss[k]) * step
+                            if in_cap(sj % L if cyc else sj):
+                                return None         # (landed in a cap region: no curve reading)
+                            return adv if adv > 1e-9 else None
+                    return None
+                A_ = []
+                th_ = self.sk.thickness
+                cs_ = [c_['s'] for c_ in self.corner_fn(run)] if self.corner_fn else []
+
+                def in_cap(x):
+                    # cap / junction ends and corner zones are not curves (the
+                    # faces bend into an end face, a junction, a corner motif):
+                    # the reviewed station rule there
+                    if not cyc and (x < th_ or x > L - th_):
+                        return True
+                    return any(abs(x - c_) < CORNER_WIN * th_ or (cyc and abs(abs(x - c_) - L) < CORNER_WIN * th_)
+                               for c_ in cs_)
+                for k in range(n + 1):
+                    if in_cap(ss[k]) or not self.perpendicular(run, ss[k]):
+                        A_.append(None)
+                        continue
+                    i, j = idx(k - m), idx(k + m)
+                    if not cyc:
+                        i, j = max(0, k - m), min(n, k + m)
+                    span = (ss[j] - ss[i]) % L if cyc else ss[j] - ss[i]
+                    if span < 1e-9:
+                        span = 2 * m * dh
+                    lam0 = R_[i][0].dist(R_[j][0]) / span
+                    lam1 = R_[i][1].dist(R_[j][1]) / span
+                    cc = 0 if lam0 <= lam1 else 1             # the concave rail
+                    lam = min(1.0, max(0.1, min(lam0, lam1)))
+                    w = R_[k][2]
+                    fallback = max(w * cot, a_min) / lam
+                    P = R_[k][cc]
+                    t = R_[j][cc] - R_[i][cc]
+                    across = R_[k][1 - cc] - P
+                    tl = t.length()
+                    if tl < 1e-9 or across.length() < 1e-9:
+                        A_.append(fallback)
+                        continue
+                    t = t * (1.0 / tl)
+                    nx_ = across - t * (across.x * t.x + across.y * t.y)
+                    nl = nx_.length()
+                    if nl < 1e-9:
+                        A_.append(fallback)
+                        continue
+                    nx_ = nx_ * (1.0 / nl)
+                    f_ = hit(k, 1 - cc, P, t * cos_t + nx_ * sin_t, 1)
+                    b_ = hit(k, 1 - cc, P, t * (-cos_t) + nx_ * sin_t, -1)
+                    got = [x for x in (f_, b_) if x is not None]
+                    if not got and (cs_ or not cyc):
+                        A_.append(None)             # (both rays into an end / corner zone)
+                        continue
+                    a = sum(got) / len(got) if got else fallback
+                    # relative to a STRAIGHT wall of this cavity (= 1 there:
+                    # straight walls keep u = s, the reviewed straight rule)
+                    q_ = max(a, a_min / lam) / max(w * cot, a_min)
+                    A_.append(None if abs(q_ - 1.0) < 1e-6 else q_)      # (straight: the reviewed rule, exactly)
+                for k in range(n):
+                    ds = ss[k + 1] - ss[k]
+                    if A_[k] is None or A_[k + 1] is None:
+                        face = min(p0[k].dist(p0[k + 1]), p1[k].dist(p1[k + 1]))
+                        us.append(us[-1] + 0.5 * ds + 0.5 * min(face, ds))
+                    else:
+                        us.append(us[-1] + ds / (0.5 * (A_[k] + A_[k + 1])))
             else:
                 for k in range(n):
                     ds = ss[k + 1] - ss[k]
@@ -919,9 +1079,129 @@ def _spacing_cost(L, n, S):
     return SPACING_W * L * e * e
 
 
+def corner_stations(centre, L, cycle, th, lo, hi, end_margin):
+    """CORNERS vs CURVES along a run (shared by the lattice and wall_systems).
+
+    centre(s) → the run's centre-line point (s in [0, L]; a cycle wraps).
+    Returns ([(s, signed turn over CORNER_WIN · th)], heading(s)).
+
+    The centre-line heading is UNWRAPPED (cumulative), so a turn over any
+    window is exact however far a tight ring turns inside it (no ±180°
+    wrap). Turns are read SAME-SIGN: over a window, the left turning and
+    the right turning are summed separately (sample increments under
+    CORNER_DEADBAND are straight), so a convex arc and a concave junction
+    kink inside one window never cancel each other. A station is a corner
+    when
+      - it turns ≥ CORNER_TURN one way within CORNER_WIN · th (a local
+        maximum; open runs: not within end_margin of lo / hi), and
+      - the turn is CONCENTRATED: its mean curvature over the 3 th core is
+        ≥ CORNER_CONTRAST × the mean same-way curvature of its two 1.5 th
+        flanks. A continuous curve (a circle of any radius, an even arc, a
+        lobe between junction kinks) curves as much beside the station as
+        at it — never a corner, however tight. A flank is clipped at a run
+        end ([lo, hi]) and where the wall turns back the other way by
+        CORNER_KINK (a junction kink: beyond it is another feature). With
+        one flank clipped the whole other flank decides; with both clipped
+        each is measured from the outer half of the core to where it ends
+        (an arc running up to the kinks is still seen as a curve). No end
+        window is skipped.
+    The anchor is unchanged: the first sample of the turn maximum."""
+    d = max(0.5, 0.25 * th)
+    n = max(4, int(L / d))
+    ss = [L * k / n for k in range(n + 1)]
+
+    def raw(x):
+        a = centre(x - 0.5 * th) if (cycle or x - 0.5 * th > 0) else centre(0.0)
+        b = centre(x + 0.5 * th) if (cycle or x + 0.5 * th < L) else centre(L)
+        return math.atan2(b.y - a.y, b.x - a.x)
+    th_u = [raw(ss[0])]
+    P, Q = [0.0], [0.0]                       # cumulative left / right turning
+    for x in ss[1:]:
+        h = raw(x)
+        dh = (h - th_u[-1] + math.pi) % (2 * math.pi) - math.pi
+        th_u.append(th_u[-1] + dh)
+        P.append(P[-1] + (dh if dh > CORNER_DEADBAND else 0.0))
+        Q.append(Q[-1] + (-dh if dh < -CORNER_DEADBAND else 0.0))
+
+    def at(arr, x):
+        q = 0
+        if cycle:
+            q, x = divmod(x, L)
+        else:
+            x = max(0.0, min(L, x))
+        f = x / L * n
+        i = min(n - 1, int(f))
+        return arr[i] + (f - i) * (arr[i + 1] - arr[i]) + q * (arr[-1] - arr[0])
+
+    def heading(x):
+        return at(th_u, x)
+
+    def clip(a, b):
+        return (a, b) if cycle else (max(a, lo), min(b, hi))
+
+    def part(a, b, sgn):                      # same-sign turning over [a, b] (≥ 0)
+        return at(P, b) - at(P, a) if sgn > 0 else at(Q, b) - at(Q, a)
+    W = CORNER_WIN * th
+    tv = []
+    for x in ss:
+        left, right = part(x - W / 2, x + W / 2, 1), part(x - W / 2, x + W / 2, -1)
+        tv.append(left if left >= right else -right)
+    wn = int(W / d)
+    m = len(ss) - 1
+    found = []
+    for k, x in enumerate(ss):
+        if abs(tv[k]) < CORNER_TURN:
+            continue
+        if not cycle and (x < lo + end_margin or x > hi - end_margin):
+            continue
+        if cycle and k == m:
+            continue                          # = sample 0 (the seam)
+        sgn = 1.0 if tv[k] > 0 else -1.0
+        # (a local maximum among SAME-WAY turns: a neighbouring arc never
+        # hides an opposite junction kink, nor the reverse)
+        nb = [sgn * tv[j % m] for j in range(k - wn, k + wn + 1)] if cycle else \
+            [sgn * tv[j] for j in range(max(0, k - wn), min(len(ss), k + wn + 1)) if lo <= ss[j] <= hi]
+        if abs(tv[k]) + 1e-12 < max(nb):
+            continue
+        a, b = clip(x - 1.5 * th, x + 1.5 * th)
+        core = part(a, b, sgn) / max(b - a, 1e-9)
+        full, short = [], []
+        for a, b, out in (clip(x - 3.0 * th, x - 1.5 * th) + (-1,), clip(x + 1.5 * th, x + 3.0 * th) + (1,)):
+            # a flank ends where the wall turns back the other way (a kink /
+            # junction): what lies beyond belongs to another feature
+            e0 = b if out < 0 else a
+            far = a if out < 0 else b
+            if abs(part(min(e0, far), max(e0, far), -sgn)) >= CORNER_KINK:
+                lo_, hi_ = 0.0, 1.0
+                for _ in range(24):
+                    f = 0.5 * (lo_ + hi_)
+                    q = e0 + f * (far - e0)
+                    if part(min(e0, q), max(e0, q), -sgn) < CORNER_KINK:
+                        lo_ = f
+                    else:
+                        hi_ = f
+                far = e0 + lo_ * (far - e0)
+                a, b = (far, e0) if out < 0 else (e0, far)
+            if b - a >= 1.5 * th - 1e-6:
+                full.append(part(a, b, sgn) / (b - a))
+            else:
+                # clipped (kink / run end): from the outer half of the core
+                # to where the flank ends — used only when NEITHER flank is
+                # whole (an arc filling the core between two kinks reads as
+                # the curve it is; a cap end's skeleton noise never decides)
+                a, b = (far, x - 0.75 * th) if out < 0 else (x + 0.75 * th, far)
+                if b - a >= CORNER_FLANK_MIN * th:
+                    short.append(part(a, b, sgn) / (b - a))
+        flanks = full or short
+        if flanks and core < CORNER_CONTRAST * sum(flanks) / len(flanks):
+            continue                          # a curve, not a corner
+        found.append((x, tv[k]))
+    return found, heading
+
+
 def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
          max_unsupported=None, contact=0.0, closed=False, stations=None, track=None, track_map=None,
-         bead=0.0, truss=None):
+         bead=0.0, truss=None, web_angle=None):
     """
     Route-aware wall lattice for one wall region (rings: material on the
     left). Returns a LatticePlan, or None if the region is not wall-like
@@ -953,6 +1233,10 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
       truss — ADAPTIVE TRUSS parameters (pattern 'truss'; truss_params()):
         brace_angle, bond, max_span, turn_radius, seed. See 8. in the module
         doc. `spacing` / `max_unsupported` are ignored for this pattern.
+      web_angle — TARGET WEB ANGLE (degrees; zigzag / wave — the Skin + Web
+        web): the pitch is derived from the measured cavity between the
+        contact rails (web_pitch; 10. in the module doc) and `spacing` is
+        ignored. None = the fixed Target Spacing (legacy wall infill).
     """
     rings = [r for r in rings if len(r) >= 3]
     if not rings:
@@ -969,6 +1253,13 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         # supports alternate faces: the station gap is bounded by half of it
         DMAX = max(0.5 * TP['max_span'], 0.5 * S)
         wide_s = max(S, 0.5 * TP['max_span'])     # wall / area test not tied to the brace angle
+    elif web_angle is not None:
+        # provisional, from the region's mean thickness (sampling only);
+        # replaced by the measured cavity once the runs exist (below)
+        S = web_pitch(thick, contact, bead, web_angle)[0]
+        DMAX = float(max_unsupported) if max_unsupported else DMAX_RATIO * S
+        DMAX = max(DMAX, 0.5 * S)
+        wide_s = max(S, WEB_WIDE_REF)
     else:
         S = max(1.0, float(spacing))
         # Maximum unsupported distance: structural upper bound on the distance
@@ -981,12 +1272,15 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     # to be replaced by a medial-axis opposing-face classification.
     if thick <= 0 or thick > WIDE * wide_s:
         return None
-    h = max(0.5, min(thick / 3.0, S / 3.0))
+    # (Target Web Angle: the skeleton is sampled as for the old 20 in default
+    # target — a tight derived pitch must not refine it into fragments)
+    S_geo = S if web_angle is None or TP is not None else max(S, WEB_WIDE_REF)
+    h = max(0.5, min(thick / 3.0, S_geo / 3.0))
     sk = skeleton(rings, h, thick)
     runs = [r for r in sk.runs if r.length > 1e-6 or r.cycle]
     if not runs:
         return None
-    region = _Region(rings, max(S / 2, 2.0))
+    region = _Region(rings, max(S_geo / 2, 2.0))
     geo = _Geo(sk)
     if TP is not None:
         geo.phase = (cot, TP['bond'], contact, max(1.0, 0.5 * TP['bond'], 0.5 * bead), S)
@@ -1005,6 +1299,32 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         if not keep:
             return LatticePlan([], {'runs': [], 'no_cavity': no_cavity, 'motif': None})
         runs = keep
+    web_rep = None
+    if web_angle is not None and TP is None:
+        # TARGET WEB ANGLE: the skins' measured separation (length-weighted
+        # median over the runs) sets the cavity, so the pitch follows the
+        # actual wall — thinner cavity, tighter pitch
+        smp = []
+        for r in runs:
+            n = max(4, int(r.length / max(0.5, 0.25 * thick)))
+            smp += [(geo.side_point(r, 0, r.length * k / n).dist(geo.side_point(r, 1, r.length * k / n)),
+                     r.length / n) for k in range(1, n)]
+        smp.sort()
+        acc, half, sep = 0.0, 0.5 * sum(w for _, w in smp), thick
+        for v, w in smp:
+            acc += w
+            if acc >= half:
+                sep = v
+                break
+        S, w_cav, limited = web_pitch(sep, contact, bead, web_angle)
+        # stations: the concave skin owns the angle on curves (_Geo.table)
+        geo.web = (1.0 / math.tan(math.radians(min(max(float(web_angle), WEB_ANGLE_RANGE[0]), WEB_ANGLE_RANGE[1]))),
+                   contact, max(1.0, 0.5 * bead), S)
+        DMAX = float(max_unsupported) if max_unsupported else DMAX_RATIO * S
+        DMAX = max(DMAX, 0.5 * S)
+        web_rep = {'target': round(min(max(float(web_angle), WEB_ANGLE_RANGE[0]), WEB_ANGLE_RANGE[1]), 2),
+                   'cavity': round(w_cav, 3), 'separation': round(sep, 3), 'pitch': round(S, 3),
+                   'angle': round(math.degrees(math.atan2(w_cav, S)), 2), 'limited': limited}
     tracked, same_topology = _match_track(runs, geo, track, track_map, thick) \
         if track and track_map else ({}, True)
     # PARTIAL TRACKING: where the skeleton changed (a junction lens shrinking
@@ -1051,50 +1371,18 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         L = r.length
         lo, hi = span(r)
         W = CORNER_WIN * thick
-        d = max(0.5, 0.25 * thick)
-        n = max(4, int(L / d))
-        ss = [L * k / n for k in range(n + 1)]
+        cand, _ = corner_stations(lambda s_: geo.centre(r, s_ % L if r.cycle else s_),
+                                        L, r.cycle, thick, lo, hi, 0.75 * thick)
 
         def ang(s_):
             a = geo.centre(r, s_ - 0.5 * thick) if (r.cycle or s_ - 0.5 * thick > 0) else geo.centre(r, 0.0)
             b = geo.centre(r, s_ + 0.5 * thick) if (r.cycle or s_ + 0.5 * thick < L) else geo.centre(r, L)
             return math.atan2(b.y - a.y, b.x - a.x)
-
-        def turn(s_):
-            t = ang(s_ + W / 2) - ang(s_ - W / 2)
-            return (t + math.pi) % (2 * math.pi) - math.pi
-        tv = [turn(x) for x in ss]
         found = []
-        for k, x in enumerate(ss):
-            if abs(tv[k]) < CORNER_TURN:
-                continue
-            if not r.cycle and (x < lo + 0.75 * thick or x > hi - 0.75 * thick):
-                continue
-            w_ = int(W / d)
-            if r.cycle:                           # the seam is not an edge
-                m_ = len(ss) - 1
-                nb = [abs(tv[j % m_]) for j in range(k - w_, k + w_ + 1)]
-            else:
-                nb = [abs(tv[j]) for j in range(max(0, k - w_), min(len(ss), k + w_ + 1))
-                      # (motifs: the cap end's turn readings are not rival corners)
-                      if not MOTIFS or lo <= ss[j] <= hi]
-            if abs(tv[k]) + 1e-12 < max(nb):
-                continue
-            if MOTIFS and (r.cycle or (x - 3.0 * thick > 0 and x + 3.0 * thick < L)):
-                # a CORNER concentrates its turn: at least CORNER_LOCAL of the
-                # turn over 6 t happens within 3 t (sharp or rounded corner
-                # ≈ 1; an even arc / circle 0.5) — curves carry the ordinary
-                # pattern, only real corners become motif anchors
-                def tw(w):
-                    t_ = ang(x + w / 2) - ang(x - w / 2)
-                    return abs((t_ + math.pi) % (2 * math.pi) - math.pi)
-                if tw(3.0 * thick) < CORNER_LOCAL * tw(6.0 * thick):
-                    continue
+        for x, tsign in cand:
             if found and abs(x - found[-1][0]) < W:
                 continue
-            if r.cycle and k == len(ss) - 1:
-                continue                          # = sample 0 (the seam)
-            found.append((x, tv[k]))
+            found.append((x, tsign))
         if r.cycle and len(found) > 1 and (found[0][0] + L - found[-1][0]) < W:
             found.pop()
         out = []
@@ -1128,6 +1416,17 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 geo.cache[(id(r), side, round(cn['s'] % L if r.cycle else cn['s'], 9))] = pnt
         corner_cache[id(r)] = out
         return out
+
+    geo.corner_fn = corners if web_angle is not None and TP is None else None
+
+    def web_zone(r, x):
+        """(Target Web Angle) an end / corner zone, kept on the reviewed
+        station and stitch rules (the concave-skin rule is for curves)."""
+        L_ = r.length
+        if not r.cycle and (x < thick or x > L_ - thick):
+            return True
+        x %= L_
+        return any(min(abs(x - c['s']), L_ - abs(x - c['s'])) < CORNER_WIN * thick for c in corners(r))
 
     cap_cache = {}
 
@@ -2137,6 +2436,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         curved = wave or not _straight(geo, r, s_a, s_b)
         if not wave and (at_junction or at_corner) and straight_ok:
             curved = False              # zigzag junction / corner stitches: straight
+        if curved and not wave and geo.web is not None and straight_ok and \
+                not any(web_zone(r, x) for x in (s_a, s_b)) and \
+                (contact <= 0 or _clear_poly(_dense(pa, pb), not is_contact(r, side_a, s_a),
+                                             not is_contact(r, side_b, s_b))):
+            curved = False              # TARGET WEB ANGLE: a straight brace (its stations set its angle)
         if not curved:
             return [pa, pb]
         if wave:
@@ -2222,7 +2526,11 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 w = pb - pa
                 u = (w.x * (-t2.y) - w.y * (-t2.x)) / den
                 Q = pa + t1 * u
-                if 0 < u < 3.0 * thick:
+                # (pb must lie AHEAD of Q along t2 — else the curve overshoots
+                # pb and doubles back: a hairpin where the legs are nearly
+                # parallel, e.g. a junction kink that a tight arc turns back)
+                v = (pb.x - Q.x) * t2.x + (pb.y - Q.y) * t2.y
+                if 0 < u < 3.0 * thick and v > 0:
                     pts = [pa]
                     for k in range(1, 8):
                         f = k / 8
@@ -2717,7 +3025,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                         choice[ri][0] if ri in choice else None)
         segs = segments(r, mode != 'two' and motif_single(r))
         for (a_, b_, U), n in zip(segs, ns_):
-            pitches.append((b_ - a_) / n if TP is not None else U / n)   # (truss: U is a phase)
+            pitches.append((b_ - a_) / n if TP is not None or geo.web else U / n)   # (truss / web angle: U is a phase)
         if r.cycle:
             motif = 'double_loop' if mode == 'two' else 'loop'
         elif mode == 'two':
@@ -2726,7 +3034,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         else:
             motif = ('single' if all(nd[0] == 'J' for nd in (r.a, r.b))
                      else 'lone' if all(nd[0] == 'E' for nd in (r.a, r.b)) else 'open_end')
-        L = sum((b_ - a_) if TP is not None else U for a_, b_, U in segs)
+        L = sum((b_ - a_) if TP is not None or geo.web else U for a_, b_, U in segs)
         N = sum(ns_)
         run_rep.append({'length': round(L, 2), 'stitches': N, 'pitch': round(L / N, 2),
                         'passes': 2 if mode == 'two' else 1, 'motif': motif,
@@ -2829,6 +3137,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         'contact_violations': c_bad,
         'track': {'runs': track_out, **track_note},
         'pattern': pattern,
+        'web_angle': web_rep,
         'truss': None if TP is None else {
             **TP, 'effective_pitch': round(S, 2),
             'stitches': _tally(x or 'other' for ri in kinds_out for one in kinds_out[ri] for x in one)},

@@ -2833,6 +2833,10 @@ class PrintLayer:
                                             **({'joined': joined} if joined is not None else {})})
                     continue
                 phys = self.material.physical
+                # a Skin + Web web (owned record): TARGET WEB ANGLE — the
+                # pitch follows the cavity (its legacy `spacing` is ignored)
+                web_angle = None if not inf.owner or pattern == 'truss' else \
+                    float(inf.params.get('web_angle') or WL.WEB_ANGLE_DEFAULT)
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
                              self.prefer_closed or phys,
                              float(inf.params.get('max_unsupported', 0) or 0) or None,
@@ -2842,7 +2846,8 @@ class PrintLayer:
                              track=((self.lattice_track or {}).get(inf.id) or (None, None))[0],
                              track_map=((self.lattice_track or {}).get(inf.id) or (None, None))[1],
                              bead=self.material.bead_width if phys else 0.0,
-                             truss=inf.params if pattern == 'truss' else None)
+                             truss=inf.params if pattern == 'truss' else None,
+                             web_angle=web_angle)
                 if lp is not None:
                     for j, poly in enumerate(lp.polylines):
                         dp = DerivedPath(poly, closed=False, role='lattice',
@@ -2886,7 +2891,9 @@ class PrintLayer:
                         # the lineage's SHARED lattice (Layer Designs), if any
                         'lineage': lr.get('lineage'),
                         # ADAPTIVE TRUSS: effective pitch / stitch constructions
-                        'truss': next((r['truss'] for r in regs if r.get('truss')), None)}
+                        'truss': next((r['truss'] for r in regs if r.get('truss')), None),
+                        # TARGET WEB ANGLE (Skin + Web): derived pitch per region
+                        'web_angle': [r['web_angle'] for r in regs if r.get('web_angle')] or None}
             # Motif lattices are continuous by construction: no repair.
             # Report them in the same shape (0 defects / edits) so route
             # consumers see one plan; open ends = lone runs / open arms.
