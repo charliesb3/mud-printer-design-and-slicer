@@ -117,7 +117,9 @@ def test_router_never_retraces_and_reports_an_unclosable_component():
                                       ('lone_wall', 'zigzag'), ('lone_wall', 'wave')])
 @pytest.mark.parametrize('O', [0.75, 1.5, 2.25])
 def test_contact_landings_reach_the_requested_overlap(name, pat, O):
-    p, m = build(getattr(PF, name)(pat=pat, O=O))
+    # (PHYSICAL WALL WIDTH, 2026-10-16: a 13 in wall's skins are 10 in apart —
+    # the skin cavity this contact test was written for)
+    p, m = build(getattr(PF, name)(pat=pat, O=O, t=10 + W))
     sep = W - O
     mins = landing_minima(p, m)
     assert mins
@@ -133,7 +135,7 @@ def test_corner_motif_keeps_the_contact_at_a_ring_corner():
     contacts squarely off each face leg: the ring's reflex corners no
     longer fall short of a large contact separation (they used to — the
     case was in the shortfall test below)."""
-    p, m = build(PF.wave_ring(pat='wave', O=0.25))
+    p, m = build(PF.wave_ring(pat='wave', O=0.25, t=10 + W))       # (skins 10 in apart)
     assert lattice(m)[0]['contact_violations'] == 0
 
 

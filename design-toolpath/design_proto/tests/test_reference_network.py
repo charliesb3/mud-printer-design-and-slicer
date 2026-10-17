@@ -101,7 +101,8 @@ def test_round_junction_arcs_are_not_jamb_lines():
     rounded-junction arcs are 'cap' beads too but junction geometry (they
     used to add 1 in pseudo-jambs at every rebuilt junction)."""
     sc = lib_of('wave', 'round', ('rect1_top',)).scaffold('base')['IN']['stations']
-    assert len(sc) == 2 and all(abs(math.dist(a, b) - 10.0) < 1e-6 for a, b in sc)
+    # (a jamb spans the printed skins: 10 in wall − 3 in bead, PHYSICAL WALL WIDTH)
+    assert len(sc) == 2 and all(abs(math.dist(a, b) - 7.0) < 1e-6 for a, b in sc)
 
 
 def test_an_opening_into_another_wall_closes_alone_and_is_reported():

@@ -48,9 +48,9 @@ def plan(rings, pattern='zigzag', S=20.0, phys=True):
                    bead=3.0 if phys else 0.0)
 
 
-def rect_layer(w=200, h=120, openings=(), pattern='zigzag'):
+def rect_layer(w=200, h=120, openings=(), pattern='zigzag', t=10):
     R = RectanglePath(100, 140, w, h, id='R')
-    lay = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', 10)],
+    lay = PrintLayer('t', source_paths=[R], wall_systems=[thick('R', t)],
                      infills=[RegionInfill('I', 'R', pattern, {'spacing': 20})])
     lay.openings = [Opening(f'o{k}', 'R', c, wd) for k, (c, wd) in enumerate(openings)]
     return PF._phys(lay)
@@ -140,7 +140,7 @@ def test_target_spacing_changes_the_fitted_lattice_not_the_motifs():
 
 @pytest.mark.parametrize('pattern', ['zigzag', 'wave'])
 def test_single_motif_closes_and_stays_in_the_wall(pattern):
-    lay = rect_layer(pattern=pattern)
+    lay = rect_layer(pattern=pattern, t=13)       # (PHYSICAL WALL WIDTH: skins 10 in apart, as written)
     p, m = lay._build_effective()
     rl = lay.to_routing_layer(p, m)
     c = closure_report(build_graph(rl))
@@ -186,7 +186,7 @@ def test_a_corner_beside_a_dead_end_is_still_anchored():
     """The short leg of a piece cut by an opening (its cap end's turn
     readings used to out-rank the real corner)."""
     rs = rings_of(rect_layer(openings=[(560.0, 24.0), (430.0, 30.0)]))
-    short = next(r for r in rs if max(p.y for p in r[0]) > 250 and min(p.x for p in r[0]) < 101
+    short = next(r for r in rs if max(p.y for p in r[0]) > 250 and min(p.x for p in r[0]) < 102
                  and max(p.x for p in r[0]) < 200)
     assert [m['kind'] for m in motifs(plan(short))] == ['double']
 

@@ -362,6 +362,16 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 **Summary (2026-10-06):** the Designer is checkpointed (5ed967d). On top of it, an UNCOMMITTED Z-phase batch adds Layer Designs (inheritance, shared lineage lattice, project bead width), semantic transforms for the Layer Assembly, and the Assembly subsystem (`layer_assembly/`, own memory). Start with "Z PHASE — CURRENT ARCHITECTURE" below; known open problem: transformed-junction lattice coherence (support findings at moving junctions). Testing tiers: same section → "Testing workflow".
 
+### PHYSICAL WALL WIDTH (2026-10-16; manually reviewed, checkpointed — details `WALL_ARCHITECTURE.md` → "Physical wall width")
+
+- **Contract (user decision 2026-10-16):** Wall Thickness = the FINISHED DEPOSITED width, outside bead edge to outside bead edge — never centreline spacing. Bead Width = one pass; toolpaths are bead CENTRELINES. Contact Overlap (O) = overlap where a bead intentionally LANDS against another (centrelines W − O); never crossings. PARALLEL WALL OVERLAP = the new user-facing name of `return_overlap` (R, storage key unchanged): the MAXIMUM overlap of paths running alongside each other (THIN Out-and-Back lanes, Parallel Walls lanes) — a maximum, not a target. THIN = 2W − R (5.25 in at W 3, R 0.75), derived, never a free thickness.
+- **Audit finding (before the fix):** generated systems (Parallel / Interleaved / Linked / Chained Loop) already kept centrelines ½ bead inside the faces (deposit = T); Hollow and Skin + Web printed the envelope FACES as bead centrelines (7 in → 10 in deposited). That, not the bead view, was why THIN 5.25 looked too narrow next to a "7 in" wall.
+- **Fix:** in a physical PRINT build only, skin constructions (`model.SKIN_SYSTEMS`: Hollow, Skin + Web, and an unassigned thick wall = Hollow) get faces inset ½ bead (`WallSpec.offsets(inset)`). The architectural envelope (`envelope_only`: Designer / Assembly / preliminary support) is UNCHANGED. Skin + Web webs land W − O off the corrected skins (unchanged lattice rule). Measured: Hollow / Skin + Web 10.000 → 7.000 for Center / Outside / Inside; generated systems unchanged; THIN 5.25.
+- **Local junction adaptations (no junction redesign):** an aligned skin wall's reference (a finished face) leaves the printed face list but stays the piece's attachment reference (`NetPiece.ref` / `arch`); ends on an inset wall's finished face / band still attach and join its network; M6 sends an end drawn to the host's finished face on its own side to the near printed skin (reproduces the old junction faces); pushes into an inset host use its printed band.
+- **Known consequences left OPEN (FAST: 20 failing tests at the checkpoint, listed in `WALL_ARCHITECTURE.md`):** the envelope ≠ full-build regions for skin walls (documented invariant to revisit); Route Origins on an aligned skin wall's reference strand report `missing`; reference-network courtyard / mixed generated ↔ skin junction cases; a few unverified expectation tests. Goldens NOT re-baselined: 14 cases with skin walls are expected to change.
+- **Product questions:** Parallel Walls default 3 lanes in 7 in overlap 1.0 in > 0.75 max (rule needed: lane count vs report); a Skin + Web web needs T ≥ 3W − 2O (7.5 in) to keep W − O off both skins.
+- **Tests:** `design_proto/tests/test_physical_wall_width.py` (58).
+
 ### DRAWING CORRECTNESS + ARCHITECTURAL SNAP UX (Pass 1, 2026-10-15; manually reviewed, checkpoint 2026-10-15)
 
 - **Bug fixed — trimmed geometry was a snap target.** `_snapTargets` used every
@@ -1561,6 +1571,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-16 — PHYSICAL WALL WIDTH (manually reviewed, checkpointed): Wall Thickness = finished deposited width; Hollow / Skin + Web skins inset ½ bead in print builds (envelope unchanged); "Return-lane overlap" renamed Parallel Wall Overlap in the UI (key `return_overlap` kept). FAST had 20 known failures at the checkpoint (see Current State → "PHYSICAL WALL WIDTH"); goldens not re-baselined. Deferred: alignment-independent connectivity, canonical wall centreline (full-wall junction work), Skin + Web / Wall System through-Z coherence.
 
 2026-10-16 — Small fixes after the cleanup (uncommitted, pending review): transform-group support / header frames, Skin + Web webs restricted to their own Wall System, THIN width test, SHOW BEAD view. Three bugs deferred (open): unassigned Out-and-Back tilt under group transforms, opening locality of generated constructions, Skin + Web through-Z coherence on curved walls. Also open: Wall Thickness should mean the finished deposited outside-to-outside width (clarified by the user; not implemented). See `WALL_ARCHITECTURE.md` → "Small fixes after the cleanup".
 

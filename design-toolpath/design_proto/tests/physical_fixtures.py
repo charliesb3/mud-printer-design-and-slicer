@@ -24,15 +24,15 @@ def _phys(lay, **m):
     return lay
 
 
-def wave_ring(pat='wave', **m):
+def wave_ring(pat='wave', t=10, **m):
     """1/2. A closed 10 in rect wall with wall infill (a circulating pass)."""
-    return _phys(WF.rect_loop(pat=pat), **m)
+    return _phys(WF.rect_loop(pat=pat, t=t), **m)
 
 
-def lone_wall(pat='zigzag', **m):
+def lone_wall(pat='zigzag', t=10, **m):
     """6. A lone straight 10 in wall with infill: one pass cannot close —
     the lattice needs a second (return) wave."""
-    return _phys(WF.straight(pat=pat), **m)
+    return _phys(WF.straight(pat=pat, t=t), **m)
 
 
 def x_walls(**m):

@@ -3988,7 +3988,7 @@ function _thicknessControl({ id, value, thin, onSet, compact, title }) {
   unit.className = 'thick-unit';
   unit.textContent = thick ? 'in' : `${thin} in`;
   unit.title = thick ? 'Architectural thickness'
-    : 'THIN wall: one bead (out and back when open) — its width comes from the bead width and return-lane overlap, not a free thickness';
+    : 'THIN wall: one bead (out and back when open) — its width comes from the bead width and parallel wall overlap (2W − overlap), not a free thickness';
   if (thick && value < thin - 1e-9) {          // (an older value, or the material changed since)
     unit.textContent = 'in ⚠';
     unit.title = `Below this wall's THIN width (${thin} in) — the next edit raises it to at least ${_minThick(thin)} in`;
@@ -4246,7 +4246,7 @@ function _addWallRows(panel, path) {
   panel.appendChild(row);
   if (!_isThick(path)) {
     _addNote(panel, `THIN wall: ${_thinWidth(path)} in wide — set by the bead width` +
-                    (!path.closed && _material().physical ? ' and return-lane overlap (out and back).' : '.') +
+                    (!path.closed && _material().physical ? ' and parallel wall overlap (out and back: 2W − overlap).' : '.') +
                     ` + makes it a thick wall of ${_minThick(_thinWidth(path))} in (never thinner than THIN).`);
     if (!path.closed && _material().physical) _addNote(panel, 'End caps: a U-turn — set by construction (out and back).');
     return;
@@ -5349,7 +5349,7 @@ function _applyMaterial() {
   const cMax = m.bead_width, rMax = m.bead_width - RETURN_MIN;
   if (m.contact_overlap > cMax) { m.contact_overlap = cMax; notes.push(`Contact overlap reduced to ${cMax.toFixed(2)} in (≤ bead width)`); }
   if (m.contact_overlap < 0) m.contact_overlap = 0;
-  if (m.return_overlap > rMax) { m.return_overlap = rMax; notes.push(`Return-lane overlap reduced to ${rMax.toFixed(2)} in (a full overlap would be an exact retrace)`); }
+  if (m.return_overlap > rMax) { m.return_overlap = rMax; notes.push(`Parallel wall overlap reduced to ${rMax.toFixed(2)} in (a full overlap would be an exact retrace)`); }
   if (m.return_overlap < 0) m.return_overlap = 0;
   layer.material = m;
   _syncMaterialControls();
@@ -5370,8 +5370,8 @@ function _syncMaterialControls() {
   const W = m.bead_width;
   const rs = Math.max(RETURN_MIN, W - m.return_overlap);
   set('material-derived', 'textContent', m.physical
-    ? `Contact: centrelines ${(W - m.contact_overlap).toFixed(2)} in apart · return lane: ${rs.toFixed(2)} in apart ` +
-      `(single-line wall ≈ ${(W + rs).toFixed(2)} in wide, printed out and back). No pass prints over another.`
+    ? `Contact: centrelines ${(W - m.contact_overlap).toFixed(2)} in apart · parallel lanes: ≥ ${rs.toFixed(2)} in apart ` +
+      `(THIN Out-and-Back wall ${(W + rs).toFixed(2)} in wide). No pass prints over another.`
     : 'Physical rules off: zero-width centrelines (beads are visual only).');
 }
 

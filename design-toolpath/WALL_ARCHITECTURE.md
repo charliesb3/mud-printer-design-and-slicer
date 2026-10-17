@@ -720,7 +720,34 @@ M0–M4 is listed in the M0–M4 implementation notes below.
 - **THIN width verified** (no code change): lanes W − R apart, deposited 2W − R, overlap R. Test `design_proto/tests/test_thin_width.py`.
 - **SHOW BEAD view** in Wall Systems and Print Simulation (drawing only, project bead width).
 - **Still OPEN (deferred, strict-xfail reproductions):** an unassigned one-end-attached Out-and-Back rotates through Z with its host's group (`test_transform_unassigned_wall.py`); Skin + Web phase incoherent through Z on a gradually scaled circle (`test_wall_system_z_coherence.py`); an Assembly opening changes far geometry of GENERATED constructions (Interleaved / Linked / Chained Loop / Parallel; Skin + Web and Hollow are local) — no test yet. None was introduced by the cleanup.
-- **Still OPEN — physical wall width (clarified by the user 2026-10-16, NOT implemented):** architectural Wall Thickness should mean the FINISHED DEPOSITED width, outside bead edge to outside bead edge; today's envelope / construction does not consistently realise that (observed discrepancy). To be designed separately.
+- ~~**Still OPEN — physical wall width**~~ — DONE, see "Physical wall width" below.
+
+### Physical wall width (2026-10-16; manually reviewed, checkpointed)
+
+- **Contract (user, 2026-10-16):**
+  - Wall Thickness = FINISHED DEPOSITED width (outside bead edge to outside bead edge), never centreline spacing; the architectural envelope stays authoritative and unchanged — centrelines go inside it.
+  - Bead Width = one pass; toolpaths are bead centrelines.
+  - Contact Overlap O = overlap where a path intentionally lands against another (W − O); explicitly includes web → skin; never ordinary crossings.
+  - PARALLEL WALL OVERLAP (user-facing name of `return_overlap`, key kept) = the MAXIMUM overlap of neighbouring paths running alongside each other (THIN lanes, Parallel lanes); a maximum, not a target.
+  - THIN = 2W − Parallel Wall Overlap (derived; 5.25 in at W 3 / 0.75). (The user's first statement used O; corrected to the parallel-lane rule — O and R stay separate concepts.)
+  - Center / Outside / Inside are AUTHORING references; downstream topology should eventually use canonical derived wall geometry (not done, below).
+- **Audit (read-only, before the fix; T 7, W 3, O = R = 0.75):** generated systems deposited ≈ 7 (centrelines ½ bead inside the faces, `H0 = T/2 − W/2`); Hollow / Skin + Web deposited 10 (faces printed as centrelines); THIN 5.25 (from R, not O). The SHOW BEAD renderers were faithful; the "too narrow THIN" was the 10 in Hollow / Skin + Web reference wall. Only Skin + Web landings used O; Linked closest approach 0 (full overlap), Parallel spacing (T − W)/(N − 1), staples / push reach / `~cross` / `extend_through` depths constants, generated band contacts effectively O = 0 — all left for M8 / junction work. No single canonical centreline exists: junction / trim detection runs on the AUTHORED source lines (an Inside / Outside wall's source is a finished face); `envelope.centrelines` holds the authored line.
+- **Fix:** `WallSpec.offsets(inset = W/2)` for `model.SKIN_SYSTEMS` (Hollow, Skin + Web; unassigned thick = Hollow) in physical, non-`envelope_only` builds: Center ±(T − W)/2; aligned W/2 and T − W/2 from the authored line (now reference-only). `INSET_MIN_SPAN` guards stale thicknesses below two beads.
+- **Local adaptations (no junction architecture):** `NetPiece.ref` (aligned reference kept for junction finding, out of `walls`) and `NetPiece.arch` / `arch_band` (finished faces) in `network.find_attachments`; caps / opening cap reach exclude an outside reference (`_wall_system_end_pts(include_src=False)`); `_apply_networks` unions walls attached to an inset wall even when beads no longer touch; M6 `_attach_branches`: an end on an inset host's finished face on its own side → the near printed skin (else band centre as before); `_split_wall_systems` push depth uses `_print_thickness` for an inset host.
+- **FAST at the checkpoint: 20 KNOWN FAILURES (not hidden, not re-baselined):**
+  - envelope ≠ full-build regions for skin walls (`test_deferred_print_paths` ×2) — the documented "envelope rings = full-build regions" invariant needs a decision (equal for generated walls; skin walls get the inset band);
+  - Route Origin on an aligned skin wall's reference strand → `missing` (`test_route_origin` ×4) — re-attach to `<id>.wall_near` vs the "never moved onto other geometry" rule: decision needed;
+  - reference network with Skin + Web hosts (`test_wall_systems` ×7): a Hollow / Skin + Web connector leaves the courtyard pocket a second run (the lattice treats courtyard + outside as one ring; only a fragile exact landing joined them), Skin + Web line into Parallel host, generated lines no longer crossing the curved Skin + Web circle — mixed-junction machinery, deferred to the full-wall junction work;
+  - not yet investigated (may be expectation updates): `test_source_attribution::test_at_a_T_the_host_keeps_its_full_thickness`, `test_semantic_transform` ×2 (connector), `test_support_contract` bridge width, `test_wall_membership_web::test_ticking_the_wall_gives_it_the_web`, `test_profiles_designer` taper coordinates, `test_route_planning` travel.
+- **Golden (not re-baselined):** expected to change — `real_10xtest1`, `real_test3`, `syn_branch_across_trim`, `syn_branch_at_junction`, `syn_circrect_hollow`, `syn_excursion_skin`, `syn_mixed_systems`, `syn_mixed_thickness`, `syn_profiles_curved/linear/stepped`, `syn_transform_multi/whole`, `syn_variant_walls`; expected identical — the 8 generated-only cases.
+- **Product questions:** Parallel Walls default 3 lanes in a 7 in wall overlap 1.0 in > 0.75 max (lane-count rule vs report); Skin + Web web needs T ≥ 3W − 2O (7.5 in) to keep W − O off both skins.
+- **DEFERRED (recorded, not fixed here):**
+  - authoring alignment must eventually NOT restrict connectivity: a wall must be able to attach to EITHER physical face of another wall regardless of Inside / Center / Outside;
+  - canonical derived wall topology / centreline — with the full-wall junction work;
+  - Skin + Web / Wall System through-Z pattern coherence — a separate issue;
+  - end caps / opening jambs still centre a bead on the cut / end line (W/2 beyond along the wall);
+  - M8 contact-overlap migration (Linked, staples, generated contacts, mouths, bridges).
+- **Tests:** `design_proto/tests/test_physical_wall_width.py` (58); geometry expectations updated with comments in `test_physical`, `test_junction_contact`, `test_corner_motifs`, `test_reference_network`, `test_wall_systems` (fixtures widened by W where a test was written for 10 in skin spacing).
 
 ### Before M5 — to decide
 

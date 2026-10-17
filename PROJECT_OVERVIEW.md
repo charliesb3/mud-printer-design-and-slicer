@@ -617,7 +617,11 @@ Major capabilities:
   a topological signature, follows parametric edits, unresolved → nothing
   suppressed); rounded thick-wall junctions are one concentric assembly.
 - PHYSICAL BEADS (system-level concept): Wall Thickness (architecture) ≠
-  centreline (toolpath) ≠ Bead Width (one deposited pass). With physical
+  centreline (toolpath) ≠ Bead Width (one deposited pass). Since 2026-10-16
+  Wall Thickness = the FINISHED DEPOSITED width (outside bead edge to outside
+  bead edge) for every construction; the architectural envelope is that
+  width and centrelines lie inside it (WALL_ARCHITECTURE.md → "Physical wall
+  width"); Return-Lane Overlap is shown as PARALLEL WALL OVERLAP (a maximum). With physical
   rules on: Contact Overlap (lattice landings stop W − O off a face),
   Return-Lane Overlap (single-bead open walls print out and back W − R
   apart), NO exact retrace, and every connected component one closed route
@@ -696,6 +700,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-16 (Design + Toolpath physical wall width)
+
+Wall Thickness now means the finished deposited width everywhere: Hollow / Skin + Web skins print half a bead inside the unchanged envelope (were on its faces: 7 in → 10 in). UI: Parallel Wall Overlap (key `return_overlap`). Checkpointed with 20 known FAST failures and goldens not re-baselined (14 cases expected to change) — `design-toolpath/WALL_ARCHITECTURE.md` → "Physical wall width". Deferred: alignment-independent face connectivity, canonical wall centreline (full-wall junction work), Wall System through-Z coherence.
 
 2026-10-16 (Design + Toolpath cleanup checkpoint)
 

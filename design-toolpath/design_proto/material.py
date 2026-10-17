@@ -38,6 +38,15 @@ toolpath prototype):
 The two overlaps share the formula W − overlap but are separate physical
 operations (machine testing may give them very different values): keep
 them separate everywhere.
+
+2026-10-16 — PARALLEL WALL OVERLAP is the user-facing name of R (stored
+key `return_overlap`, unchanged — saved projects need no migration): the
+MAXIMUM physical overlap of neighbouring deposited paths running alongside
+one another — a THIN Out-and-Back's two lanes (THIN = 2W − R) and
+neighbouring Parallel Walls lanes. A maximum, not a target.
+PHYSICAL WALL WIDTH (same date): Wall Thickness is the FINISHED deposited
+width; a skin construction's printed faces lie half a bead inside it
+(model.WallSpec.offsets inset).
 """
 from __future__ import annotations
 from dataclasses import dataclass

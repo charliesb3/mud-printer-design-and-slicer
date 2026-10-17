@@ -348,6 +348,7 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
 
 ## Known limitations
 
+- OPEN (2026-10-16, physical wall width): for Hollow / Skin + Web walls the full print build's material regions are now the skin band (envelope inset ½ bead), while the architectural envelope (`envelope_only`, what the Assembly edits / checks) is unchanged — the M0 invariant "envelope rings = the full build's regions" (`test_deferred_print_paths`) holds only for generated walls now; decision pending (`../WALL_ARCHITECTURE.md` → "Physical wall width").
 - KNOWN ISSUE — corner-cutting in path views (diagnosed 2026-10-15; FIXED the same day, see below).
   Symptom: corners / openings / junctions look rough or diagonally cut in the
   Pi top view, and in the Designer's Print Simulation only while dragging /
