@@ -47,6 +47,7 @@ const wsys = {
   view: { mode: 'top', zoom: 1, px: 0, py: 0, yaw: -Math.PI / 4, pitch: 0.6 },
   cache: {},                        // `${clientKey}|${index}` → generated layer geometry (index -1: Base design)
   pending: {},                      // the same keys while their request is in flight
+  failed: {},                       // the same keys whose last request failed → the message (retried on re-selection)
   baseEnv: null,                    // { key, polylines } the Base design's envelope
   hist: { undo: [], redo: [] },
   drag: null, seq: 0, stats: { layerFetches: 0 },
@@ -85,6 +86,7 @@ async function _wsysKeys() {
 function wsysStatus() {
   if (wsys.inflight) return 'generating';
   if (!wsys.gen) return 'not_generated';
+  if (wsys.serverLost === wsys.gen.clientKey) return 'outdated';   // (the server no longer holds this generation)
   return wsys.currentKey !== null && wsys.gen.clientKey === wsys.currentKey ? 'current' : 'outdated';
 }
 
@@ -242,35 +244,57 @@ function wsysCancel() {
 
 // one GENERATED layer of the shown generation (read-only on the server; i = -1:
 // the Base design's generated geometry); each fetched once per generation
+// LIFECYCLE: a layer is fetched once per generation; a request that fails
+// (the server lost the generation, a network error) records its message
+// under the layer and the canvas says so — never "Loading…" forever — and the
+// next selection of that layer retries; a result for a superseded generation
+// or another layer is kept in the cache but never drawn over the selection.
 async function _wsysFetchLayer(i) {
   const G = wsys.gen;
   if (!G) return null;
   const k = `${G.clientKey}|${i}`;
   if (wsys.cache[k]) return wsys.cache[k];
   if (wsys.pending[k]) return wsys.pending[k];    // (in flight: the same request)
+  delete wsys.failed[k];                           // (a re-selection retries)
   const p = _wsysFetchLayerNow(G, i, k);
   wsys.pending[k] = p;
   try { return await p; } finally { delete wsys.pending[k]; }
 }
 
+function _wsysLayerFailed(G, i, k, msg, outdated) {
+  wsys.failed[k] = msg;
+  if (wsys.gen !== G) return;                      // (a superseded generation: nothing to show)
+  wsys.error = outdated
+    ? 'The generated geometry of that layer is no longer available on the server — Regenerate Wall Systems.'
+    : `Layer ${i < 0 ? 'view' : i + 1} could not be loaded (${msg}) — select it again to retry, or regenerate.`;
+  if (outdated) wsys.serverLost = G.clientKey;      // the status reads OUTDATED: the server no longer holds it
+  wsysRender();
+}
+
 async function _wsysFetchLayerNow(G, i, k) {
+  wsys.stats.layerFetches++;
+  const root = (window.Designer.listDesigns().find(d => d.parent == null) || {}).id;
+  let data;
   try {
-    wsys.stats.layerFetches++;
-    const root = (window.Designer.listDesigns().find(d => d.parent == null) || {}).id;
     const res = await fetch('/api/wallsystems/layer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                                        body: JSON.stringify({ ...G.body, ...(i < 0 ? { design: root } : { index: i }) }) });
-    const data = await res.json();
-    if (data.error) {
-      if (data.outdated && wsys.gen === G) wsys.error = 'The generated geometry of that layer is no longer available — generate again.';
-      if (wsys.gen === G) wsysRender();
+    data = await res.json();
+  } catch (e) { _wsysLayerFailed(G, i, k, e.message || 'network error', false); return null; }
+  if (data.error) {
+    if (data.busy) {                               // a generation holds the adapter: try again shortly
+      delete wsys.failed[k];
+      if (wsys.gen === G && wsys.layer === i) setTimeout(() => { if (wsys.gen === G && wsys.layer === i) _wsysFetchLayer(i); }, 700);
       return null;
     }
-    wsys.cache[k] = data;
-    const keys = Object.keys(wsys.cache);
-    if (keys.length > 400) delete wsys.cache[keys[0]];
-    if (wsys.gen === G && wsys.layer === i) { _wsysRenderLayer(); wsysDraw(); }
-    return data;
-  } catch (e) { return null; }
+    _wsysLayerFailed(G, i, k, data.error, !!data.outdated);
+    return null;
+  }
+  wsys.cache[k] = data;
+  if (wsys.serverLost === G.clientKey) delete wsys.serverLost;                 // (the server does hold it)
+  const keys = Object.keys(wsys.cache);
+  if (keys.length > 400) delete wsys.cache[keys[0]];
+  if (wsys.gen === G && wsys.layer === i) { _wsysRenderLayer(); wsysDraw(); wsysRender(); }   // (never over a newer selection)
+  return data;
 }
 
 // ---- inspection -----------------------------------------------------------------------
@@ -413,7 +437,9 @@ function wsysScene() {
   return { layer: i, view: wsys.view.mode, kind: gen ? 'generated' : 'envelope',
            status: wsys.display === 'generated' ? (wsys.gen ? wsysStatus() : 'not_generated') : null,
            items: items ? items.length : null, paths: items ? items.filter(it => it.role === 'path').length : 0,
-           loading: gen && !items, focus: wsys.view.focus || null,
+           loading: gen && !items && !(wsys.gen && wsys.failed[`${wsys.gen.clientKey}|${i}`]),
+           failed: gen && wsys.gen ? (wsys.failed[`${wsys.gen.clientKey}|${i}`] || null) : null,
+           focus: wsys.view.focus || null,
            highlight: (() => { const f = _wsysSelected(); return f && f.layer === i ? f.id : null; })() };
 }
 function _wsysZ(i) {
@@ -443,7 +469,15 @@ function wsysDraw() {
   g.font = '12px monospace';
   if (!items) {
     g.fillStyle = '#888';
-    g.fillText(wsys.gen ? 'Loading the generated layer…' : 'NOT GENERATED — press "Generate Wall Systems".', 20, 36);
+    const fk = wsys.gen ? `${wsys.gen.clientKey}|${i}` : null;
+    if (fk && wsys.failed[fk]) {
+      g.fillStyle = '#e0a060';
+      g.fillText(`This layer could not be loaded: ${wsys.failed[fk]}`, 20, 36);
+      g.fillStyle = '#888';
+      g.fillText('Select the layer again to retry, or Regenerate Wall Systems.', 20, 54);
+    } else {
+      g.fillText(wsys.gen ? 'Loading the generated layer…' : 'NOT GENERATED — press "Generate Wall Systems".', 20, 36);
+    }
     return;
   }
   const below = i > 0 && wsys.view.mode === 'orbit' ? (_wsysShown(i - 1) || _wsysEnvelopeOf(i - 1)) : [];

@@ -369,6 +369,20 @@ def _unopened(cuts):
     return [{'op': 'unopen', 'opening': c.get('opening'), 'profile': c.get('profile', '')} for c in moves]
 
 
+def _canon_state(o):
+    """A construction state in canonical JSON form (see DesignLibrary._state_key)."""
+    if isinstance(o, dict):
+        return {str(k): _canon_state(v) for k, v in o.items() if not str(k).startswith('_')}   # ('_…': bookkeeping, no geometry)
+    if isinstance(o, (list, tuple)):
+        return [_canon_state(v) for v in o]
+    if isinstance(o, bool) or o is None or isinstance(o, str):
+        return o
+    if isinstance(o, (int, float)):
+        r = round(float(o), 9)
+        return int(r) if r == int(r) else r
+    return o
+
+
 class DesignLibrary:
     """The set of Layer Designs of one project, resolved on demand.
     Resolution and builds are cached; any edit invalidates the cache."""
@@ -785,10 +799,62 @@ class DesignLibrary:
         return {k: v['polylines'] for k, v in sc.items()}
 
     # -- building (the Designer) ---------------------------------------------------
+    @staticmethod
+    def _state_key(state) -> str:
+        """'|st:<hash>' of a construction state — over a CANONICAL form (floats
+        rounded to 1e-9, integral floats as ints), so the state the page sends
+        back through JavaScript (which writes 2.0 as 2) names the same build."""
+        if not state:
+            return ''
+        import hashlib
+        return '|st:' + hashlib.sha1(json.dumps(_canon_state(state), sort_keys=True,
+                                                separators=(',', ':')).encode()).hexdigest()[:16]
+
+    def _truss_lineage(self, doc) -> bool:
+        """Does this document print an ADAPTIVE TRUSS wall infill? Only the
+        truss still uses the lineage scaffold / reference tracking / local
+        cut join (WALL_ARCHITECTURE.md §Z.3): zigzag / wave webs are planned
+        per layer on the CONSTRUCTION STATE (stage Z4) — on their own without
+        one."""
+        for f in doc.get('infills') or []:
+            if (f.get('kind') or 'wall') == 'wall' and f.get('pattern') == 'truss':
+                return True
+        return any(((w.get('web') or {}).get('pattern') == 'truss') for w in doc.get('wall_systems') or [])
+
+    def topology(self, design_id: str, transforms=None, cuts=None) -> dict:
+        """The CONSTRUCTION TOPOLOGY of a design or variant (§Z.0): every
+        supported web run's face rails, segments, forced motif faces and
+        Pass A stations, plus the host walls' samples
+        (`wall_lattice.plan(topology_only)` merged over the regions) — the
+        per-layer input of the construction chain. No lattice geometry is
+        built; cached like a variant."""
+        import semantic_transform as ST
+        key = ('topology', design_id, ST.spec_key(transforms) if transforms else '[]', _cut_key(cuts))
+        hit = self._tbuilds.get(key)
+        if hit is not None:
+            self._tbuilds.move_to_end(key)
+            return hit
+        doc, _ = self.transformed(design_id, transforms, cuts)
+        layer = self._layer(doc, design_id)
+        layer.topology_only = True
+        _, meta = layer._build_effective()
+        net = meta['network']
+        out = {'topology': net.get('topology') or {'runs': [], 'walls': {}},
+               'identity': net.get('identity')}
+        self._tbuilds[key] = out
+        while len(self._tbuilds) > 256:
+            self._tbuilds.popitem(last=False)
+        return out
+
     def build(self, design_id: str, inherit_lattice: bool = True, transforms=None,
-              cuts=None) -> BuiltLayer:
+              cuts=None, state=None) -> BuiltLayer:
         """Resolve and build a design with the Designer. Wall infills shared
         by a lattice family print the family scaffold (see module doc).
+        state: the CONSTRUCTION STATE of this layer (construction_state.py,
+        stage Z4) — the webs' choices carried from the layer below by the
+        Assembly's chain; the build with it is a variant of its own. Zigzag /
+        wave webs never use the lineage scaffold, the reference tracking or
+        the local cut join any more (truss only).
         transforms: SEMANTIC transforms {source id: (k, tx, ty)} applied to
         the design's source geometry BEFORE resolution (Layer Assembly
         transform groups; semantic_transform.py) — walls, junctions,
@@ -801,7 +867,7 @@ class DesignLibrary:
         cannot close with it is planned on its own (scaffold_verdict)."""
         import semantic_transform as ST
         ckey = _cut_key(cuts)
-        tkey = (ST.spec_key(transforms) if transforms else '[]') + ckey
+        tkey = (ST.spec_key(transforms) if transforms else '[]') + ckey + self._state_key(state)
         key = ('build', design_id, inherit_lattice, tkey)
         if tkey != '[]':
             hit = self._tbuilds.get(key)
@@ -816,6 +882,11 @@ class DesignLibrary:
         doc, trep = self.transformed(design_id, transforms, cuts)
         tm['semantic_transform'] = _t.perf_counter() - t0
         layer = self._layer(doc, design_id)
+        layer.construction_state = state or None
+        if not self._truss_lineage(doc):
+            # zigzag / wave: planned per layer on the construction state (or
+            # on their own) — no lineage scaffold, no tracking, no cut join
+            inherit_lattice = False
         if any(c.get('op') in ('opening', 'extent', 'plane', 'move') for c in cuts or []):
             # generated Wall Systems keep the UNCUT layer's pattern (period,
             # phase, lanes, loop stations) and solve only their new ends
@@ -843,9 +914,9 @@ class DesignLibrary:
                 layer.lattice_identity = self._scaffold_identity(design_id, transforms) or None
         tm['scaffold_resolve_closure_check'] = _t.perf_counter() - t0
         t0 = _t.perf_counter()
-        if tkey != '[]' and not layer.lattice_reference:
-            # a design planned on its own: its transformed lattice keeps the
-            # untransformed plan's stations (cross-Z correspondence)
+        if tkey != '[]' and not layer.lattice_reference and inherit_lattice:
+            # (truss) a design planned on its own: its transformed lattice keeps
+            # the untransformed plan's stations (cross-Z correspondence)
             ref = self.build(design_id, inherit_lattice)
             tmap = _track_map(self.document(design_id), transforms) if _transforms_active(transforms) \
                 else (lambda p: p)

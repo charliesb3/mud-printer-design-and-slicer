@@ -215,6 +215,13 @@ def _resolve_stack(data, lap=lambda name: None, envelope=False) -> dict:
             # exactly like placed ones (support, preview, print plan)
             assembly.objects = list(assembly.objects) + profile_headers(presults)
         lap('profiles')
+    if geo and not envelope:
+        # CONSTRUCTION CHAIN (WALL_ARCHITECTURE.md §Z.0): bottom-up over the
+        # final instances, each layer's webs printing the landings deposited
+        # below (construction_chain.py) — the print adapter builds on it
+        from .construction_chain import run as run_chain
+        res = run_chain(src, res, max_overhang=assembly.max_overhang)
+        lap('construction_chain')
     return {'assembly': assembly, 'res': res, 'res0': res0, 'geo': geo, 'grp': grp, 'src': src, 'presults': presults,
             'targets_out': targets_out, 'targets': targets, 'bead': bead, 'sources_out': sources_out,
             'openings_out': openings_out}
@@ -247,7 +254,7 @@ def _envelope_stack(st):
     src, res = st['src'], st['res']
     geo, key_of, variants = {}, {}, {}
     for i in res.instances:
-        d, tr, cu = variant_request(i)
+        d, tr, cu = variant_request(i)[:3]
         k = key_of[i.index] = src.envelope_key(d, tr or None, cu or None)
         if k in geo:
             continue
@@ -308,6 +315,9 @@ def _resolve_locked(data, T, lap, t_all, envelope=False):
                         'transforms': {s_: list(t) for s_, t in i.transforms().items()},
                         **({'cuts': i.cut_spec(), 'profile': g.diagnostics.get('profile') or []}
                            if i.cuts else {}),
+                        # the CONSTRUCTION STATE this layer's webs were built on (stage Z4):
+                        # the page asks /geometry for exactly this variant
+                        **({'state': i.state} if i.state else {}),
                         'connectors': (g.diagnostics.get('semantic') or {}).get('connectors', []),
                         # DERIVED junctions (forms that merely intersect): recomputed
                         # per layer; present False = the forms have separated here
@@ -404,9 +414,9 @@ def _geometry_locked(data):
         out = {}
         req = data.get('variants') or {}
         tf = lambda v: {s_: tuple(t) for s_, t in (v.get('transforms') or {}).items()}
-        src.prefetch([(v['design_id'], tf(v), v.get('cuts') or None) for v in req.values()])
+        src.prefetch([(v['design_id'], tf(v), v.get('cuts') or None, v.get('state') or None) for v in req.values()])
         for key, v in req.items():
-            g = src.geometry(v['design_id'], tf(v) or None, v.get('cuts') or None)
+            g = src.geometry(v['design_id'], tf(v) or None, v.get('cuts') or None, v.get('state') or None)
             out[key] = {'name': src.info(v['design_id']).name, 'parent': src.info(v['design_id']).parent,
                         'polylines': g.polylines, 'bead_width': g.bead_width, 'sources': g.sources,
                         'variant_of': v['design_id']}
@@ -589,13 +599,20 @@ def _generated_current(data) -> bool:
     if g is None:
         return False
     src = g['src']
-    from .designer_source import _vkey
     for i in g['res'].instances:
-        if i.is_variant:
-            d, tr, cu = variant_request(i)
-            if _vkey(d, tr or None, cu or None) not in getattr(src, '_variants', {}):
-                return False
+        if i.is_variant and _variant_key(i) not in getattr(src, '_variants', {}):
+            return False
     return True
+
+
+def _variant_key(inst):
+    """The print adapter's cache key of a layer's variant — design, transforms,
+    cuts AND its construction state (stage Z4: a stateful layer is a variant
+    keyed by its state; a key without it names a build that never happened)."""
+    from .designer_source import _vkey
+    req = variant_request(inst)
+    d, tr, cu = req[:3]
+    return _vkey(d, tr or None, cu or None, req[3] if len(req) > 3 else None)
 
 
 @bp.route('/api/wallsystems/generate', methods=['POST'])
@@ -818,11 +835,8 @@ def api_wallsystems_layer():
             return jsonify({'error': f'no layer {idx + 1}'}), 400
         inst = insts[idx]
         src = g['src']
-        if inst.is_variant:
-            from .designer_source import _vkey
-            d, tr, cu = variant_request(inst)
-            if _vkey(d, tr or None, cu or None) not in src._variants:
-                return jsonify({'error': 'no longer cached — generate again', 'outdated': True}), 409
+        if inst.is_variant and _variant_key(inst) not in src._variants:
+            return jsonify({'error': 'no longer cached — generate again', 'outdated': True}), 409
         geom = layer_geometry(src, inst)
         polys = _layer_polys(geom)
         return jsonify({'index': idx, 'polylines': polys, 'bead_width': geom.bead_width,

@@ -260,16 +260,23 @@ def transform_document(doc, transforms, atts=None, _maps_only=False) -> tuple:
     """(transformed document, report). transforms: {source id: (k, tx, ty)}.
     atts: attachments(doc) (pass it when transforming the same design for
     many layers)."""
-    transforms = {s: tuple(t) for s, t in (transforms or {}).items() if not _is_identity(tuple(t))}
-    if not transforms:
+    # (with a '*' entry an explicit identity names a source the layer's placement
+    # does NOT move — it stays)
+    keep_id = not _is_identity(tuple((transforms or {}).get('*', ID)))
+    transforms = {s: tuple(t) for s, t in (transforms or {}).items() if keep_id or not _is_identity(tuple(t))}
+    if not transforms:                       # (a '*' entry alone still transforms every source)
         return {} if _maps_only else (doc, {'connectors': [], 'moved': []})
     if atts is None:
         atts = attachments(doc)
     srcs = {d['id']: d for d in doc.get('source_paths') or [] if d.get('id')}
     maps = {}
 
+    whole = transforms.get('*', ID)            # '*': the WHOLE layer's placement (an Assembly plan scale /
+                                               # shift applied as a semantic transform of every source, so the
+                                               # walls are re-resolved at their authored thickness)
+
     def own(sid):
-        return ('sim', transforms.get(sid, ID))
+        return ('sim', transforms.get(sid, whole))
 
     # closed / free sources first; then open sources whose ends are attached
     # (hosts first — a host that is itself a connector is resolved before
@@ -413,6 +420,7 @@ def derived_junctions(doc, tdoc) -> list:
 def spec_key(transforms) -> str:
     """A stable key for a transforms spec (rounded; ints and floats alike —
     a spec sent back by the page has been through JavaScript)."""
+    keep_id = not _is_identity(tuple((transforms or {}).get('*', ID)))       # ('*': an identity entry is a choice)
     items = sorted((s, round(float(t[0]), 12), round(float(t[1]), 9), round(float(t[2]), 9))
-                   for s, t in (transforms or {}).items() if not _is_identity(tuple(t)))
+                   for s, t in (transforms or {}).items() if keep_id or not _is_identity(tuple(t)))
     return json.dumps(items)

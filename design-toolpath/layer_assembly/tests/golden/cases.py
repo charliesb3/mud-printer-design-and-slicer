@@ -45,6 +45,14 @@ PASS_A_2026_10_16 = ('real_test3b', 'syn_circrect_interleaved')
 # re-baselined — the Designer response gained the `identity` report and `junction` ids on junction
 # corners (label keys, harness.LABEL_KEYS); `geom` hashes, `plan` and `.mudjob` were identical.
 IDENTITY_2026_10_17 = 'all designer.* components (labels only)'
+# 2026-10-17 (stages Z3 + Z4, construction through Z — uncommitted, under review): the Assembly's
+# resolve response gained `variants[key].state` and `|st:<hash>` geometry-key suffixes (label keys /
+# stripped: harness._STATE_KEY); `real_testsave2`'s support finding moved by ≤ 0.06 in on one clipped
+# piece boundary (the corner STATION is now the centre-line point nearest the inner corner instead of
+# the nearest 0.25 t sample — a continuous Pass A refinement); every other case's `geom` was identical
+# with and without the construction chain (the golden projects have no transformed / derived zigzag
+# or wave web — the Z1 harness stacks measure those).
+CONSTRUCTION_STATE_2026_10_17 = ('real_testsave2',)
 CHANGES_AT = {
     'syn_branch_at_junction': 'M5', 'syn_branch_across_trim': 'M5',
     'syn_mixed_thickness': 'M6 (Centered: unchanged at M6)', 'real_test3': 'M6 (Auto = Inside host: Line 1 no longer cuts the exterior face)',

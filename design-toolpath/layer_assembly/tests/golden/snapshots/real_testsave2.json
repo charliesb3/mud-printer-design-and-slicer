@@ -9,8 +9,8 @@
   }
  },
  "assembly": {
-  "geom": "497b6d6a7a1470e64a1a593323804a57b01df2d43d42dcbe3b2037903c1ac9c5",
-  "hash": "691f3ced8442eeb80e8883477853976e407759dcc22a2e1af9a28464890840b1",
+  "geom": "8e72f082bbb4a8ca7b94b0d872d60f1d4f24b83a5d9e71cd902e317c402a9c13",
+  "hash": "5bff9d3a750b400591534daeb81878a670f7c32b48ec1ef5cddb7af9d6bfec74",
   "summary": {
    "findings": 2,
    "instances": 73,
@@ -93,17 +93,17 @@
   }
  },
  "mudjob": {
-  "geom": "8f89870aa582d72a18cf30621f8186ac53e839e6fb8ff7507107f2753dcf98b9",
-  "hash": "8f89870aa582d72a18cf30621f8186ac53e839e6fb8ff7507107f2753dcf98b9",
+  "geom": "abb8e593c4f6c490c53aa044aaf35903aad32de6fae7cc4ee04bbd56b6db3d94",
+  "hash": "abb8e593c4f6c490c53aa044aaf35903aad32de6fae7cc4ee04bbd56b6db3d94",
   "summary": {
-   "gcode_lines": 350313,
-   "gcode_sha": "a8295e88b750e1ba",
+   "gcode_lines": 363939,
+   "gcode_sha": "3b55a95f076f70a7",
    "lifts": 7
   }
  },
  "plan": {
-  "geom": "326f379e98361ee9f046c27e8aa49b91e23aedd7189972973e64c6677ee2c8f6",
-  "hash": "64055cab33b5c6754186f234391f44dff1996bc9fff85653fd81b3695161a6d0",
+  "geom": "20bdf26fe65a8efe715605b1a4ac855722b8bde923402e3df3015ddee96c0af9",
+  "hash": "6c9f70fe91a63d1c4c7ddd29026d3019af6559b8c6d9e553956bcef0c79291d5",
   "summary": {
    "estimate": {
     "assumptions": "Estimate from ordered path lengths at constant speeds: printing (incl. any retrace) at the print speed, every non-printing move (travel inside a piece and the transition to the next piece / layer, XY distance) at the travel speed, plus the estimated time of each frame reposition between lifts (if given). Not machine timing: acceleration, cornering, pump response, Z motion (manual today) and pauses are not included.",
@@ -1623,13 +1623,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4767.399306,
-      "print_time": 794.566551,
+      "print_length": 4787.414008,
+      "print_time": 797.902335,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1691.086,
+        "length": 1691.083,
         "sources": [
          "p1",
          "p2"
@@ -1637,11 +1637,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 281.847587
+        "time": 281.847131
        },
        {
         "index": 1,
-        "length": 1311.971,
+        "length": 1319.913,
         "sources": [
          "p1",
          "p2"
@@ -1649,22 +1649,22 @@
         "systems": [
          "WS1"
         ],
-        "time": 218.661838
+        "time": 219.985432
        },
        {
         "index": 2,
-        "length": 1764.343,
+        "length": 1776.419,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 294.057125
+        "time": 296.069772
        }
       ],
       "section_index": 0,
-      "total_time": 829.235907,
+      "total_time": 832.571691,
       "transition_length": 208.016136,
       "travel_length": 0,
       "travel_time": 34.669356
@@ -1696,13 +1696,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4751.426495,
-      "print_time": 791.904416,
+      "print_length": 4769.091278,
+      "print_time": 794.848546,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1687.217,
+        "length": 1687.214,
         "sources": [
          "p1",
          "p2"
@@ -1710,11 +1710,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 281.202777
+        "time": 281.202321
        },
        {
         "index": 1,
-        "length": 1306.427,
+        "length": 1313.299,
         "sources": [
          "p1",
          "p2"
@@ -1722,25 +1722,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 217.737863
+        "time": 218.883114
        },
        {
         "index": 2,
-        "length": 1757.783,
+        "length": 1768.579,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 292.963776
+        "time": 294.763111
        }
       ],
       "section_index": 0,
-      "total_time": 792.103759,
-      "transition_length": 1.196059,
+      "total_time": 795.181091,
+      "transition_length": 1.99527,
       "travel_length": 0,
-      "travel_time": 0.199343
+      "travel_time": 0.332545
      },
      {
       "design_id": "d1",
@@ -1769,13 +1769,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4735.462718,
-      "print_time": 789.243786,
+      "print_length": 4750.930098,
+      "print_time": 791.821683,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1683.348,
+        "length": 1683.345,
         "sources": [
          "p1",
          "p2"
@@ -1783,11 +1783,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 280.557966
+        "time": 280.557512
        },
        {
         "index": 1,
-        "length": 1300.88,
+        "length": 1306.745,
         "sources": [
          "p1",
          "p2"
@@ -1795,25 +1795,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 216.81333
+        "time": 217.790895
        },
        {
         "index": 2,
-        "length": 1751.235,
+        "length": 1760.84,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 291.87249
+        "time": 293.473277
        }
       ],
       "section_index": 0,
-      "total_time": 789.442671,
-      "transition_length": 1.193309,
+      "total_time": 792.023946,
+      "transition_length": 1.213579,
       "travel_length": 0,
-      "travel_time": 0.198885
+      "travel_time": 0.202263
      },
      {
       "design_id": "d1",
@@ -1842,13 +1842,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4718.766363,
-      "print_time": 786.461061,
+      "print_length": 4733.444399,
+      "print_time": 788.9074,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1679.479,
+        "length": 1679.476,
         "sources": [
          "p1",
          "p2"
@@ -1856,11 +1856,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 279.913156
+        "time": 279.912702
        },
        {
         "index": 1,
-        "length": 1295.249,
+        "length": 1300.247,
         "sources": [
          "p1",
          "p2"
@@ -1868,25 +1868,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 215.874877
+        "time": 216.70779
        },
        {
         "index": 2,
-        "length": 1744.038,
+        "length": 1753.721,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 290.673028
+        "time": 292.286908
        }
       ],
       "section_index": 0,
-      "total_time": 786.612557,
-      "transition_length": 0.908982,
+      "total_time": 789.060002,
+      "transition_length": 0.915612,
       "travel_length": 0,
-      "travel_time": 0.151497
+      "travel_time": 0.152602
      },
      {
       "design_id": "d1",
@@ -1915,13 +1915,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4702.893969,
-      "print_time": 783.815661,
+      "print_length": 4715.36156,
+      "print_time": 785.893593,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1675.61,
+        "length": 1675.607,
         "sources": [
          "p1",
          "p2"
@@ -1929,11 +1929,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 279.268345
+        "time": 279.267893
        },
        {
         "index": 1,
-        "length": 1289.728,
+        "length": 1293.835,
         "sources": [
          "p1",
          "p2"
@@ -1941,25 +1941,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 214.95472
+        "time": 215.639177
        },
        {
         "index": 2,
-        "length": 1737.556,
+        "length": 1745.919,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 289.592596
+        "time": 290.986524
        }
       ],
       "section_index": 0,
-      "total_time": 784.023055,
-      "transition_length": 1.244362,
+      "total_time": 786.104991,
+      "transition_length": 1.268383,
       "travel_length": 0,
-      "travel_time": 0.207394
+      "travel_time": 0.211397
      },
      {
       "design_id": "d1",
@@ -1988,13 +1988,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4687.046489,
-      "print_time": 781.174415,
+      "print_length": 4697.421368,
+      "print_time": 782.903561,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1671.741,
+        "length": 1671.738,
         "sources": [
          "p1",
          "p2"
@@ -2002,11 +2002,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 278.623535
+        "time": 278.623083
        },
        {
         "index": 1,
-        "length": 1284.26,
+        "length": 1287.46,
         "sources": [
          "p1",
          "p2"
@@ -2014,25 +2014,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 214.043361
+        "time": 214.576699
        },
        {
         "index": 2,
-        "length": 1731.045,
+        "length": 1738.223,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 288.50752
+        "time": 289.70378
        }
       ],
       "section_index": 0,
-      "total_time": 781.372102,
-      "transition_length": 1.186123,
+      "total_time": 783.105638,
+      "transition_length": 1.212457,
       "travel_length": 0,
-      "travel_time": 0.197687
+      "travel_time": 0.202076
      },
      {
       "design_id": "d1",
@@ -2061,13 +2061,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4671.595827,
-      "print_time": 778.599305,
+      "print_length": 4679.141182,
+      "print_time": 779.856864,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1667.872,
+        "length": 1667.87,
         "sources": [
          "p1",
          "p2"
@@ -2075,11 +2075,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 277.978724
+        "time": 277.978274
        },
        {
         "index": 1,
-        "length": 1278.763,
+        "length": 1281.237,
         "sources": [
          "p1",
          "p2"
@@ -2087,25 +2087,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 213.127216
+        "time": 213.539514
        },
        {
         "index": 2,
-        "length": 1724.96,
+        "length": 1730.034,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 287.493364
+        "time": 288.339076
        }
       ],
       "section_index": 0,
-      "total_time": 778.85805,
-      "transition_length": 1.552473,
+      "total_time": 780.083325,
+      "transition_length": 1.358768,
       "travel_length": 0,
-      "travel_time": 0.258746
+      "travel_time": 0.226461
      },
      {
       "design_id": "d1",
@@ -2134,13 +2134,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4655.041908,
-      "print_time": 775.840318,
+      "print_length": 4662.130589,
+      "print_time": 777.021765,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1664.003,
+        "length": 1664.001,
         "sources": [
          "p1",
          "p2"
@@ -2148,11 +2148,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 277.333914
+        "time": 277.333464
        },
        {
         "index": 1,
-        "length": 1273.202,
+        "length": 1275.126,
         "sources": [
          "p1",
          "p2"
@@ -2160,22 +2160,22 @@
         "systems": [
          "WS1"
         ],
-        "time": 212.200315
+        "time": 212.521
        },
        {
         "index": 2,
-        "length": 1717.837,
+        "length": 1723.004,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 286.30609
+        "time": 287.167301
        }
       ],
       "section_index": 0,
-      "total_time": 775.991197,
+      "total_time": 777.172643,
       "transition_length": 0.905271,
       "travel_length": 0,
       "travel_time": 0.150879
@@ -2207,13 +2207,13 @@
         "stage": 7
        }
       ],
-      "print_length": 4639.651473,
-      "print_time": 773.275245,
+      "print_length": 4644.335363,
+      "print_time": 774.055894,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1660.135,
+        "length": 1660.132,
         "sources": [
          "p1",
          "p2"
@@ -2221,11 +2221,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 276.689103
+        "time": 276.688655
        },
        {
         "index": 1,
-        "length": 1267.73,
+        "length": 1269.119,
         "sources": [
          "p1",
          "p2"
@@ -2233,22 +2233,22 @@
         "systems": [
          "WS1"
         ],
-        "time": 211.28841
+        "time": 211.519871
        },
        {
         "index": 2,
-        "length": 1711.786,
+        "length": 1715.084,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 285.297732
+        "time": 285.847368
        }
       ],
       "section_index": 0,
-      "total_time": 773.5348,
+      "total_time": 774.315448,
       "transition_length": 1.557327,
       "travel_length": 0,
       "travel_time": 0.259554
@@ -2280,24 +2280,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4623.566327,
-      "print_time": 770.594388,
+      "print_length": 4627.346604,
+      "print_time": 771.224434,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1705.366,
+        "length": 1707.752,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 284.22759
+        "time": 284.625302
        },
        {
         "index": 1,
-        "length": 1261.935,
+        "length": 1263.332,
         "sources": [
          "p1",
          "p2"
@@ -2305,11 +2305,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 210.322505
+        "time": 210.555287
        },
        {
         "index": 2,
-        "length": 1656.266,
+        "length": 1656.263,
         "sources": [
          "p1",
          "p2"
@@ -2317,14 +2317,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 276.044293
+        "time": 276.043845
        }
       ],
       "section_index": 0,
-      "total_time": 812.772384,
-      "transition_length": 253.067976,
+      "total_time": 813.801861,
+      "transition_length": 255.464564,
       "travel_length": 0,
-      "travel_time": 42.177996
+      "travel_time": 42.577427
      },
      {
       "design_id": "d1",
@@ -2353,24 +2353,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4607.140208,
-      "print_time": 767.856701,
+      "print_length": 4610.730827,
+      "print_time": 768.455138,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1698.299,
+        "length": 1700.857,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 283.04986
+        "time": 283.476244
        },
        {
         "index": 1,
-        "length": 1256.444,
+        "length": 1257.479,
         "sources": [
          "p1",
          "p2"
@@ -2378,11 +2378,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 209.407359
+        "time": 209.579858
        },
        {
         "index": 2,
-        "length": 1652.397,
+        "length": 1652.394,
         "sources": [
          "p1",
          "p2"
@@ -2390,14 +2390,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 275.399482
+        "time": 275.399036
        }
       ],
       "section_index": 0,
-      "total_time": 768.375569,
-      "transition_length": 3.113204,
+      "total_time": 768.715785,
+      "transition_length": 1.563881,
       "travel_length": 0,
-      "travel_time": 0.518867
+      "travel_time": 0.260647
      },
      {
       "design_id": "d1",
@@ -2426,24 +2426,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4592.17611,
-      "print_time": 765.362685,
+      "print_length": 4593.833541,
+      "print_time": 765.638924,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1692.285,
+        "length": 1693.568,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 282.047513
+        "time": 282.261256
        },
        {
         "index": 1,
-        "length": 1251.363,
+        "length": 1251.741,
         "sources": [
          "p1",
          "p2"
@@ -2451,11 +2451,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 208.560501
+        "time": 208.623442
        },
        {
         "index": 2,
-        "length": 1648.528,
+        "length": 1648.525,
         "sources": [
          "p1",
          "p2"
@@ -2463,14 +2463,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 274.754671
+        "time": 274.754226
        }
       ],
       "section_index": 0,
-      "total_time": 765.783851,
-      "transition_length": 2.526993,
+      "total_time": 766.057999,
+      "transition_length": 2.514454,
       "travel_length": 0,
-      "travel_time": 0.421166
+      "travel_time": 0.419076
      },
      {
       "design_id": "d1",
@@ -2499,24 +2499,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4576.464615,
-      "print_time": 762.744102,
+      "print_length": 4577.452392,
+      "print_time": 762.908732,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1685.86,
+        "length": 1686.67,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 280.976673
+        "time": 281.111706
        },
        {
         "index": 1,
-        "length": 1245.945,
+        "length": 1246.126,
         "sources": [
          "p1",
          "p2"
@@ -2524,11 +2524,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 207.657569
+        "time": 207.687609
        },
        {
         "index": 2,
-        "length": 1644.659,
+        "length": 1644.656,
         "sources": [
          "p1",
          "p2"
@@ -2536,14 +2536,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 274.109861
+        "time": 274.109417
        }
       ],
       "section_index": 0,
-      "total_time": 763.039134,
-      "transition_length": 1.770188,
+      "total_time": 763.204008,
+      "transition_length": 1.771655,
       "travel_length": 0,
-      "travel_time": 0.295031
+      "travel_time": 0.295276
      },
      {
       "design_id": "d1",
@@ -2572,24 +2572,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4560.303942,
-      "print_time": 760.050657,
+      "print_length": 4561.181909,
+      "print_time": 760.196985,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1679.325,
+        "length": 1679.892,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 279.887447
+        "time": 279.982073
        },
        {
         "index": 1,
-        "length": 1240.189,
+        "length": 1240.502,
         "sources": [
          "p1",
          "p2"
@@ -2597,11 +2597,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 206.69816
+        "time": 206.750304
        },
        {
         "index": 2,
-        "length": 1640.79,
+        "length": 1640.788,
         "sources": [
          "p1",
          "p2"
@@ -2609,14 +2609,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 273.46505
+        "time": 273.464607
        }
       ],
       "section_index": 0,
-      "total_time": 760.298726,
-      "transition_length": 1.488414,
+      "total_time": 760.446864,
+      "transition_length": 1.499276,
       "travel_length": 0,
-      "travel_time": 0.248069
+      "travel_time": 0.249879
      },
      {
       "design_id": "d1",
@@ -2645,24 +2645,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4544.663427,
-      "print_time": 757.443905,
+      "print_length": 4545.145943,
+      "print_time": 757.524324,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1672.927,
+        "length": 1673.235,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 278.821142
+        "time": 278.872456
        },
        {
         "index": 1,
-        "length": 1234.815,
+        "length": 1234.992,
         "sources": [
          "p1",
          "p2"
@@ -2670,11 +2670,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 205.802523
+        "time": 205.83207
        },
        {
         "index": 2,
-        "length": 1636.921,
+        "length": 1636.919,
         "sources": [
          "p1",
          "p2"
@@ -2682,14 +2682,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 272.82024
+        "time": 272.819798
        }
       ],
       "section_index": 0,
-      "total_time": 757.745504,
-      "transition_length": 1.809596,
+      "total_time": 757.828189,
+      "transition_length": 1.82319,
       "travel_length": 0,
-      "travel_time": 0.301599
+      "travel_time": 0.303865
      },
      {
       "design_id": "d1",
@@ -2718,24 +2718,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4529.384176,
-      "print_time": 754.897363,
+      "print_length": 4529.321324,
+      "print_time": 754.886887,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1666.541,
+        "length": 1666.67,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 277.7569
+        "time": 277.77827
        },
        {
         "index": 1,
-        "length": 1229.79,
+        "length": 1229.602,
         "sources": [
          "p1",
          "p2"
@@ -2743,11 +2743,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.965034
+        "time": 204.933629
        },
        {
         "index": 2,
-        "length": 1633.053,
+        "length": 1633.05,
         "sources": [
          "p1",
          "p2"
@@ -2755,14 +2755,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 272.175429
+        "time": 272.174988
        }
       ],
       "section_index": 0,
-      "total_time": 755.25323,
-      "transition_length": 2.135202,
+      "total_time": 755.392846,
+      "transition_length": 3.035754,
       "travel_length": 0,
-      "travel_time": 0.355867
+      "travel_time": 0.505959
      },
      {
       "design_id": "d1",
@@ -2791,24 +2791,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4518.653616,
-      "print_time": 753.108936,
+      "print_length": 4518.590913,
+      "print_time": 753.098486,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1662.593,
+        "length": 1662.721,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 277.098866
+        "time": 277.120186
        },
        {
         "index": 1,
-        "length": 1226.877,
+        "length": 1226.689,
         "sources": [
          "p1",
          "p2"
@@ -2816,11 +2816,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.479451
+        "time": 204.448121
        },
        {
         "index": 2,
-        "length": 1629.184,
+        "length": 1629.181,
         "sources": [
          "p1",
          "p2"
@@ -2828,14 +2828,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 271.530619
+        "time": 271.530179
        }
       ],
       "section_index": 0,
-      "total_time": 753.284394,
-      "transition_length": 1.052745,
+      "total_time": 753.273994,
+      "transition_length": 1.053051,
       "travel_length": 0,
-      "travel_time": 0.175458
+      "travel_time": 0.175508
      },
      {
       "design_id": "d1",
@@ -2864,24 +2864,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4512.439496,
-      "print_time": 752.073249,
+      "print_length": 4512.91859,
+      "print_time": 752.153098,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1661.065,
+        "length": 1661.371,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 276.844161
+        "time": 276.895112
        },
        {
         "index": 1,
-        "length": 1226.06,
+        "length": 1226.236,
         "sources": [
          "p1",
          "p2"
@@ -2889,11 +2889,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.34328
+        "time": 204.372618
        },
        {
         "index": 2,
-        "length": 1625.315,
+        "length": 1625.312,
         "sources": [
          "p1",
          "p2"
@@ -2901,14 +2901,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 270.885808
+        "time": 270.885369
        }
       ],
       "section_index": 0,
-      "total_time": 752.326074,
-      "transition_length": 1.516946,
+      "total_time": 752.334687,
+      "transition_length": 1.089531,
       "travel_length": 0,
-      "travel_time": 0.252824
+      "travel_time": 0.181588
      },
      {
       "design_id": "d1",
@@ -2937,24 +2937,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4506.53963,
-      "print_time": 751.089938,
+      "print_length": 4507.407246,
+      "print_time": 751.234541,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1659.526,
+        "length": 1660.087,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 276.587676
+        "time": 276.681187
        },
        {
         "index": 1,
-        "length": 1225.568,
+        "length": 1225.877,
         "sources": [
          "p1",
          "p2"
@@ -2962,11 +2962,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.261265
+        "time": 204.312794
        },
        {
         "index": 2,
-        "length": 1621.446,
+        "length": 1621.443,
         "sources": [
          "p1",
          "p2"
@@ -2974,14 +2974,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 270.240998
+        "time": 270.24056
        }
       ],
       "section_index": 0,
-      "total_time": 751.329757,
-      "transition_length": 1.438914,
+      "total_time": 751.416973,
+      "transition_length": 1.094594,
       "travel_length": 0,
-      "travel_time": 0.239819
+      "travel_time": 0.182432
      },
      {
       "design_id": "d1",
@@ -3010,24 +3010,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4501.105529,
-      "print_time": 750.184255,
+      "print_length": 4502.077041,
+      "print_time": 750.346173,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1658.1,
+        "length": 1658.896,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 276.349926
+        "time": 276.482736
        },
        {
         "index": 1,
-        "length": 1225.429,
+        "length": 1225.606,
         "sources": [
          "p1",
          "p2"
@@ -3035,11 +3035,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.238142
+        "time": 204.267688
        },
        {
         "index": 2,
-        "length": 1617.577,
+        "length": 1617.575,
         "sources": [
          "p1",
          "p2"
@@ -3047,14 +3047,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 269.596187
+        "time": 269.59575
        }
       ],
       "section_index": 0,
-      "total_time": 750.457399,
-      "transition_length": 1.638868,
+      "total_time": 750.522667,
+      "transition_length": 1.058961,
       "travel_length": 0,
-      "travel_time": 0.273145
+      "travel_time": 0.176493
      },
      {
       "design_id": "d1",
@@ -3083,24 +3083,24 @@
         "stage": 10
        }
       ],
-      "print_length": 4495.181391,
-      "print_time": 749.196898,
+      "print_length": 4496.803814,
+      "print_time": 749.467302,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1656.541,
+        "length": 1657.796,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 276.090181
+        "time": 276.299409
        },
        {
         "index": 1,
-        "length": 1224.932,
+        "length": 1225.302,
         "sources": [
          "p1",
          "p2"
@@ -3108,11 +3108,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.155341
+        "time": 204.216953
        },
        {
         "index": 2,
-        "length": 1613.708,
+        "length": 1613.706,
         "sources": [
          "p1",
          "p2"
@@ -3120,14 +3120,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 268.951377
+        "time": 268.950941
        }
       ],
       "section_index": 0,
-      "total_time": 749.438974,
-      "transition_length": 1.452451,
+      "total_time": 749.743072,
+      "transition_length": 1.654621,
       "travel_length": 0,
-      "travel_time": 0.242075
+      "travel_time": 0.27577
      },
      {
       "design_id": "d1",
@@ -3156,13 +3156,13 @@
         "stage": 13
        }
       ],
-      "print_length": 4488.483273,
-      "print_time": 748.080546,
+      "print_length": 4491.981415,
+      "print_time": 748.663569,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1609.839,
+        "length": 1609.837,
         "sources": [
          "p1",
          "p2"
@@ -3170,11 +3170,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 268.306566
+        "time": 268.306131
        },
        {
         "index": 1,
-        "length": 1224.084,
+        "length": 1225.093,
         "sources": [
          "p1",
          "p2"
@@ -3182,25 +3182,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 204.014071
+        "time": 204.182127
        },
        {
         "index": 2,
-        "length": 1654.559,
+        "length": 1657.052,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 275.759909
+        "time": 276.175311
        }
       ],
       "section_index": 0,
-      "total_time": 788.243949,
-      "transition_length": 240.980423,
+      "total_time": 788.895168,
+      "transition_length": 241.38959,
       "travel_length": 0,
-      "travel_time": 40.163404
+      "travel_time": 40.231598
      },
      {
       "design_id": "d1",
@@ -3229,13 +3229,13 @@
         "stage": 13
        }
       ],
-      "print_length": 4483.164162,
-      "print_time": 747.194027,
+      "print_length": 4486.829645,
+      "print_time": 747.804941,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1605.971,
+        "length": 1605.968,
         "sources": [
          "p1",
          "p2"
@@ -3243,11 +3243,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 267.661755
+        "time": 267.661322
        },
        {
         "index": 1,
-        "length": 1223.614,
+        "length": 1224.969,
         "sources": [
          "p1",
          "p2"
@@ -3255,25 +3255,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 203.935718
+        "time": 204.16143
        },
        {
         "index": 2,
-        "length": 1653.579,
+        "length": 1655.893,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 275.596554
+        "time": 275.982189
        }
       ],
       "section_index": 0,
-      "total_time": 747.316351,
-      "transition_length": 0.733944,
+      "total_time": 747.938725,
+      "transition_length": 0.802705,
       "travel_length": 0,
-      "travel_time": 0.122324
+      "travel_time": 0.133784
      },
      {
       "design_id": "d1",
@@ -3302,13 +3302,13 @@
         "stage": 13
        }
       ],
-      "print_length": 4477.464229,
-      "print_time": 746.244038,
+      "print_length": 4481.984385,
+      "print_time": 746.997398,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1602.102,
+        "length": 1602.099,
         "sources": [
          "p1",
          "p2"
@@ -3316,11 +3316,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 267.016945
+        "time": 267.016512
        },
        {
         "index": 1,
-        "length": 1223.415,
+        "length": 1224.755,
         "sources": [
          "p1",
          "p2"
@@ -3328,25 +3328,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 203.902449
+        "time": 204.125819
        },
        {
         "index": 2,
-        "length": 1651.948,
+        "length": 1655.13,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 275.324644
+        "time": 275.855067
        }
       ],
       "section_index": 0,
-      "total_time": 746.377785,
-      "transition_length": 0.802483,
+      "total_time": 747.131182,
+      "transition_length": 0.802705,
       "travel_length": 0,
-      "travel_time": 0.133747
+      "travel_time": 0.133784
      },
      {
       "design_id": "d1",
@@ -3375,13 +3375,13 @@
         "stage": 13
        }
       ],
-      "print_length": 4471.048752,
-      "print_time": 745.174792,
+      "print_length": 4477.857249,
+      "print_time": 746.309542,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1598.233,
+        "length": 1598.23,
         "sources": [
          "p1",
          "p2"
@@ -3389,11 +3389,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 266.372134
+        "time": 266.371703
        },
        {
         "index": 1,
-        "length": 1222.878,
+        "length": 1224.726,
         "sources": [
          "p1",
          "p2"
@@ -3401,25 +3401,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 203.812978
+        "time": 204.120988
        },
        {
         "index": 2,
-        "length": 1649.938,
+        "length": 1654.901,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 274.98968
+        "time": 275.816851
        }
       ],
       "section_index": 0,
-      "total_time": 745.285701,
-      "transition_length": 0.665451,
+      "total_time": 746.443326,
+      "transition_length": 0.802705,
       "travel_length": 0,
-      "travel_time": 0.110908
+      "travel_time": 0.133784
      },
      {
       "design_id": "d1",
@@ -3448,13 +3448,13 @@
         "stage": 13
        }
       ],
-      "print_length": 4465.703844,
-      "print_time": 744.283974,
+      "print_length": 4472.916651,
+      "print_time": 745.486108,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 1594.364,
+        "length": 1594.361,
         "sources": [
          "p1",
          "p2"
@@ -3462,11 +3462,11 @@
         "systems": [
          "WS1"
         ],
-        "time": 265.727324
+        "time": 265.726893
        },
        {
         "index": 1,
-        "length": 1222.404,
+        "length": 1224.769,
         "sources": [
          "p1",
          "p2"
@@ -3474,25 +3474,25 @@
         "systems": [
          "WS1"
         ],
-        "time": 203.734027
+        "time": 204.128153
        },
        {
         "index": 2,
-        "length": 1648.936,
+        "length": 1653.786,
         "sources": [
          "p2"
         ],
         "systems": [
          "WS1"
         ],
-        "time": 274.822623
+        "time": 275.631062
        }
       ],
       "section_index": 0,
-      "total_time": 744.406397,
-      "transition_length": 0.734538,
+      "total_time": 745.619893,
+      "transition_length": 0.802705,
       "travel_length": 0,
-      "travel_time": 0.122423
+      "travel_time": 0.133784
      },
      {
       "design_id": "base",
@@ -3507,13 +3507,13 @@
         "stage": 14
        }
       ],
-      "print_length": 4879.479222,
-      "print_time": 813.246537,
+      "print_length": 4890.055573,
+      "print_time": 815.009262,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 4879.479,
+        "length": 4890.056,
         "sources": [
          "p1",
          "p2"
@@ -3521,14 +3521,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 813.246537
+        "time": 815.009262
        }
       ],
       "section_index": 1,
-      "total_time": 813.290261,
-      "transition_length": 0.262346,
+      "total_time": 815.034882,
+      "transition_length": 0.153717,
       "travel_length": 0,
-      "travel_time": 0.043724
+      "travel_time": 0.025619
      },
      {
       "design_id": "base",
@@ -3543,13 +3543,13 @@
         "stage": 14
        }
       ],
-      "print_length": 4873.087594,
-      "print_time": 812.181266,
+      "print_length": 4883.91618,
+      "print_time": 813.98603,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 4873.088,
+        "length": 4883.916,
         "sources": [
          "p1",
          "p2"
@@ -3557,14 +3557,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 812.181266
+        "time": 813.98603
        }
       ],
       "section_index": 1,
-      "total_time": 812.250362,
-      "transition_length": 0.414578,
+      "total_time": 814.03522,
+      "transition_length": 0.295142,
       "travel_length": 0,
-      "travel_time": 0.069096
+      "travel_time": 0.04919
      },
      {
       "design_id": "base",
@@ -3579,13 +3579,13 @@
         "stage": 14
        }
       ],
-      "print_length": 4865.581814,
-      "print_time": 810.930302,
+      "print_length": 4879.600003,
+      "print_time": 813.266667,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 4865.582,
+        "length": 4879.6,
         "sources": [
          "p1",
          "p2"
@@ -3593,14 +3593,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 810.930302
+        "time": 813.266667
        }
       ],
       "section_index": 1,
-      "total_time": 810.978348,
-      "transition_length": 0.288272,
+      "total_time": 813.311654,
+      "transition_length": 0.269923,
       "travel_length": 0,
-      "travel_time": 0.048045
+      "travel_time": 0.044987
      },
      {
       "design_id": "base",
@@ -3615,13 +3615,13 @@
         "stage": 14
        }
       ],
-      "print_length": 4859.016104,
-      "print_time": 809.836017,
+      "print_length": 4873.424749,
+      "print_time": 812.237458,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 4859.016,
+        "length": 4873.425,
         "sources": [
          "p1",
          "p2"
@@ -3629,14 +3629,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 809.836017
+        "time": 812.237458
        }
       ],
       "section_index": 1,
-      "total_time": 809.861394,
-      "transition_length": 0.152258,
+      "total_time": 812.28659,
+      "transition_length": 0.294789,
       "travel_length": 0,
-      "travel_time": 0.025376
+      "travel_time": 0.049131
      },
      {
       "design_id": "base",
@@ -3651,13 +3651,13 @@
         "stage": 14
        }
       ],
-      "print_length": 4851.314568,
-      "print_time": 808.552428,
+      "print_length": 4869.254484,
+      "print_time": 811.542414,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 4851.315,
+        "length": 4869.254,
         "sources": [
          "p1",
          "p2"
@@ -3665,14 +3665,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 808.552428
+        "time": 811.542414
        }
       ],
       "section_index": 1,
-      "total_time": 808.594069,
-      "transition_length": 0.249846,
+      "total_time": 811.588166,
+      "transition_length": 0.274511,
       "travel_length": 0,
-      "travel_time": 0.041641
+      "travel_time": 0.045752
      },
      {
       "design_id": "base",
@@ -3687,13 +3687,13 @@
         "stage": 14
        }
       ],
-      "print_length": 4868.370047,
-      "print_time": 811.395008,
+      "print_length": 4862.970233,
+      "print_time": 810.495039,
       "retrace_length": 0,
       "runs": [
        {
         "index": 0,
-        "length": 4868.37,
+        "length": 4862.97,
         "sources": [
          "p1",
          "p2"
@@ -3701,14 +3701,14 @@
         "systems": [
          "WS1"
         ],
-        "time": 811.395008
+        "time": 810.495039
        }
       ],
       "section_index": 1,
-      "total_time": 811.42042,
-      "transition_length": 0.152471,
+      "total_time": 810.542953,
+      "transition_length": 0.287486,
       "travel_length": 0,
-      "travel_time": 0.025412
+      "travel_time": 0.047914
      },
      {
       "design_id": "base",
@@ -3741,10 +3741,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 809.600987,
-      "transition_length": 0.992677,
+      "total_time": 809.49153,
+      "transition_length": 0.33594,
       "travel_length": 0,
-      "travel_time": 0.165446
+      "travel_time": 0.05599
      },
      {
       "design_id": "base",
@@ -3777,10 +3777,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 807.485513,
-      "transition_length": 0.288469,
+      "total_time": 807.484728,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -3813,10 +3813,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 805.487407,
-      "transition_length": 0.288469,
+      "total_time": 805.486622,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -3849,10 +3849,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 803.489301,
-      "transition_length": 0.288469,
+      "total_time": 803.488516,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -3885,10 +3885,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 801.491195,
-      "transition_length": 0.288469,
+      "total_time": 801.49041,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -3921,10 +3921,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 799.493088,
-      "transition_length": 0.288469,
+      "total_time": 799.492304,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -3957,10 +3957,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 797.494982,
-      "transition_length": 0.288469,
+      "total_time": 797.494198,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -3993,10 +3993,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 795.496876,
-      "transition_length": 0.288469,
+      "total_time": 795.496092,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -4029,10 +4029,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 793.49877,
-      "transition_length": 0.288469,
+      "total_time": 793.497986,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -4065,10 +4065,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 791.500664,
-      "transition_length": 0.288469,
+      "total_time": 791.49988,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -4101,10 +4101,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 789.502558,
-      "transition_length": 0.288469,
+      "total_time": 789.501774,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -4137,10 +4137,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 787.504452,
-      "transition_length": 0.288469,
+      "total_time": 787.503667,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -4173,10 +4173,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 785.506346,
-      "transition_length": 0.288469,
+      "total_time": 785.505561,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      },
      {
       "design_id": "base",
@@ -4209,10 +4209,10 @@
        }
       ],
       "section_index": 1,
-      "total_time": 783.50824,
-      "transition_length": 0.288469,
+      "total_time": 783.507455,
+      "transition_length": 0.283761,
       "travel_length": 0,
-      "travel_time": 0.048078
+      "travel_time": 0.047293
      }
     ],
     "lifts": [
@@ -4276,7 +4276,7 @@
       "last_layer": 35,
       "layers": 12,
       "passes": 33,
-      "print_time": 9462.589307,
+      "print_time": 9480.92019,
       "reposition_in": {
        "at": [
         178.24523,
@@ -4295,8 +4295,8 @@
        6,
        7
       ],
-      "total_time": 9505.909987,
-      "travel_time": 43.32068,
+      "total_time": 9524.354664,
+      "travel_time": 43.434473,
       "z_bottom": 36.0,
       "z_top": 54.0
      },
@@ -4309,7 +4309,7 @@
       "last_layer": 47,
       "layers": 12,
       "passes": 36,
-      "print_time": 9094.603078,
+      "print_time": 9097.135024,
       "reposition_in": {
        "at": [
         349.3485,
@@ -4327,8 +4327,8 @@
        9,
        10
       ],
-      "total_time": 9140.104994,
-      "travel_time": 45.501916,
+      "total_time": 9142.738946,
+      "travel_time": 45.603922,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -4341,7 +4341,7 @@
       "last_layer": 59,
       "layers": 12,
       "passes": 22,
-      "print_time": 9406.554475,
+      "print_time": 9421.233968,
       "reposition_in": {
        "at": [
         179.22728,
@@ -4360,8 +4360,8 @@
        13,
        14
       ],
-      "total_time": 9447.626023,
-      "travel_time": 41.071548,
+      "total_time": 9462.319288,
+      "travel_time": 41.08532,
       "z_bottom": 72.0,
       "z_top": 90.0
      },
@@ -4377,8 +4377,8 @@
       "print_time": 9557.374214,
       "reposition_in": {
        "at": [
-        135.89898,
-        114.14908
+        135.72513,
+        116.49144
        ],
        "frame_z_from": 72.0,
        "frame_z_to": 90.0,
@@ -4390,8 +4390,8 @@
       "stages": [
        15
       ],
-      "total_time": 9557.951153,
-      "travel_time": 0.576939,
+      "total_time": 9557.941736,
+      "travel_time": 0.567522,
       "z_bottom": 90.0,
       "z_top": 108.0
      },
@@ -4407,8 +4407,8 @@
       "print_time": 783.460162,
       "reposition_in": {
        "at": [
-        137.68803,
-        117.11256
+        137.51932,
+        119.38554
        ],
        "frame_z_from": 90.0,
        "frame_z_to": 108.0,
@@ -4420,34 +4420,34 @@
       "stages": [
        16
       ],
-      "total_time": 783.50824,
-      "travel_time": 0.048078,
+      "total_time": 783.507455,
+      "travel_time": 0.047293,
       "z_bottom": 108.0,
       "z_top": 109.5
      }
     ],
-    "print_length": 348950.652413,
-    "print_time": 58158.442069,
+    "print_length": 349163.906346,
+    "print_time": 58193.984391,
     "retrace_length": 0.0,
     "runs": 152,
     "sections": [
      {
       "index": 0,
       "layers": 53,
-      "print_length": 252852.183563,
-      "print_time": 42142.030594,
-      "total_time": 42288.481477,
-      "travel_length": 878.705301,
-      "travel_time": 146.450883
+      "print_length": 253003.065624,
+      "print_time": 42167.177604,
+      "total_time": 42313.958215,
+      "travel_length": 880.683668,
+      "travel_time": 146.780611
      },
      {
       "index": 1,
       "layers": 20,
-      "print_length": 96098.46885,
-      "print_time": 16016.411475,
-      "total_time": 16017.455233,
-      "travel_length": 6.262548,
-      "travel_time": 1.043758
+      "print_length": 96160.840722,
+      "print_time": 16026.806787,
+      "total_time": 16027.740187,
+      "travel_length": 5.600397,
+      "travel_time": 0.9334
      }
     ],
     "speeds": {
@@ -4595,8 +4595,8 @@
        58,
        59
       ],
-      "print_time": 3362.826733,
-      "total_time": 3363.432981,
+      "print_time": 3362.822659,
+      "total_time": 3363.428907,
       "travel_time": 0.606248,
       "z_bottom": 36.0,
       "z_top": 54.0
@@ -4643,8 +4643,8 @@
        70,
        71
       ],
-      "print_time": 1934.70193,
-      "total_time": 1935.026211,
+      "print_time": 1941.163491,
+      "total_time": 1941.487771,
       "travel_time": 0.324281,
       "z_bottom": 40.5,
       "z_top": 54.0
@@ -4671,9 +4671,9 @@
        79,
        80
       ],
-      "print_time": 2606.76372,
-      "total_time": 2642.278094,
-      "travel_time": 35.514374,
+      "print_time": 2618.637117,
+      "total_time": 2654.265284,
+      "travel_time": 35.628167,
       "z_bottom": 40.5,
       "z_top": 54.0
      },
@@ -4700,9 +4700,9 @@
        91,
        92
       ],
-      "print_time": 3349.737934,
-      "total_time": 3351.180831,
-      "travel_time": 1.442896,
+      "print_time": 3351.585938,
+      "total_time": 3352.732881,
+      "travel_time": 1.146943,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -4729,9 +4729,9 @@
        103,
        104
       ],
-      "print_time": 2474.891129,
-      "total_time": 2480.201944,
-      "travel_time": 5.310815,
+      "print_time": 2475.580372,
+      "total_time": 2481.303142,
+      "travel_time": 5.72277,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -4758,9 +4758,9 @@
        115,
        116
       ],
-      "print_time": 3269.974015,
-      "total_time": 3308.72222,
-      "travel_time": 38.748205,
+      "print_time": 3269.968714,
+      "total_time": 3308.702923,
+      "travel_time": 38.734209,
       "z_bottom": 54.0,
       "z_top": 72.0
      },
@@ -4780,8 +4780,8 @@
        120,
        121
       ],
-      "print_time": 1335.084725,
-      "total_time": 1335.337328,
+      "print_time": 1335.08256,
+      "total_time": 1335.335164,
       "travel_time": 0.252603,
       "z_bottom": 72.0,
       "z_top": 79.5
@@ -4802,8 +4802,8 @@
        125,
        126
       ],
-      "print_time": 1019.399242,
-      "total_time": 1026.267806,
+      "print_time": 1020.718517,
+      "total_time": 1027.587081,
       "travel_time": 6.868563,
       "z_bottom": 72.0,
       "z_top": 79.5
@@ -4824,9 +4824,9 @@
        130,
        131
       ],
-      "print_time": 1376.49341,
-      "total_time": 1410.02505,
-      "travel_time": 33.53164,
+      "print_time": 1379.46048,
+      "total_time": 1413.106049,
+      "travel_time": 33.645568,
       "z_bottom": 72.0,
       "z_top": 79.5
      },
@@ -4852,9 +4852,9 @@
        137,
        138
       ],
-      "print_time": 5675.577099,
-      "total_time": 5675.99584,
-      "travel_time": 0.418741,
+      "print_time": 5685.972411,
+      "total_time": 5686.290995,
+      "travel_time": 0.318584,
       "z_bottom": 79.5,
       "z_top": 90.0
      },
@@ -4882,8 +4882,8 @@
        150
       ],
       "print_time": 9557.374214,
-      "total_time": 9557.951153,
-      "travel_time": 0.576939,
+      "total_time": 9557.941736,
+      "travel_time": 0.567522,
       "z_bottom": 90.0,
       "z_top": 108.0
      },
@@ -4900,16 +4900,16 @@
        151
       ],
       "print_time": 783.460162,
-      "total_time": 783.50824,
-      "travel_time": 0.048078,
+      "total_time": 783.507455,
+      "travel_time": 0.047293,
       "z_bottom": 108.0,
       "z_top": 109.5
      }
     ],
-    "total_time": 58305.93671,
-    "transition_length": 884.967848,
+    "total_time": 58341.698402,
+    "transition_length": 886.284065,
     "travel_length": 0.0,
-    "travel_time": 147.494641
+    "travel_time": 147.714011
    },
    "layers": 73
   }

@@ -25,7 +25,7 @@ def q(h, dx=0.0, dy=0.0, s=0.0, d='A'):
 
 
 def tfs(res):
-    return [i.transform for i in res.instances]
+    return [i.placement for i in res.instances]          # (the effective placement: a plan scale is semantic, Z.9)
 
 
 def test_zero_transform_is_identity_everywhere():

@@ -619,7 +619,8 @@ async function _asmResolveOnce(gen) {
     // the request: without it the backend returns the uncut design.)
     const need = {};
     for (const [k, v] of Object.entries(res.variants || {}))
-      if (!asm.variants[k]) need[k] = { design_id: v.design_id, transforms: v.transforms, cuts: v.cuts || [] };
+      if (!asm.variants[k]) need[k] = { design_id: v.design_id, transforms: v.transforms, cuts: v.cuts || [],
+                                        ...(v.state ? { state: v.state } : {}) };   // (construction state, stage Z4)
     const t1 = T ? performance.now() : 0;
     if (Object.keys(need).length) {
       const r = await _asmPost('/api/assembly/geometry', { designs, variants: need, envelope: true,

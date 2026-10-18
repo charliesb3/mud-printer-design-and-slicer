@@ -189,7 +189,7 @@ def test_profiles_never_change_placements():
     a1 = Assembly(1.5, [Section('A', 72, '', tf)], profiles=[p])
     r0 = resolve(a0, ['A'], fps)
     r1, _ = apply_profiles(resolve(a1, ['A'], fps), a1.profiles, TG, BEAD, H)
-    assert [i.transform for i in r0.instances] == [i.transform for i in r1.instances]
+    assert [i.placement for i in r0.instances] == [i.placement for i in r1.instances]
     assert any(i.cuts for i in r1.instances)
     k = next(i for i in r1.instances if i.cuts)
     assert k.geometry_key.startswith('A|cut:') and k.is_variant
@@ -292,7 +292,7 @@ def test_taper_coexists_with_an_assembly_transform():
     plain = apply_profiles(resolve(Assembly(1.5, [Section('A', 72)], profiles=[p]), ['A'], fps), [p], TG, BEAD, H)
     moved = apply_profiles(resolve(Assembly(1.5, [Section('A', 72, '', tf)], profiles=[p]), ['A'], fps), [p], TG, BEAD, H)
     assert [i.cuts for i in plain[0].instances] == [i.cuts for i in moved[0].instances]
-    assert [i.transform for i in plain[0].instances] != [i.transform for i in moved[0].instances]
+    assert [i.placement for i in plain[0].instances] != [i.placement for i in moved[0].instances]
 
 
 def test_revised_taper_round_trips_and_reads_older_dicts():

@@ -234,3 +234,33 @@ def test_assembly_transform_column_never_scrolls_sideways(tmp_path):
     for m in rows:
         assert m['scrollW'] <= m['clientW'] and not m['over'], m          # no horizontal scrolling
     assert len({m['canvasW'] for m in rows}) == 1                       # the preview keeps its width
+
+
+def test_generated_layers_with_a_construction_state_are_served_and_reused(client):
+    """STAGE Z4 REGRESSION (2026-10-17, manual review): with the construction
+    chain every Skin + Web layer is a VARIANT keyed by its state. Selecting a
+    generated layer must read it from the generation (200, nothing built) —
+    it was answered 409 'no longer cached' because the lookup key lacked the
+    state; and identical layers (a Base-only stack) share ONE build."""
+    from layer_assembly import web as W
+    from layer_assembly.tests.test_stacking_gate import _doc
+    asm = {'layer_height': 1.5, 'sections': [{'design_id': 'A', 'height': 36}]}
+    # (a plain Skin + Web room: a run the construction chain supports — milestone 1, §Z.0)
+    B = {'assembly': asm, 'designs': [{'id': 'A', 'name': 'A', 'parent': None, 'document': _doc('rect')}]}
+    code, g = post(client, '/api/wallsystems/generate', B)
+    assert code == 200 and len(g['layers']) == 24
+    keys = {L['geometry_key'] for L in g['layers']}
+    assert len(keys) == 1 and '|st:' in next(iter(keys))          # identical layers: one stateful variant
+    assert g['stats']['built'] == 1
+    assert W._generated_current(B)                                 # the generation holds every layer
+    for idx in (0, 1, 9, 23):
+        code, lay = post(client, '/api/wallsystems/layer', dict(B, index=idx))
+        assert code == 200 and lay['index'] == idx and lay['polylines'], idx
+    code, again = post(client, '/api/wallsystems/generate', B)     # a second Generate: served from the generation
+    assert code == 200 and again['stats'] == g['stats']
+    assert post(client, '/api/assembly/print_plan', dict(B, require_generated=True))[0] == 200
+    X = copy.deepcopy(B)
+    X['assembly']['sections'][0]['height'] = 30                    # a real Assembly change: OUTDATED again
+    assert post(client, '/api/wallsystems/layer', dict(X, index=0))[0] == 409
+    assert post(client, '/api/wallsystems/generate', X)[0] == 200
+    assert post(client, '/api/wallsystems/layer', dict(X, index=19))[0] == 200

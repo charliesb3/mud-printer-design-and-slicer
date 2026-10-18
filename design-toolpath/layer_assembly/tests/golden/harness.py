@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import math
 import os
 import sys
@@ -69,15 +70,23 @@ def _round(o):
 # 'junction' (2026-10-17, stage Z2): the construction identity report and the
 # persistent junction id of a junction corner — NAMES of construction, never
 # positions (construction_identity.py)
+# 'state' (stage Z4): the construction state a variant was built on, in the
+# resolve response (variants[key].state) — decisions, not geometry
 LABEL_KEYS = {'id', 'source_id', 'treatment_id', 'label', 'name', 'system', 'system_id', 'systems', 'strand', 'owner',
-              'lineage_infill', 'lineage_owner', 'identity', 'junction'}
+              'lineage_infill', 'lineage_owner', 'identity', 'junction', 'state'}
+
+
+_STATE_KEY = re.compile(r'\|st:[0-9a-f]{16}')      # a geometry key's construction-state suffix (stage Z4): an id
 
 
 def _strip(o):
     if isinstance(o, dict):
-        return {k: _strip(v) for k, v in o.items() if k not in LABEL_KEYS}
+        return {_STATE_KEY.sub('', k) if isinstance(k, str) else k: _strip(v)
+                for k, v in o.items() if k not in LABEL_KEYS}
     if isinstance(o, (list, tuple)):
         return [_strip(v) for v in o]
+    if isinstance(o, str):
+        return _STATE_KEY.sub('', o)
     return o
 
 

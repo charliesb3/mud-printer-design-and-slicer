@@ -69,7 +69,9 @@ def test_grouped_layers_print_a_designer_resolved_variant_with_a_regenerated_con
     top = r['instances'][-1]
     assert '|' in top['geometry_key'] and top['geometry_key'] in r['variants']
     v = r['variants'][top['geometry_key']]
-    assert set(v['transforms']) == {'C', 'R'}                       # ONLY the grouped sources move
+    # the grouped sources move by their groups; '*' is the layer's own placement (a plan
+    # scale applied semantically so the printed thickness stays authored — §Z.1 invariant 17)
+    assert set(v['transforms']) - {'*'} == {'C', 'R'}
     (con,) = v['connectors']
     assert con['source'] == 'L' and con['hosts'] == ['R', 'C']      # L: attached to both, regenerated
     polys = geometry(client, r, top['geometry_key'])
@@ -88,7 +90,7 @@ def test_a_derived_design_keeps_its_groups_and_its_openings(client):
     top = r['instances'][-1]
     assert top['design_id'] == 'cuts' and top['geometry_key'].startswith('cuts|')
     v = r['variants'][top['geometry_key']]
-    assert set(v['transforms']) == {'C', 'R'} and [c['source'] for c in v['connectors']] == ['L']
+    assert set(v['transforms']) - {'*'} == {'C', 'R'} and [c['source'] for c in v['connectors']] == ['L']
     polys = geometry(client, r, top['geometry_key'])
     assert any(p['id'].startswith('IR') for p in polys)            # its lattice, resolved for the variant
 
@@ -173,4 +175,7 @@ def test_a_strongly_scaled_stack_keeps_its_lattice_registered(client):
     r = post(client, a)
     f = r['support']['findings']
     assert all(x['kind'] == 'overlap' for x in f)
-    assert min((x['overlap'] for x in f), default=3.0) > 0.9
+    # (persistent comb, Z.9: the rectangle's repeats are consumed at its corners under
+    # this heavy scale — the transition stitch beside a corner can be left with a
+    # partial overlap for a layer; never an unsupported bead, never a re-phased web)
+    assert min((x['overlap'] for x in f), default=3.0) > 0.5

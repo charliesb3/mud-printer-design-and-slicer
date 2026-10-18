@@ -357,7 +357,8 @@ def test_the_pages_variant_request_reuses_the_resolved_variants(monkeypatch):
     c = A.app.test_client()
     res = c.post('/api/assembly/resolve', json={'assembly': asm, 'designs': designs}).get_json()
     assert 'error' not in res and res['variants']
-    need = {k: _js({'design_id': v['design_id'], 'transforms': v['transforms'], 'cuts': v.get('cuts') or []})
+    need = {k: _js({'design_id': v['design_id'], 'transforms': v['transforms'], 'cuts': v.get('cuts') or [],
+                    **({'state': v['state']} if v.get('state') else {})})   # (the construction state, as the page sends it)
             for k, v in res['variants'].items()}
     assert json.dumps(need) != json.dumps({k: {'design_id': v['design_id'], 'transforms': v['transforms'],
                                                'cuts': v.get('cuts') or []} for k, v in res['variants'].items()})
@@ -369,4 +370,4 @@ def test_the_pages_variant_request_reuses_the_resolved_variants(monkeypatch):
     from layer_assembly.web import _source
     src = _source(designs)
     for k, v in res['variants'].items():
-        assert g['designs'][k]['polylines'] == src.geometry(v['design_id'], None, v.get('cuts')).polylines
+        assert g['designs'][k]['polylines'] == src.geometry(v['design_id'], None, v.get('cuts'), v.get('state')).polylines

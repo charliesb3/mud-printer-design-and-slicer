@@ -1201,7 +1201,7 @@ def corner_stations(centre, L, cycle, th, lo, hi, end_margin):
 
 def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
          max_unsupported=None, contact=0.0, closed=False, stations=None, track=None, track_map=None,
-         bead=0.0, truss=None, web_angle=None, identity=None):
+         bead=0.0, truss=None, web_angle=None, identity=None, state=None, topology_only=False):
     """
     Route-aware wall lattice for one wall region (rings: material on the
     left). Returns a LatticePlan, or None if the region is not wall-like
@@ -1242,6 +1242,15 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         region's architecture. The report then names every skeleton run and
         segment by the anchors at its ends / corners (report['identity']).
         Identity only: the geometry is the same with or without it.
+      state — CONSTRUCTION THROUGH Z (WALL_ARCHITECTURE.md §Z.0; milestone
+        1): {'landings': [{'x', 'y', 'f', 'e', 't'}]} — the landings the
+        Assembly's chain decided for THIS layer from the construction
+        deposited below (construction_state.py). A supported run (a lone
+        straight wall's two-pass loop, a plain corner-motif loop; zigzag)
+        prints exactly those landings; every other run is planned on its own.
+      topology_only — stop after the layout: report['topology'] = the
+        supported runs' face rails, segment bounds, forced edge faces and
+        Pass A stations (the chain's per-layer input); no stitch geometry.
     """
     rings = [r for r in rings if len(r) >= 3]
     if not rings:
@@ -1783,6 +1792,110 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             return [a] + [s_of(ua + (ub - ua) * q[j]) for j in range(1, n)] + [b]
         return [a] + [s_of(ua + (ub - ua) * j / n) for j in range(1, n)] + [b]
 
+    # -- CONSTRUCTION THROUGH Z: DEPOSITED LANDINGS (§Z.0, milestone 1) ------
+    # A SUPPORTED run prints exactly the landings the Assembly's chain decided
+    # from the construction deposited below (state['landings'], this layer's
+    # design coordinates, on this layer's face rails). The planner decides
+    # nothing for it: no counts, no fitting, no phase or parity choice. A face
+    # is named physically — `f` = +1 / −1 = left / right of the HOST WALL's
+    # own direction — so it means the same face whatever way the skeleton
+    # runs. Two consecutive landings on one face are a LANE cell (the pass
+    # follows its face for that cell, invariant 10).
+    carry = (state or {}).get('landings') if (TP is None and pattern == 'zigzag') else None
+    wall_geom = (identity or {}).get('walls') or {}
+    RAIL_STEP = 0.5
+    face0_cache, rail_cache, carried_int = {}, {}, {}
+    carried_t = []                    # (id(run), side, s) of carried transfer landings
+
+    def eligible(ri, r):
+        """Milestone 1 scope: zigzag, a lone straight wall (two-pass loop
+        with a cap V at each end) or a plain corner-motif loop."""
+        if pattern != 'zigzag' or TP is not None or jambs_of(r) or jamb_end_cache.get(id(r)):
+            return False
+        if r.cycle:
+            return ri not in jammed and motif_single(r)
+        return r.a[0] == 'E' and r.b[0] == 'E' and mult.get(ri) == 2
+
+    def face0(r):
+        """(f, wall): the physical face of side 0 (+1 left / −1 right of the
+        host wall's direction) and the host wall id."""
+        if id(r) not in face0_cache:
+            sm = 0.5 * r.length
+            c = geo.centre(r, sm)
+            q = geo.side_point(r, 0, sm)
+            best = None
+            for w_, (wpts, wclosed) in wall_geom.items():
+                n_ = len(wpts)
+                for i in range(n_ if wclosed else n_ - 1):
+                    a_, b_ = wpts[i], wpts[(i + 1) % n_]
+                    d_ = _seg_d(c, a_, b_)
+                    if best is None or d_ < best[0]:
+                        best = (d_, b_ - a_, w_)
+            if best is None:
+                t_, w_ = geo.centre(r, min(r.length, sm + 1.0)) - geo.centre(r, max(0.0, sm - 1.0)), None
+            else:
+                t_, w_ = best[1], best[2]
+            v = q - c
+            face0_cache[id(r)] = (1 if t_.x * v.y - t_.y * v.x > 0 else -1, w_)
+        return face0_cache[id(r)]
+
+    def rail_pts(r, side):
+        """[(s, point)] of a face rail (the landing points) every RAIL_STEP."""
+        key_ = (id(r), side)
+        if key_ not in rail_cache:
+            n_ = max(2, int(math.ceil(r.length / RAIL_STEP)))
+            rail_cache[key_] = [(r.length * k_ / n_, geo.side_point(r, side, (r.length * k_ / n_) % r.length
+                                                                    if r.cycle else r.length * k_ / n_))
+                                for k_ in range(n_ + 1)]
+        return rail_cache[key_]
+
+    def rail_project(pts, q):
+        """(s, distance) of the point of a rail nearest q."""
+        best = (math.inf, 0.0)
+        for (s0_, a_), (s1_, b_) in zip(pts, pts[1:]):
+            dx, dy = b_.x - a_.x, b_.y - a_.y
+            L2 = dx * dx + dy * dy
+            t_ = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((q.x - a_.x) * dx + (q.y - a_.y) * dy) / L2))
+            d_ = math.hypot(q.x - a_.x - t_ * dx, q.y - a_.y - t_ * dy)
+            if d_ < best[0]:
+                best = (d_, s0_ + t_ * (s1_ - s0_))
+        return best[1], best[0]
+
+    def carried_segments(r, segs):
+        """{round(segment start, 6): [(s, side)]} — the carried landings of a
+        supported run inside each of its segments (None: not carried)."""
+        if not carry:
+            return None
+        if id(r) in carried_int:
+            return carried_int[id(r)]
+        ri = next(i for i, x in enumerate(runs) if x is r)
+        out_ = None
+        if eligible(ri, r):
+            f0, _ = face0(r)
+            pts = {sd: rail_pts(r, sd) for sd in (0, 1)}
+            items = []
+            for ld in carry:
+                if ld.get('e'):
+                    continue
+                sd = 0 if int(ld['f']) == f0 else 1
+                s_, d_ = rail_project(pts[sd], Vec2(float(ld['x']), float(ld['y'])))
+                if d_ <= 0.25:
+                    items.append((s_, sd, bool(ld.get('t'))))
+            if items:
+                out_ = {}
+                for a, b, U in segs:
+                    lo_, hi_ = min(a, b), max(a, b)
+                    lst = []
+                    for s_, sd, t_ in items:
+                        x = s_ + (r.length if (r.cycle and s_ < lo_ - 1e-9) else 0.0)
+                        if lo_ + 1e-6 < x < hi_ - 1e-6:
+                            lst.append((x, sd))
+                            if t_:
+                                carried_t.append((id(r), sd, x % r.length if r.cycle else x))
+                    out_[round(lo_ % r.length if r.cycle else lo_, 6)] = sorted(lst)
+        carried_int[id(r)] = out_
+        return out_
+
     # -- 1. how many passes per run (route inspection on the skeleton) -----
     # A run crossed by a lineage JAMB line carries TWO passes (module doc
     # §5): it contributes an even degree at both ends, so route inspection
@@ -2035,9 +2148,20 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         sa = s0
         jamb_report[id(r)] = {'resolved': 0, 'unresolved': []}         # (the last layout wins)
         fixed = {0}                       # segment bounds: ends, corners
+        ci = carried_segments(r, segs)
         for (a, b, U), n in zip(segs_o, ns_o):
             st = seg_stations(r, a, b, n) if not rev else \
                 list(reversed(seg_stations(r, b, a, n)))
+            if ci is not None:
+                # carried STATIONS (both faces landed at each): exactly the chain's
+                xs = []
+                for x, _ in ci.get(round(min(a, b), 6), []):
+                    if not xs or x - xs[-1] > 0.05:
+                        xs.append(x)
+                st = [min(a, b)] + xs + [max(a, b)]
+                if a > b:
+                    st = list(reversed(st))
+                n = len(st) - 1
             for k in range(1, n + 1):
                 sa = 1 - sa
                 A.append((st[k], sa))
@@ -2121,7 +2245,21 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                     pin(c, 'Ob', sc + go, 1 - inn, P['Ob']), pin(c, 'Ib', sc + gi, inn, P['Ib'])]
         seq = []
         side = s0
+        ci = carried_segments(r, segs) if r.cycle else None
         for i, ((a, b, U), n) in enumerate(zip(segs, ns_)):
+            if ci is not None:
+                # the carried landings with their own faces; a face mismatch at a
+                # motif edge is a LANE cell — the motif itself is never dropped
+                if i == 0:
+                    seq.append((a, side))
+                seq += list(ci.get(round(a % L, 6), []))
+                c = order[(i + 1) % len(order)]
+                seq.append((b, c['inner']))
+                side = c['inner']
+                m = motif(c, b + gi)
+                seq[-1:] = m[:3] if i == len(segs) - 1 else m
+                motif_report['single'] += 1
+                continue
             st = seg_stations(r, a, b, n)
             if i == 0:
                 seq.append((st[0], side))
@@ -2429,6 +2567,10 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             m_ = motif_stitch(r, ka, kb, pa, pb)
             if m_ is not None:
                 return m_
+        if side_a == side_b and side_a in (0, 1) and carried_int.get(id(r)) is not None:
+            # a LANE cell of a carried run: the pass follows its face (§Z.0)
+            n_ = max(1, int(abs(s_b - s_a) / max(0.5, 0.25 * thick)))
+            return [pa] + [rail(r, side_a, s_a + (s_b - s_a) * k_ / n_) for k_ in range(1, n_)] + [pb]
         if TP is not None:
             t_ = truss_stitch(r, s_a, side_a, pa, s_b, side_b, pb)
             if t_ is not None:
@@ -2805,6 +2947,37 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             s0, par = choice[ri] if ri in choice else (face_pref[ri], None)
             seqs[ri] = ('single', layout(r, 'single', s0, par))
 
+    if topology_only:
+        # the chain's per-layer input: every SUPPORTED run's face rails,
+        # segment bounds, forced faces at its motif edges and Pass A stations
+        topo_runs = []
+        for ri, r in enumerate(runs):
+            if not eligible(ri, r):
+                continue
+            f0, w_ = face0(r)
+            segs_ = segments(r, r.cycle)
+            order_ = [corners(r)[i] for i in seg_order.get(id(r), range(len(corners(r))))] if r.cycle else []
+            ent = [e for one in seqs[ri][1] for e in one]
+            rec = {'kind': 'loop' if r.cycle else 'lone', 'cycle': bool(r.cycle), 'L': round(r.length, 6),
+                   'face0': f0, 'wall': w_,
+                   'rails': [[[round(s_, 6), round(q_.x, 6), round(q_.y, 6)] for s_, q_ in rail_pts(r, sd)]
+                             for sd in (0, 1)], 'segs': []}
+            for i, (a, b, U) in enumerate(segs_):
+                pa = set()
+                for x, sd in ent:
+                    if sd not in (0, 1) or motif_role.get((id(r), sd, round(x % r.length if r.cycle else x, 9))):
+                        continue
+                    xx = x + (r.length if (r.cycle and x < a - 1e-9) else 0.0)
+                    if a + 1e-6 < xx < b - 1e-6:
+                        pa.add((round(xx, 9), sd))
+                rec['segs'].append({'a': round(a, 9), 'b': round(b, 9),
+                                    'fa': order_[i]['inner'] if order_ else None,
+                                    'fb': order_[(i + 1) % len(order_)]['inner'] if order_ else None,
+                                    'pa': sorted(pa)})
+            topo_runs.append(rec)
+        return LatticePlan([], {'topology': {'runs': topo_runs, 'target': S}, 'runs': [], 'no_cavity': no_cavity,
+                                'target': S, 'thickness': round(thick, 2), 'pattern': pattern})
+
     def neighbour(ri, end, side):
         """The landing a junction slot's stitch goes to (for the corner
         meeting point check)."""
@@ -2967,7 +3140,19 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             # to the middle that is neither a pass end nor a corner)
             m = len(cs) // 2
             order = sorted(range(len(cs)), key=lambda i: (abs(i - m), i))
-            ri, sd, x, _ = cs[next((i for i in order if not cs[i][3]), m)]
+            pick = next((i for i in order if not cs[i][3]), m)
+            if carried_t:
+                # a carried run's transfer rides ONE deposited landing (§Z.0)
+                hits = [i for i, (ri_, sd_, x_, poor_) in enumerate(cs) if not poor_ and any(
+                    rid == id(runs[ri_]) and sd == sd_ and
+                    abs((x_ % runs[ri_].length if runs[ri_].cycle else x_) - xt) < 1e-6 for rid, sd, xt in carried_t)]
+                if hits:
+                    # (the lowest station; on one station the physical face +1 first — never
+                    # the skeleton's side numbering, which can change between layers)
+                    pick = min(hits, key=lambda i: (round(cs[i][2], 6),
+                                                    0 if (face0(runs[cs[i][0]])[0] if cs[i][1] == 0
+                                                          else -face0(runs[cs[i][0]])[0]) > 0 else 1))
+            ri, sd, x, _ = cs[pick]
             r = runs[ri]
             transfers.add((id(r), sd, round(x % r.length if r.cycle else x, 9)))
             union(('R', k), next(pid for pid, ri_, _ in pass_of if ri_ == ri and

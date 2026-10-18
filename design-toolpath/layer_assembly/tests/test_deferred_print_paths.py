@@ -85,7 +85,7 @@ def distinct_requests(designs, asm):
     st = web._resolve_stack({'assembly': asm, 'designs': designs})
     out, seen = [], set()
     for i in st['res'].instances:
-        r = variant_request(i)
+        r = variant_request(i)[:3]                      # (the construction state is not an envelope input)
         k = json.dumps(r, sort_keys=True, default=str)
         if k not in seen:
             seen.add(k)
@@ -320,7 +320,9 @@ def test_envelope_resolve_places_every_layer_as_the_print_resolve(client):
     assert prn['support']['level'] == 'bead' and 'geometry' not in prn
     strip = lambda r: [{k: v for k, v in i.items() if k not in ('geometry_key', 'print_key')} for i in r['instances']]
     assert strip(env) == strip(prn)                                      # Z, transforms, group parts
-    assert [i['print_key'] for i in env['instances']] == [i['geometry_key'] for i in prn['instances']]
+    import re as _re
+    strip_st = lambda k: _re.sub(r'\|st:[0-9a-f]{16}', '', k)      # (the print build's construction state, stage Z4)
+    assert [i['print_key'] for i in env['instances']] == [strip_st(i['geometry_key']) for i in prn['instances']]
     for k in ('sections', 'groups', 'profiles', 'profile_targets', 'total_layers', 'warnings'):
         assert env.get(k) == prn.get(k), k
     # envelope variants: fetched with their spec, = the editing adapter's envelopes

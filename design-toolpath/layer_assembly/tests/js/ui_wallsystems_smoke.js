@@ -262,13 +262,46 @@ eval(src + `
   await sleep(20);
   check(wsys.stats.layerFetches === lf && reqs('/api/wallsystems/generate') === ng && Object.keys(wsys.cache).length === 5,
         'switching between visited layers / display modes: served from the cache (no fetch), nothing regenerated');
+  // ---- A FAILED LAYER LOAD (stage Z4 review, 2026-10-17): never stuck at "Loading…" ----
+  const G1 = wsys.gen;
+  delete wsys.cache[G1.clientKey + '|2'];
+  fetchHook = (url, body) => url === '/api/wallsystems/layer' && body.index === 2
+    ? { json: async () => ({ error: 'not generated for this design', outdated: true }) } : null;
+  wsysSelectLayer(2); await _wsysFetchLayer(2); await sleep(10);
+  sc = wsysScene();
+  check(sc.loading === false && sc.failed && /not generated/.test(sc.failed) && wsysStatus() === 'outdated' &&
+        /Regenerate Wall Systems/.test(wsys.error) && el('wsys-generate').textContent === 'Regenerate Wall Systems',
+        'a layer the server no longer holds: the canvas says so (not "Loading…"), status OUTDATED, the button offers Regenerate');
+  fetchHook = (url, body) => url === '/api/wallsystems/layer' && body.index === 2
+    ? (() => { throw new Error('connection lost'); })() : null;
+  wsysSelectLayer(1); wsysSelectLayer(2); await _wsysFetchLayer(2); await sleep(10);
+  sc = wsysScene();
+  check(sc.failed && /connection lost/.test(sc.failed) && /select it again to retry/.test(wsys.error),
+        'a network failure: recorded under the layer with a retry hint');
+  fetchHook = null;
+  const lf2 = wsys.stats.layerFetches;
+  wsysSelectLayer(1); wsysSelectLayer(2); await _wsysFetchLayer(2); await sleep(10);
+  sc = wsysScene();
+  check(wsys.stats.layerFetches === lf2 + 1 && sc.failed === null && sc.paths > 0 && wsysStatus() === 'current',
+        're-selecting the layer retries, loads it and the generation reads CURRENT again — no save / reopen needed');
+  // a STALE result never overwrites a newer selection: a slow layer 3 answers after layer 1 was selected
+  delete wsys.cache[G1.clientKey + '|3'];
+  let release;
+  fetchHook = (url, body) => url === '/api/wallsystems/layer' && body.index === 3
+    ? new Promise(r => { release = () => r(null); }) : null;
+  wsysSelectLayer(3); const slow = _wsysFetchLayer(3);
+  await sleep(10); wsysSelectLayer(1);
+  release(); await slow; await sleep(10);
+  check(wsys.layer === 1 && wsysScene().layer === 1 && wsys.cache[G1.clientKey + '|3'],
+        'a late result for another layer is cached but the selection stays where the user put it');
+  fetchHook = null;
   {  // SHOW BEAD (2026-10-16): printed paths at the project bead width — a VIEW only
     const rec = { widths: [], caps: [] };
     const ctx = new Proxy({}, { get(t, k) { return k in t ? t[k] : () => {}; },
                                 set(t, k, v) { if (k === 'lineWidth') rec.widths.push(v); if (k === 'lineCap') rec.caps.push(v);
                                                t[k] = v; return true; } });
     el('wsys-canvas').getContext = () => ctx;
-    const n0 = calls.length, gen0 = JSON.stringify(wsys.cache);
+    const n0 = calls.length, gen0 = JSON.stringify(wsys.cache), lf1 = wsys.stats.layerFetches;
     wsysDraw();
     const vecMax = Math.max(...rec.widths);
     rec.widths.length = 0; rec.caps.length = 0;
@@ -279,7 +312,7 @@ eval(src + `
     const k = 0.86 * Math.min(cv.width, cv.height) / Math.max(B[2] - B[0], B[3] - B[1], 1) * vv.zoom;
     check(wsys.beads && rec.widths.some(w => Math.abs(w - W * k) < 1e-6) && rec.caps.includes('round') && vecMax < 2,
           'Show Bead: every printed path drawn at the project bead width (round caps), vector view = thin centre lines');
-    check(calls.length === n0 && JSON.stringify(wsys.cache) === gen0 && wsys.stats.layerFetches === lf,
+    check(calls.length === n0 && JSON.stringify(wsys.cache) === gen0 && wsys.stats.layerFetches === lf1,
           'Show Bead is a view only: no request, no regeneration, the generated geometry unchanged');
     wsysToggleBeads(false);
     check(!wsys.beads, 'back to the vector view');

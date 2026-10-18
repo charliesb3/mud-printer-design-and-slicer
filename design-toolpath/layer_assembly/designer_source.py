@@ -57,9 +57,7 @@ def _geometry_of(built):
              'identity': built.network.get('identity')}, labels)
 
 
-def _variant_worker(designs_json, design_id, transforms, cuts=None):
-    """(in a worker process) one variant (semantic transforms and / or
-    Assembly-profile cuts), from the designs JSON."""
+def _worker_lib(designs_json):
     import json
     from layer_design import DesignLibrary
     lib = _WORKER_LIBS.get(designs_json)
@@ -69,13 +67,28 @@ def _variant_worker(designs_json, design_id, transforms, cuts=None):
         lib = DesignLibrary(spec['designs'], spec.get('wall_systems'), spec.get('arch', False),
                             spec.get('junctions'))
         _WORKER_LIBS[designs_json] = lib
-    return _geometry_of(lib.build(design_id, transforms=transforms or None, cuts=cuts or None))
+    return lib
 
 
-def _vkey(design_id, transforms, cuts):
+def _variant_worker(designs_json, design_id, transforms, cuts=None, state=None):
+    """(in a worker process) one variant (semantic transforms and / or
+    Assembly-profile cuts, the construction state), from the designs JSON."""
+    lib = _worker_lib(designs_json)
+    return _geometry_of(lib.build(design_id, transforms=transforms or None, cuts=cuts or None,
+                                  state=state or None))
+
+
+def _topology_worker(designs_json, design_id, transforms, cuts=None):
+    """(in a worker process) the construction TOPOLOGY of one layer."""
+    return _worker_lib(designs_json).topology(design_id, transforms or None, cuts or None)
+
+
+def _vkey(design_id, transforms, cuts, state=None):
     import semantic_transform as ST
     import profile_cuts as PC
-    return (design_id, ST.spec_key(transforms) if transforms else '[]', PC.cut_key(cuts) if cuts else '')
+    from layer_design import DesignLibrary
+    return (design_id, ST.spec_key(transforms) if transforms else '[]', PC.cut_key(cuts) if cuts else '',
+            DesignLibrary._state_key(state))
 
 
 def arch_library(designs):
@@ -96,8 +109,9 @@ class DesignerSource:
         self.lib = library
         self.calls = 0
         from collections import OrderedDict
-        self._variants = OrderedDict()           # (design, spec key) → LayerGeometry
+        self._variants = OrderedDict()           # (design, spec key, cut key, state key) → LayerGeometry
         self._plain = {}                         # design → its canonical LayerGeometry
+        self._topologies = {}                    # (design, spec key, cut key) → construction topology (Z4)
         self._walls = {}                         # design → its straight walls (profile targets)
         self._srcs = {}                          # design → every selectable wall (planar cut)
         self._opens = {}                         # design → its authored openings (conversions)
@@ -141,6 +155,7 @@ class DesignerSource:
             self._envelopes.clear()
             self._plain.clear()
             self._variants.clear()
+            self._topologies.clear()
             self._walls.clear()
             self._srcs.clear()
             self._opens.clear()
@@ -245,15 +260,59 @@ class DesignerSource:
             self._srcs[design_id] = source_list(self.lib.document(design_id))
         return self._srcs[design_id]
 
-    def geometry(self, design_id, transforms=None, cuts=None):
+    def topology(self, design_id, transforms=None, cuts=None):
+        """The construction TOPOLOGY of a layer (DesignLibrary.topology): the
+        chain's per-layer input (construction_chain.py)."""
+        self._fresh()
+        key = _vkey(design_id, transforms, cuts)
+        if key not in self._topologies:
+            self._topologies[key] = self.lib.topology(design_id, transforms or None, cuts or None)
+        return self._topologies[key]
+
+    def prefetch_topology(self, requests, cancelled=None):
+        """Resolve many layers' topologies [(design id, transforms, cuts)] —
+        in parallel worker processes when several are missing."""
+        self._fresh()
+        miss, seen = [], set()
+        for r in requests:
+            d, t, c = r[0], r[1], (r[2] if len(r) > 2 else None)
+            key = _vkey(d, t, c)
+            if key not in self._topologies and key not in seen:
+                seen.add(key)
+                miss.append((key, d, t, c))
+        if len(miss) < 3 or _workers() < 2:
+            for key, d, t, c in miss:
+                if cancelled is not None and cancelled():
+                    return
+                self._topologies[key] = self.lib.topology(d, t or None, c or None)
+            return
+        dj = self._lib_json()
+        global _POOL
+        try:
+            futs = [(key, _pool().submit(_topology_worker, dj, d, t, c)) for key, d, t, c in miss]
+            for key, f in futs:
+                if cancelled is not None and cancelled():
+                    for _, g in futs:
+                        g.cancel()
+                    return
+                self._topologies[key] = f.result()
+        except Exception:
+            _POOL = None
+            for key, d, t, c in miss:
+                if key not in self._topologies:
+                    self._topologies[key] = self.lib.topology(d, t or None, c or None)
+
+    def geometry(self, design_id, transforms=None, cuts=None, state=None):
         """The design's resolved geometry — with `transforms`, its SEMANTIC
         variant (the Designer moves the sources, regenerates connecting
         walls and resolves walls / junctions / openings / lineage lattice:
         layer_design.DesignLibrary.build(…, transforms)). With `cuts`
-        (Assembly profiles) the cut variant — cuts applied first."""
+        (Assembly profiles) the cut variant — cuts applied first. With
+        `state` (the construction state, stage Z4) the layer's webs are built
+        on it — a variant of its own."""
         self.calls += 1
         self._fresh()
-        if not transforms and not cuts:          # the canonical design: built and attributed once
+        if not transforms and not cuts and not state:          # the canonical design: built and attributed once
             if design_id not in self._plain:
                 sp = self.shared_plain
                 g = sp.get(design_id) if sp is not None else None
@@ -263,10 +322,10 @@ class DesignerSource:
                         sp[design_id] = g
                 self._plain[design_id] = g
             return self._plain[design_id]
-        key = _vkey(design_id, transforms, cuts)
+        key = _vkey(design_id, transforms, cuts, state)
         if key not in self._variants:
             self._store(key, _geometry_of(self.lib.build(design_id, transforms=transforms or None,
-                                                         cuts=cuts or None)))
+                                                         cuts=cuts or None, state=state or None)))
         self._variants.move_to_end(key)
         return self._variants[key]
 
@@ -358,22 +417,24 @@ class DesignerSource:
         for r in requests:
             d, t = r[0], r[1]
             c = r[2] if len(r) > 2 else None
-            if not t and not c:
+            st = r[3] if len(r) > 3 else None
+            if not t and not c and not st:
                 continue
-            key = _vkey(d, t, c)
+            key = _vkey(d, t, c, st)
             if key not in self._variants and key not in seen:
                 seen.add(key)
-                miss.append((key, d, t, c))
+                miss.append((key, d, t, c, st))
         if len(miss) < 3 or _workers() < 2:
-            for key, d, t, c in miss:
+            for key, d, t, c, st in miss:
                 if cancelled is not None and cancelled():
                     return
-                self._store(key, _geometry_of(self.lib.build(d, transforms=t or None, cuts=c or None)))
+                self._store(key, _geometry_of(self.lib.build(d, transforms=t or None, cuts=c or None,
+                                                             state=st or None)))
             return
         dj = self._lib_json()
         global _POOL
         try:
-            futs = [(key, _pool().submit(_variant_worker, dj, d, t, c)) for key, d, t, c in miss]
+            futs = [(key, _pool().submit(_variant_worker, dj, d, t, c, st)) for key, d, t, c, st in miss]
             for key, f in futs:
                 if cancelled is not None and cancelled():
                     for _, g in futs:
@@ -385,6 +446,7 @@ class DesignerSource:
                 self._store(key, f.result())
         except Exception:                        # no usable worker processes: build here
             _POOL = None
-            for key, d, t, c in miss:
+            for key, d, t, c, st in miss:
                 if key not in self._variants:
-                    self._store(key, _geometry_of(self.lib.build(d, transforms=t or None, cuts=c or None)))
+                    self._store(key, _geometry_of(self.lib.build(d, transforms=t or None, cuts=c or None,
+                                                                 state=st or None)))

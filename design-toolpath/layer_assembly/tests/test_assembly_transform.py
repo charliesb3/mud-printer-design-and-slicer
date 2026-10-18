@@ -23,7 +23,7 @@ def stack(*secs, lh=1.5, tf=None):
 
 
 def tfs(r):
-    return [i.transform for i in r.instances]
+    return [i.placement for i in r.instances]
 
 
 def test_zero_assembly_transform_is_exactly_the_section_behaviour():

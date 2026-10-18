@@ -45,11 +45,17 @@ class LayerSource(Protocol):
     source-level cuts to the design document (ordinary openings, shortened
     straight walls), then the transforms, then resolves as usual.
     walls(design): the design's STRAIGHT walls a profile can target
-    ([WallTarget-like dicts]; optional — a source without it has none)."""
+    ([WallTarget-like dicts]; optional — a source without it has none).
+    With `state` (CONSTRUCTION STATE, stage Z4 — design_proto/
+    construction_state.py: the webs' discrete choices carried from the layer
+    below by identity, computed by the Assembly's chain over the resolved
+    stack) the Designer builds the layer's webs on it; the Designer still
+    receives no Z, only the state. `topology(design, transforms, cuts)`
+    (optional) is the chain's per-layer input."""
     def design_ids(self) -> list: ...
     def info(self, design_id: str) -> DesignInfo: ...
     def geometry(self, design_id: str, transforms: Optional[dict] = None,
-                 cuts: Optional[list] = None) -> LayerGeometry: ...
+                 cuts: Optional[list] = None, state: Optional[dict] = None) -> LayerGeometry: ...
 
 
 class StaticSource:
@@ -78,7 +84,7 @@ class StaticSource:
     def info(self, design_id):
         return self._d[design_id][0]
 
-    def geometry(self, design_id, transforms=None, cuts=None):
+    def geometry(self, design_id, transforms=None, cuts=None, state=None):
         self.calls += 1
         if cuts:
             self.cut_calls.append((design_id, cuts))
@@ -124,15 +130,22 @@ def stack_geometry(resolved, source) -> dict:
 
 
 def variant_request(inst) -> tuple:
-    """(design id, transforms, cuts) of a layer printing a variant."""
+    """(design id, transforms, cuts[, state]) of a layer printing a variant
+    — the state only when the layer has one (the chain ran)."""
+    st = getattr(inst, 'state', None)
+    if st:
+        return (inst.design_id, inst.transforms(), inst.cut_spec(), st)
     return (inst.design_id, inst.transforms(), inst.cut_spec())
 
 
 def layer_geometry(source, inst):
     """The geometry a layer prints: its design, or its VARIANT (transform
-    groups → semantic transforms; profiles → cuts)."""
+    groups → semantic transforms; profiles → cuts; the construction state)."""
     if not inst.is_variant:
         return source.geometry(inst.design_id)
+    st = getattr(inst, 'state', None) or None
+    if st:
+        return source.geometry(inst.design_id, inst.transforms() or None, inst.cut_spec() or None, st)
     if inst.cuts:
         return source.geometry(inst.design_id, inst.transforms() or None, inst.cut_spec())
     return source.geometry(inst.design_id, inst.transforms())

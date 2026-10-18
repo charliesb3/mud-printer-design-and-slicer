@@ -112,7 +112,7 @@ def test_changing_the_setting_recomputes_diagnostics_without_changing_geometry()
     a.max_overhang = W - 2.0
     res2 = resolve(a)
     assert analyse_support(res2, geo, a).findings                     # 1.25 > 3 − 2
-    assert [i.transform for i in res.instances] == [i.transform for i in res2.instances]
+    assert [i.placement for i in res.instances] == [i.placement for i in res2.instances]
     assert geo == {'A': (LINE, W)}
 
 

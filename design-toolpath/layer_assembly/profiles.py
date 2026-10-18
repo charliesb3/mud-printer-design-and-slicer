@@ -779,9 +779,15 @@ def wall_placement(inst, source):
     placement relative to it (inst.semantic; 'multiple' centre mode) — so a
     wall moved by its group is compensated too."""
     T = inst.transform
+    whole = None
     for s_, k, tx, ty in inst.semantic or ():
         if s_ == source:
             return InstanceTransform(T.scale * k, T.scale * tx + T.tx, T.scale * ty + T.ty)
+        if s_ == '*':                      # the whole layer's placement as a semantic transform (plan scale)
+            whole = (k, tx, ty)
+    if whole is not None:
+        k, tx, ty = whole
+        return InstanceTransform(T.scale * k, T.scale * tx + T.tx, T.scale * ty + T.ty)
     return T
 
 

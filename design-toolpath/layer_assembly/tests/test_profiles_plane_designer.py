@@ -61,6 +61,8 @@ def stackp(src, a, ids=('A',), fps=None):
     res = resolve(a, list(ids), fps)
     tg = {d: {t.key: t for t in map(WallTarget.from_dict, src.walls(d))} for d in ids}
     res, rep = apply_profiles(res, a.profiles, tg, BEAD, a.max_overhang, {d: src.sources(d) for d in ids})
+    from layer_assembly.construction_chain import run as run_chain
+    res = run_chain(src, res)                            # (the construction-state chain, as the print resolve)
     return res, rep, stack_geometry(res, src)
 
 

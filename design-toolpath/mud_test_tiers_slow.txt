@@ -241,3 +241,8 @@ layer_assembly/tests/test_stack_coherence.py::test_stack_coherence[mixed_benchma
 layer_assembly/tests/test_identity_stack.py::test_scaled_circle_stack_keeps_every_name_on_all_twenty_layers
 layer_assembly/tests/test_identity_stack.py::test_reference_network_stack_reports_its_topology_events_and_nothing_else
 layer_assembly/tests/test_identity_stack.py::test_real_project_names_its_three_junctions_and_the_thin_line_stays_out
+# SKIN + WEB CONSTRUCTION THROUGH Z (WALL_ARCHITECTURE.md §Z.2, stage Z4, 2026-10-17): whole stacks built in process.
+layer_assembly/tests/test_construction_chain.py::test_scaled_lobe_building_is_one_web_evolving_through_z
+layer_assembly/tests/test_construction_chain.py::test_a_sliding_junction_consumes_the_web_locally
+layer_assembly/tests/test_construction_chain.py::test_the_web_either_side_of_a_door_is_the_web_below
+layer_assembly/tests/test_construction_chain.py::test_reference_network_keeps_its_gains_over_the_z1_baseline[reference_network_wave]

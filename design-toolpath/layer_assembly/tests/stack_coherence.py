@@ -26,7 +26,8 @@ on beads physically):
   locality        every event cluster's distance to the nearest MOVING ARCHITECTURAL
                   BOUNDARY of the pair: envelope vertices (rings / bare beads) that moved
                   more than h between the two layers, territory that appeared or vanished,
-                  junction points that appeared, ceased or moved more than h. An event
+                  junction points that appeared, ceased or moved at all (> JUNCTION_MOVE:
+                  a web beside a sliding junction gains / loses cells there). An event
                   within LOCAL_REACH (2 × the thickest wall) of such a boundary is
                   explained by the architecture; farther away it is NONLOCAL — the
                   "unexplained rephasing / reorganisation" number, 0 when §Z.2 is done.
@@ -56,6 +57,7 @@ for p in (os.path.join(ROOT, 'design_proto'), ROOT):
 
 CONSTRUCTION_ROLES = ('lattice', 'wall_system')
 LOCAL_REACH_FACTOR = 2.0          # × the thickest wall of the pair: how far from a moving boundary an event is local
+JUNCTION_MOVE = 0.05              # in: a junction point that moved more than this between the layers is a moving boundary
 DEFAULT_THICKNESS = 10.0
 BASELINES = os.path.join(HERE, 'coherence')
 
@@ -90,7 +92,7 @@ def build_stack(designs, wall_systems, assembly_state, design_ids=None) -> dict:
                 pts.append(pts[0])
             placed.append({'id': pl['id'], 'role': a.get('role') or 'free', 'kind': a.get('kind'),
                            'source': a.get('source'), 'pts': pts})
-        d, tr, cu = variant_request(inst)
+        d, tr, cu = variant_request(inst)[:3]
         e = src.envelope(d, tr or None, cu or None)
         env = e.diagnostics['envelope']
         env_polys = []
@@ -101,9 +103,17 @@ def build_stack(designs, wall_systems, assembly_state, design_ids=None) -> dict:
             env_polys.append(pts)
         thick = max((float((w or {}).get('thickness') or 0.0) for w in (env.walls or {}).values()),
                     default=0.0) or DEFAULT_THICKNESS
+        # the construction's own LOCAL boundaries (WALL_ARCHITECTURE §Z.1 15, 18): the
+        # layer's corner anchors and the loops' seams — a repeat is consumed / born there
+        anchors = ((g.diagnostics.get('identity') or {}).get('anchors') or [])
+        corners = [T.apply(a['x'], a['y']) for a in anchors if a.get('kind') == 'corner']
+        seams = []
+        for inf in (g.diagnostics.get('lattice') or {}).values():
+            for reg in (inf or {}).get('regions') or []:
+                seams += [T.apply(q[0], q[1]) for q in (reg.get('seams') or [])]
         layers.append({'index': inst.index, 'design_id': inst.design_id, 'key': inst.geometry_key,
                        'z': inst.z_bottom, 'placed': placed, 'env': env_polys,
-                       'junctions': [T.apply(j['x'], j['y']) for j in (env.junctions or [])],
+                       'junctions': [T.apply(j['x'], j['y']) for j in (env.junctions or [])] + corners + seams,
                        'thickness': thick})
     report = web._support_report(st, geo)
     return {'layers': layers, 'support': report, 'bead': float(st['bead'] or 3.0),
@@ -204,15 +214,23 @@ def measure(stack, local_reach=None) -> dict:
         ds_a = [min(idx_a.dist(q), reach) for pl in up_arch for q in pl] if lo_arch else []
         all_con += ds_c
         all_arch += ds_a
-        far = [q for pl in up_con for q in pl if idx_c.dist(q) > h] if lo_con else [q for pl in up_con for q in pl]
+        # an EVENT: a construction vertex with no printed bead of any role under
+        # it (a lane cell rides the skin below; the physical checker reasons the
+        # same way) — correspondence (above) stays construction-to-construction
+        idx_all = _index(lo_con + lo_arch, reach) if (lo_con or lo_arch) else None
+        far = [q for pl in up_con for q in pl if idx_all.dist(q) > h] if idx_all is not None \
+            else [q for pl in up_con for q in pl]
         clusters = _clusters(far, bead)
         # the MOVING architectural boundary of this pair
         e_lo, e_up = _index(lo['env'], reach), _index(up['env'], reach)
         moving = [q for pl in up['env'] for q in _densify(pl, bead) if e_lo.dist(q) > h] + \
                  [q for pl in lo['env'] for q in _densify(pl, bead) if e_up.dist(q) > h]
+        # a junction, corner or loop seam is a moving boundary as soon as it
+        # moves at all (a web beside a slowly sliding one gains / loses its cells
+        # there: local by definition — the territory it bounds changed)
         for js, other in ((up['junctions'], lo['junctions']), (lo['junctions'], up['junctions'])):
             for j in js:
-                if not other or min(math.dist(j, o) for o in other) > h:
+                if not other or min(math.dist(j, o) for o in other) > JUNCTION_MOVE:
                     moving.append(j)
         m_idx = _clusters(moving, bead) if moving else []
         m_pts = [c[0] for c in m_idx]                      # one representative per boundary cluster

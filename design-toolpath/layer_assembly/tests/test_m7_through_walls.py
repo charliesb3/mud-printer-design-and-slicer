@@ -194,7 +194,7 @@ def test_base_variant_and_assembly_layers_share_one_topology():
         st = web._resolve_stack({'assembly': P['assembly']['state'], 'designs': designs, 'wall_systems': ws})
         seen = {}
         for inst in st['res'].instances:
-            did, tr, cu = variant_request(inst) if inst.is_variant else (inst.design_id, None, None)
+            did, tr, cu = variant_request(inst)[:3] if inst.is_variant else (inst.design_id, None, None)
             key = (did, repr(tr), repr(cu))
             if key not in seen:
                 seen[key] = _signature(st['src'].lib.build(did, transforms=tr or None, cuts=cu or None))

@@ -101,7 +101,7 @@ def test_footprint_mode_is_exactly_the_previous_behaviour():
     fp = {'A': Footprint.of_bbox(0, 0, 260, 100)}
     r0 = resolve(a, footprints=fp)
     r1 = resolve(a, footprints=fp, groups=model())               # mode 'footprint': groups unused
-    assert [i.transform for i in r0.instances] == [i.transform for i in r1.instances]
+    assert [i.placement for i in r0.instances] == [i.placement for i in r1.instances]
     assert all(not i.parts for i in r1.instances)
 
 

@@ -329,6 +329,31 @@ def _max_overhang(v) -> float:
 
 
 
+def state_key(state) -> str:
+    """'|st:<hash>' — the construction state's part of a geometry key (the
+    same hash the Designer library keys its builds by)."""
+    if not state:
+        return ''
+    import hashlib
+    import json
+
+    def canon(o):
+        # (the same canonical form as design_proto/layer_design._canon_state —
+        # floats rounded to 1e-9, integral floats as ints — so the state the
+        # page sends back through JavaScript names the same build)
+        if isinstance(o, dict):
+            return {str(k): canon(v) for k, v in o.items() if not str(k).startswith('_')}   # ('_…': bookkeeping)
+        if isinstance(o, (list, tuple)):
+            return [canon(v) for v in o]
+        if isinstance(o, bool) or o is None or isinstance(o, str):
+            return o
+        if isinstance(o, (int, float)):
+            r = round(float(o), 9)
+            return int(r) if r == int(r) else r
+        return o
+    return '|st:' + hashlib.sha1(json.dumps(canon(state), sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class LayerInstance:
     """One physical layer: which design, where."""
@@ -345,15 +370,30 @@ class LayerInstance:
     cuts: tuple = field(default=(), compare=False)             # ASSEMBLY PROFILE cut spec of this
                                                                # layer (profiles.py; applied by the
                                                                # Designer before the semantic transform)
+    state: object = field(default=None, compare=False)         # CONSTRUCTION STATE of this layer
+                                                               # (construction_chain.py, stage Z4): the
+                                                               # webs' choices carried from the layer
+                                                               # below; None = planned on its own
 
     def transform_of(self, key) -> 'InstanceTransform':
         return self.parts.get(key, self.transform)
 
     @property
+    def placement(self) -> 'InstanceTransform':
+        """The layer's effective WHOLE placement: its transform composed with
+        the '*' semantic entry (a plan scale applied semantically, invariant
+        17) — what the old `transform` alone used to mean."""
+        T = self.transform
+        for s_, k, tx, ty in self.semantic or ():
+            if s_ == '*':
+                return InstanceTransform(T.scale * k, T.scale * tx + T.tx, T.scale * ty + T.ty)
+        return T
+
+    @property
     def geometry_key(self) -> str:
         """Which geometry this layer prints: its design, or the design's
         semantically transformed VARIANT."""
-        if not self.semantic and not self.cuts:
+        if not self.semantic and not self.cuts and not self.state:
             return self.design_id
         key = self.design_id
         if self.semantic:
@@ -361,13 +401,15 @@ class LayerInstance:
         if self.cuts:
             from .profiles import cut_key
             key += '|cut:' + cut_key(self.cuts)
+        if self.state:
+            key += state_key(self.state)
         return key
 
     @property
     def is_variant(self) -> bool:
         """Prints a Designer-resolved VARIANT of its design (transform groups
         and / or profile cuts), not the canonical design."""
-        return bool(self.semantic or self.cuts)
+        return bool(self.semantic or self.cuts or self.state)
 
     def cut_spec(self) -> list:
         from .profiles import cuts_to_dicts
@@ -517,10 +559,38 @@ def resolve(assembly: Assembly, known_designs=None, footprints=None, groups=None
     if assembly.center_mode == 'multiple' and groups is not None:
         for g in range(len(design_of)):
             semantic[g] = relative_transforms(whole[g], parts[g], groups.group_of)
-    instances = [LayerInstance(g, design_of[g], _section_of(counts, g), g * lh, (g + 1) * lh, whole[g], parts[g],
-                               semantic[g])
-                 for g in range(len(design_of))]
+    instances = []
+    for g in range(len(design_of)):
+        W, P, sem = whole[g], parts[g], semantic[g]
+        if abs(W.scale - 1.0) > 1e-9 or any(abs(t.scale - 1.0) > 1e-9 for t in P.values()):
+            # PHYSICAL WALL THICKNESS (WALL_ARCHITECTURE §Z.1 invariant 17, 2026-10-17):
+            # a plan SCALE is never applied to the finished layer geometry (it would
+            # scale the printed thickness) — the layer's placement becomes a SEMANTIC
+            # transform of every source ('*', plus each transform group's own), the
+            # Designer re-resolves the walls at their authored thickness on the scaled
+            # centre lines, and the layer is placed by the identity
+            sem = absolute_transforms(W, P, groups.group_of if groups is not None else {})
+            W, P = IDENTITY, {cid: IDENTITY for cid in P}
+        instances.append(LayerInstance(g, design_of[g], _section_of(counts, g), g * lh, (g + 1) * lh, W, P, sem))
     return ResolvedAssembly(lh, sections, instances, warnings)
+
+
+def absolute_transforms(whole, parts, group_of) -> tuple:
+    """(('*', k, tx, ty), (source, k, tx, ty), …): the layer's placement as the
+    semantic transform of every source, each grouped source's own placement
+    where it differs (identity entries omitted; see resolve)."""
+    out = []
+    if abs(whole.scale - 1) > 1e-9 or abs(whole.tx) > 1e-7 or abs(whole.ty) > 1e-7:
+        out.append(('*', whole.scale, whole.tx, whole.ty))
+    for s, cid in sorted(group_of.items()):
+        t = parts.get(cid)
+        if t is None or (abs(t.scale - whole.scale) < 1e-9 and abs(t.tx - whole.tx) < 1e-7 and abs(t.ty - whole.ty) < 1e-7):
+            continue
+        if abs(t.scale - 1) > 1e-9 or abs(t.tx) > 1e-7 or abs(t.ty) > 1e-7:
+            out.append((s, t.scale, t.tx, t.ty))
+        else:
+            out.append((s, 1.0, 0.0, 0.0))        # (explicitly NOT moved while the rest of the layer is)
+    return tuple(out)
 
 
 def relative_transforms(whole, parts, group_of) -> tuple:

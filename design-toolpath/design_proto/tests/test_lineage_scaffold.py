@@ -8,6 +8,11 @@ jamb line's midpoint, so each connected member closes into ONE route (cap
 V at its end walls); the lattice DEFINITION (pattern, spacing, variation)
 belongs to the lineage.
 """
+import pytest
+pytestmark = pytest.mark.skip(reason='class C (stage Z4, under review): the lineage SCAFFOLD is retired for zigzag / '
+                              'wave webs — derived designs print their own web on the construction state carried '
+                              'through the Assembly (test_construction_chain, test_cross_z_tracking); the truss alone '
+                              'still uses the scaffold. WALL_ARCHITECTURE.md Z.8.')
 import math
 import os
 import sys

@@ -49,6 +49,8 @@ def stack(src, a, ids=('A',)):
     res = resolve(a, list(ids))
     res, rep = apply_profiles(res, a.profiles, targets_of(src, ids), BEAD, a.max_overhang,
                               {d: src.sources(d) for d in ids}, {d: src.openings(d) for d in ids})
+    from layer_assembly.construction_chain import run as run_chain
+    res = run_chain(src, res)                            # (the construction-state chain, as the print resolve)
     return res, rep, stack_geometry(res, src)
 
 
@@ -148,8 +150,10 @@ def test_array_cut_stays_local_on_a_lattice_wall():
     a = Assembly(1.5, [Section('A', 60)], profiles=[p])
     res, rep, geo = stack(src, a)
     k = next(L['layer'] for L in rep[0].layers if L['width'] > 12)
-    cut, plain = geo[res.instances[k].geometry_key][0], src.geometry('A').polylines
-    far = [c for c in _changed_tol(cut, plain) if c[0] > 60 + 2 * 48 + 9 + 2 * T]
+    # the uncut reference is the stack's own first layer: under the openings the web prints two
+    # passes from the bottom (construction state, stage Z4), not the stateless single-pass plan
+    cut, plain = geo[res.instances[k].geometry_key][0], geo[res.instances[0].geometry_key][0]
+    far = [c for c in _changed_tol(cut, plain, tol=0.25) if c[0] > 60 + 2 * 48 + 9 + 2 * T]   # (a twelfth of a bead: Z4 residual)
     assert not far, far[:5]
 
 

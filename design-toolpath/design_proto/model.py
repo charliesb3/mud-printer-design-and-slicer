@@ -2051,6 +2051,25 @@ def _seg_intersect_param(a: Vec2, b: Vec2, c: Vec2, d: Vec2,
 # PrintLayer — assembles effective print geometry
 # ---------------------------------------------------------------------------
 
+def _wall_samples(pts, closed, n=32) -> dict:
+    """A wall polyline sampled at n (+ 1) equal arc fractions (the topology's
+    `walls`): {'pts': [[x, y], …], 'closed', 'L'}."""
+    m = len(pts)
+    cum = [0.0]
+    for i in range(m if closed else m - 1):
+        cum.append(cum[-1] + pts[i].dist(pts[(i + 1) % m]))
+    L = cum[-1]
+    out = []
+    import bisect
+    for k in range(n if closed else n + 1):
+        t = L * k / n
+        j = max(0, min(len(cum) - 2, bisect.bisect_right(cum, t) - 1))
+        seg = cum[j + 1] - cum[j]
+        q = pts[j].lerp(pts[(j + 1) % m], (t - cum[j]) / seg if seg > 1e-12 else 0.0)
+        out.append([round(q.x, 6), round(q.y, 6)])
+    return {'pts': out, 'closed': bool(closed), 'L': round(L, 6)}
+
+
 @dataclass
 class PrintLayer:
     """
@@ -2128,6 +2147,15 @@ class PrintLayer:
     # with a lattice_reference: {infill id: [segment ids]} of the reference's
     # own plan (the layer prints it clipped, so those are its segments)
     lattice_identity: Optional[dict] = None
+    # CONSTRUCTION STATE (construction_state.py; WALL_ARCHITECTURE.md §Z.0):
+    # {'landings': [...]} — the landings the Assembly's chain decided for this
+    # layer from the construction deposited below. None: each web planned on
+    # its own (Pass A).
+    construction_state: Optional[dict] = None
+    # TOPOLOGY ONLY: stop each web after its layout — network['topology'] =
+    # the supported runs' face rails / segments / Pass A stations (the
+    # chain's per-layer input); no lattice geometry is built.
+    topology_only: bool = False
 
     def _corner_r(self, p: Path) -> float:
         """A source's own Corner R (legacy fallback: layer-wide value)."""
@@ -2862,6 +2890,23 @@ class PrintLayer:
                 web_angle = None if not inf.owner or pattern == 'truss' else \
                     float(inf.params.get('web_angle') or WL.WEB_ANGLE_DEFAULT)
                 dom = self._region_identity(N, result, cls_of, job, processed)
+                if self.topology_only and pattern != 'truss':
+                    tp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
+                                 self.prefer_closed or phys,
+                                 float(inf.params.get('max_unsupported', 0) or 0) or None,
+                                 contact=self.material.contact_separation() if phys else 0.0,
+                                 closed=phys, bead=self.material.bead_width if phys else 0.0,
+                                 web_angle=web_angle, identity=dom['identity'], topology_only=True)
+                    topo = (tp.report.get('topology') if tp is not None else None) or {}
+                    T = network.setdefault('topology', {'runs': [], 'walls': {}})
+                    for rec in topo.get('runs') or []:
+                        T['runs'].append(dict(rec, region=job['key']))
+                    # the host walls at equal fractions: the chain reads their motion
+                    # between layers (rigid → carried with the wall, §Z.0)
+                    for w_, (wpts_, wclosed_) in (dom['identity'].get('walls') or {}).items():
+                        if w_ not in T['walls'] and len(wpts_) >= 2:
+                            T['walls'][w_] = _wall_samples(wpts_, wclosed_)
+                    continue
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
                              self.prefer_closed or phys,
                              float(inf.params.get('max_unsupported', 0) or 0) or None,
@@ -2872,7 +2917,8 @@ class PrintLayer:
                              track_map=((self.lattice_track or {}).get(inf.id) or (None, None))[1],
                              bead=self.material.bead_width if phys else 0.0,
                              truss=inf.params if pattern == 'truss' else None,
-                             web_angle=web_angle, identity=dom['identity'])
+                             web_angle=web_angle, identity=dom['identity'],
+                             state=self.construction_state if pattern != 'truss' else None)
                 if lp is not None:
                     ident = lp.report.get('identity') or {}
                     network['identity']['domains'].append(dict(
@@ -3135,7 +3181,7 @@ class PrintLayer:
              a['kind'] != 'junction' and set(a['walls']) <= wset]
         return {'domain': {'id': job['key'], 'system': inf.owner or inf.id, 'infill': inf.id, 'walls': walls,
                            'thin': thin},
-                'identity': {'anchors': A,
+                'identity': {'anchors': A, 'region': job['key'],
                              'walls': {w: (processed[w], bool(getattr(by_id.get(w), 'closed', False))) for w in walls}}}
 
     def _web_envelope(self, N, rings, members, msid):

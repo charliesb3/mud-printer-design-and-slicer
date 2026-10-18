@@ -80,7 +80,7 @@ def test_metrics_on_a_synthetic_pair():
     def layer(idx, stitch_x, env_shift=0.0):
         skin0 = [(0.0, 0.0), (100.0, 0.0)]
         skin1 = [(0.0, 10.0), (100.0, 10.0)]
-        web = [(stitch_x, 0.0), (stitch_x + 10.0, 10.0), (stitch_x + 20.0, 0.0)]
+        web = [(stitch_x, 2.25), (stitch_x + 10.0, 7.75), (stitch_x + 20.0, 2.25)]     # (on the contact rails, off the skins)
         # (env_shift moves the wall SIDEWAYS: every envelope vertex moves — a
         # wall sliding along its own axis would move only at its ends)
         env = [[(0.0, -1.5 + env_shift), (100.0, -1.5 + env_shift), (100.0, 11.5 + env_shift),

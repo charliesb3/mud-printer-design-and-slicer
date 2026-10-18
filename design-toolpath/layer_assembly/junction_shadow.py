@@ -26,7 +26,7 @@ def layer_documents(designs, wall_systems, assembly_state) -> list:
     lib = getattr(src, 'env_lib', None) or src.lib
     out = []
     for i in res.instances:
-        d, tr, cu = variant_request(i)
+        d, tr, cu = variant_request(i)[:3]
         doc, _rep = lib.transformed(d, tr or None, architectural_cuts(cu) or None)
         out.append((i.index, d, doc))
     return out

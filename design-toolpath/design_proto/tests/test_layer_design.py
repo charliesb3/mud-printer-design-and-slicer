@@ -103,6 +103,7 @@ def test_a_design_alone_is_the_normal_designer_build():
     assert built.printable == authored_layer(base_doc()).printable_centerlines(paths, meta)
 
 
+@pytest.mark.skip(reason='class C (stage Z4, under review): the lineage scaffold / lattice reference is retired for zigzag / wave webs — WALL_ARCHITECTURE.md Z.8')
 def test_derived_design_keeps_the_parent_lattice_away_from_the_change():
     L = lib()
     base, door = L.build('base'), L.build('door')
@@ -115,6 +116,7 @@ def test_derived_design_keeps_the_parent_lattice_away_from_the_change():
     assert all(not (185 < x < 215 and 138 < y < 152) for x, y in dp)
 
 
+@pytest.mark.skip(reason='class C (stage Z4, under review): the lineage scaffold / lattice reference is retired for zigzag / wave webs — WALL_ARCHITECTURE.md Z.8')
 def test_a_lattice_override_in_a_derived_patch_is_inert():
     """Superseded 2026-10-06 ("a changed infill is regenerated"): the
     lattice DEFINITION belongs to the lineage, so a spacing stored in a
@@ -196,6 +198,7 @@ def test_layer_design_endpoints():
         assert bad.status_code == 400
 
 
+@pytest.mark.skip(reason='class C (stage Z4, under review): the lineage scaffold / lattice reference is retired for zigzag / wave webs — WALL_ARCHITECTURE.md Z.8')
 def test_inherited_lattice_reference_is_the_generated_original_not_a_clipped_copy():
     """A design derived from a gap design that closes the gap gets the
     ORIGINAL lattice stitches back across the gap (in phase with the base),
