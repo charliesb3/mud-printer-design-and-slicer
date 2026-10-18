@@ -536,6 +536,7 @@ function wsysRender() {
   _wsysRenderList();
   _wsysRenderGeometry();
   _wsysRenderArch();
+  _wsysRenderMaterial();
   _wsysRenderLayer();
   _wsysRenderFindings();
   wsysDraw();
@@ -670,6 +671,28 @@ function _wsysRenderGeometry() {}
 // each wall's own end cap and Corner R) — not Wall-System properties, no
 // Variant copies. An edit is a step of this workspace's undo and makes the
 // generation OUTDATED (it is in the generation key); regenerate to see it.
+// MATERIAL, convenience editing (2026-10-16): the project's Bead Width,
+// Contact Overlap and Parallel Wall Overlap (`return_overlap`) — the Designer's
+// own values, edited through its one setter (window.Designer.setMaterial):
+// no Wall-System copy, not in this workspace's undo (the Designer's, as when
+// edited there). With physical rules they shape geometry → OUTDATED.
+function _wsysRenderMaterial() {
+  const m = window.Designer.material ? window.Designer.material() : null;
+  if (!m) return;
+  for (const [id, v] of [['wsys-bead-width', m.bead_width], ['wsys-contact-overlap', m.contact_overlap],
+                         ['wsys-parallel-overlap', m.return_overlap]]) {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = (+v).toFixed(2);
+  }
+}
+function wsysSetMaterial(field, el) {
+  if (!window.Designer.setMaterial) return;
+  const v = window.Designer.setMaterial(field, el.value);
+  el.value = (+v).toFixed(2);
+  _wsysRenderMaterial();
+  wsysNoteState(true);
+}
+
 function _wsysRenderArch() {
   const box = document.getElementById('wsys-arch');
   if (!box || !window.Designer.buildArchControls) return;

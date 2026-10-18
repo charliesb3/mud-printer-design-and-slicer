@@ -658,6 +658,12 @@ class NetPiece:
     cap_ids: list = field(default_factory=lambda: [[], []])
     attached: list = field(default_factory=lambda: [False, False])
     ref_only: bool = False      # the source is an unprinted reference line
+    # PHYSICAL WALL WIDTH (inset skin walls, model._inset_piece): `ref` — the
+    # reference line when it lies OUTSIDE the printed faces (an aligned wall;
+    # then not in `walls`); `arch` — [(distance, pts)] the finished envelope's
+    # face lines (+ that reference): where a branch drawn to the wall ends
+    arch: list = field(default_factory=list)
+    ref: Optional[list] = None
 
     def printed_internal(self, wi) -> bool:
         return not (self.ref_only and abs(self.walls[wi][0]) < 1e-12)
@@ -672,7 +678,19 @@ class NetPiece:
         return self.walls[0][0] - self.walls[-1][0] if self.walls else 0.0
 
     def src(self):
+        if self.ref is not None:
+            return self.ref
         return next(w for w in self.walls if abs(w[0]) < 1e-12)[1]
+
+    def arch_band(self) -> Optional[Shape]:
+        """The finished envelope's band (inset skin walls; no caps)."""
+        if len(self.arch) < 2:
+            return None
+        ds = sorted(self.arch, key=lambda w: -w[0])
+        out, inn = ds[0][1], ds[-1][1]
+        if self.closed:
+            return Shape([out, inn])
+        return Shape([list(out) + list(reversed(inn))])
 
     def wall_class(self, idx) -> str:
         if not self.thick:
@@ -738,7 +756,9 @@ def find_attachments(pieces: list[NetPiece], tol=TOL):
         for q in pieces:
             if q.sys_id == pc.sys_id:
                 continue
-            for wi, (d, pts, _) in enumerate(q.walls):
+            # (an inset skin wall: also its finished faces / outside reference)
+            lines = [(d, pts) for d, pts, _ in q.walls] + list(q.arch)
+            for d, pts in lines:
                 if dist_to_polyline(e, pts, q.closed) > tol:
                     continue
                 at_end = (not q.closed and
@@ -761,6 +781,10 @@ def find_attachments(pieces: list[NetPiece], tol=TOL):
                     band = q.band()
                     if band is not None and band.contains(e):
                         host = q
+                        break
+                    band = q.arch_band()
+                    if band is not None and band.contains(e):
+                        host = q                # (between a finished face and its skin)
                         break
         if host is not None:
             result[(id(pc), which)] = ('T', host, e)

@@ -75,7 +75,9 @@ def test_grouped_layers_print_a_designer_resolved_variant_with_a_regenerated_con
     polys = geometry(client, r, top['geometry_key'])
     faces = [p for p in polys if p['id'].startswith('L.wall')]
     ys = sorted({round(y, 9) for p in faces for _, y in p['pts']})
-    assert len(faces) == 2 and len(ys) == 2 and math.isclose(ys[1] - ys[0], 10.0)   # a 10 in wall, not a fan
+    # a 10 in wall, not a fan: two parallel skins, each half a bead inside the
+    # faces (physical wall width, 2026-10-16) → centrelines 10 − 3 = 7 in apart
+    assert len(faces) == 2 and len(ys) == 2 and math.isclose(ys[1] - ys[0], 7.0)
     (x0, x1) = sorted(round(e[0], 6) for e in con['ends'])
     assert all(min(x for x, _ in p['pts']) <= x0 + 1e-6 and max(x for x, _ in p['pts']) >= x1 - 5.1 for p in faces)
     assert r['instances'][0]['geometry_key'] == 'base'              # layer 0: nothing moved yet

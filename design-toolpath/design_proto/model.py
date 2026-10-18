@@ -19,7 +19,15 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from material import MaterialSpec
+from material import MaterialSpec, RETURN_MIN
+
+# PHYSICAL WALL WIDTH: the smallest skin-centreline band of a skin wall whose
+# stored thickness is thinner than two beads (an old file / a material change)
+INSET_MIN_SPAN = RETURN_MIN
+
+# SKIN constructions: their envelope faces are printed beads (inset half a
+# bead under physical rules); generated constructions place their own paths
+SKIN_SYSTEMS = ('hollow', 'skin_web')
 
 # ---------------------------------------------------------------------------
 # Vec2
@@ -911,7 +919,8 @@ def _wall_system_end_pts(src_pts: list[Vec2],
                           walls: list[tuple[float, list[Vec2]]],
                           cap_style: str,
                           cap_corner_radius: float,
-                          landings: tuple = ((), ())):
+                          landings: tuple = ((), ()),
+                          include_src: bool = True):
     """
     One end treatment per wall SYSTEM (source + N parallel offsets).
 
@@ -942,6 +951,10 @@ def _wall_system_end_pts(src_pts: list[Vec2],
     polyline); the source itself is the distance-0 wall. The same builder
     closes original open-wall ends and the cut faces left by openings.
 
+    include_src=False: the source is NOT a line of the assembly (an inset
+    skin wall's aligned reference lies outside its printed faces, PHYSICAL
+    WALL WIDTH): the cross-section is the offsets alone.
+
     `landings` = (start_points, end_points): extra points lying on the
     flat end line (e.g. lattice strands clipped at an opening) that must
     join the cap. They land on the profile exactly like intermediate walls.
@@ -955,7 +968,7 @@ def _wall_system_end_pts(src_pts: list[Vec2],
 
     # Walls ordered outermost (most positive distance = furthest LEFT of
     # travel) → innermost; the source is the distance-0 wall.
-    entries: list[tuple[float, list[Vec2]]] = [(0.0, src_pts)]
+    entries: list[tuple[float, list[Vec2]]] = [(0.0, src_pts)] if include_src else []
     entries.extend(walls)
     entries.sort(key=lambda e: -e[0])
 
@@ -1589,7 +1602,13 @@ class WallSpec:
         return d
 
     def offsets(self, path_id: str, closed: bool,
-                pts: list[Vec2]) -> list['OffsetTreatment']:
+                pts: list[Vec2], inset: float = 0.0) -> list['OffsetTreatment']:
+        """The wall's face lines. inset > 0 (PHYSICAL WALL WIDTH, 2026-10-16:
+        a SKIN construction — Hollow / Skin + Web — whose faces are printed
+        beads): the faces are the bead CENTRELINES, `inset` (half a bead)
+        inside the finished envelope, so the deposited width is the
+        thickness. An aligned wall's reference (a finished face) then lies
+        outside the printed band and is not printed (see inset_reference)."""
         t = max(0.0, float(self.thickness))
         if t <= 1e-9:
             return []
@@ -1598,11 +1617,25 @@ class WallSpec:
         sign = {'left': 1.0, 'right': -1.0,
                 'inside': 1.0 if ccw else -1.0,
                 'outside': -1.0 if ccw else 1.0}.get(align)
+        if inset > 0.0:
+            # (a stale thickness thinner than two beads keeps a minimal band)
+            span = max(t - 2.0 * inset, INSET_MIN_SPAN)
+            near = (t - span) / 2.0
+            if sign is not None:
+                return [OffsetTreatment(f'{path_id}.wall', path_id, sign * (near + span), label='wall'),
+                        OffsetTreatment(f'{path_id}.wall_near', path_id, sign * near, label='wall')]
+            return [OffsetTreatment(f'{path_id}.wall+', path_id, span / 2, label='wall'),
+                    OffsetTreatment(f'{path_id}.wall-', path_id, -span / 2, label='wall')]
         if sign is not None:
             return [OffsetTreatment(f'{path_id}.wall', path_id, sign * t,
                                     label='wall')]
         return [OffsetTreatment(f'{path_id}.wall+', path_id, t / 2, label='wall'),
                 OffsetTreatment(f'{path_id}.wall-', path_id, -t / 2, label='wall')]
+
+    def inset_reference(self, closed: bool) -> bool:
+        """With inset faces, does the reference lie OUTSIDE the printed band
+        (an aligned wall: the reference is a finished face)?"""
+        return self.resolved_align(closed) != 'center'
 
 
 @dataclass
@@ -2713,8 +2746,10 @@ class PrintLayer:
     def _opening_cap_reach(self, offsets, sid=None) -> float:
         """How far this wall system's end treatment protrudes past a cut
         face: the effective cap radius for its total thickness W."""
-        dists = [0.0] + [ot.distance for ot, d in offsets
-                         if len(d.sample_points()) >= 2]
+        dists = ([] if sid in getattr(self, '_ref_outside', ()) else [0.0]) + \
+            [ot.distance for ot, d in offsets if len(d.sample_points()) >= 2]
+        if not dists:
+            return 0.0
         W = max(dists) - min(dists)
         style = self._cap_style_of(sid)
         if W <= 1e-9 or style == 'flat':
@@ -3014,9 +3049,9 @@ class PrintLayer:
                 walls = [(0.0, processed[p.id], p.id)] + \
                         [(ot.distance, d.sample_points(), d.id) for ot, d in offs]
                 walls.sort(key=lambda w: -w[0])
-                net_pieces.append(N.NetPiece(
+                net_pieces.append(self._inset_piece(N.NetPiece(
                     p.id, p.id, p.closed, walls,
-                    [None, None] if p.closed else ['free', 'free']))
+                    [None, None] if p.closed else ['free', 'free'])))
                 continue
             for k, pc in enumerate(plan.pieces):
                 walls = [(0.0, pc.src_pts, f'{p.id}~{k}')] + \
@@ -3024,10 +3059,10 @@ class PrintLayer:
                 walls.sort(key=lambda w: -w[0])
                 # opening faces are CUT ends; path ends and trim ends are
                 # FREE (a trimmed wall may join the wall it now ends on)
-                net_pieces.append(N.NetPiece(
+                net_pieces.append(self._inset_piece(N.NetPiece(
                     p.id, f'{p.id}~{k}', False, walls,
                     ['cut' if pc.start_cut and not pc.start_cut.trim else 'free',
-                     'cut' if pc.end_cut and not pc.end_cut.trim else 'free']))
+                     'cut' if pc.end_cut and not pc.end_cut.trim else 'free'])))
         for pc in net_pieces:
             pc.ref_only = pc.sys_id in ref_only
         piece_by_key = {pc.key: pc for pc in net_pieces}
@@ -3118,7 +3153,8 @@ class PrintLayer:
             for pid, src_pts, walls, landings in pieces:
                 npc = piece_by_key.get(pid)
                 ends = _wall_system_end_pts(src_pts, walls, self._cap_style_of(src.id),
-                                            self._cap_radius_of(src.id), landings)
+                                            self._cap_radius_of(src.id), landings,
+                                            include_src=src.id not in self._ref_outside)
                 for which, ((cap_pts, extensions), tag, label) in enumerate(zip(
                         ends, ('_cs', '_ce'), ('cap_start', 'cap_end'))):
                     e_pt = src_pts[0] if which == 0 else src_pts[-1]
@@ -3893,7 +3929,10 @@ class PrintLayer:
                         hsid = next((ss[(R_['g0'] + x) % n] for x in range(max(1, R_['glen']) if same else 1)
                                      if ss[(R_['g0'] + x) % n] != '__J'), None)
                         hw = (getattr(self, '_source_walls', {}) or {}).get(hsid) or {}
-                        hT = float(hw.get('thickness') or 10.0)
+                        # (an INSET skin host: measured on its printed band — the
+                        # push ends where it did relative to the host's centre)
+                        hT = float(getattr(self, '_print_thickness', {}).get(hsid) or
+                                   hw.get('thickness') or 10.0)
                         cv = sp - e
                         nrm = Vec2(cv.y, -cv.x) * (1.0 / cv.length())          # (material on the left)
                         a_in = e - (R_['pts'][-2] if len(R_['pts']) >= 2 else e)
@@ -4536,6 +4575,9 @@ class PrintLayer:
         net_of = {pid: ids for ids in source_nets for pid in ids}
         out, ref_only = [], set()
         self._return_lanes = set()
+        self._print_thickness = {}            # source id → skin-centreline band (inset skin walls)
+        self._arch_faces = {}                 # source id → its ENVELOPE faces (inset skin walls)
+        self._ref_outside = set()             # inset aligned walls: reference outside the printed band
         self._wall_systems = {}               # source id → its (non Skin + Web) wall system
         self._wall_system_key = {}            # source id → grouping key (layer system id)
         self._wall_system_of = {}             # source id → {'id', 'name', 'type', 'filled'}
@@ -4585,11 +4627,31 @@ class PrintLayer:
                 # (unprinted) centre reference.
                 spec = WallSpec(mat.return_separation(), 'center', False)
                 self._return_lanes.add(p.id)
+            # PHYSICAL WALL WIDTH (2026-10-16): Wall Thickness is the FINISHED
+            # deposited width. A SKIN construction prints its faces, so in a
+            # print build they are the bead centrelines half a bead inside the
+            # envelope; the ARCHITECTURAL envelope (envelope_only: Designer /
+            # Assembly) keeps the thickness itself. Generated constructions
+            # already keep their paths half a bead inside the faces.
+            inset = 0.0
+            # (a legacy thick wall in no Wall System — `path.wall` / Network Wall
+            # without a generated construction — IS a Hollow wall: walls.DEFAULT_TYPE)
+            skin = (lsys.type in SKIN_SYSTEMS) if lsys is not None else ws is None
+            if spec is not None and p.id not in self._return_lanes and mat.physical and \
+                    not self.envelope_only and skin:
+                inset = 0.5 * mat.bead_width
+                self._print_thickness[p.id] = max(spec.thickness - mat.bead_width, INSET_MIN_SPAN)
             if spec is not None:
-                offs = spec.offsets(p.id, p.closed, processed[p.id])
+                offs = spec.offsets(p.id, p.closed, processed[p.id], inset)
                 out.extend(offs)
-                if offs and not spec.reference_printed(p.closed):
+                if offs and (not spec.reference_printed(p.closed) or
+                             (inset > 0.0 and spec.inset_reference(p.closed))):
                     ref_only.add(p.id)
+                if offs and inset > 0.0:
+                    # the finished envelope's faces (attachment detection only)
+                    self._arch_faces[p.id] = spec.offsets(p.id, p.closed, processed[p.id])
+                    if spec.inset_reference(p.closed):
+                        self._ref_outside.add(p.id)
         return out, ref_only
 
     def _mouth_cuts(self, N, sources, processed, offsets_by_source) -> dict:
@@ -4709,7 +4771,17 @@ class PrintLayer:
         faces_of: dict = {}
         for ot in wall_offs:
             faces_of.setdefault(ot.source_path_id, []).append(ot)
+        arch = getattr(self, '_arch_faces', {}) or {}
+        arch_cache: dict = {}
+        import network as N
         tol = 1e-4
+
+        def arch_pts(h):
+            """an inset skin host's FINISHED face lines (PHYSICAL WALL WIDTH)"""
+            if h.id not in arch_cache:
+                arch_cache[h.id] = [ot.generate(processed[h.id], h.closed).sample_points()
+                                    for ot in arch.get(h.id, ())]
+            return arch_cache[h.id]
 
         def nearest(pt, pts, closed):
             cum = _cum_lengths(pts, closed)
@@ -4759,8 +4831,10 @@ class PrintLayer:
                     if h.id == p.id or len(processed.get(h.id, ())) < 2:
                         continue
                     s_, d_, q, cum = nearest(E, processed[h.id], h.closed)
-                    if d_ > tol:
-                        continue
+                    if d_ > tol and not any(N.dist_to_polyline(E, fp, h.closed) <= tol
+                                            for fp in arch_pts(h)):
+                        continue                      # (PHYSICAL WALL WIDTH: or on an inset
+                        #  skin host's FINISHED face — its printed skin lies half a bead in)
                     L = cum[-1]
                     if not h.closed and (s_ <= tol or s_ >= L - tol):
                         continue                      # (a corner of two ends — not a through-host)
@@ -4774,11 +4848,26 @@ class PrintLayer:
                     oc = (lo_d + hi_d) / 2.0          # band centre: signed offset, left of the host's travel
                     tang = tangent_at(h.id, s_, cum)
                     nl = Vec2(-tang.y, tang.x)
-                    banded.append({'host': h.id, 's': s_, 'q': q, 'n': nl, 'oc': oc, 'lo': lo_d, 'hi': hi_d})
+                    e_off = (E.x - q.x) * nl.x + (E.y - q.y) * nl.y if d_ > tol else 0.0
+                    banded.append({'host': h.id, 's': s_, 'q': q, 'n': nl, 'oc': oc, 'lo': lo_d, 'hi': hi_d,
+                                   'e_off': e_off})
                 for x in banded:                      # the side the branch comes from, and its NEAR face
                     v = (inner.x - x['q'].x) * x['n'].x + (inner.y - x['q'].y) * x['n'].y
                     x['near'] = x['hi'] if v > 0 else x['lo']
-                if not banded or all(abs(x['oc']) <= 1e-9 or abs(x['near']) <= 1e-9 for x in banded):
+                    # where the end goes: the band centre (M6) — but an end drawn to an
+                    # INSET skin host's FINISHED face on its own side (PHYSICAL WALL
+                    # WIDTH: that face is no longer a printed bead) goes to the near
+                    # printed skin, half a bead in: it meets that face bead exactly as
+                    # it met the face before (same junction faces, same joins)
+                    x['tgt'], x['edge'] = x['oc'], False
+                    ad = [ot.distance for ot in arch.get(x['host'], ())]
+                    if ad:
+                        ad = ad + [0.0] if len(ad) == 1 else ad
+                        a_near = max(ad) if v > 0 else min(ad)
+                        if abs(x['e_off'] - a_near) <= tol:
+                            x['tgt'], x['edge'] = x['near'], True
+                if not banded or all((abs(x['oc']) <= 1e-9 or abs(x['near']) <= 1e-9) and
+                                     abs(x['e_off']) <= 1e-9 for x in banded):
                     # Centered (the source line is the band centre) or the source line IS
                     # the near face (Inside / Outside, branch on that side): the authored
                     # end already meets the face on its own side — nothing to derive
@@ -4786,13 +4875,14 @@ class PrintLayer:
                 def inside_band(P, x):
                     half = (x['hi'] - x['lo']) / 2.0
                     off = (P.x - x['q'].x) * x['n'].x + (P.y - x['q'].y) * x['n'].y
-                    return half > 1e-6 and x['lo'] + 0.2 * half <= off <= x['hi'] - 0.2 * half
+                    m_ = -1e-6 if x['edge'] else 0.2 * half      # (on the near skin: the band's edge)
+                    return half > 1e-6 and x['lo'] + m_ <= off <= x['hi'] - m_
                 if len(banded) >= 2:
                     # a JUNCTION of several walls: where their band centres meet (the
                     # junction's material centre — for Centered walls the junction point)
                     x1, x2 = banded[0], banded[1]
-                    C1 = Vec2(x1['q'].x + x1['n'].x * x1['oc'], x1['q'].y + x1['n'].y * x1['oc'])
-                    C2 = Vec2(x2['q'].x + x2['n'].x * x2['oc'], x2['q'].y + x2['n'].y * x2['oc'])
+                    C1 = Vec2(x1['q'].x + x1['n'].x * x1['tgt'], x1['q'].y + x1['n'].y * x1['tgt'])
+                    C2 = Vec2(x2['q'].x + x2['n'].x * x2['tgt'], x2['q'].y + x2['n'].y * x2['tgt'])
                     t1, t2 = Vec2(x1['n'].y, -x1['n'].x), Vec2(x2['n'].y, -x2['n'].x)
                     den = t1.x * t2.y - t1.y * t2.x
                     if abs(den) < 1e-6:
@@ -4809,7 +4899,7 @@ class PrintLayer:
                     dn = dx * b_['n'].x + dy * b_['n'].y
                     ok = abs(dn) >= 0.25              # (grazing: the branch runs along the host — kept)
                     if ok:
-                        t = b_['oc'] / dn
+                        t = (b_['tgt'] - b_['e_off']) / dn
                         En = Vec2(E.x + t * dx, E.y + t * dy)
                         ok = inside_band(En, b_) and abs(t) < seg - 1e-6
                 if not ok:
@@ -4833,6 +4923,27 @@ class PrintLayer:
                     'at': [round(E.x, 6), round(E.y, 6)], 'physical_end': [round(En.x, 6), round(En.y, 6)],
                     'status': 'attached'})
         return shifts
+
+    def _inset_piece(self, pc):
+        """PHYSICAL WALL WIDTH — a network piece of an INSET skin wall (its
+        printed faces half a bead inside the finished envelope). An aligned
+        wall's reference (a finished face) lies outside that band: it leaves
+        the piece's wall list (walls[0] / walls[-1] stay its two printed
+        faces) but stays the piece's reference line (`ref`: its ends and
+        direction find junctions exactly as before). The finished envelope's
+        face lines (`arch`) still identify a branch drawn to the wall's face
+        as attached (network.find_attachments)."""
+        faces = getattr(self, '_arch_faces', {}).get(pc.sys_id)
+        if not faces:
+            return pc
+        ref = next(w for w in pc.walls if abs(w[0]) < 1e-12)
+        closed = pc.closed
+        pc.arch = [(ot.distance, ot.generate(ref[1], closed).sample_points()) for ot in faces]
+        if pc.sys_id in getattr(self, '_ref_outside', ()):
+            pc.walls = [w for w in pc.walls if w is not ref]
+            pc.ref = ref[1]
+            pc.arch.append((0.0, ref[1]))
+        return pc
 
     def _snap_source_ends(self, sources, processed, tol) -> set:
         """Move open source ends lying within tol (but not exactly on)
@@ -4909,6 +5020,23 @@ class PrintLayer:
             uf.union(a, b)
             if not _expected(a, b):
                 foreign.append(a)
+        # PHYSICAL WALL WIDTH: an INSET skin wall prints its faces half a bead
+        # inside its envelope, so a wall ending ON it (its reference / finished
+        # face — where its beads used to touch) may no longer touch a bead. The
+        # architectural attachment (the same test the joins use) still makes
+        # them one network; only walls involving an inset skin wall
+        inset = getattr(self, '_arch_faces', None) or {}
+        if inset:
+            live = {b.element for b in beads_all}
+            for key, att in N.find_attachments(net_pieces).items():
+                pc = next(q for q in net_pieces if id(q) == key[0])
+                others = [att[1]] if att[0] == 'T' else [m for m, _ in att[2]]
+                for q in others:
+                    a, b = f'S:{pc.sys_id}', f'S:{q.sys_id}'
+                    if (pc.sys_id in inset or q.sys_id in inset) and a in live and b in live \
+                            and uf.find(a) != uf.find(b):
+                        uf.union(a, b)
+                        foreign.append(a)
         # Infill on a closed single-bead wall declares its inside to be
         # wall; closed walls lying inside it are its holes (even-odd).
         declared: dict[str, list] = {}           # anchor id → [ring, holes…]

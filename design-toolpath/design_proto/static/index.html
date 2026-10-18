@@ -805,8 +805,8 @@
                  onchange="onMaterialChange('contact_overlap')">
           <span class="prop-unit">in</span>
         </div>
-        <div class="prop-row" title="Overlap of a RETURN LANE with the pass it runs beside (instead of printing over it): centrelines W − R apart. A single-line wall becomes a two-pass wall ≈ 2W − R wide.">
-          <span class="prop-label">Return-lane overlap</span>
+        <div class="prop-row" title="PARALLEL WALL OVERLAP: the MAXIMUM physical overlap of neighbouring paths that run alongside one another — the two lanes of a THIN Out-and-Back (centrelines W − overlap apart: THIN = 2W − overlap wide) and neighbouring Parallel Walls lanes. A maximum, not a target: a Wall System may overlap less.">
+          <span class="prop-label">Parallel wall overlap</span>
           <input type="number" class="prop-input" id="return-overlap" value="0.75" min="0" step="0.25"
                  onchange="onMaterialChange('return_overlap')">
           <span class="prop-unit">in</span>
@@ -999,6 +999,32 @@
         <div id="wsys-edit-section" style="display:none">
           <div class="section-title" id="wsys-edit-title">Wall System</div>
           <div class="prop-panel" id="wsys-props"></div>
+        </div>
+        <!-- MATERIAL (convenience editing, 2026-10-16): the Designer's Material / Bead
+             values themselves (window.Designer.setMaterial — no Wall-System copy);
+             with physical rules they shape the generated geometry → OUTDATED -->
+        <div class="wsys-arch-section" id="wsys-material">
+          <div class="section-title">Material · shared with Designer</div>
+          <div class="prop-panel material-panel">
+            <div class="prop-row" title="Bead width: the physical width of one deposited pass (the project's one value)">
+              <span class="prop-label">Bead width</span>
+              <input type="number" class="prop-input" id="wsys-bead-width" value="3.00" min="0.25" step="0.25"
+                     onchange="wsysSetMaterial('bead_width', this)">
+              <span class="prop-unit">in</span>
+            </div>
+            <div class="prop-row" title="Contact overlap: how deeply a bead overlaps a bead it intentionally LANDS AGAINST (centrelines W − O apart). Not applied to crossings.">
+              <span class="prop-label">Contact overlap</span>
+              <input type="number" class="prop-input" id="wsys-contact-overlap" value="0.75" min="0" step="0.25"
+                     onchange="wsysSetMaterial('contact_overlap', this)">
+              <span class="prop-unit">in</span>
+            </div>
+            <div class="prop-row" title="Parallel wall overlap: the MAXIMUM overlap of neighbouring paths running alongside one another (THIN Out-and-Back lanes: THIN = 2W − overlap; Parallel Walls lanes). A maximum, not a target.">
+              <span class="prop-label">Parallel wall overlap</span>
+              <input type="number" class="prop-input" id="wsys-parallel-overlap" value="0.75" min="0" step="0.25"
+                     onchange="wsysSetMaterial('return_overlap', this)">
+              <span class="prop-unit">in</span>
+            </div>
+          </div>
         </div>
         <!-- ARCHITECTURE (convenience editing, 2026-10-15): the Designer's "Junctions,
              Ends & Corners" controls on the SAME canonical state (wallsystems.js

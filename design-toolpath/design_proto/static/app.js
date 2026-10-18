@@ -4061,7 +4061,7 @@ function _thicknessControl({ id, value, thin, onSet, compact, title }) {
   unit.className = 'thick-unit';
   unit.textContent = thick ? 'in' : `${thin} in`;
   unit.title = thick ? 'Architectural thickness'
-    : 'THIN wall: one bead (out and back when open) — its width comes from the bead width and return-lane overlap, not a free thickness';
+    : 'THIN wall: one bead (out and back when open) — its width comes from the bead width and parallel wall overlap (2W − overlap), not a free thickness';
   if (thick && value < thin - 1e-9) {          // (an older value, or the material changed since)
     unit.textContent = 'in ⚠';
     unit.title = `Below this wall's THIN width (${thin} in) — the next edit raises it to at least ${_minThick(thin)} in`;
@@ -4324,7 +4324,7 @@ function _addWallRows(panel, path) {
   panel.appendChild(row);
   if (!_isThick(path)) {
     _addNote(panel, `THIN wall: ${_thinWidth(path)} in wide — set by the bead width` +
-                    (!path.closed && _material().physical ? ' and return-lane overlap (out and back).' : '.') +
+                    (!path.closed && _material().physical ? ' and parallel wall overlap (out and back: 2W − overlap).' : '.') +
                     ` + makes it a thick wall of ${_minThick(_thinWidth(path))} in (never thinner than THIN).`);
     if (!path.closed && _material().physical) _addNote(panel, 'End caps: a U-turn — set by construction (out and back).');
     return;
@@ -5441,16 +5441,30 @@ function _material() {
 }
 
 function onMaterialChange(field) {
-  const m = _material();
-  if (field === 'physical') {
-    m.physical = !!document.getElementById('phys-rules').checked;
-  } else {
+  if (field !== 'physical') {
     const el = document.getElementById(field === 'contact_overlap' ? 'contact-overlap' : 'return-overlap');
-    const v = parseFloat(el.value);
-    m[field] = Number.isFinite(v) ? Math.round(v / BEAD_STEP) * BEAD_STEP : m[field];
+    setMaterialField(field, el.value);
+    return;
   }
+  const m = _material();
+  m.physical = !!document.getElementById('phys-rules').checked;
   layer.material = m;
   _applyMaterial();
+}
+
+// ONE setter for the project material values (bead_width, contact_overlap,
+// return_overlap = "Parallel Wall Overlap") — the Designer's Material panel and
+// the Wall Systems workspace (window.Designer.setMaterial) both edit through it,
+// so there is never a second copy. Returns the value actually stored (snapped,
+// clamped by _applyMaterial).
+function setMaterialField(field, v) {
+  if (field === 'bead_width') return setProjectBeadWidth(v);
+  const m = _material();
+  const x = parseFloat(v);
+  m[field] = Number.isFinite(x) ? Math.round(x / BEAD_STEP) * BEAD_STEP : m[field];
+  layer.material = m;
+  _applyMaterial();
+  return _material()[field];
 }
 
 // clamp the overlaps to the bead width (visibly), sync the controls, regenerate
@@ -5460,7 +5474,7 @@ function _applyMaterial() {
   const cMax = m.bead_width, rMax = m.bead_width - RETURN_MIN;
   if (m.contact_overlap > cMax) { m.contact_overlap = cMax; notes.push(`Contact overlap reduced to ${cMax.toFixed(2)} in (≤ bead width)`); }
   if (m.contact_overlap < 0) m.contact_overlap = 0;
-  if (m.return_overlap > rMax) { m.return_overlap = rMax; notes.push(`Return-lane overlap reduced to ${rMax.toFixed(2)} in (a full overlap would be an exact retrace)`); }
+  if (m.return_overlap > rMax) { m.return_overlap = rMax; notes.push(`Parallel wall overlap reduced to ${rMax.toFixed(2)} in (a full overlap would be an exact retrace)`); }
   if (m.return_overlap < 0) m.return_overlap = 0;
   layer.material = m;
   _syncMaterialControls();
@@ -5478,11 +5492,15 @@ function _syncMaterialControls() {
   set('contact-overlap', 'value', m.contact_overlap.toFixed(2));
   set('return-overlap', 'value', m.return_overlap.toFixed(2));
   set('phys-rules', 'checked', m.physical);
+  // (the Wall Systems workspace shows the same values: index.html #wsys-material)
+  set('wsys-bead-width', 'value', m.bead_width.toFixed(2));
+  set('wsys-contact-overlap', 'value', m.contact_overlap.toFixed(2));
+  set('wsys-parallel-overlap', 'value', m.return_overlap.toFixed(2));
   const W = m.bead_width;
   const rs = Math.max(RETURN_MIN, W - m.return_overlap);
   set('material-derived', 'textContent', m.physical
-    ? `Contact: centrelines ${(W - m.contact_overlap).toFixed(2)} in apart · return lane: ${rs.toFixed(2)} in apart ` +
-      `(single-line wall ≈ ${(W + rs).toFixed(2)} in wide, printed out and back). No pass prints over another.`
+    ? `Contact: centrelines ${(W - m.contact_overlap).toFixed(2)} in apart · parallel lanes: ≥ ${rs.toFixed(2)} in apart ` +
+      `(THIN Out-and-Back wall ${(W + rs).toFixed(2)} in wide). No pass prints over another.`
     : 'Physical rules off: zero-width centrelines (beads are visual only).');
 }
 
@@ -7234,6 +7252,7 @@ window.Designer = {
   saveProject, openProjectDialog, newProject,
   designsForBackend, createDerivedDesign, editDesign, renameDesign, setWorkspace,
   beadWidth: projectBeadWidth, setBeadWidth: setProjectBeadWidth,   // ONE project material value
+  material: _material, setMaterial: setMaterialField,                // (the same material, every field)
   wallSystems: () => project.wall_systems || (project.wall_systems = []),   // the project's constructions
   setWallSystems: list => { project.wall_systems = list; },
   wallCatalog, setWallThickness, archThickness, setArchThickness,

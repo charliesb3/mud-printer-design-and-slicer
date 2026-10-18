@@ -620,7 +620,8 @@ Major capabilities:
   suppressed); rounded thick-wall junctions are one concentric assembly.
 - PHYSICAL BEADS (system-level concept): Wall Thickness (architecture) ≠
   centreline (toolpath) ≠ Bead Width (one deposited pass). DECIDED
-  2026-10-16, not yet in the baseline code: Wall Thickness = the FINISHED
+  2026-10-16, re-implemented on the restart branch 2026-10-18 (manually
+  reviewed, committed; known failures in WALL_ARCHITECTURE.md Z.8): Wall Thickness = the FINISHED
   DEPOSITED width (outside bead edge to outside bead edge) for every
   construction; centrelines lie inside the envelope; Return-Lane Overlap is
   shown as PARALLEL WALL OVERLAP (a maximum) (`WALL_ARCHITECTURE.md` §Z.2). With physical
@@ -702,6 +703,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-18 (Design + Toolpath — restart milestone 1)
+
+Physical wall width (Wall Thickness = finished deposited width; Hollow / Skin + Web skins inset ½ bead in print builds, envelope unchanged) and the shared material controls (Parallel Wall Overlap; Wall Systems Material section) re-implemented on `restart/oct16-base`, manually reviewed and committed as a checkpoint with known failures: a cut-join regression for Skin + Web walls under Assembly profile cuts (next fix), 14 goldens not re-baselined, the envelope = full-build invariant open. Details: `design-toolpath/WALL_ARCHITECTURE.md` Z.8.
 
 2026-10-18 (Design + Toolpath — restart)
 

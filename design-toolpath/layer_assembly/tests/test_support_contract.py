@@ -47,7 +47,10 @@ def test_without_a_header_the_bridge_is_reported_with_its_lattice():
     f = rep.findings[0]
     assert f.status == 'needs_header' and f.layer == 24 and f.section == 2
     assert abs(f.angle) < 1e-6 and math.isclose(f.centre[0], 200, abs_tol=1) and math.isclose(f.centre[1], 145, abs_tol=0.5)
-    assert 30 < f.span < 36 and math.isclose(f.depth, 13, abs_tol=0.5)
+    # depth = the printed wall across the span + one bead: the 10 in wall's skins
+    # print half a bead inside its faces (physical wall width, 2026-10-16) →
+    # centrelines 7 apart + 3 = 10 (was 13 with skins on the faces)
+    assert 30 < f.span < 36 and math.isclose(f.depth, 10, abs_tol=0.5)
     assert any(in_gap(p) for r in f.runs for p in r)            # the lattice over the void is flagged, not accepted
 
 

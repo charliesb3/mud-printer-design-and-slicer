@@ -349,6 +349,9 @@ Supersedes, for authoring, "WALL GROUPS × WALL SYSTEMS WORKSPACE" below and the
 
 ## Known limitations
 
+- REGRESSION (2026-10-18, physical wall width): an Assembly profile cut on a Skin + Web wall (a taper removing an attached wall, two planes on one wall) no longer joins the clipped reference web locally — open route ends where the removed wall met the inset skin reject `DesignLibrary._cut_join`, and the layer's web is re-planned (`test_taper_to_zero_removes_only_that_wall`, `test_two_planes…[skin_web]` red; pass on `8988108`). Next fix (`../WALL_ARCHITECTURE.md` Z.8).
+- OPEN (2026-10-18, physical wall width re-implemented on the restart branch): for Hollow / Skin + Web walls the full print build's material regions are the skin band (envelope inset ½ bead), while the architectural envelope (`envelope_only`, what the Assembly edits / checks) is unchanged — the M0 invariant "envelope rings = the full build's regions" (`test_deferred_print_paths` ×4, red) holds only for generated walls now; decision pending (`../WALL_ARCHITECTURE.md` Z.8).
+
 - KNOWN ISSUE — corner-cutting in path views (diagnosed 2026-10-15; FIXED the same day, see below).
   Symptom: corners / openings / junctions look rough or diagonally cut in the
   Pi top view, and in the Designer's Print Simulation only while dragging /

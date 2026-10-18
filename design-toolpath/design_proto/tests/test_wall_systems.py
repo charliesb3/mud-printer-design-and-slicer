@@ -768,7 +768,9 @@ def test_the_wall_system_owns_thickness_and_alignment():
     assert sw['B'] is None                                     # not a member: a single bead
     outer = [x for x in p if getattr(x, 'source_id', None) == 'A' or getattr(x, 'id', '') == 'A']
     xs = [q.x for x in outer for q in x.sample_points()]
-    assert abs(min(xs) - 32) < 0.05                            # 8 in OUTSIDE the 40 in edge
+    # 8 in OUTSIDE the 40 in edge: the finished face at 32, the outer skin's
+    # centreline half a bead inside it (PHYSICAL WALL WIDTH)
+    assert abs(min(xs) - (32 + 0.5 * 3.0)) < 0.05
 
 
 def test_members_need_not_touch():
