@@ -150,7 +150,7 @@ function wsysNew(type = 'skin_web', assign = {}) {
     let k = L.length + 1;
     while (L.some(s => s.name === `Wall System ${k}`)) k++;
     const s = { id: _wsysNewId(), name: `Wall System ${k}`, type: 'skin_web', params: {}, members: [],
-                web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } };
+                web: { pattern: 'zigzag', params: { web_angle: 20 }, variation_index: 0 } };
     _wsSetType(s, type);
     L.push(s);
     for (const w of assign.members || []) _wsysAssignWall(s, w);

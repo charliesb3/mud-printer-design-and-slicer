@@ -3288,6 +3288,10 @@ class PrintLayer:
                                             **({'joined': joined} if joined is not None else {})})
                     continue
                 phys = self.material.physical
+                # a Skin + Web web (owned record): TARGET WEB ANGLE — the
+                # pitch follows the cavity (its legacy `spacing` is ignored)
+                web_angle = None if not inf.owner or pattern == 'truss' else \
+                    float(inf.params.get('web_angle') or WL.WEB_ANGLE_DEFAULT)
                 lp = WL.plan(job['rings'], spacing, pattern, inf.variation_index,
                              self.prefer_closed or phys,
                              float(inf.params.get('max_unsupported', 0) or 0) or None,
@@ -3297,7 +3301,8 @@ class PrintLayer:
                              track=((self.lattice_track or {}).get(inf.id) or (None, None))[0],
                              track_map=((self.lattice_track or {}).get(inf.id) or (None, None))[1],
                              bead=self.material.bead_width if phys else 0.0,
-                             truss=inf.params if pattern == 'truss' else None)
+                             truss=inf.params if pattern == 'truss' else None,
+                             web_angle=web_angle)
                 if lp is not None:
                     for j, poly in enumerate(lp.polylines):
                         dp = DerivedPath(poly, closed=False, role='lattice',
@@ -3341,7 +3346,9 @@ class PrintLayer:
                         # the lineage's SHARED lattice (Layer Designs), if any
                         'lineage': lr.get('lineage'),
                         # ADAPTIVE TRUSS: effective pitch / stitch constructions
-                        'truss': next((r['truss'] for r in regs if r.get('truss')), None)}
+                        'truss': next((r['truss'] for r in regs if r.get('truss')), None),
+                        # TARGET WEB ANGLE (Skin + Web): derived pitch per region
+                        'web_angle': [r['web_angle'] for r in regs if r.get('web_angle')] or None}
             # Motif lattices are continuous by construction: no repair.
             # Report them in the same shape (0 defects / edits) so route
             # consumers see one plan; open ends = lone runs / open arms.
@@ -5556,10 +5563,19 @@ def _join_cut_ends(pieces, ref, rings, bead) -> tuple:
     in 'odd' (the caller's closure check decides)."""
     import wall_lattice as _WL
     ends0 = [q for poly in ref for q in (poly[0], poly[-1])]
+    ends1 = [q for poly in pieces for q in (poly[0], poly[-1])]
     thick = _WL._thickness([r for r in rings if len(r) >= 3]) or 1.0
 
     def original(q):
-        return any(q.dist(e) < 1e-6 for e in ends0)
+        """An end of the reference that the cut left as it was. A reference
+        end where strands MEET (a hand-off node: e.g. a room's pass and a
+        branch's web meeting at the branch's mouth corners) is EXPOSED when
+        the cut removed a partner — fewer ends meet there now — and is joined
+        like any cut end. (PHYSICAL WALL WIDTH: with skins inset, a room's
+        pass hands off exactly at the mouth corners on the inset skin, so
+        removing the branch leaves the room's ends on reference end points.)"""
+        n0 = sum(1 for e in ends0 if q.dist(e) < 1e-6)
+        return n0 > 0 and sum(1 for e in ends1 if q.dist(e) < 1e-6) >= n0
     cums = []
     for r in rings:
         c = [0.0]

@@ -440,6 +440,31 @@ eval(src + `
           'clamped exactly as in the Designer (< bead width)');
     el('return-overlap').value = '0.75'; onMaterialChange('return_overlap');
   }
+  // ---- SKIN + WEB: Target Web Angle (2026-10-16, Pass A) — the zigzag / wave
+  //      pitch is derived from the angle and the cavity; no Target Spacing ----
+  {
+    // (the server's pattern list, as init() loads it)
+    for (const p of await (await fetch('/api/infill_patterns')).json()) infillPatterns[p.name] = p;
+    const s0 = { params: {} };
+    _wsSetType(s0, 'skin_web');
+    check(s0.web.params.web_angle === 20 && !('spacing' in s0.web.params), 'a new Skin + Web web: Target Web Angle 20°');
+    check(_webParamsFor('zigzag')[0].name === 'web_angle' && _webParamsFor('wave')[0].name === 'web_angle' &&
+          _webParamsFor('truss')[0].name === 'brace_angle', 'web parameters from the server: angle (zigzag / wave), truss its own');
+    // a SAVED project's web with only the legacy spacing still opens
+    const s = { id: 'tmpw', type: 'skin_web', members: [], web: { pattern: 'zigzag', params: { spacing: 20 }, variation_index: 0 } };
+    const panel = document.createElement('div');
+    let edits = 0;
+    _addWebRows(panel, s, () => {}, { onParam: () => { edits++; } });
+    const rowOf = label => panel.children.find(r => r.children && r.children[0] && r.children[0].textContent === label);
+    const ang = rowOf('Target Web Angle');
+    check(ang && !rowOf('Target Spacing') && ang.children[1].value === 20 && ang.children[2].textContent === '°',
+          'the Skin + Web panel shows Target Web Angle (default for a legacy web), not Target Spacing');
+    ang.children[1].value = '35'; ang.children[1].onchange();
+    check(s.web.params.web_angle === 35 && edits === 1 && s.web.params.spacing === 20,
+          'editing it sets web_angle (the legacy spacing is left untouched)');
+    ang.children[1].value = '89'; ang.children[1].onchange();
+    check(s.web.params.web_angle === 75, 'clamped to the server range (≤ 75°)');
+  }
   console.log('UI WALL SYSTEMS SMOKE PASSED');
 })().catch(e => { console.error(e); process.exit(1); });
 `);

@@ -117,9 +117,13 @@ def _transforms_active(transforms) -> bool:
     return bool(transforms) and ST.spec_key(transforms) != '[]'
 
 
-def _merged_track(reports) -> dict:
-    """The station tracks of a reference plan's regions, as one list."""
-    return {'runs': [run for r in reports or [] for run in ((r or {}).get('track') or {}).get('runs', [])]}
+def _merged_track(reports, pool=None) -> dict:
+    """The station tracks of a reference plan's regions, as one list —
+    plus the POOL of deposited web stations carried to the new layer
+    (wall_lattice §11): `pool` (reports) or these same runs."""
+    runs = [run for r in reports or [] for run in ((r or {}).get('track') or {}).get('runs', [])]
+    return {'runs': runs, 'pool': runs if pool is None else
+            [run for r in pool or [] for run in ((r or {}).get('track') or {}).get('runs', [])]}
 
 
 _TRACK_MAPS: OrderedDict = OrderedDict()
@@ -144,6 +148,19 @@ def _track_map(doc0, transforms):
     def f(p):
         q = ST.map_wall_point(maps, lines, owner, (p.x, p.y))
         return Vec2(q[0], q[1])
+    spans = {sid: ST.straight_spans(pts) for sid, pts in lines.items()}
+    grids, memo = {}, {}
+
+    def host(p):
+        # DEPOSITED CONSTRUCTION follows its host's motion only (carried
+        # web stations; wall_lattice module doc §11) — never the full map
+        # of a wall whose length changed
+        k = (round(p.x, 9), round(p.y, 9))
+        if k not in memo:
+            memo[k] = ST.map_host_point(maps, lines, owner, (p.x, p.y), spans, grids)
+        q = memo[k]
+        return Vec2(q[0], q[1])
+    f.host = host
     _TRACK_MAPS[key] = f
     while len(_TRACK_MAPS) > 64:
         _TRACK_MAPS.popitem(last=False)
@@ -809,9 +826,15 @@ class DesignLibrary:
             ref = self.build(design_id, inherit_lattice)
             tmap = _track_map(self.document(design_id), transforms) if _transforms_active(transforms) \
                 else (lambda p: p)
-            layer.lattice_track = {inf: (_merged_track(info.get('regions') or []), tmap)
-                                   for inf, info in (ref.network.get('lattice') or {}).items()
-                                   if any(r_.get('track') for r_ in info.get('regions') or [])}
+            lat = ref.network.get('lattice') or {}
+            # every web of this layer carries the WHOLE deposited construction
+            # below (one pool): a wall whose web was another infill's below (a
+            # domain that split) keeps it — physical ancestry, not infill ids
+            pool = [r_ for info in lat.values() for r_ in info.get('regions') or []]
+            ids = set(lat) | {f.get('id') for f in doc.get('infills') or [] if (f.get('kind') or 'wall') == 'wall'}
+            layer.lattice_track = {inf: (_merged_track((lat.get(inf) or {}).get('regions') or [], pool), tmap)
+                                   for inf in ids
+                                   if any(r_.get('track') for r_ in pool)}
         tm['tracking_reference'] = _t.perf_counter() - t0
         t0 = _t.perf_counter()
         pre = self.scaffold_verdict(design_id, transforms, cuts).pop('_built', None) \
@@ -933,7 +956,7 @@ class DesignLibrary:
         probes = []
         for c in stations:
             if c.get('plane') is not None:            # a PLANAR cut's first cut: probes at its removed stretches
-                probes += PC.plane_probes(doc0, c['plane'], PROBE_WIDTH)
+                probes += self._plane_probes_reaching(design_id, transforms, base_cuts, doc0, c['plane'], ref0)
             else:
                 probes.append(dict(op='opening', source=c['source'], edge=c.get('edge'), at=c['at'],
                                    width=PROBE_WIDTH, profile='probe'))
@@ -980,6 +1003,59 @@ class DesignLibrary:
                                     bool(tracking)), make)
         self._cache[key] = out
         return out
+
+    PROBE_DEPTHS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)   # in: how far a plane station's probe may advance
+
+    def _plane_probes_reaching(self, design_id, transforms, base_cuts, doc0, plane, ref0) -> list:
+        """The probes of a PLANAR station that actually cut the reference
+        lattice. The station is the plane's FIRST cut of the wall — on a
+        corner, often only the envelope's tip. Under physical wall width the
+        printed band (skins, web) lies half a bead and more inside the
+        envelope, so a probe there removes no printed construction and
+        trivially 'closes', which says nothing about the cuts that follow
+        (a single-pass web cut once per face cannot close). So: probe the same
+        plane advanced along its normal (deeper into the wall) until the probe
+        clips the reference lattice; that probe answers the parity question.
+        (The plane removes {q: (q − P)·n < 0}: moving P by +d·n cuts deeper.)
+        The deeper probes sit at the QUARTER points of each removed stretch:
+        a plane across a corner removes a stretch centred on the corner
+        vertex at every depth, and a probe AT the vertex cuts nothing printed.
+        None reaches it within PROBE_DEPTHS → the first-cut probes, as before."""
+        import profile_cuts as PC
+        from app import _deserialise_layer
+        first = PC.plane_probes(doc0, plane, PROBE_WIDTH)
+        if not ref0:
+            return first
+        (px, py), (nx, ny) = plane['point'], plane['normal']
+        srcs = {d_.get('id'): d_ for d_ in doc0.get('source_paths') or []}
+
+        def quarters(pl):
+            out = []
+            for sid in PC.selection(doc0, pl):
+                if sid not in srcs:
+                    continue
+                pts, closed = PC._processed(srcs[sid], doc0)
+                ivs, L = PC.removed_intervals(pts, closed, pl['point'], pl['normal'])
+                for a, b in ivs:
+                    for f in (0.25, 0.75):
+                        s = a + f * (b - a)
+                        out.append({'op': 'opening', 'source': sid, 'edge': None,
+                                    'center_s': s % L if closed else s, 'width': PROBE_WIDTH, 'profile': 'probe'})
+            return out
+        for d in self.PROBE_DEPTHS:
+            ps = first if d == 0.0 else quarters(dict(plane, point=[px + d * nx, py + d * ny]))
+            if not ps:
+                continue
+            pdoc = self.transformed(design_id, transforms, list(base_cuts or []) + ps)[0]
+            lay = _deserialise_layer(pdoc)
+            lay.lattice_reference = ref0
+            lay.lattice_join = True
+            _, meta = lay._build_effective()
+            cut = any((r.get('joined') or {}).get('pairs', 0) + (r.get('joined') or {}).get('odd', 0)
+                      for v in (meta['network'].get('lattice') or {}).values() for r in v.get('regions') or [])
+            if cut:
+                return ps
+        return first
 
     def _finish(self, design_id, doc, trep, layer, paths, meta, tm, key, tkey) -> 'BuiltLayer':
         import time as _t

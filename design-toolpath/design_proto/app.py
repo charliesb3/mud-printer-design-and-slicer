@@ -269,7 +269,8 @@ def api_generators():
 def api_infill_patterns():
     import solid as solid_mod
     return jsonify([{'name': k, 'description': v, 'kind': 'wall',
-                     'parameters': infill_mod.parameters_for(k)}
+                     'parameters': infill_mod.parameters_for(k),
+                     'web_parameters': infill_mod.web_parameters_for(k)}
                     for k, v in infill_mod.PATTERNS.items()] +
                    [{'name': k, 'description': v, 'kind': 'solid',
                      'parameters': solid_mod.PARAMETERS}

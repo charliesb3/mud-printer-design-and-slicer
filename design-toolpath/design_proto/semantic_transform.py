@@ -277,6 +277,113 @@ def map_wall_point(maps, lines, owner, p):
     return (f[0] + off[0], f[1] + off[1])
 
 
+SPAN_TOL = math.radians(0.25)   # a straight span: every piece within this of its first piece's direction
+
+
+def straight_spans(pts) -> list:
+    """Per segment of a dense centre line: its maximal STRAIGHT SPAN
+    (A, B, unit tangent) — consecutive pieces within SPAN_TOL of the span's
+    first piece. On a curve every span is a piece or two long."""
+    out, k, n = [], 0, len(pts) - 1
+    while k < n:
+        a = pts[k]
+        d0 = math.atan2(pts[k + 1][1] - a[1], pts[k + 1][0] - a[0])
+        j = k + 1
+        while j < n:
+            d = math.atan2(pts[j + 1][1] - pts[j][1], pts[j + 1][0] - pts[j][0])
+            if abs((d - d0 + math.pi) % (2 * math.pi) - math.pi) > SPAN_TOL:
+                break
+            j += 1
+        b = pts[j]
+        L = math.dist(a, b)
+        tau = ((b[0] - a[0]) / L, (b[1] - a[1]) / L) if L > 1e-12 else (1.0, 0.0)
+        out += [(a, b, tau)] * (j - k)
+        k = j
+    return out
+
+
+class SegGrid:
+    """Segments of a dense polyline bucketed in a uniform grid: the nearest
+    segment to a point without scanning them all (a circle's centre line
+    has 4096)."""
+
+    def __init__(self, pts, cell=2.0):
+        self.pts, self.cell, self.grid = pts, cell, {}
+        for k, (a, b) in enumerate(zip(pts, pts[1:])):
+            for gx in range(math.floor(min(a[0], b[0]) / cell), math.floor(max(a[0], b[0]) / cell) + 1):
+                for gy in range(math.floor(min(a[1], b[1]) / cell), math.floor(max(a[1], b[1]) / cell) + 1):
+                    self.grid.setdefault((gx, gy), []).append(k)
+
+    def nearest(self, p):
+        """(distance, foot, segment index) — rings of cells searched outwards
+        until one holds a segment, then one ring more (exact nearest)."""
+        cx, cy = math.floor(p[0] / self.cell), math.floor(p[1] / self.cell)
+        best, found_at = (math.inf, None, 0), None
+        for ring in range(0, 4096):
+            if found_at is not None and ring > found_at + 1:
+                break
+            cells = [(cx + i, cy + j) for i in range(-ring, ring + 1) for j in range(-ring, ring + 1)
+                     if max(abs(i), abs(j)) == ring]
+            for c in cells:
+                for k in self.grid.get(c, ()):
+                    a, b = self.pts[k], self.pts[k + 1]
+                    dx, dy = b[0] - a[0], b[1] - a[1]
+                    L2 = dx * dx + dy * dy
+                    t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+                    q = (a[0] + t * dx, a[1] + t * dy)
+                    dd = math.dist(p, q)
+                    if dd < best[0]:
+                        best = (dd, q, k)
+            if found_at is None and best[1] is not None:
+                found_at = ring
+        return best
+
+
+def map_host_point(maps, lines, owner, p, spans=None, grids=None):
+    """HOST MOTION (construction through Z, WALL_ARCHITECTURE §Z.0.S): where
+    construction deposited at p on the untransformed design sits on the
+    transformed one. Rigid motion carries it; a CHANGING DISTANCE between
+    architectural events never moves it along the wall.
+      * Along a straight span of its source: it follows the span's
+        perpendicular motion (the face moved), and moves ALONG the span only
+        by the motion both span ends share (the smaller, when they move the
+        same way; none when the span shortens / lengthens about a point on
+        it) — the ends move THROUGH the construction.
+      * On a curve (every span a piece or two): that reduces to the source's
+        own map — a circle's construction moves radially with it, keeping
+        its angle (§Z.0.S; a rigid translation / scale about the centre).
+      * A regenerated connector (rotating map): its own map.
+    p's foot on the owning source's centre line moves; its offset from it
+    stays physical."""
+    sid = owner(p)
+    m = maps.get(sid)
+    if m is None or sid not in lines:
+        return p
+    if m[0] != 'sim':
+        return map_wall_point(maps, lines, owner, p)
+    pts = lines[sid]
+    g = (grids or {}).get(sid)
+    if g is None:
+        g = SegGrid(pts)
+        if grids is not None:
+            grids[sid] = g
+    _, foot, k = g.nearest(p)
+    if foot is None:
+        return p
+    sp = (spans or {}).get(sid)
+    A, B, (tx, ty) = (sp or straight_spans(pts))[k]
+
+    def mv(x):
+        y = _map_point(m, x)
+        return (y[0] - x[0], y[1] - x[1])
+    nx_, ny_ = -ty, tx
+    f = mv(foot)
+    perp = f[0] * nx_ + f[1] * ny_
+    ta, tb = (lambda v: v[0] * tx + v[1] * ty)(mv(A)), (lambda v: v[0] * tx + v[1] * ty)(mv(B))
+    along = 0.0 if ta * tb <= 0 else (ta if abs(ta) < abs(tb) else tb)
+    return (p[0] + nx_ * perp + tx * along, p[1] + ny_ * perp + ty * along)
+
+
 def transform_document(doc, transforms, atts=None, _maps_only=False) -> tuple:
     """(transformed document, report). transforms: {source id: (k, tx, ty)}.
     atts: attachments(doc) (pass it when transforming the same design for

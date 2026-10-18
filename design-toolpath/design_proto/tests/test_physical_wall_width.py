@@ -172,11 +172,16 @@ def test_skin_web_web_lands_contact_overlap_off_the_corrected_skins(pattern, t):
     skin_y = sorted(p.sample_points()[0].y for p in skins)
     assert math.isclose(skin_y[1] - skin_y[0], t - W, abs_tol=1e-6)
     d_min = float('inf')
+    joins = [q.x for p in web for q in p.sample_points() if min(abs(q.y - y) for y in skin_y) < 1e-6]
     for p in web:
         for q in p.sample_points():
-            if 110 < q.x < 250:
-                d_min = min(d_min, min(abs(q.y - y) for y in skin_y))
-    # the web's landings stop W − O from the skin centreline (never closer)
+            d = min(abs(q.y - y) for y in skin_y)
+            if 110 < q.x < 250 and all(abs(q.x - x) > 12.0 for x in joins):
+                d_min = min(d_min, d)
+    # the web's landings stop W − O from the skin centreline (never closer;
+    # the route's TRANSFER — exactly on a skin — excepted: since 2026-10-18 it
+    # sits on the station deepest inside its run, so it can lie mid-wall:
+    # the stitches into it — a cell either side — are excepted too)
     assert math.isclose(d_min, W - O, abs_tol=0.02), d_min
 
 

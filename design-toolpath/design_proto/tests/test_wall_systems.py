@@ -851,9 +851,14 @@ def _apply_migration(L, res):
     return M
 
 
-def _printable(L):
+def _printable(L, web=True):
+    """web=False: without the lattice / web strands (their geometry may
+    legitimately change, see test_migration_keeps_the_printed_geometry)."""
     p, m = L._build_effective()
     pc = L.printable_centerlines(p, m)
+    if not web:
+        assert len(pc) == len(p)
+        pc = [c for c, q in zip(pc, p) if getattr(q, 'role', None) != 'lattice']
     pts = sorted(tuple((round(a, 3), round(b, 3)) for a, b in c['pts']) for c in pc)
     assert pts and all(pts)
     rl = L.to_routing_layer(p, m)
@@ -883,7 +888,16 @@ def test_migration_keeps_the_printed_geometry(case):
     assert res['migrated']
     M = _apply_migration(L, res)
     assert not M.migrate_wall_systems()['migrated']               # idempotent
-    assert _printable(M) == _printable(L)
+    # (2026-10-18, Skin + Web Target Web Angle: a legacy UNOWNED wall infill
+    # keeps Target Spacing; migrated, it is the OWNED web of a Skin + Web
+    # system — angle-driven, its stored `spacing` ignored, no pitch → angle
+    # conversion (WALL_ARCHITECTURE §Z.3). So the WEB of a migrated zigzag /
+    # wave infill may change; every other printed path and the route stay.)
+    angled = any(f.kind == 'wall' and f.pattern in ('zigzag', 'wave') for f in L.infills)
+    assert _printable(M, web=not angled) == _printable(L, web=not angled)
+    if angled:
+        lat = M._build_effective()[1]['network']['infills']
+        assert any(i.get('lattice') and i['lattice'].get('web_angle') for i in lat)
     walls = [f for f in L.infills if f.kind == 'wall']
     assert all(f.id in res['owners'] for f in walls)
     members = [pid for w in res['wall_systems'] for pid in w['members']]
