@@ -151,7 +151,11 @@ def resolved_to_dict(res) -> dict:
         'instances': [{'index': i.index, 'design_id': i.design_id, 'section_index': i.section_index,
                        'z_bottom': i.z_bottom, 'z_top': i.z_top, 'transform': i.transform.to_dict(),
                        'geometry_key': i.geometry_key,
-                       **({'parts': {k: t.to_dict() for k, t in i.parts.items()}} if i.parts else {})}
+                       **({'parts': {k: t.to_dict() for k, t in i.parts.items()}} if i.parts else {}),
+                       # (Preserve physical dimensions: where the CANONICAL design's
+                       # coordinates land — profiles / planes / wall targets)
+                       **({'design_transform': i.design_transform.to_dict()}
+                          if i.design_transform != i.transform else {})}
                       for i in res.instances],
         'total_layers': res.total_layers, 'total_height': res.total_height,
         'desired_height': res.desired_height, 'warnings': res.warnings,
@@ -285,6 +289,28 @@ def _support_report(st, geo, **kw):
     return rep
 
 
+def _dimension_report(st, envelope=False) -> dict:
+    """SCALE CONSTRUCTION feasibility (dimensions.py): where the placed
+    construction asks the physical bead for more than it can make."""
+    from .dimensions import scale_construction_report
+    src, res = st['src'], st['res']
+    used = list(dict.fromkeys(i.design_id for i in res.instances))
+    geo = {d: st['geo'][d] for d in used if d in st['geo']}
+    diags, ro = {}, None
+    for d in used:
+        if not envelope:
+            try:
+                diags[d] = src.geometry(d).diagnostics
+            except Exception:                          # (no canonical build: the strands alone)
+                pass
+        if ro is None:
+            try:
+                ro = (src.lib.document(d).get('material') or {}).get('return_overlap')
+            except Exception:
+                pass
+    return scale_construction_report(res, st['assembly'], geo, diags, st['bead'], ro, envelope=envelope)
+
+
 def _resolve_locked(data, T, lap, t_all, envelope=False):
     import time
     try:
@@ -357,6 +383,10 @@ def _resolve_locked(data, T, lap, t_all, envelope=False):
             rep = _support_report(st, geo)
         out['support'] = rep.to_dict()
         lap('support_analysis')
+        dim = _dimension_report(st, envelope=env_key is not None)
+        if dim['findings']:
+            out['dimension'] = dim
+            out['warnings'] = list(out.get('warnings') or []) + dim['warnings']
     if grp is not None:
         out['groups'] = grp.to_dict()
     resp = jsonify(out)
@@ -649,7 +679,9 @@ def api_wallsystems_generate():
                 for d in src.design_ids():               # (the Base design view: its canonical build)
                     if src.info(d).parent is None:
                         src.geometry(d)
+                dim = _dimension_report(st)
                 hit = {'src': src, 'res': res, 'support': rep.to_dict(), 'inspection': inspection,
+                       'dimension': dim,
                        'stats': {'layers': len(res.instances),
                                  'variants': sum(1 for i in res.instances if i.is_variant),
                                  'built': max(0, len(getattr(src, '_variants', {})) - n0),
@@ -668,7 +700,8 @@ def api_wallsystems_generate():
                 for w in hit['src'].lib.document(d).get('wall_systems') or []:
                     systems[w.get('id')] = {'name': w.get('name') or w.get('id'), 'type': w.get('type')}
         return jsonify({'key': key, 'layers': layers, 'support': hit['support'], 'stats': hit['stats'],
-                        'systems': systems, 'inspection': hit['inspection']})
+                        'systems': systems, 'inspection': hit['inspection'],
+                        **({'dimension': hit['dimension']} if (hit.get('dimension') or {}).get('findings') else {})})
     except PlanCancelled as e:
         return jsonify({'error': str(e), 'cancelled': True}), 409
     except (AssemblyError, ProfileError, KeyError, ValueError, TypeError) as e:

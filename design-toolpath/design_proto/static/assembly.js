@@ -43,6 +43,7 @@ const asm = {
            centers: [],     // transform groups [{id, x, y, sources: [source id], label}]
            center_counter: 0,
            opening_alignment: 'plumb',   // Vertical / Plumb: the default since 2026-10-14 (Follow Wall before)
+           dimension_behavior: 'scale',  // Scale construction (default; absent = the same) | 'physical'
            max_overhang: 1.0,  // in: how far a bead may hang past the one below (min overlap = bead − this; 1.5 until 2026-10-11)
            profiles: [],    // ASSEMBLY PROFILES (Z-dependent source geometry of straight walls)
            profile_counter: 0 },
@@ -892,6 +893,31 @@ function asmRender() {
   csel.onchange = () => asmSetCenterMode(csel.value);
   crow.appendChild(csel);
   atf.appendChild(crow);
+  // DIMENSION BEHAVIOR (global: every Scale in of the stack)
+  const drow = _el('div', 'asm-row asm-dimension');
+  drow.title = 'Dimension behavior of Scale in — Scale construction: the resolved wall construction scales with the ' +
+               'transform (walls taper; useful for intentional tapered construction). Preserve physical dimensions: ' +
+               'the architectural form transforms while physical wall / material dimensions such as Wall Thickness, ' +
+               'Bead Width and opening widths stay constant.';
+  drow.appendChild(_el('span', 'prop-label', 'Dimensions'));
+  const dsel = _el('select', 'prop-input');
+  const multi = asm.state.center_mode === 'multiple';
+  for (const [v, lab] of ASM_DIMENSIONS) {
+    const o = _el('option', null, lab + (v === 'physical' && multi ? ' (not with Multiple centres)' : ''));
+    o.value = v;
+    if (v === 'physical' && multi && _asmDimension() !== 'physical') o.disabled = true;
+    dsel.appendChild(o);
+  }
+  dsel.value = _asmDimension();
+  dsel.dataset.field = 'dimension_behavior';
+  dsel.onchange = () => asmSetDimensionBehavior(dsel.value);
+  drow.appendChild(dsel);
+  atf.appendChild(drow);
+  if (multi && _asmDimension() === 'physical')
+    atf.appendChild(_el('div', 'asm-calc asm-align-warn',
+      '⚠ Preserve physical dimensions is not supported with Multiple centres: Scale construction is used'));
+  for (const w of (R && R.dimension && R.dimension.warnings) || [])
+    atf.appendChild(_el('div', 'asm-calc asm-align-warn', '⚠ ' + w));
   // OPENING ALIGNMENT (global): how every opening responds to these transforms
   const orow = _el('div', 'asm-row asm-opening-align');
   orow.title = 'Opening Alignment — Follow Wall: openings move with the transformed walls (they lean). ' +
@@ -1566,7 +1592,7 @@ function asmProfileElevation(id) {
   asm.profSel = p ? p.id : null;
   if (!p || !t) { asmRender(); return; }
   const stack = asmStack();
-  const T0 = (stack[0] && stack[0].transform) || { scale: 1, tx: 0, ty: 0 };
+  const T0 = _asmDesignT(stack[0]);
   const ux = t.b[0] - t.a[0], uy = t.b[1] - t.a[1];
   Object.assign(asm.view, { yaw: -Math.atan2(uy, ux), pitch: 0, zoom: 1, px: 0, py: 0 });
   asm.elevation = { id: p.id, orbited: false };
@@ -1597,7 +1623,7 @@ function _asmWallPoint(t, s, z) {
   if (insts.length) {
     const lh = asm.state.layer_height || 1;
     const i = Math.max(0, Math.min(insts.length - 1, Math.floor(z / lh - 1e-9)));
-    T = insts[i].transform || T;
+    T = _asmDesignT(insts[i]);
   }
   const L = t.length || 1;
   const x = t.a[0] + (t.b[0] - t.a[0]) * s / L, y = t.a[1] + (t.b[1] - t.a[1]) * s / L;
@@ -1732,7 +1758,15 @@ function _asmWallPlacement(k, source) {
     const c = (asm.state.centers || []).find(c_ => (c_.sources || []).includes(source));
     if (c && i.parts[c.id]) return i.parts[c.id];
   }
-  return i.transform || { scale: 1, tx: 0, ty: 0 };
+  return _asmDesignT(i);
+}
+
+// Where the CANONICAL design's coordinates land at a layer (profiles, planes,
+// wall targets): with Preserve physical dimensions the placement is a
+// translation and the architecture's scale is inside the variant — the server
+// sends that composed placement as `design_transform`
+function _asmDesignT(i) {
+  return (i && (i.design_transform || i.transform)) || { scale: 1, tx: 0, ty: 0 };
 }
 function _asmPlumb(t, s0, k0, source) {
   const insts = (asm.resolved && asm.resolved.instances) || [];
@@ -2151,7 +2185,7 @@ function _asmPlaneFootprint(p) {
   if (!R) return out;
   for (const d of _asmPlaneDesigns()) {
     const inst = R.instances.find(i => i.design_id === d);
-    const T = (inst && inst.transform) || { scale: 1, tx: 0, ty: 0 };
+    const T = _asmDesignT(inst);
     const sel = _asmPlaneSel(p, d);
     for (const r of _asmPlaneSources(d)) if (sel.has(r.source))
       for (const [x, y] of r.points || []) out.push(_asmPlace(T, x, y));
@@ -2384,7 +2418,7 @@ function _asmDrawPlane(g, P, p) {
   g.strokeStyle = ASM_PROFILE_COLOR; g.lineWidth = 2.2;
   for (const d of _asmPlaneDesigns()) {
     const inst = R.instances.find(i => i.design_id === d);
-    const T = (inst && inst.transform) || { scale: 1, tx: 0, ty: 0 };
+    const T = _asmDesignT(inst);
     const sel = _asmPlaneSel(p, d);
     for (const r of _asmPlaneSources(d)) {
       if (!sel.has(r.source)) continue;
@@ -2517,7 +2551,7 @@ function _asmDrawPlaneGhost(g, P, stack, p) {
     if (!geo) continue;
     const sel = _asmPlaneSel(p, inst.design_id);
     if (!sel.size) continue;
-    const z = (inst.z_bottom + inst.z_top) / 2, T = inst.transform, sc = T.scale, tx = T.tx, ty = T.ty;
+    const z = (inst.z_bottom + inst.z_top) / 2, T = _asmDesignT(inst), sc = T.scale, tx = T.tx, ty = T.ty;
     for (const pl of geo.polylines || []) {
       const n = pl.pts.length, segN = pl.closed ? n : n - 1;
       for (let k = 0; k < segN; k++) {
@@ -2580,7 +2614,7 @@ function asmPlaneWallAt(sx, sy) {
   let best = null, bd = 8;
   for (const d of _asmPlaneDesigns()) {
     const inst = R.instances.find(i => i.design_id === d);
-    const T = (inst && inst.transform) || { scale: 1, tx: 0, ty: 0 };
+    const T = _asmDesignT(inst);
     for (const r of _asmPlaneSources(d)) {
       const pts = (r.points || []).map(([x, y]) => L.P(..._asmPlace(T, x, y), 0));
       if (r.closed && pts.length) pts.push(pts[0]);
@@ -2897,6 +2931,17 @@ function _asmConfigName(p) {
 // explicit by the schema-4 migration) for every opening: Designer openings,
 // Assembly openings, arrays, header openings (profiles.py)
 const ASM_ALIGN = [['follow', 'Follow Wall'], ['plumb', 'Vertical / Plumb']];
+// DIMENSION BEHAVIOR — ONE global Assembly setting (asm.state.dimension_behavior,
+// layer_assembly/model.py): 'scale' = Scale construction (the default, also
+// when absent) | 'physical' = Preserve physical dimensions (single centre)
+const ASM_DIMENSIONS = [['scale', 'Scale construction'], ['physical', 'Preserve physical dimensions']];
+const _asmDimension = () => (asm.state.dimension_behavior === 'physical' ? 'physical' : 'scale');
+function asmSetDimensionBehavior(v) {
+  return asmEdit(null, () => {
+    asm.state.dimension_behavior = v === 'physical' ? 'physical' : 'scale';
+    return asmResolve();
+  });
+}
 const _asmPlumbOn = () => asm.state.opening_alignment !== 'follow';
 function asmSetOpeningAlignment(v) {
   return asmEdit(null, () => {
@@ -3144,7 +3189,7 @@ function _asmDrawRemovedGhost(g, P, stack) {
       for (let k = 0; k < segN; k++) {
         const a = pl.pts[k], b = pl.pts[(k + 1) % n];
         if (!zone([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])) continue;
-        const A = P(..._asmPlace(inst.transform, a[0], a[1]), inst.z_top), B = P(..._asmPlace(inst.transform, b[0], b[1]), inst.z_top);
+        const A = P(..._asmPlace(_asmDesignT(inst), a[0], a[1]), inst.z_top), B = P(..._asmPlace(_asmDesignT(inst), b[0], b[1]), inst.z_top);
         g.beginPath(); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.stroke();
       }
     }
@@ -3201,8 +3246,10 @@ function asmStack() {
       return L;
     }
     // (preview: clipped only when a layer is actually drawn; bounds / level of
-    // detail from its uncut design — `basePolylines`)
+    // detail from its uncut design — `basePolylines` — so it is placed as the
+    // CANONICAL design is: Preserve physical dimensions scales it approximately)
     L.basePolylines = (asm.geometry[i.design_id] || {}).polylines || [];
+    L.transform = _asmDesignT(i);
     let memo = null;
     Object.defineProperty(L, 'polylines', { get: () => memo || (memo = prev(L)), enumerable: true });
     return L;
@@ -3224,7 +3271,7 @@ function _asmPlanePreview() {
   const fn = inst => {
     const geo = asm.geometry[inst.design_id];
     if (!geo) return [];
-    const z = (inst.z_bottom + inst.z_top) / 2, T = inst.transform || { scale: 1, tx: 0, ty: 0 };
+    const z = (inst.z_bottom + inst.z_top) / 2, T = _asmDesignT(inst);
     const act = planes.map(p => [_asmPlaneRemovedF(p), _asmPlaneSel(p, inst.design_id)]).filter(([, sel]) => sel.size);
     const mk = inst.design_id + '|' + z + '|' + T.scale + ',' + T.tx + ',' + T.ty;
     if (memo[mk]) return memo[mk];

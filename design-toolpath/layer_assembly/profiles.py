@@ -782,7 +782,16 @@ def wall_placement(inst, source):
     for s_, k, tx, ty in inst.semantic or ():
         if s_ == source:
             return InstanceTransform(T.scale * k, T.scale * tx + T.tx, T.scale * ty + T.ty)
-    return T
+    return inst.design_transform           # (Preserve physical dimensions: the whole-layer scale '*')
+
+
+def _design_to_local(inst, p):
+    """A canonical design point → the layer's LOCAL coordinates (what its
+    placement places): moved by the whole-layer scale '*', if any."""
+    for s_, k, tx, ty in inst.semantic or ():
+        if s_ == '*':
+            return (k * p[0] + tx, k * p[1] + ty)
+    return p
 
 
 def _to_design(T, X):
@@ -1142,8 +1151,12 @@ def _opening_headers(p, res, members, insts, tgs, bead):
         hs = p.header_settings(t.thickness, bead)
         sc = inst.transform.scale or 1.0
         hid = f'{p.id}-header' + (f'-{j + 1}' if len(members) > 1 else '')
+        # (a header is written in its layer's LOCAL coordinates — those its
+        # placement places: the canonical design point, moved by the
+        # whole-layer architectural scale of Preserve physical dimensions)
+        hx, hy = _design_to_local(inst, (t.a[0] + ux * _at(m, last + 1), t.a[1] + uy * _at(m, last + 1)))
         out.append(Header(hid, inst.section_index, inst.index - first[inst.section_index],
-                          t.a[0] + ux * _at(m, last + 1), t.a[1] + uy * _at(m, last + 1), math.degrees(math.atan2(uy, ux)),
+                          hx, hy, math.degrees(math.atan2(uy, ux)),
                           p.width / sc, hs['bearing'], hs['depth'], hs['thickness'], snap=True,
                           profile=p.id, member=j))
     res.headers = [h.to_dict() for h in out]
@@ -1526,7 +1539,7 @@ def _resolve_plane(p, insts, sources, per_layer, res):
         if not recs:
             continue
         z = _mid(inst)
-        T = inst.transform
+        T = inst.design_transform          # (the selected walls are in the canonical design's coordinates)
         pts = [T.apply(x, y) for r in recs for x, y in r.get('points') or ()]
         if p.shape != 'linear':                        # STEPPED / CURVED: compared along the run t
             tc = p.cut_t(z)

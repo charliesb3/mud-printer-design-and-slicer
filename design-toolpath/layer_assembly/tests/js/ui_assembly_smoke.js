@@ -190,6 +190,30 @@ eval(src + `
   const txt = el('asm-sections').children.flatMap(flat).map(n => n.textContent || '');
   check(txt.some(t => t.includes('scale in 0.5000 in/layer')) && txt.some(t => t.includes('shift +0.2500, 0.0000 in/layer')),
         'section cards summarise their transform');
+  // ---- DIMENSION BEHAVIOR (global): Scale construction ↔ Preserve physical dimensions ----
+  {
+    asmRender();
+    const fl = n => [n, ...(n.children || []).flatMap(fl)];
+    const dsel = () => fl(el('asm-assembly-tf')).find(n => n.dataset && n.dataset.field === 'dimension_behavior');
+    check(dsel() && dsel().value === 'scale' && asm.state.dimension_behavior === 'scale',
+          'ONE Dimensions control under Assembly Transform: Scale construction by default');
+    const wA = w(asmStack()[30]), kA = T(30).scale;
+    const u0 = asm.hist.undo.length;
+    await asmSetDimensionBehavior('physical');
+    const I = asm.resolved.instances[30];
+    check(asm.state.dimension_behavior === 'physical' && asm.hist.undo.length === u0 + 1 &&
+          I.transform.scale === 1 && I.design_transform && Math.abs(I.design_transform.scale - kA) < 1e-12,
+          'Preserve physical dimensions: the layer is placed by a translation, its scale in the variant (one undo step)');
+    const dw = (_asmPlace(_asmDesignT(I), b[2], 0)[0] - _asmPlace(_asmDesignT(I), b[0], 0)[0]);
+    check(Math.abs(dw - wA) < 1e-9 && asm.resolved.variants && asm.resolved.variants[I.geometry_key],
+          '…the same footprint as Scale construction, printed from its own Designer variant');
+    asm.state.center_mode = 'multiple'; asmRender();
+    check(fl(el('asm-assembly-tf')).some(n => (n.textContent || '').includes('not supported with Multiple centres')),
+          'Multiple centres: Preserve physical dimensions is marked not supported');
+    asm.state.center_mode = 'footprint';
+    await asmUndo();
+    check(asm.state.dimension_behavior === 'scale' && T(30).scale === kA, 'undo → Scale construction');
+  }
   await asmSetLayerHeight(2);
   check(asm.resolved.instances.length === 36 && T(17).tx === 17 * 0.25, 'layer height 2: transforms re-derived per layer');
   asmDrawPreview();

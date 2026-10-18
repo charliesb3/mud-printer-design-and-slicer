@@ -11,6 +11,10 @@ walls, junctions, openings, lattice and printable geometry from the result.
     transforms: {source path id: (k, tx, ty)}  p' = k·p + (tx, ty)
                 (design coordinates; a uniform scale + translation — the
                 Assembly's group placement relative to the layer's own)
+                The key '*' (2026-10-18) transforms EVERY source that has no
+                entry of its own: the Assembly's "Preserve physical
+                dimensions" moves the whole layer's architecture by its scale
+                while walls / beads / openings stay physical.
 
 RULES (V1):
   * A closed source (rectangle, circle, ellipse, closed polyline) and an
@@ -397,7 +401,7 @@ def transform_document(doc, transforms, atts=None, _maps_only=False) -> tuple:
     maps = {}
 
     def own(sid):
-        return ('sim', transforms.get(sid, ID))
+        return ('sim', transforms.get(sid, transforms.get('*', ID)))
 
     # closed / free sources first; then open sources whose ends are attached
     # (hosts first — a host that is itself a connector is resolved before

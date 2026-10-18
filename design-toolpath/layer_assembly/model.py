@@ -86,6 +86,29 @@ places its design's resolved geometry:
         variant is then placed by T_whole like any layer. Wall thickness is
         therefore scaled only by the layer's whole placement, never
         stretched.
+  * DIMENSION BEHAVIOR (Assembly.dimension_behavior, 2026-10-18; ONE
+    Assembly-wide setting for every scale of the stack — section and
+    assembly-wide alike — because they compose into one similarity per
+    layer, and a switch between sections would make the wall jump):
+      'scale' — SCALE CONSTRUCTION (the default; also when the field is
+        absent): exactly the above — the layer's resolved construction is
+        placed by its similarity, so walls, beads' spacing and lattice scale
+        with it (deposited width k (T − W) + W). One resolved geometry for
+        the whole stack.
+      'physical' — PRESERVE PHYSICAL DIMENSIONS: each layer's similarity
+        s·p + t is split into a SEMANTIC scale of the whole architecture
+        about its design's footprint centre c — LayerInstance.semantic
+        ('*', s, (1 − s) c) — and a TRANSLATION-only placement
+        t + (s − 1) c. The Designer re-resolves the scaled architecture with
+        its physical Wall Thickness / Bead Width / Contact Overlap /
+        opening widths, and its Construction-through-Z carrying continues
+        the construction below. Layers of equal scale share a variant; a
+        shift-only layer stays the canonical design. Single centre only:
+        with 'multiple' centres it is not supported (warned; Scale
+        construction is used).
+    LayerInstance.design_transform: where the CANONICAL design's
+    coordinates land (= transform in Scale construction) — for whatever is
+    authored in design coordinates (profiles, planes, wall targets).
 """
 from __future__ import annotations
 
@@ -236,6 +259,10 @@ class Assembly:
     # transforms — the default before; older project files say so explicitly
     # after the schema-4 migration). Always stored.
     opening_alignment: str = 'plumb'
+    # DIMENSION BEHAVIOR (2026-10-18, ONE global setting; module doc):
+    # 'scale' (Scale construction — the default, also when absent) |
+    # 'physical' (Preserve physical dimensions).
+    dimension_behavior: str = 'scale'
 
     def to_dict(self) -> dict:
         return {'name': self.name, 'layer_height': self.layer_height,
@@ -251,7 +278,8 @@ class Assembly:
                 'profiles': [p.to_dict() for p in self.profiles],
                 'print_speeds': dict(self.print_speeds),
                 'machine': dict(self.machine),
-                'opening_alignment': self.opening_alignment}
+                'opening_alignment': self.opening_alignment,
+                'dimension_behavior': self.dimension_behavior}
 
     @staticmethod
     def from_dict(d: dict) -> 'Assembly':
@@ -269,7 +297,8 @@ class Assembly:
                         _max_overhang(d.get('max_overhang')),
                         [profile_from_dict(p) for p in d.get('profiles') or []],
                         _print_speeds(d.get('print_speeds')), _machine(d.get('machine')),
-                        _alignment(d.get('opening_alignment'), d.get('profiles') or []))
+                        _alignment(d.get('opening_alignment'), d.get('profiles') or []),
+                        _dimension_behavior(d.get('dimension_behavior')))
 
 
 def _print_speeds(v) -> dict:
@@ -306,6 +335,20 @@ def _alignment(v, profiles=()) -> str:
         return 'plumb' if any_plumb and all_plumb else 'follow'
     if v not in ('follow', 'plumb'):
         raise AssemblyError(f'unknown opening alignment {v!r} (follow | plumb)')
+    return v
+
+
+DIMENSION_BEHAVIORS = ('scale', 'physical')
+
+
+def _dimension_behavior(v) -> str:
+    """'scale' (Scale construction) | 'physical' (Preserve physical
+    dimensions). Absent: 'scale' — every project before 2026-10-18 placed
+    its layers that way."""
+    if v is None:
+        return 'scale'
+    if v not in DIMENSION_BEHAVIORS:
+        raise AssemblyError(f'unknown dimension behavior {v!r} (scale | physical)')
     return v
 
 
@@ -348,6 +391,17 @@ class LayerInstance:
 
     def transform_of(self, key) -> 'InstanceTransform':
         return self.parts.get(key, self.transform)
+
+    @property
+    def design_transform(self) -> 'InstanceTransform':
+        """Where the CANONICAL design's coordinates land: the placement
+        composed with the whole-layer architectural scale of Preserve
+        physical dimensions (semantic '*'); = transform otherwise."""
+        T = self.transform
+        for s_, k, tx, ty in self.semantic or ():
+            if s_ == '*':
+                return InstanceTransform(T.scale * k, T.scale * tx + T.tx, T.scale * ty + T.ty)
+        return T
 
     @property
     def geometry_key(self) -> str:
@@ -517,6 +571,25 @@ def resolve(assembly: Assembly, known_designs=None, footprints=None, groups=None
     if assembly.center_mode == 'multiple' and groups is not None:
         for g in range(len(design_of)):
             semantic[g] = relative_transforms(whole[g], parts[g], groups.group_of)
+    if assembly.dimension_behavior not in DIMENSION_BEHAVIORS:
+        raise AssemblyError(f'unknown dimension behavior {assembly.dimension_behavior!r}')
+    if assembly.dimension_behavior == 'physical':
+        if assembly.center_mode == 'multiple':
+            warnings.append('Preserve physical dimensions is not supported with Multiple centres: '
+                            'Scale construction is used')
+        else:
+            # PRESERVE PHYSICAL DIMENSIONS: the scale moves into the Designer
+            # (the architecture, about the design's footprint centre); the
+            # placement keeps only the translation (module doc)
+            for g, d in enumerate(design_of):
+                T = whole[g]
+                if abs(T.scale - 1.0) <= 1e-12:
+                    continue
+                fp = fps.get(d)
+                cx, cy = (fp.cx, fp.cy) if fp is not None else (0.0, 0.0)
+                s_ = T.scale
+                semantic[g] = (('*', s_, (1.0 - s_) * cx, (1.0 - s_) * cy),)
+                whole[g] = InstanceTransform(1.0, T.tx + (s_ - 1.0) * cx, T.ty + (s_ - 1.0) * cy)
     instances = [LayerInstance(g, design_of[g], _section_of(counts, g), g * lh, (g + 1) * lh, whole[g], parts[g],
                                semantic[g])
                  for g in range(len(design_of))]
