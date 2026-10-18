@@ -139,14 +139,15 @@ The approximate current/future information flow is:
 Design + Toolpath
   ├─ Designer (design_proto): reusable 2D LAYER DESIGNS
   │         ↓ narrow interface (LayerSource: design info + resolved 2D printable geometry)
-  │         (WALL GROUPS since 2026-10-11: members, thickness, alignment — the architecture;
-  │          the Designer shows wall envelopes, no construction / lattice / route)
+  │         (PER-WALL ARCHITECTURE since 2026-10-15, schema 7: each wall owns its thickness,
+  │          alignment, caps and Corner R — Wall Groups removed; the Designer shows wall
+  │          envelopes, no construction / lattice / route)
   ├─ Layer Assembly (layer_assembly): stacks Layer Designs by physical height → layers + Z
   │         (edited on ARCHITECTURAL ENVELOPES: walls / junctions / openings / cuts, no Wall
   │          System lattice or routing; preliminary envelope-level support)
   └─ WALL SYSTEMS workspace (2026-10-11): the project's printable constructions (Single /
-            Hollow / Skin + Web / Parallel / waves / Chained Loop) assigned to walls or Wall
-            Groups; "Generate Wall Systems" (explicit) = the existing full pipeline for the whole
+            Hollow / Skin + Web / Parallel / waves / Chained Loop) assigned per wall (a
+            members checklist); "Generate Wall Systems" (explicit) = the existing full pipeline for the whole
             building + bead-level support; status NOT GENERATED / GENERATING / CURRENT / OUTDATED
         ↓ (only CURRENT generated geometry)
   PRINT PLAN (layer_assembly/print_plan.py, 2026-10-09): every layer routed and
@@ -433,9 +434,11 @@ Each application owns and persists its own profile (name, inches, printable X / 
 
 The whole-print plan (ordered layers → continuous runs, travels and layer transitions in world coordinates, with source identities) is produced once by the Design + Toolpath subsystem from the exact geometry the designer sees. Print Simulation, G-code export and any machine-controller execution consume that plan (and its timeline) instead of re-deriving order, starts or timing. Time figures from it are estimates (constant speeds), not machine timing. Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "Print plan".
 
-### Active Design + Toolpath baseline (2026-10-14)
+### Active Design + Toolpath baseline (2026-10-14; RESET 2026-10-18)
 
-**ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface (2026-10-14). Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE".
+**RESTART BASELINE (2026-10-18): the manually reviewed M6 + M7 checkpoint `8988108` (2026-10-16), branch `restart/oct16-base`, is the current Design + Toolpath code base.** Later work on `restart/post-print-simulation` (the 2026-10-16 cleanup, physical wall width, material controls, Skin + Web Pass A, test cost tiers, Construction-through-Z Z0–Z2) and the failed post-Z2 experiments (archival commit `bfb0e93`, local branch `archive/construction-through-z-2026-10-18`) are ARCHIVED history, not current architecture. Their PRODUCT knowledge was brought forward as the binding Construction-through-Z specification, `design-toolpath/WALL_ARCHITECTURE.md` §Z, which is the plan going forward; future work proceeds in small, manually reviewed milestones. The paragraph below is the earlier (2026-10-14) baseline record.
+
+**ACTIVE DESIGN + TOOLPATH BASELINE (2026-10-14): `dd70148` + one cleanup pass, branch `restart/post-print-simulation`.** After manual review, development was ROLLED BACK to commit `dd70148` (the four-workspace architecture Designer → Assembly → Wall Systems → Print Simulation, deferred print paths M0–M2, architectural openings) — this is the current, stable Designer state. The later work on `main` / `origin/main` — M3 stack-aware lattice (`040d8de`), M4 sub-pass 1 (`fdaa7d7`), the junction harness / shared junction / region framework J1–J4a (`481554e`, `48845cc`) — and the home machine's unfinished M4 local lattice repair (branch `archive/home-m4-local-repair-wip-2026-10-14`, `487f796`) are ARCHIVED HISTORY, kept on GitHub for reference, NOT the current development direction. Explicitly deferred (not to be attempted without a new decision): corner glitches, junction geometry, standardized endings / end caps, motifs and other Wall Systems behaviour; the deferred-toolpath milestones M3+ are no longer the plan of record. Focus moved to the Raspberry Pi interface on 2026-10-14; Design + Toolpath development RESUMED on 2026-10-15 on this branch with `design-toolpath/WALL_ARCHITECTURE.md` (its §F decisions supersede the "explicitly deferred" list above — junction / corner / cap ownership is the active work; M0–M7 implemented, manually reviewed and checkpointed). Details: `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "ACTIVE BASELINE".
 
 ### Architectural editing is separate from print-path generation (2026-10-11)
 
@@ -595,11 +598,11 @@ Major capabilities:
   PHYSICAL HEIGHT with one global layer height (whole layers, boundaries
   rounded, errors reported) into layer instances that only reference their
   design; its 3D preview consumes instance Z + resolved 2D geometry. A
-  lineage prints ONE vertically registered wall-lattice scaffold, and its
-  lattice definition (pattern, spacing, variation) belongs to the lineage.
-  Runs crossed by a variant's end wall carry two passes that cross on the
-  jamb line, so a connected opening variant still prints as one closed
-  route. Assembly transform groups move the ARCHITECTURE (source paths,
+  lineage's lattice definition (pattern, spacing, variation) belongs to the
+  lineage. (HISTORY, superseded 2026-10-17 by WALL_ARCHITECTURE §Z: "a
+  lineage prints ONE vertically registered wall-lattice scaffold"; runs
+  crossed by a variant's end wall carrying two passes that cross on the jamb
+  line. How construction evolves through Z is now governed by §Z.0.) Assembly transform groups move the ARCHITECTURE (source paths,
   via the LayerSource `geometry(design, transforms)`), then the Designer
   resolves walls / junctions / lattice — never rubber-sheeted beads. The
   application has two workspaces, [Designer] [Assembly] (stack
@@ -616,7 +619,11 @@ Major capabilities:
   a topological signature, follows parametric edits, unresolved → nothing
   suppressed); rounded thick-wall junctions are one concentric assembly.
 - PHYSICAL BEADS (system-level concept): Wall Thickness (architecture) ≠
-  centreline (toolpath) ≠ Bead Width (one deposited pass). With physical
+  centreline (toolpath) ≠ Bead Width (one deposited pass). DECIDED
+  2026-10-16, not yet in the baseline code: Wall Thickness = the FINISHED
+  DEPOSITED width (outside bead edge to outside bead edge) for every
+  construction; centrelines lie inside the envelope; Return-Lane Overlap is
+  shown as PARALLEL WALL OVERLAP (a maximum) (`WALL_ARCHITECTURE.md` §Z.2). With physical
   rules on: Contact Overlap (lattice landings stop W − O off a face),
   Return-Lane Overlap (single-bead open walls print out and back W − R
   apart), NO exact retrace, and every connected component one closed route
@@ -643,7 +650,7 @@ Important unresolved questions currently include:
 - What constraints arise from the physical scale of the machine? (Machine profiles exist from 2026-10-15; the real printable X / Y and maximum building Z are still unmeasured, and where the print origin sits relative to the frame's printable area — the envelope convention — is provisional.)
 - What constraints arise from material behavior and the hose-fed printing process?
 - What should the boundary between design and toolpath generation ultimately be?
-- Wall / junction / corner / cap ownership: `design-toolpath/WALL_ARCHITECTURE.md` approved (revision 4, §F final decisions); milestones M0–M4 implemented 2026-10-15, manually reviewed and checkpointed (`b4ccd16`); M5 (trims bounded by persistent junctions — a branch joining a junction or crossing a removed section no longer resurrects trimmed geometry) implemented, reviewed and checkpointed (`dce9366`); M6 (source-wall attachment) + M7 (continuous Out-and-Back excursions) implemented 2026-10-16 (with the through-wall / Chained Loop correction), manually reviewed and checkpointed — walls own their properties, no Wall Groups, persistent junction records (authoritative for trim boundaries since M5, otherwise shadow). M8+ not started; open points in "Before M5 — to decide".
+- Wall / junction / corner / cap ownership: `design-toolpath/WALL_ARCHITECTURE.md` approved (revision 4, §F final decisions); milestones M0–M4 implemented 2026-10-15, manually reviewed and checkpointed (`b4ccd16`); M5 (trims bounded by persistent junctions — a branch joining a junction or crossing a removed section no longer resurrects trimmed geometry) implemented, reviewed and checkpointed (`dce9366`); M6 (source-wall attachment) + M7 (continuous Out-and-Back excursions) implemented 2026-10-16 (with the through-wall / Chained Loop correction), manually reviewed and checkpointed — walls own their properties, no Wall Groups, persistent junction records (authoritative for trim boundaries since M5, otherwise shadow). M8+ not started; open points in "Before M5 — to decide". **2026-10-18: CONSTRUCTION THROUGH Z is specified (`WALL_ARCHITECTURE.md` §Z). It is the binding product hierarchy for how every Wall System evolves layer to layer (§Z.0): support within Maximum Overhang and valid required topology are both validity constraints; then stacking on the construction below, local resolution of architectural change, ancestry, subordinate nominal parameters, simple geometry. Product invariants outrank implementation mechanisms. Not implemented: the baseline re-plans / re-phases construction through Z in many cases. The approach to implementing it is open and will be taken in small reviewed milestones; earlier attempts are archived (§Z.6).**
 
 ### Raspberry Pi / Printer Interface
 
@@ -695,6 +702,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-18 (Design + Toolpath — restart)
+
+Development base reset to the reviewed M6 + M7 checkpoint `8988108` (branch `restart/oct16-base`). Product knowledge from the archived later work was brought forward as the binding Construction-through-Z specification (`design-toolpath/WALL_ARCHITECTURE.md` §Z: §Z.0 hierarchy — support and topology both validity constraints, then stacking, local change, ancestry, subordinate parameters, simple geometry; invariants; physical wall width / material / Skin + Web decisions, not yet implemented). Conflicting older rules marked superseded. Later implementations archived (`bfb0e93`). No code changed.
 
 2026-10-15 (checkpoint)
 

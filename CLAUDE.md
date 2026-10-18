@@ -290,6 +290,10 @@ Memory location:
 
 `design-toolpath/PROJECT_MEMORY.md`
 
+Sub-memory (Layer Assembly, read for Assembly / stacking work): `design-toolpath/layer_assembly/PROJECT_MEMORY.md`.
+
+Reference documents: `design-toolpath/WALL_ARCHITECTURE.md` (wall / junction ownership plan, milestones M0–M10, plus §Z: the binding Construction-through-Z product specification; read §Z.0 before any cross-Z, lattice or Wall System work) and `design-toolpath/DEFERRED_TOOLPATH_ARCHITECTURE.md` (deferred print paths, with its own M0–M5 numbering: M0–M2 done, M3+ archived). The two M-numberings are independent.
+
 This subproject concerns the environment for designing printable forms and translating those designs into machine instructions.
 
 It includes, but is not limited to:
