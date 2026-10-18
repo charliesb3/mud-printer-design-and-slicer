@@ -120,3 +120,20 @@ def seg_dist(p, a, b):
 
 def near(p, polys, tol):
     return any(seg_dist(p, a, b) <= tol for pl in polys for a, b in zip(pl, pl[1:]))
+
+
+def changed(below, b, tol=1.0, h=0.5):
+    """Where the deposited web CHANGED from the layer below: samples (every h
+    in) of b's web centrelines farther than tol from below's — a death, a
+    birth, a re-planned stitch (measured on deposited geometry; ordinary
+    host motion of a layer is far under tol)."""
+    prev = web(below)
+    out = []
+    for pl in web(b):
+        for a, c in zip(pl, pl[1:]):
+            n = max(1, int(math.dist(a, c) / h))
+            for j in range(n + 1):
+                p = (a[0] + (c[0] - a[0]) * j / n, a[1] + (c[1] - a[1]) * j / n)
+                if not near(p, prev, tol):
+                    out.append(p)
+    return out

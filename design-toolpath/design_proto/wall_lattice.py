@@ -206,23 +206,38 @@ designs the topology first:
        by how far the end has travelled through that cell (lp): births grow
        out of the deposited stitch and deaths flatten into it, never a pair
        across the cavity in one layer. The run's start face / parity follow
-       the carried faces (the junction pairing search starts from them).
+       the carried faces (the junction pairing search starts from them) —
+       except at a JUNCTION end the run had below too: there the face is
+       the junction's own (the reference's choice, like a corner's inner
+       face), so a station dying / born beside a moving junction FOLDS
+       instead of flipping the junction's hand-offs and pairing.
+     - ONE consume / expose rule for every anchor (2026-10-18, §Z.11):
+       corners, wall ends, junctions, a loop's seam (and Assembly cuts,
+       which clip the carried web). A segment whose deposited stations an
+       anchor has consumed ALL of continues the same comb — its own
+       reference segment's, at the pitch, from the consumed station nearest
+       to it on the same straight leg (comb_seed: pool identity, never
+       geometry matching) — never re-planned as new construction.
      - A corner-less LOOP is one segment from its seam round to it: the
        reference seam carried, or — a loop formed through Z (a split) — the
        middle of its gap below (where the junction was).
-     - Transfers (and junction hand-offs: the exact web ↔ face joins) are
-       carried too: a deposited transfer stays; a ring joined elsewhere
-       below is joined beside where it was.
+     - Transfers are carried: a deposited transfer stays. Junction hand-offs
+       (the junction's exact web ↔ face joins) are carried separately: they
+       only place the join of a ring NO LONGER joined (the junction has
+       gone) beside where it was — never an extra transfer beside a junction
+       that still joins that ring.
      - Cells the host motion compressed under e_min away from any anchor
        are REPORTED (track 'pitch_floor'), never redistributed.
      - Single-layer rules (§9, §10) still build NEW construction: the first
        layer, and the stations a segment grows.
-   KNOWN LIMITATIONS: the junction's own transition web (its hand-offs, a
-   lens run collapsing) is rebuilt from that layer's junction geometry —
-   where two walls first touch / finally part its support is not
-   guaranteed (findings stay at the junction); corner-motif contact points
-   follow the region's skeleton (≤ 0.2 in when the region's outline
-   changes). Other wall infill patterns keep the tracking of §6.
+   KNOWN LIMITATIONS: a junction that does not exist in the reference (it
+   APPEARS through Z), and a lens run the skeleton merges away (MERGE),
+   have no construction below to inherit — the junction's own transition
+   web is rebuilt from that layer's junction geometry, so where two walls
+   first touch / finally part its support is not guaranteed (findings stay
+   at the junction); corner-motif contact points follow the region's
+   skeleton (≤ 0.2 in when the region's outline changes). Other wall infill
+   patterns keep the tracking of §6.
 
 Wide regions (local thickness ≫ spacing — not a wall but an area) are not
 stitched here; the caller falls back to the field generator (infill.py).
@@ -1948,6 +1963,8 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
     # changes the runs, not what was deposited.
     run_pool = {}
     pool_tf = []
+    pool_ho = []                  # the junction hand-offs below (exact joins)
+    pool_ents = []                # every pool station (whatever run it now lies on)
     if geo.web_pitch is not None and track and track.get('pool'):
         host = getattr(track_map, 'host', track_map)
         ents = []
@@ -1962,6 +1979,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                                  'side': sd[i] if sd and i < len(sd) else None,
                                  'id': (tuple(tr_.get('uid') or ()), j, i)})
             pool_tf += [host(Vec2(*q)) for q in tr_.get('transfers') or ()]
+            pool_ho += [host(Vec2(*q)) for q in tr_.get('handoffs') or ()]
         # A run that is still the continuation of a reference run (tracked)
         # takes no station of ANOTHER reference run that also still exists:
         # such a station has crossed a junction — the junction swept over
@@ -1969,6 +1987,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         # from this run's own stations). Stations of reference runs that no
         # longer exist (a junction vanished, a domain split / merged) are
         # adopted by whichever run they now lie on.
+        pool_ents = ents
         live = {tuple(tr_.get('uid') or ()) for tr_ in tracked.values()}
         best_ = {}
         for r in runs:
@@ -2068,6 +2087,57 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
             new_station.update((id(r), round(x_ % r.length if r.cycle else x_, 9)) for x_ in grown)
         return list(xs) if fwd else list(reversed(xs))
 
+    def comb_seed(r, lo_, hi_):
+        """(u, face | None) of the consumed station that continues an
+        emptied segment's comb: a station of the SAME reference segment
+        (pool identity, never geometry matching), nearest to the segment,
+        on the straight leg through either of its anchors — measured in the
+        leg's own frame a little inside the segment (a run's centre line
+        bends into a junction at its very end) — or None."""
+        tr = tracked.get(id(r))
+        if not tr or not tr.get('segmid') or not pool_ents:
+            return None
+        L = r.length
+        w_ = (lambda q: q % L) if r.cycle else (lambda q: max(0.0, min(L, q)))
+        m_ = geo.centre(r, w_(0.5 * (lo_ + hi_)))
+        j = min(range(len(tr['segmid'])), key=lambda i: tr['segmid'][i].dist(m_))
+        uid_ = tuple(tr.get('uid') or ())
+        ents_j = [e for e in pool_ents if e['id'][0] == uid_ and e['id'][1] == j]
+        if not ents_j:
+            return None
+        d1 = min(thick, 0.25 * (hi_ - lo_))
+        if d1 < 1e-6:
+            return None
+        legs = []
+        for b_, sgn in ((lo_, 1.0), (hi_, -1.0)):
+            s_r = b_ + sgn * d1                                      # the leg's frame, inside
+            c_ = geo.centre(r, w_(s_r))
+            t_ = geo.centre(r, w_(s_r + sgn * d1)) - c_
+            if t_.length() < 1e-9:
+                continue
+            du = (geo.u_of_s(r, w_(s_r + sgn * d1)) - geo.u_of_s(r, w_(s_r))) / (sgn * t_.length())   # du / ds
+            legs.append((b_, sgn, s_r, c_, t_ * (sgn / t_.length()), du))   # t_: along +s
+        best = None
+        for e in ents_j:
+            for b_, sgn, s_r, c_, t_, du in legs:
+                v = e['P'] - c_
+                d_ = v.x * t_.x + v.y * t_.y                         # along +s from the frame
+                if sgn * (s_r + d_ - b_) > geo.web_min + 1e-6 or abs(v.x * t_.y - v.y * t_.x) > 0.5 * thick:
+                    continue                                         # (not at / beyond this anchor on its leg)
+                g = abs(s_r + d_ - b_)
+                if best is None or g < best[0]:
+                    best = (g, geo.u_of_s(r, w_(s_r)) + d_ * du, e, s_r, c_, t_)
+        if best is None:
+            return None
+        _, u_, e, s_r, c_, t_ = best
+        f_ = None
+        if e.get('side') in (0, 1) and e.get('F'):
+            # (the face it landed: which side of the leg — in the leg's frame)
+            crs = lambda v: t_.x * v.y - t_.y * v.x
+            q = e['F'][e['side']]
+            f_ = next((sd for sd in (0, 1) if crs(geo.side_point(r, sd, w_(s_r)) - c_) * crs(q - c_) > 0), None)
+        return u_, f_
+
     def _carried_seg(r, pool, lo_, hi_, want_lo, want_hi):
         L = r.length
         c_ = (lo_ + hi_) / 2
@@ -2097,11 +2167,29 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         ua, ub = u(lo_), u(hi_)
         ok = lambda x: lo_ < x < hi_ and rail_d(lo_, x) >= e_min - 1e-9 and rail_d(x, hi_) >= e_min - 1e-9
         inside = [(x, e) for x, e in cand if ok(x)]
-        if not inside:
-            return None                           # nothing deposited here below: new construction
-        # [u, s, station below | None, face below (this numbering) | None]
-        st = [[u(inside[0][0]), inside[0][0], inside[0][1], _cur_side(r, *inside[0])]]
         single = mult.get(run_index.get(id(r))) == 1
+        if not inside:
+            # every station this segment deposited below has been CONSUMED
+            # (an anchor reached them all): the segment continues the SAME
+            # comb — its own reference segment's, at the pitch, from the
+            # consumed station nearest to it on the same straight leg — the
+            # construction the territory grew from below; never re-planned
+            seed = comb_seed(r, lo_, hi_)
+            if seed is None:
+                return None                       # nothing deposited here below: new construction
+            u_seed, f_seed = seed
+            k0 = math.ceil((ua - u_seed) / S_ - 1e-9)
+            st = []
+            for k in range(k0, k0 + int((ub - ua) / S_) + 2):
+                x = u_seed + k * S_
+                if ua < x < ub and ok(s_of(x)):
+                    st.append([x, s_of(x), None, None if f_seed is None else f_seed ^ (abs(k) % 2)])
+            if not st:
+                return None
+            inside = []
+        else:
+            # [u, s, station below | None, face below (this numbering) | None]
+            st = [[u(inside[0][0]), inside[0][0], inside[0][1], _cur_side(r, *inside[0])]]
         for (x0, e0), (x1, e1) in zip(inside, inside[1:]):
             if not _consecutive(e0, e1):
                 # a GAP: grown over from both sides at the pitch
@@ -2788,9 +2876,21 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
         if cs_ is not None:
             # CARRIED (§11): the faces the run's stations landed on below —
             # the start face lands opposite the first, the end face opposite
-            # the last
-            s0_ = 1 - cs_[0]
-            kept[ri] = (s0_, s0_ ^ (1 - cs_[1]))
+            # the last …
+            f_ = [1 - cs_[0], 1 - cs_[1]]
+            # … except at a JUNCTION end the run had below too: there the
+            # face it lands is the junction's (its hand-off, its pairing),
+            # inherited like a corner's inner face — a station dying /
+            # born beside the junction FOLDS (carried_in), it never flips the
+            # junction (module doc §11)
+            tr_ = tracked.get(id(runs[ri]))
+            ch_ = tr_.get('choice') if tr_ else None
+            if ch_:
+                ref_j = {int(k_.split(',')[0]) for k_ in (tr_.get('partners') or {})}
+                for e_, nd_ in ((0, runs[ri].a), (1, runs[ri].b)):
+                    if nd_[0] == 'J' and (e_ if tr_.get('fwd', True) else 1 - e_) in ref_j:
+                        f_[e_] = ch_[0] if e_ == 0 else ch_[0] ^ ch_[1]
+            kept[ri] = (f_[0], f_[0] ^ f_[1])
     best = search(kept) if single else (0.0, {}, solve({})[1])
     if kept and best[0] >= 1e9:                   # the carried sides cannot pair here
         best = search({})
@@ -3463,6 +3563,10 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                             union(pid, ('R', k))
                 pass_of.append((pid, ri, one))
         carried_tf = list(pool_tf)
+        # (a junction hand-off below only says where a ring that is NO
+        # LONGER joined — the junction has gone — is rejoined; a ring this
+        # layer's own junction still joins needs nothing there)
+        carried_join = carried_tf + list(pool_ho)
 
         def transfer(k, cs):
             # mid-sequence: away from ends / corners (the nearest candidate
@@ -3486,7 +3590,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                                 best_ = max(best_, min(xx - a_, b_ - xx))
                     return best_
                 good = sorted(good, key=lambda i: (-round(depth(i), 6), abs(i - m), i))
-            mine = [t_ for t_ in carried_tf if ring_of(t_)[1] == k and ring_of(t_)[0] <= 0.5 * thick]
+            mine = [t_ for t_ in carried_join if ring_of(t_)[1] == k and ring_of(t_)[0] <= 0.5 * thick]
             if mine and good:
                 def dq(i):
                     c_ = cs[i]
@@ -3495,7 +3599,7 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                 best = min(good, key=dq)
                 if dq(best) <= 0.5 * S + 2.0 * thick:
                     good = [best]
-            elif carried_tf and good:
+            elif carried_join and good:
                 # this ring was joined some other way below (a junction that
                 # has gone): join it where this layer grew new construction —
                 # where the topology changed — never somewhere unrelated
@@ -3674,12 +3778,13 @@ def plan(rings, spacing=20.0, pattern='zigzag', variation=0, prefer_closed=True,
                        for x in seg_stations(r, a_, b_, n_)[1:-1]]
                       for (a_, b_, _), n_ in zip(segs_, ns_)] if geo.web_pitch is not None else None,
             'transfers': [_xy(geo.landing(r, sd_, x_)) for (rid_, sd_, x_) in sorted(transfers, key=str)
-                          if rid_ == id(r)] + [
-                # (… and its junction hand-offs: the other EXACT joins of web
-                # and faces — a ring joined there below is rejoined beside it)
-                _xy(geo.landing(r, sd_, x_)) for one in seqs[ri][1] for x_, sd_ in one
-                if sd_ in (0, 1) and not r.cycle and (x_ <= 1e-9 and r.a[0] == 'J' or
-                                                      x_ >= r.length - 1e-9 and r.b[0] == 'J')]
+                          if rid_ == id(r)] if geo.web_pitch is not None else None,
+            # … and its junction hand-offs (the other EXACT joins of web and
+            # faces): a ring joined there below and no longer joined is
+            # rejoined beside it (where the junction was)
+            'handoffs': [_xy(geo.landing(r, sd_, x_)) for one in seqs[ri][1] for x_, sd_ in one
+                         if sd_ in (0, 1) and not r.cycle and (x_ <= 1e-9 and r.a[0] == 'J' or
+                                                               x_ >= r.length - 1e-9 and r.b[0] == 'J')]
             if geo.web_pitch is not None else None,
             # CONTACT IDENTITY (truss): normalised phase of every interior
             # station of each segment — segment j, contact k

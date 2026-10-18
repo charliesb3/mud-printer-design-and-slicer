@@ -297,6 +297,68 @@ def test_preserve_circle_rectangle_junction_findings_stay_local(client):
         assert 80 < x < 115 and 5 < y < 75, f
 
 
+def _variant_web(r, g, li):
+    """(design point → this layer's VARIANT frame, the layer's web
+    polylines in that frame — the Designer's resolution, before the
+    translation-only placement)."""
+    inst = r['instances'][li]
+    dt, t = inst.get('design_transform') or inst['transform'], inst['transform']
+    f = lambda p: (dt['scale'] * p[0] + dt['tx'] - t['tx'], dt['scale'] * p[1] + dt['ty'] - t['ty'])  # noqa: E731
+    polys = g[inst['geometry_key']]['polylines']
+    return f, [pl['pts'] for pl in polys if (pl.get('id') or '').startswith('WEB')]
+
+
+def test_preserve_circle_rectangle_construction_persists_away_from_the_junction(client):
+    """TEST E (transitions milestone, WALL_ARCHITECTURE §Z.11): an overlapping
+    same-system circle + rectangle under Preserve, single centre. The
+    circle's web keeps its angles (radial host motion — never re-phased),
+    the rectangle's bottom wall keeps its stations, every change of the
+    deposited web lies at the junction or a moving corner, and the
+    circle's repeat count never jumps."""
+    doc = _doc([rect('R', 0, 0, 100, 80), circle('C', 120, 40, 30)], systems=[['R', 'C']])
+    r, g = _run(client, doc, _assembly('physical', scale_in=0.5, height=41.0))
+    S = (T - W - 2 * (W - O)) / math.tan(math.radians(20.0))
+    m = S + 2 * T
+    n = len(r['instances'])
+
+    def circ(li):
+        # (the circle's far half, away from both junctions: landing angles)
+        f, web = _variant_web(r, g, li)
+        c = f((120, 40))
+        a = sorted(math.degrees(math.atan2(q[1] - c[1], q[0] - c[0])) for pl in web for q in pl
+                   if math.dist(q, c) > 0.5 * math.dist(f((120, 40)), f((90, 40)))
+                   and abs(math.degrees(math.atan2(q[1] - c[1], q[0] - c[0]))) < 90)
+        return [x for i, x in enumerate(a) if i == 0 or x - a[i - 1] > 0.3]      # (one per landing)
+
+    def bottom(li, at=None):
+        f, web = _variant_web(r, g, li)
+        fa = _variant_web(r, g, li if at is None else at)[0]
+        yc = f((0, 0))[1] + T / 2
+        lo, hi = max(fa((0, 0))[0], 0.0) + m, min(fa((100, 0))[0], 100.0) - m
+        return sorted({round(q[0], 2) for pl in web for q in pl if abs(abs(q[1] - yc) - 1.25) < 0.05 and lo < q[0] < hi})
+
+    a0 = circ(0)
+    for li in range(n):
+        got = circ(li)
+        assert len(got) == len(a0), li                       # nothing born / dies away from the junctions
+        if li:                                               # never re-phased (radial host motion: the
+            prev = circ(li - 1)                              # contact points drift < ½° per layer)
+            assert all(any(abs(a - b) <= 0.5 for b in got) for a in prev), li
+        assert bottom(li) == bottom(0, at=li), li                     # (stations never move along)
+        if li:
+            f, web = _variant_web(r, g, li)
+            _, prev = _variant_web(r, g, li - 1)
+            marks = [f(p) for p in ((100, 40), (100, 17.6), (100, 62.4), (0, 0), (100, 0), (0, 80), (100, 80))]
+            for pl in web:
+                for a, b in zip(pl, pl[1:]):
+                    k = max(1, int(math.dist(a, b) / 0.5))
+                    for j in range(k + 1):
+                        p = (a[0] + (b[0] - a[0]) * j / k, a[1] + (b[1] - a[1]) * j / k)
+                        if not near(p, prev, 1.0):
+                            assert any(math.dist(p, q) <= m for q in marks), (li, p)
+    assert bottom(n - 1), 'no bottom-wall station far from the corners'
+
+
 def test_multiple_centres_with_preserve_is_not_supported(client):
     a = _assembly('physical', center_mode='multiple', centers=[{'id': 'c1', 'x': 80, 'y': 50, 'sources': ['R']}])
     r, _ = _run(client, _doc(), a)
