@@ -9,10 +9,11 @@ Development is done on Mac. The Pi is the runtime target.
 ## Hardware
 
 - Raspberry Pi 4 Model B (2 GB RAM or more)
-- Touchscreen: already owned, model / interface / power NOT yet confirmed
-  (this guide originally assumed the official 7-inch 800×480 display)
-- USB connection to the Arduino (Uno per the 2026-10-14 baseline) running GRBL;
-  USB also powers the Uno
+- Touchscreen: 7-inch 800×480 DSI display (identified 2026-10-20) on the
+  Pi's DSI connector, powered with 5 V + GND from the regulated 5 V supply
+- USB connection (Pi USB-A, either black USB 2.0 port → Uno USB-B) to the
+  Arduino Uno running GRBL; USB also powers the Uno
+- Pi GPIO pin map (Z MD13S, RF remote): wired, see `../../CONTROL_BOX_HARDWARE.md`
 
 Full control-box hardware (power, E-stop, Z driver, RF remote, VERIFY items):
 `../../CONTROL_BOX_HARDWARE.md`.

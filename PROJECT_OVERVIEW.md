@@ -71,7 +71,9 @@ actuator (ECO-WORTHY, 18 in stroke), not a stepper axis.
 CURRENT ARCHITECTURE (decided 2026-10-14; details and implementation
 consequences: `CONTROL_BOX_HARDWARE.md` → Z axis):
 - The Raspberry Pi is the SOLE Z command source: Pi 3.3 V GPIO PWM + DIR →
-  Cytron MD13S (planned) → actuator. Z is NOT a GRBL axis.
+  Cytron MD13S → actuator (wired 2026-10-20, directly to the Pi, not via the
+  Uno; pins: `CONTROL_BOX_HARDWARE.md` → "Raspberry Pi GPIO pin map").
+  Z is NOT a GRBL axis.
 - Manual Z = Pi UI and the RF remote's Z UP / Z DOWN, both as inputs to Pi
   software (the remote never drives Z directly).
 - Open-loop: no Z limits, homing or position feedback yet (actuator internal
@@ -160,11 +162,12 @@ Design + Toolpath
         ↓ upload (parsed + validated independently)
 Raspberry Pi 4 / Printer Interface (supervisory: UI, jobs, Z, RF remote inputs)
         ↓ USB / serial                        ↓ GPIO PWM + DIR
-Arduino Uno / GRBL                      Cytron MD13S (planned)
+Arduino Uno / GRBL                      Cytron MD13S
         ↓ DM556T ×3 (X, Y1, Y2)               ↓
 X/Y machine motion                      Z: 12 V linear actuator (open-loop)
 
-Handheld RF remote → Kaleinavi receiver (dry contacts) → Pi GPIO (planned)
+Handheld RF remote → Kaleinavi receiver (dry contacts) → Pi GPIO
+Pi pin map (wired 2026-10-20, authoritative): CONTROL_BOX_HARDWARE.md
 Hardwired E-stop (120 VAC side): separate, independent safety layer
 Hardware details: CONTROL_BOX_HARDWARE.md
 
@@ -247,7 +250,8 @@ Potential responsibilities include:
 - jogging X/Y
 - Z control: the Pi is the sole Z command source via the Cytron MD13S
   (`CONTROL_BOX_HARDWARE.md`; not yet implemented)
-- reading the wireless remote (Kaleinavi dry contacts on Pi GPIO; planned)
+- reading the wireless remote (Kaleinavi dry contacts on Pi GPIO; wired
+  2026-10-20, software not yet implemented)
 - homing where appropriate
 - starting jobs
 - pausing jobs
@@ -703,6 +707,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-20 (control box wiring)
+
+Control-box signal wiring physically implemented and recorded as authoritative in `CONTROL_BOX_HARDWARE.md`: Pi GPIO pin map (BCM + physical), Kaleinavi CH1–CH6 → Pi inputs (active-low, pull-ups), MD13S PWM / DIR on GPIO18 / GPIO23 (direct from the Pi), Uno on Pi USB, 7" 800×480 DSI display, 12 V / 5 V power layout. No code changed.
 
 2026-10-18 (Design + Toolpath — restart milestone 1)
 

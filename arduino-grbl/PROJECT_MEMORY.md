@@ -27,7 +27,7 @@ Approximate control path:
 
 UGS today → Raspberry Pi 4 (pi-interface) in the new architecture
         ↓
-USB / serial (USB also powers the Uno)
+Pi USB-A → Uno USB-B: serial + the Uno's power (wired 2026-10-20; no Pi GPIO used)
         ↓
 Arduino Uno / GRBL
         ↓
@@ -109,7 +109,9 @@ The system has successfully moved and printed with the physical machine.
 
 UGS is currently used as the higher-level sender/interface.
 
-Z remains manually controlled today; in the new control box it will be commanded by the Pi via the MD13S (not GRBL).
+Z remains manually controlled today; in the new control box it is commanded by the Pi via the MD13S, wired directly to Pi GPIO — not through the Uno and not GRBL (2026-10-20).
+
+In the new control box the Uno is connected to the Pi by USB (2026-10-20); pi-interface replaces UGS's operator functions there (UGS is not installed on the Pi).
 
 No GRBL modifications associated with this new software project have yet been made.
 
@@ -172,6 +174,11 @@ No new firmware work has yet been completed for this project.
 ---
 
 ## Last Updated
+
+2026-10-20
+
+Control-box wiring: Uno on Pi USB (serial + power, no GPIO); MD13S wired to
+the Pi, not the Uno; X/Y limits stay on GRBL. See `../CONTROL_BOX_HARDWARE.md`.
 
 2026-10-14
 

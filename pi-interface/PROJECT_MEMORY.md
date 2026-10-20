@@ -12,11 +12,19 @@ The goal is a simpler, more appropriate interface specifically designed around t
 
 ## Hardware
 
-The real control-box interfaces (Pi 4, Arduino Uno / GRBL over USB, planned
-Cytron MD13S for Z on Pi GPIO, planned Kaleinavi RF receiver on Pi GPIO,
-power, E-stop, VERIFY items, superseded parts) are documented in
-`../CONTROL_BOX_HARDWARE.md`. Consult it before writing code that touches
-serial, GPIO, Z, the remote, limits or power-loss behaviour.
+The real control-box interfaces (Pi 4, Arduino Uno / GRBL over Pi USB,
+Cytron MD13S for Z on Pi GPIO, Kaleinavi RF receiver on Pi GPIO, 7" 800×480
+DSI touchscreen, power, E-stop, VERIFY items, superseded parts) are
+documented in `../CONTROL_BOX_HARDWARE.md`. Consult it before writing code
+that touches serial, GPIO, Z, the remote, limits or power-loss behaviour.
+
+**The Pi GPIO pin map is WIRED (2026-10-20) and authoritative in
+`../CONTROL_BOX_HARDWARE.md` → "Raspberry Pi GPIO pin map (wired)"** —
+together with the software consequences for hardware integration (one
+hardware-mapping layer, BCM in code, active-low debounced inputs, dead-man
+Z, UP + DOWN = STOP, PWM 0 on every exit path, startup = Z STOP). Do not
+renumber the pins; do not copy the table here. UGS is not installed on the
+Pi: this application replaces its operator functions.
 
 ---
 
@@ -429,22 +437,28 @@ inputs to Pi software. Requirements for the implementation are in
 `../CONTROL_BOX_HARDWARE.md` → Z axis: open-loop (never assume a known Z
 height), dead-man / time-bounded motion, guaranteed default STOP on boot /
 shutdown / crash / loss of control (hardware pull-down + loss-of-control
-mechanism still TBD), contradictory inputs → STOP. GPIO pins are
-intentionally unassigned (pending the touchscreen) and must come from
-configuration. The old SRDKG RF Z controller is not part of the architecture.
+mechanism still TBD), contradictory inputs → STOP. GPIO pins are now
+WIRED (2026-10-20: PWM GPIO18 / physical 12, DIR GPIO23 / physical 16 —
+authoritative table in `../CONTROL_BOX_HARDWARE.md`) and must live in one
+hardware-mapping / configuration layer. (Previously, 2026-10-14: pins
+intentionally unassigned pending the touchscreen.) The old SRDKG RF Z
+controller is not part of the architecture.
 What Z does within a print remains the undecided `z_within_lift`.
 
 HISTORY: in Milestone 1 Z was out of scope (manual actuator; no Z commands,
 no Z UI, method TBD). M1 code still contains no Z — that is current fact,
 not a design rule.
 
-### Wireless remote = Pi GPIO inputs (planned, 2026-10-14)
+### Wireless remote = Pi GPIO inputs (decided 2026-10-14; wired 2026-10-20)
 Operator-input device only: handheld → Kaleinavi 6-channel RF receiver → dry
 contacts → Pi GPIO (internal pull-ups, active-low, ~1 kΩ series) → Pi
-software; it never drives Z directly. Tentative functions: REMOTE STOP, Z UP, Z DOWN,
-extrusion pause / resume, two spare — mapping configurable in software.
-REMOTE STOP is an operational software stop, NOT an E-stop; the UI must
-never present it as one. Not implemented.
+software; it never drives Z directly. Wired functions (no longer tentative):
+CH1 REMOTE STOP, CH2 Z UP, CH3 Z DOWN, CH4 extrusion pause / resume, CH5 /
+CH6 AUX 1 / AUX 2 (reserved) — pins in `../CONTROL_BOX_HARDWARE.md`; code
+still reads them from the hardware-mapping layer. REMOTE STOP is an
+operational software stop, NOT an E-stop; the UI must never present it as
+one. Extrusion pause / resume has an input but no defined pump output. Not
+implemented in software.
 
 ### Extrusion is out of scope
 The external pumping system is independently controlled. Not addressed here.
@@ -701,10 +715,11 @@ Lift-aware job work:
 - Enter the real machine dimensions in Machine / Printer settings once
   measured (max building Z unknown); machine-profile pass reviewed 2026-10-15.
 
-Hardware-facing work (not started; needs `../CONTROL_BOX_HARDWARE.md` VERIFY
-items and the touchscreen pin usage first): Z control via MD13S (dead-man,
-time-bounded), RF remote inputs (debounced, UP+DOWN interlock), REMOTE STOP
-behaviour definition.
+Hardware-facing work (not started; pins wired 2026-10-20 — see
+`../CONTROL_BOX_HARDWARE.md`; still needs its VERIFY items, especially the
+meter check of the Kaleinavi contacts and the default-STOP mechanism): Z
+control via MD13S (dead-man, time-bounded), RF remote inputs (debounced,
+UP+DOWN interlock), REMOTE STOP behaviour definition.
 - P4 (optional): persist progress at lift boundaries; start at lift N.
 - Add a lift-boundary step to docs/acceptance-test.md once hardware testing
   of lifts is planned.
@@ -734,6 +749,10 @@ behaviour definition.
 ---
 
 ## Last Updated
+
+2026-10-20 — control-box wiring recorded: Pi GPIO pin map wired and
+authoritative in `../CONTROL_BOX_HARDWARE.md`; touchscreen = 7" 800×480 DSI;
+remote channel functions fixed. No code changed.
 
 2026-10-15 — machine profile + job preflight (manually reviewed,
 checkpoint 2026-10-15): this printer's own persisted profile, authoritative preflight,
