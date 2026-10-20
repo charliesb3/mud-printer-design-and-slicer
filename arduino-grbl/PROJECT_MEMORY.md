@@ -32,7 +32,14 @@ Pi USB-A → Uno USB-B: serial + the Uno's power (wired 2026-10-20; no Pi GPIO u
 Arduino Uno / GRBL
         ↓
 step/direction control → three DM556T drivers: X, Y1, Y2
-        (Y1/Y2 believed to share the Y STEP/DIR — VERIFY)
+        (observed 2026-10-20: X PUL+ D4 / DIR+ D5; Y1 + Y2 share PUL+ D3 /
+         DIR+ D6 = one logical Y axis; returns commoned to Uno GND —
+         table: ../CONTROL_BOX_HARDWARE.md → "Arduino Uno → DM556T wiring")
+
+DISCREPANCY (2026-10-20, unresolved): stock GRBL 1.1 puts X step on D2 and
+Z step on D4. With the observed wiring a stock build would step X only on Z
+moves. The installed build (possibly modified) or the wiring must be
+confirmed before any Pi-driven motion; do not change either by assumption.
         ↓
 X/Y machine motion
 
@@ -142,6 +149,7 @@ No GRBL modifications associated with this new software project have yet been ma
 - What coordinates Z with X/Y within a print job? (Pi-side; the undecided
   `z_within_lift` semantic in `contracts/mudjob/README.md`.)
 - Which board and GRBL build are actually installed (Uno vs earlier-documented Mega)?
+- Does the installed build drive X step on D4 (observed wiring) rather than stock D2? (See the discrepancy above.)
 - What homing/limit behavior currently exists?
 - What safety/interlock behavior may eventually be needed?
 - What machine-state information will the Raspberry Pi interface need from GRBL?
@@ -174,6 +182,11 @@ No new firmware work has yet been completed for this project.
 ---
 
 ## Last Updated
+
+2026-10-20 (Uno → DM556T wiring)
+
+Observed driver wiring recorded; Y1 / Y2 shared PUL / DIR confirmed (no
+longer VERIFY); X step on D4 conflicts with stock GRBL 1.1 (D2) — open.
 
 2026-10-20
 

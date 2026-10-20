@@ -85,9 +85,49 @@ Responsibilities (do not blur):
 | Item | Detail |
 |---|---|
 | Drivers | three DM556T: X, Y1, Y2 |
-| Y gantry | **VERIFY**: Y1 and Y2 believed to share the GRBL Y STEP/DIR signals (one logical Y axis) |
+| Y gantry | **CONFIRMED (observed 2026-10-20):** Y1 and Y2 share the same PUL and DIR signals — one logical Y axis from the controller |
 | Power | the two 48 V PSUs (**VERIFY** which PSU feeds which driver) |
 | Limits | existing X/Y limit-switch hardware/connectors are to connect to the **Uno/GRBL**, not the Pi (current wiring and GRBL `$21`/`$22` state: **VERIFY**, see `pi-interface/docs/grbl-capture-checklist.md`) |
+
+### Arduino Uno → DM556T wiring (observed, authoritative)
+
+Physically observed in the control box 2026-10-20. Terminal names are the
+DM556T's own labels: **PUL+** is the step (STEP) input and **DIR+** the
+direction input.
+
+| Driver | DM556T terminal | Arduino Uno pin |
+|---|---|---|
+| X | PUL+ (step) | digital **D4** |
+| X | DIR+ (direction) | digital **D5** |
+| Y1 and Y2 (both) | PUL+ (step) | digital **D3** |
+| Y1 and Y2 (both) | DIR+ (direction) | digital **D6** |
+| all three | signal returns (PUL− / DIR−) | commoned → Arduino **GND** |
+
+- Y1 and Y2 are driven in parallel from the same two Uno pins: they cannot be
+  commanded independently (no separate Y2 / auto-squaring axis).
+- Driver ENA terminals and limit-switch pins: not part of this observation.
+
+**DISCREPANCY with stock GRBL 1.1 (Uno / ATmega328P default pin map) —
+UNRESOLVED, do not "fix" either side by assumption.** Stock GRBL 1.1 uses:
+step X **D2** / Y **D3** / Z **D4**; direction X **D5** / Y **D6** / Z **D7**.
+
+| Signal | Observed | Stock GRBL 1.1 | Match |
+|---|---|---|---|
+| X step | D4 | D2 (D4 = **Z** step) | **NO** |
+| X dir | D5 | D5 | yes |
+| Y step | D3 | D3 | yes |
+| Y dir | D6 | D6 | yes |
+
+Under STOCK GRBL 1.1 with this wiring, X-axis moves would pulse D2 (not
+connected) and the X driver would step only on **Z** moves, with its
+direction taken from the X direction pin. XY-only jobs (no Z words) and X
+jogs would then not move X. Because the machine has moved and printed, one
+of these must be true — **VERIFY before any Pi-driven motion**: the
+installed firmware is a modified build with X step remapped to D4 (or with
+X/Z swapped), the wiring was changed since the machine last ran, or the
+observation is mistaken. Check: the installed GRBL build / `cpu_map`
+(source or `$I`), and a low-speed single-axis X jog with the operator at
+the E-stop.
 
 ## Z axis
 
@@ -257,7 +297,13 @@ numbers; documentation always shows BOTH the BCM number and the physical
 | Extrusion pause / resume | GPIO5 | 29 | input, pull-up, active-low | Kaleinavi CH4 NO, through ~1 kΩ series resistor |
 | Remote AUX 1 | GPIO6 | 31 | input, pull-up, active-low | Kaleinavi CH5 NO, through ~1 kΩ series resistor |
 | Remote AUX 2 | GPIO13 | 33 | input, pull-up, active-low | Kaleinavi CH6 NO, through ~1 kΩ series resistor |
-| Signal ground | GND | 9 | — | common signal-ground bus (Kaleinavi CH1–CH6 COM, MD13S GND) |
+| Signal ground | GND | 9 | — | common signal-ground bus (Kaleinavi CH1–CH6 COM, MD13S control GND) |
+
+- **Z DOWN = physical pin 15 / GPIO22 — CONFIRMED by the operator
+  (2026-10-20).** No open question remains on that line.
+- The Pi **signal-ground bus** (Kaleinavi CH1–CH6 COM + MD13S control GND →
+  Pi physical 9) is a signal reference only. It is **not** protective earth
+  and **not** the Kaleinavi's 12 V supply terminals — do not conflate them.
 
 - **Kaleinavi CH6 / AUX 2 is PHYSICAL PIN 33 / GPIO13.** An earlier
   conversational ASCII diagram showed physical pin 27 — that was an ERROR.
@@ -338,8 +384,9 @@ numbers; documentation always shows BOTH the BCM number and the physical
 
 **4. VERIFY before final wiring**
 - [ ] Arduino board (Uno vs earlier-documented Mega) and GRBL build / settings
+- [ ] **X step on Uno D4 vs stock GRBL 1.1 D2** (D4 = stock Z step): firmware pin map or wiring — resolve before Pi-driven motion
 - [ ] Uno serial device name on the Pi (ttyACM0 / ttyUSB0)
-- [ ] Y1 / Y2 share the Y STEP/DIR command
+- [x] ~~Y1 / Y2 share the Y STEP/DIR command~~ — observed 2026-10-20: both on Uno D3 (PUL+) / D6 (DIR+)
 - [ ] which 48 V PSU feeds which driver
 - [ ] X/Y limit switches wired to the Uno; GRBL limit / homing settings
 - [ ] protective earth / bonding
