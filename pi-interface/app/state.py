@@ -66,6 +66,46 @@ class MachineSetup:
         self.origin_mpos = None
 
 
+class RemoteStop:
+    """
+    REMOTE STOP latch (Kaleinavi CH1) — an OPERATIONAL software stop, NOT an
+    E-stop (the hardwired mains-side mushroom is the only safety stop).
+
+    Latched by the remote; releasing the RF button does NOT clear it. While
+    latched no new machine motion is accepted (jog, Z, job start / resume /
+    reposition confirm, prime, outline, console, lift changes). Cleared only by
+    a deliberate UI action, and only once the CH1 contact reads released.
+    Clearing never starts motion: a held job stays held until RESUME.
+    """
+
+    def __init__(self) -> None:
+        self.latched: bool = False
+        self.since: Optional[float] = None
+        self.cause: Optional[str] = None
+        self.actions: list = []          # what the stop did (for the operator)
+        self.count: int = 0
+
+    def latch(self, cause: str) -> bool:
+        """Latch; False if it already was."""
+        if self.latched:
+            return False
+        self.latched, self.since, self.cause, self.actions = True, time.time(), cause, []
+        self.count += 1
+        return True
+
+    def clear(self) -> None:
+        self.latched, self.since, self.cause, self.actions = False, None, None, []
+
+    def refusal(self) -> Optional[str]:
+        if self.latched:
+            return "REMOTE STOP is latched — clear it on the screen once the problem is corrected."
+        return None
+
+    def to_dict(self) -> dict:
+        return {"latched": self.latched, "since": self.since, "cause": self.cause,
+                "actions": list(self.actions)}
+
+
 class AppState:
     def __init__(self) -> None:
         self.connected: bool = False
@@ -100,6 +140,11 @@ class AppState:
         self.offsets: dict[str, str] = {}             # $# → [G54:…] … [PRB:…]
         self.events: deque = deque(maxlen=30)         # alarms, errors, resets, messages
         self.setup = MachineSetup()
+        self.build_info: dict = {}                    # $I → [VER:…], [OPT:…]
+        self.remote_stop = RemoteStop()
+        # app/hardware HardwareService (GPIO, remote, Z) — attached at startup
+        self.hardware = None
+        self.hw_events: deque = deque(maxlen=60)      # remote / Z / GRBL link events
         # THIS controller's machine profile (loaded from MACHINE_PROFILE_PATH at
         # startup; authoritative for job preflight) + a load problem, if any
         self.machine_profile: dict = _mp.default_profile()
@@ -150,7 +195,18 @@ class AppState:
         """Diagnostics history: alarms, errors, resets, GRBL messages."""
         self.events.append({"t": time.time(), "kind": kind, "text": text, "detail": detail})
 
+    def add_hw_event(self, kind: str, text: str) -> None:
+        """Hardware / link event history (remote, Z, REMOTE STOP, GRBL connect)."""
+        self.hw_events.append({"t": time.time(), "kind": kind, "text": text})
+
+    def mark_link_up(self) -> None:
+        if not self.connected:
+            self.add_hw_event("grbl", "GRBL serial link connected")
+        self.connected = True
+
     def mark_disconnected(self) -> None:
+        if self.connected:
+            self.add_hw_event("grbl", "GRBL disconnected")
         self.connected = False
         self.grbl_state = "Disconnected"
         self.setup.invalidate("GRBL disconnected")
@@ -226,6 +282,8 @@ class AppState:
             "jog_warning": jog_warning,
             "job": self.job.to_dict() if self.job else None,
             "setup": self._setup_dict(),
+            "remote_stop": self.remote_stop.to_dict(),
+            "hardware": self._hardware_dict(),
             "machine": {"profile": self.machine_profile, "envelope": _mp.envelope(self.machine_profile),
                         "problem": self.machine_profile_problem},
             "grbl": {
@@ -244,8 +302,15 @@ class AppState:
                 "parser_state": self.parser_state,
                 "offsets": dict(self.offsets),
                 "events": list(self.events),
+                "build_info": dict(self.build_info),
             },
         }
+
+    def _hardware_dict(self) -> dict:
+        hw = self.hardware.to_dict() if self.hardware is not None else {"backend": "none", "gpio": False,
+                                                                         "remote": [], "z": None}
+        hw["events"] = list(self.hw_events)
+        return hw
 
     def _setup_dict(self) -> dict:
         s = self.setup

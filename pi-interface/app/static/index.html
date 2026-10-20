@@ -16,6 +16,7 @@
       <span class="badge badge-disconnected" id="conn-badge">DISCONNECTED</span>
       <span class="state-badge state-disconnected" id="grbl-state">—</span>
       <span class="state-badge lift-badge" id="lift-badge" hidden></span>
+      <span class="state-badge rstop-badge" id="rstop-badge" hidden>REMOTE STOP</span>
       <button class="printer-chip" id="printer-chip" title="Machine / Printer settings">Printer: —</button>
     </div>
     <div class="status-right">
@@ -33,6 +34,22 @@
   <div id="notice" hidden></div>
 
   <div id="main-content">
+
+    <!-- REMOTE STOP latched (Kaleinavi CH1) — an operational stop, NOT the E-stop -->
+    <div class="section rstop-panel span-all" id="rstop-panel" hidden>
+      <div class="rstop-title">Remote stop latched</div>
+      <div class="rstop-text" id="rstop-text"></div>
+      <ul class="rstop-actions" id="rstop-actions"></ul>
+      <p class="rstop-note">
+        No machine motion is accepted until this is cleared. Releasing the remote button does not clear it.
+        Correct the problem, then hold the button below. Clearing moves nothing: a held job continues only
+        when you press <b>RESUME</b>. This is not the E-stop — the physical mushroom E-stop is the only safety stop.
+      </p>
+      <button class="ctrl-btn btn-rstop-clear" id="btn-rstop-clear" title="Press and hold to clear the REMOTE STOP">
+        <span>Hold to clear REMOTE STOP</span><div class="hold-fill"></div>
+      </button>
+      <div class="rstop-blocked" id="rstop-blocked"></div>
+    </div>
 
     <!-- Frame reposition required (shown on every connected client) -->
     <div class="section reposition-panel span-all" id="reposition-panel" hidden>
@@ -210,6 +227,18 @@
         </div>
       </div>
 
+      <div class="section" id="z-section">
+        <div class="section-title">Manual Z (hold to move)</div>
+        <div class="jog-warning" id="z-warning"></div>
+        <div class="z-pad">
+          <button class="jog-btn z-btn" id="z-up" data-zdir="up">Z UP</button>
+          <button class="jog-btn z-btn" id="z-down" data-zdir="down">Z DOWN</button>
+        </div>
+        <div class="z-status" id="z-status">—</div>
+        <p class="est-note">Open-loop: the Z height is not known to the controller. Z moves only while a button
+          (here or on the remote) is held; UP and DOWN together stop it.</p>
+      </div>
+
     </div><!-- .col-mid -->
 
     <!-- RIGHT: persistent toolpath top view (from the loaded job only) -->
@@ -249,6 +278,22 @@
       <div class="est-note" id="printer-note"></div>
     </div>
 
+    <!-- Hardware / commissioning: remote inputs, Z outputs, GPIO (collapsed by default) -->
+    <div class="section span-all" id="hw-section">
+      <button class="console-toggle" id="hw-toggle">Hardware / Commissioning ▾</button>
+      <div class="console-body" id="hw-body" style="display:none">
+        <div class="diag-grid" id="hw-status"></div>
+        <div class="diag-title">RF remote inputs (Kaleinavi → Pi GPIO, active low)</div>
+        <table class="diag-table hw-table" id="hw-remote"></table>
+        <div class="diag-title">Manual Z output (Cytron MD13S)</div>
+        <div class="diag-grid" id="hw-z"></div>
+        <div class="diag-title">Hardware events</div>
+        <div class="diag-events" id="hw-events"></div>
+        <p class="est-note">Check each remote button here with motion disabled (JOG_SPEED_MM_MIN=0, Z_PWM_DUTY=0)
+          before enabling any motion: button → GPIO level → software state. See docs/acceptance-test.md.</p>
+      </div>
+    </div>
+
     <!-- Advanced: GRBL diagnostics + console (collapsed by default) -->
     <div class="section span-all">
       <button class="console-toggle" id="console-toggle">Advanced / Diagnostics / Console ▾</button>
@@ -261,7 +306,9 @@
           <button class="view-btn" data-read="settings">Settings ($$)</button>
           <button class="view-btn" data-read="parser">Parser state ($G)</button>
           <button class="view-btn" data-read="offsets">Offsets ($#)</button>
+          <button class="view-btn" data-read="info">Build info ($I)</button>
         </div>
+        <div class="diag-pre" id="diag-build"></div>
         <div class="diag-pre" id="diag-parser"></div>
         <div class="diag-pre" id="diag-offsets"></div>
         <table class="diag-table" id="diag-settings"></table>

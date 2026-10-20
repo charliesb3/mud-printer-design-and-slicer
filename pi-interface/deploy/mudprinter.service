@@ -1,0 +1,37 @@
+# Mud Printer Interface — systemd unit (docs/deployment.md → "systemd service").
+# Install: sudo cp deploy/mudprinter.service /etc/systemd/system/ ; edit User / paths if the
+# account is not "pi"; sudo systemctl daemon-reload && sudo systemctl enable --now mudprinter
+#
+# Z default-STOP layers handled here (see docs/deployment.md → "Z default STOP"):
+# - ExecStartPre / ExecStopPost drive the MD13S PWM (GPIO18) and DIR (GPIO23) LOW with the
+#   Raspberry Pi `pinctrl` tool, before the app starts and after it exits FOR ANY REASON
+#   (clean stop, crash, kill, watchdog). "+" = run with full privileges.
+# - Type=notify + WatchdogSec: the app pings systemd from its event loop; a hung loop (Z
+#   dead-man checks no longer running) is killed, then ExecStopPost forces Z PWM low.
+# GPIO numbers here MUST match app/hardware/pins.py (Z_PWM_BCM / Z_DIR_BCM).
+
+[Unit]
+Description=Mud Printer Interface (pi-interface)
+# Local / offline operation: no dependency on network-online or any internet service.
+After=network.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=pi
+SupplementaryGroups=dialout gpio
+WorkingDirectory=/home/pi/mudprintersoftware/pi-interface
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=+/usr/bin/pinctrl set 18 op dl
+ExecStartPre=+/usr/bin/pinctrl set 23 op dl
+ExecStart=/home/pi/mudprintersoftware/pi-interface/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+ExecStopPost=+/usr/bin/pinctrl set 18 op dl
+ExecStopPost=+/usr/bin/pinctrl set 23 op dl
+WatchdogSec=10
+TimeoutStartSec=60
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

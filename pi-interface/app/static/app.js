@@ -166,6 +166,13 @@ function handleState(s) {
   renderPreflight(s);
   renderView(s);
   renderDiagnostics(s);
+  renderRemoteStop(s);
+  renderZ(s);
+  renderHardware(s);
+}
+
+function latched(s) {
+  return !!(s.remote_stop && s.remote_stop.latched);
 }
 
 function renderJogSection(s) {
@@ -176,7 +183,8 @@ function renderJogSection(s) {
     && s.jog_enabled
     && ["Idle", "Jog"].includes(s.grbl_state)
     && (!jobActive(s) || awaiting)           // jog / re-zero allowed during a frame reposition
-    && !(s.setup && s.setup.moving);        // the server applies the same rules
+    && !(s.setup && s.setup.moving)         // the server applies the same rules
+    && !latched(s);
 
   if (s.jog_warning) {
     warn.textContent = s.jog_warning;
@@ -195,7 +203,7 @@ function renderControls(s) {
   const inRun = ["Run", "Jog"].includes((s.grbl_state || "").split(":")[0]);
 
   document.getElementById("btn-hold").disabled = !inRun;
-  document.getElementById("btn-resume").disabled = !inHold;
+  document.getElementById("btn-resume").disabled = !inHold || latched(s);
   document.getElementById("btn-stop").disabled = !s.connected;
 }
 
@@ -736,6 +744,9 @@ function renderDiagnostics(s) {
     ev.appendChild(row);
   });
   if (!(d.events || []).length) ev.textContent = "none";
+  const bi = d.build_info || {};
+  document.getElementById("diag-build").textContent = Object.keys(bi).length
+    ? Object.entries(bi).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
   document.getElementById("diag-parser").textContent = d.parser_state ? "Parser state: " + d.parser_state : "";
   document.getElementById("diag-offsets").textContent = d.offsets && Object.keys(d.offsets).length
     ? Object.entries(d.offsets).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
@@ -768,6 +779,95 @@ function attachFeatureControls() {
   document.getElementById("btn-restore-lifts").addEventListener("click", () => send({ type: "restore_planned_lifts" }));
   document.querySelectorAll("[data-read]").forEach(b =>
     b.addEventListener("click", () => send({ type: "read_grbl", what: b.dataset.read })));
+}
+
+// ---- REMOTE STOP (Kaleinavi CH1): latched operational stop — never called an E-stop
+function renderRemoteStop(s) {
+  const rs = s.remote_stop || {};
+  const panel = document.getElementById("rstop-panel");
+  document.getElementById("rstop-badge").hidden = !rs.latched;
+  panel.hidden = !rs.latched;
+  if (!rs.latched) return;
+  const when = rs.since ? new Date(rs.since * 1000).toLocaleTimeString() : "";
+  document.getElementById("rstop-text").textContent = `Latched at ${when} — ${rs.cause || ""}.`;
+  const ul = document.getElementById("rstop-actions");
+  ul.innerHTML = "";
+  (rs.actions || []).forEach(a => { const li = document.createElement("li"); li.textContent = a; ul.appendChild(li); });
+  const ch = ((s.hardware || {}).remote || []).find(c => c.key === "remote_stop");
+  const held = ch && ch.state !== "released";
+  document.getElementById("btn-rstop-clear").disabled = !!held;
+  document.getElementById("rstop-blocked").textContent = held
+    ? "The REMOTE STOP input still reads " + (ch.state === "pressed" ? "PRESSED" : "unknown") + " — release the remote button first."
+    : "";
+}
+
+// ---- Manual Z: one dead-man controller on the server (same as the remote's Z UP / Z DOWN)
+function renderZ(s) {
+  const z = (s.hardware || {}).z;
+  const warn = document.getElementById("z-warning");
+  const status = document.getElementById("z-status");
+  const reason = !z ? "No Z hardware." : (z.blocked || z.refusal);
+  warn.textContent = reason || "";
+  warn.classList.toggle("visible", !!reason && !(z && z.blocked));
+  const usable = !!(z && z.available && !z.refusal);
+  document.querySelectorAll(".z-btn").forEach(b => { b.disabled = !usable && !zActive; });
+  if (!z) { status.textContent = "—"; status.className = "z-status"; return; }
+  const moving = z.command !== "STOP";
+  status.className = "z-status" + (moving ? " moving" : "");
+  status.textContent = moving
+    ? `Z ${z.command} — ${z.source} · duty ${Math.round(z.duty_config * 100)} %`
+    : (z.blocked ? z.blocked : `Z STOP · fixed duty ${z.duty_config > 0 ? Math.round(z.duty_config * 100) + " %" : "not set"}`);
+}
+
+// ---- Hardware / commissioning panel
+function renderHardware(s) {
+  if (document.getElementById("hw-body").style.display === "none") return;
+  const hw = s.hardware || {};
+  kvGrid(document.getElementById("hw-status"), [
+    ["GPIO backend", hw.backend + (hw.gpio ? "" : " (no GPIO: remote inputs not read)")
+                     + (hw.backend_error ? " — " + hw.backend_error : "")],
+    ["Poll loop", hw.loop_error ? "ERROR: " + hw.loop_error : "running"],
+    ["Debounce", hw.debounce_ms != null ? hw.debounce_ms + " ms" : "—"],
+    ["GRBL", s.connected ? `connected · ${s.grbl_version || "version not yet reported"} · ${s.grbl_state}`
+                         : "disconnected"],
+    ["GRBL build ($I)", (s.diag && s.diag.build_info && s.diag.build_info.VER) || "not read (Advanced → Build info)"],
+    ["REMOTE STOP", latched(s) ? "LATCHED" : "clear"],
+  ]);
+  const tbl = document.getElementById("hw-remote");
+  tbl.innerHTML = "";
+  const head = document.createElement("tr");
+  ["CH", "Function", "GPIO (BCM)", "Pin", "Level", "Software", "Armed"].forEach(t => {
+    const td = document.createElement("td"); td.textContent = t; td.className = "k"; head.appendChild(td);
+  });
+  tbl.appendChild(head);
+  (hw.remote || []).forEach(c => {
+    const tr = document.createElement("tr");
+    if (c.state === "pressed") tr.className = "pressed";
+    [`CH${c.channel}`, c.label, `GPIO${c.bcm}`, `${c.physical}`, c.level || "—", c.state.toUpperCase(),
+     c.armed ? "yes" : (c.held_at_startup ? "no — held at startup, release to arm" : "no")
+    ].forEach(t => { const td = document.createElement("td"); td.textContent = t; tr.appendChild(td); });
+    tbl.appendChild(tr);
+  });
+  const z = hw.z, p = hw.z_pins || {};
+  kvGrid(document.getElementById("hw-z"), z ? [
+    ["Command", z.command + (z.source ? ` (${z.source})` : "")],
+    ["PWM output", `${Math.round(z.pwm_duty * 100)} % on GPIO${p.pwm_bcm} (pin ${p.pwm_physical})`],
+    ["DIR output", `${z.dir_level} on GPIO${p.dir_bcm} (pin ${p.dir_physical})${z.dir_invert ? " · inverted" : ""}`],
+    ["Configured duty", z.duty_config > 0 ? Math.round(z.duty_config * 100) + " % (fixed)" : "0 — manual Z disabled"],
+    ["Dead-man / max run", `${z.timeout_s} s / ${z.max_run_s} s`],
+    ["Blocked / refused", z.blocked || z.refusal || "—"],
+    ["Fault", z.fault || "none"],
+    ["Last stop", z.last_stop || "—"],
+  ] : [["Z", "unavailable"]]);
+  const ev = document.getElementById("hw-events");
+  ev.innerHTML = "";
+  (hw.events || []).slice().reverse().forEach(e => {
+    const row = document.createElement("div");
+    row.className = "ev-" + e.kind;
+    row.textContent = `${new Date(e.t * 1000).toLocaleTimeString()} ${e.text}`;
+    ev.appendChild(row);
+  });
+  if (!(hw.events || []).length) ev.textContent = "none";
 }
 
 // ---- Live 2D toolpath view: drawn only from the loaded job's G-code (GET /api/job/path)
@@ -966,6 +1066,61 @@ function attachJogButton(btn) {
 }
 
 // ------------------------------------------------------------------ //
+// Manual Z buttons (dead-man, like jog: heartbeat while held)          //
+// ------------------------------------------------------------------ //
+
+let zHeartbeatInterval = null;
+let zActive = false;
+
+function startZ(direction) {
+  if (zActive) stopZ();
+  zActive = true;
+  send({ type: "z_start", direction });
+  zHeartbeatInterval = setInterval(() => send({ type: "z_heartbeat" }), 100);
+}
+
+function stopZ() {
+  if (!zActive) return;
+  zActive = false;
+  clearInterval(zHeartbeatInterval);
+  zHeartbeatInterval = null;
+  send({ type: "z_stop" });
+}
+
+function attachZButton(btn) {
+  const dir = btn.dataset.zdir;
+  let touchId = null;
+  btn.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    if (touchId !== null || btn.disabled) return;
+    touchId = e.changedTouches[0].identifier;
+    btn.classList.add("pressing");
+    startZ(dir);
+  }, { passive: false });
+  const touchEnd = (e) => {
+    const t = Array.from(e.changedTouches).find(t => t.identifier === touchId);
+    if (!t) return;
+    touchId = null;
+    btn.classList.remove("pressing");
+    stopZ();
+  };
+  btn.addEventListener("touchend", touchEnd);
+  btn.addEventListener("touchcancel", touchEnd);
+  btn.addEventListener("mousedown", () => {
+    if (touchId !== null || btn.disabled) return;
+    btn.classList.add("pressing");
+    startZ(dir);
+  });
+  const mouseEnd = () => {
+    if (!btn.classList.contains("pressing")) return;
+    btn.classList.remove("pressing");
+    stopZ();
+  };
+  btn.addEventListener("mouseup", mouseEnd);
+  btn.addEventListener("mouseleave", mouseEnd);
+}
+
+// ------------------------------------------------------------------ //
 // Press-and-hold buttons (Stop 2.5 s, Confirm reposition 2 s)          //
 // ------------------------------------------------------------------ //
 
@@ -1047,6 +1202,24 @@ let cancelConfirmHold = () => {};
 function attachStopButton() {
   attachHoldButton(document.getElementById("btn-stop"), STOP_HOLD_MS,
     () => send({ type: "stop" }));
+}
+
+const RSTOP_CLEAR_HOLD_MS = 2000;
+
+function attachRemoteStopClear() {
+  attachHoldButton(document.getElementById("btn-rstop-clear"), RSTOP_CLEAR_HOLD_MS,
+    () => send({ type: "remote_stop_clear" }));
+}
+
+function attachHardwarePanel() {
+  const toggle = document.getElementById("hw-toggle");
+  const body = document.getElementById("hw-body");
+  toggle.addEventListener("click", () => {
+    const open = body.style.display === "none";
+    body.style.display = open ? "block" : "none";
+    toggle.textContent = "Hardware / Commissioning " + (open ? "▴" : "▾");
+    if (open) renderHardware(lastState);
+  });
 }
 
 function attachConfirmButton() {
@@ -1180,6 +1353,9 @@ document.addEventListener("DOMContentLoaded", () => {
   attachConfirmButton();
   attachSetupButtons();
   attachFeatureControls();
+  document.querySelectorAll(".z-btn").forEach(attachZButton);
+  attachRemoteStopClear();
+  attachHardwarePanel();
   attachView();
   attachPrinter();
 

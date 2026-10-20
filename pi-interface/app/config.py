@@ -54,5 +54,32 @@ JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", "jobs"))
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8000"))
 
+# ------------------------------------------------------------------ #
+# Raspberry Pi hardware (GPIO pins: app/hardware/pins.py — never here)  #
+# ------------------------------------------------------------------ #
+
+# none = no GPIO (Mac development; remote absent, no Z) | mock = in-memory
+# pins (tests / UI exercise) | gpio = the Raspberry Pi (gpiozero → lgpio).
+HARDWARE_BACKEND: str = os.getenv("HARDWARE_BACKEND", "none")
+
+# Remote inputs are sampled at this interval and debounced: a level must be
+# stable this long before it counts (relay contacts bounce a few ms).
+REMOTE_POLL_INTERVAL_S: float = float(os.getenv("REMOTE_POLL_INTERVAL_S", "0.01"))
+REMOTE_DEBOUNCE_S: float = float(os.getenv("REMOTE_DEBOUNCE_S", "0.05"))
+
+# Manual Z (MD13S). FIXED duty 0–1 for every manual Z move (no operator speed
+# control). 0 = manual Z DISABLED — set it only during commissioning, after the
+# default-STOP check (docs/acceptance-test.md). Never a position estimate.
+Z_PWM_DUTY: float = float(os.getenv("Z_PWM_DUTY", "0"))
+# Software PWM frequency (lgpio). MD13S accepts up to 20 kHz.
+Z_PWM_FREQUENCY_HZ: float = float(os.getenv("Z_PWM_FREQUENCY_HZ", "1000"))
+# Swap if Z UP moves the actuator down (set at commissioning).
+Z_DIR_INVERT: bool = os.getenv("Z_DIR_INVERT", "false").strip().lower() in ("1", "true", "yes")
+# Dead-man: a held Z request (UI heartbeat / remote contact) must be refreshed
+# within this time or Z stops.
+Z_TIMEOUT_S: float = float(os.getenv("Z_TIMEOUT_S", "0.3"))
+# Any single continuous Z run stops after this long (release and press again).
+Z_MAX_RUN_S: float = float(os.getenv("Z_MAX_RUN_S", "30"))
+
 # Rolling console buffer size
 CONSOLE_MAX_LINES: int = 100

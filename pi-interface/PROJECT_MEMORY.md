@@ -40,6 +40,14 @@ wiring"); confirm X with a slow jog before the first Pi-driven motion.
 - **Serial**: pyserial in a background reader thread; asyncio.Queue bridges thread→async
 - **Frontend**: Vanilla HTML/CSS/JS (no framework, no CDN, no build step)
 - **Testing**: pytest + pytest-asyncio (asyncio_mode=auto)
+- **GPIO** (2026-10-20): gpiozero (Raspberry Pi's maintained library,
+  preinstalled on Raspberry Pi OS; default pin factory lgpio via
+  `/dev/gpiochip*`, no daemon / root). On the Pi from apt
+  (`python3-gpiozero`, `python3-lgpio`; venv `--system-site-packages`); on
+  the Mac only in requirements-dev (tests use its MockFactory). Imported only
+  in `app/hardware/backend.py`. Rejected: RPi.GPIO (legacy, no Pi 5),
+  pigpio (daemon, no Pi 5), sysfs hardware PWM (keeps running after the
+  process dies — wrong for Z default-STOP).
 
 Rationale: simple, offline-capable, no Node.js toolchain, minimal surface area,
 Pi-deployable, easy to maintain.
@@ -113,6 +121,29 @@ jog button is held, motion stops within one `JOG_TIMEOUT_S` interval.
 This is the fail-safe requirement. It does NOT rely on the browser successfully
 sending a release message.
 
+### Hardware layer (2026-10-20; `app/hardware/`)
+
+```
+pins.py      THE BCM map (+ physical pins) — no GPIO number anywhere else
+backend.py   none (Mac, default) | mock (tests / UI) | gpio (gpiozero) — only place touching pins;
+             Z outputs claimed at STOP BEFORE inputs get pull-ups
+remote.py    CH1–CH6 polled every 10 ms, debounced (50 ms stable), active LOW;
+             first stable state only after 200 ms; a channel closed at startup is NOT ARMED
+             until seen released
+z.py         ZController — the ONE manual Z: per-source dead-man requests (each browser
+             client, remote_up, remote_down) → STOP | UP | DOWN at the FIXED duty
+service.py   HardwareService: one asyncio loop (poll + Z tick); remote → same machine ops as UI
+sdnotify.py  (app/) systemd READY / WATCHDOG pings from the event loop
+```
+Z resolution: no live request → STOP; two directions (UP+DOWN, UI vs remote,
+a source reversing) → STOP + BLOCKED until every Z input is released; a
+request refused (disabled / fault / REMOTE STOP) is also BLOCKED — it never
+starts later on its own; run > `Z_MAX_RUN_S` → STOP + blocked; exception →
+STOP + fault (Z refused until restart). Z allowed during a job (manual Z
+while printing), independent of GRBL. Hardware events (remote, Z, REMOTE
+STOP, GRBL link) go to the log and `AppState.hw_events` — no polling noise.
+A failing gpio backend falls back to `none` (no remote, no Z) and is reported.
+
 ---
 
 ## File Layout
@@ -151,10 +182,14 @@ pi-interface/
 │   ├── test_ui.py          # 6 tests (dashboard structure; UI proposal rule == server rule, via Node)
 │   └── js/propose_check.js # runs app.js proposeLiftEnd for test_ui.py
 │   └── test_api.py         # 25 tests (building/export upload, .muddesign refusal, synced clients incl. setup)
+│   ├── test_hardware.py    # GPIO map, gpiozero backend (MockFactory), remote, Z, REMOTE STOP, lifecycle
+│   └── test_grbl_capture.py # capture tool sends read-only queries only
+├── tools/grbl_capture.py   # read-only $I $$ $# $G capture to a file (service stopped)
+├── deploy/                 # mudprinter.service (systemd), kiosk.sh (labwc), 99-mudpr-grbl.rules.example
 ├── docs/
-│   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
-│   ├── deployment.md              # Pi OS, systemd, kiosk, networking
-│   └── acceptance-test.md         # Physical machine acceptance criteria
+│   ├── grbl-capture-checklist.md  # read-only capture + prepared (not executed) flash procedure
+│   ├── deployment.md              # Pi OS, config.txt Z STOP, venv, systemd, udev, kiosk, Z default-STOP layers
+│   └── acceptance-test.md         # 10-step control-box commissioning + M1 functional checks
 ├── .env.example
 ├── requirements.txt
 ├── requirements-dev.txt
@@ -181,6 +216,12 @@ All settings in `.env`. Key values:
 | `JOG_TIMEOUT_S` | `0.3` | Dead-man timeout — motion stops if no heartbeat |
 | `STATUS_POLL_INTERVAL_S` | `0.2` | How often `?` is sent to GRBL |
 | `GRBL_UNRESPONSIVE_S` | `5.0` | Job lines / drains / positioning moves fail only after this long WITHOUT any status report (replaced `LIFT_DRAIN_TIMEOUT_S`) |
+| `HARDWARE_BACKEND` | `none` | `none` (Mac) / `mock` / `gpio` (the Pi) |
+| `REMOTE_POLL_INTERVAL_S` / `REMOTE_DEBOUNCE_S` | `0.01` / `0.05` | remote sampling / debounce |
+| `Z_PWM_DUTY` | `0` | **0 = manual Z disabled**; fixed duty for every manual Z move, set at commissioning |
+| `Z_PWM_FREQUENCY_HZ` | `1000` | lgpio software PWM (MD13S ≤ 20 kHz) |
+| `Z_DIR_INVERT` | `false` | set if Z UP moves down (actuator test) |
+| `Z_TIMEOUT_S` / `Z_MAX_RUN_S` | `0.3` / `30` | Z dead-man / max continuous run (provisional) |
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `8000` | HTTP port |
 
@@ -434,7 +475,7 @@ each ok is LIVE (see "Live ok-wait"), not a fixed timeout.
 The Pi interface communicates through the GRBL serial protocol only.
 It never sends `$$=` or `$N=` commands. Existing machine settings are preserved.
 
-### Z — the Pi is the sole Z command source (decided 2026-10-14; not implemented)
+### Z — the Pi is the sole Z command source (decided 2026-10-14; implemented 2026-10-20, not yet on hardware)
 CURRENT: the Pi will command Z through GPIO PWM + DIR → Cytron MD13S → the
 12 V actuator; manual Z comes from the UI and the remote's Z UP / Z DOWN as
 inputs to Pi software. Requirements for the implementation are in
@@ -448,6 +489,10 @@ hardware-mapping / configuration layer. (Previously, 2026-10-14: pins
 intentionally unassigned pending the touchscreen.) The old SRDKG RF Z
 controller is not part of the architecture.
 What Z does within a print remains the undecided `z_within_lift`.
+IMPLEMENTED 2026-10-20 (`app/hardware/z.py`, see "Hardware layer"): one
+controller for UI + remote, fixed configurable duty (no operator speed
+control; disabled at 0), open-loop (no position anywhere). Jobs stay XY-only.
+Default STOP layers and the open pull-down blocker: `docs/deployment.md` §7.
 
 HISTORY: in Milestone 1 Z was out of scope (manual actuator; no Z commands,
 no Z UI, method TBD). M1 code still contains no Z — that is current fact,
@@ -461,8 +506,37 @@ CH1 REMOTE STOP, CH2 Z UP, CH3 Z DOWN, CH4 extrusion pause / resume, CH5 /
 CH6 AUX 1 / AUX 2 (reserved) — pins in `../CONTROL_BOX_HARDWARE.md`; code
 still reads them from the hardware-mapping layer. REMOTE STOP is an
 operational software stop, NOT an E-stop; the UI must never present it as
-one. Extrusion pause / resume has an input but no defined pump output. Not
-implemented in software.
+one. Extrusion pause / resume has an input but no defined pump output.
+IMPLEMENTED 2026-10-20 (`app/hardware/`): all six inputs read and shown
+(Hardware / Commissioning); CH4 / CH5 / CH6 are logged only — no action.
+
+### REMOTE STOP semantics (decided + implemented 2026-10-20)
+Kaleinavi CH1 → `http.remote_stop()` — an OPERATIONAL stop, never an
+E-stop (UI / logs say REMOTE STOP; the panel states it is not the E-stop).
+On press: Z `stop_all` (PWM 0); GRBL real-time jog cancel `0x85` + feed hold
+`!` (bypass the line stream, GRBL 1.1 semantics: decelerate, keep position
+and planner); the jog loop cancelled; a running job → `held` exactly as HOLD
+(runner sends nothing more; awaiting-reposition stays awaiting). Then
+LATCHED (`AppState.remote_stop`): releasing the RF button does nothing.
+While latched these are refused with a notice: jog, Z (UI + remote), job
+start, RESUME, reposition confirm, prime, outline, console, lift-end
+changes (they can release a paused job). Allowed: software STOP, hold,
+upload, feed override, read-only queries. Recovery: "Hold to clear REMOTE
+STOP" (2 s) on any screen, refused while CH1 reads pressed / unknown;
+clearing moves NOTHING — a held job continues only with RESUME (same line,
+nothing repeated / skipped; tested), or STOP ends it. CH1 already closed when
+the inputs are first read latches too (the no-motion direction). `!` sent
+while GRBL is Idle puts it in Hold:0 (GRBL 1.1): RESUME returns it to Idle
+(empty buffer, no motion) — accepted for simplicity / no races.
+
+### Deployment (2026-10-20, prepared; not yet performed on the Pi)
+Raspberry Pi OS 64-bit desktop; venv `--system-site-packages`; `.env`
+`HARDWARE_BACKEND=gpio`; systemd `deploy/mudprinter.service` (Type=notify,
+WatchdogSec, pinctrl Z-LOW ExecStartPre / ExecStopPost, no network-online
+dependency); config.txt `gpio=18=op,dl` / `gpio=23=op,dl`; udev symlink
+`/dev/mudpr-grbl` from the Uno's discovered USB identity
+(`deploy/99-mudpr-grbl.rules.example`); Chromium kiosk via
+`~/.config/labwc/autostart` → `deploy/kiosk.sh`. Wi-Fi AP not done.
 
 ### Extrusion is out of scope
 The external pumping system is independently controlled. Not addressed here.
@@ -509,7 +583,9 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-262 tests total, all passing on Python 3.9 (Mac development environment)
+346 tests total, all passing on Python 3.9 (Mac, 2026-10-20; 291 before the
+hardware integration pass — `test_hardware.py` uses MockBackend + a fake
+clock and gpiozero's MockFactory for the real backend). Earlier: 262 tests
 (196 before the controller features pass, 246 before the UI pass;
 `test_ui.py` checks the dashboard structure from index.html and runs the
 UI's proposal rule under Node against the server's):
@@ -565,9 +641,20 @@ to end against a throwaway fake GRBL (override 119 % read back, $$/$G/$#,
 outline, lift end moved before start, continued while awaiting, completion
 with waits separated). UI checked only headlessly (render code under Node).
 
+**Hardware integration pass, 2026-10-20 (Mac only; NOT on the Pi, NOT
+commissioned):** `app/hardware/` (pin map, none / mock / gpiozero backends,
+debounced active-low remote, the one Z controller), REMOTE STOP latch +
+recovery, Manual Z panel, REMOTE STOP panel, Hardware / Commissioning panel,
+`$I` build info, GRBL link events, systemd notify / watchdog, read-only
+capture tool, deploy/ files, rewritten deployment / capture / acceptance
+docs. 346 tests pass. Exercised in-process with the mock backend (UI Z
+dead-man stop over a real WebSocket); UI not yet visually reviewed.
+
 **Not yet complete:**
-- Physical machine testing on the Pi (hardware not yet available)
-- Pi deployment and systemd configuration (depends on hardware)
+- Physical commissioning (docs/acceptance-test.md steps 1–10) — nothing
+  has run on the Pi or touched the hardware
+- MD13S PWM pull-down: value not derivable from the spec — COMMISSIONING
+  BLOCKER for Z (deployment.md §7)
 - Jog speed validation on the physical machine
 - Wi-Fi access point setup for offline field use
 
@@ -582,10 +669,16 @@ with waits separated). UI checked only headlessly (render code under Node).
 
 - What is the correct JOG_SPEED_MM_MIN for this machine's scale?
   (Must be established by physical testing before jogging is enabled)
-- What serial port does the Arduino appear as on the Pi (ttyUSB0 or ttyACM0)?
-  (Board recorded as an Uno 2026-10-14: genuine Uno → usually ttyACM0, CH340
-  clone → ttyUSB0. The `.env` default is ttyUSB0.)
-- Is a udev rule needed to assign a stable symlink to the Arduino port?
+- What USB identity does the Uno have (genuine 2341:xxxx with serial, or a
+  CH340 clone)? Decides udev variant A / B for `/dev/mudpr-grbl` (decided
+  2026-10-20: use a symlink; rule template in deploy/, values discovered on
+  the Pi).
+- MD13S PWM pull-down value (proposed 10 kΩ, measure — blocker for Z);
+  the fixed manual Z duty; `Z_MAX_RUN_S` (30 s provisional); whether
+  `Z_DIR_INVERT` is needed; Kaleinavi momentary mode + RF range / dropouts.
+- Does the Raspberry Pi kernel keep released outputs
+  (`persist_gpio_outputs`)? Irrelevant to safety (ExecStopPost drives LOW)
+  but worth recording.
 - Does the Pi need to act as a Wi-Fi access point for field use?
   If so, hostapd + dnsmasq setup is needed (not yet done).
 - Will the current GRBL firmware support all required jog and job operations?
@@ -691,10 +784,12 @@ day by the live ok-wait (see Key Decisions).
 
 ## Next Steps
 
-1. Complete GRBL configuration capture (grbl-capture-checklist.md) on the
-   existing working machine before any Pi connection.
-2. Deploy the Pi interface on the Raspberry Pi (docs/deployment.md).
-3. Run the physical machine acceptance test (docs/acceptance-test.md).
+1. Deploy on the Pi (docs/deployment.md) and run commissioning steps 1–4
+   (boot, service, read-only GRBL capture — before any motion — RF inputs
+   with no motion).
+2. Fit + measure the MD13S PWM pull-down (step 5); only then set
+   Z_PWM_DUTY (step 6).
+3. Continue the commissioning / acceptance test (steps 7–10).
 4. Validate and set JOG_SPEED_MM_MIN in .env.
 5. If field offline use is needed, configure Wi-Fi access point.
 6. After Milestone 1 is verified on hardware, define Milestone 2.
@@ -719,11 +814,13 @@ Lift-aware job work:
 - Enter the real machine dimensions in Machine / Printer settings once
   measured (max building Z unknown); machine-profile pass reviewed 2026-10-15.
 
-Hardware-facing work (not started; pins wired 2026-10-20 — see
-`../CONTROL_BOX_HARDWARE.md`; still needs its VERIFY items, especially the
-meter check of the Kaleinavi contacts and the default-STOP mechanism): Z
-control via MD13S (dead-man, time-bounded), RF remote inputs (debounced,
-UP+DOWN interlock), REMOTE STOP behaviour definition.
+Hardware-facing work: software DONE 2026-10-20 (Z via MD13S, RF remote,
+REMOTE STOP). Next = the physical commissioning sequence in
+`docs/acceptance-test.md` (Pi boot → service → read-only GRBL capture →
+six RF inputs with no motion → MD13S default STOP with the actuator
+disconnected (fit + measure the pull-down) → actuator → slow XY jog →
+limits → air print → material), plus a manual browser / touchscreen review
+of the new panels.
 - P4 (optional): persist progress at lift boundaries; start at lift N.
 - Add a lift-boundary step to docs/acceptance-test.md once hardware testing
   of lifts is planned.
@@ -746,6 +843,9 @@ UP+DOWN interlock), REMOTE STOP behaviour definition.
 - 2026-10-14: current-machine execution (executable XY-only jobs, origin /
   prime, Start returns to origin, reposition re-zero, live ok-wait);
   196 tests passing
+- 2026-10-20: hardware integration (GPIO layer, RF remote, manual Z,
+  REMOTE STOP, diagnostics, deployment files, capture tool, commissioning
+  procedure); 346 tests passing on Mac — not yet run on the Pi
 - Deployment documentation written
 - GRBL capture checklist written
 - Acceptance test procedure written
@@ -753,6 +853,12 @@ UP+DOWN interlock), REMOTE STOP behaviour definition.
 ---
 
 ## Last Updated
+
+2026-10-20 — hardware integration pass (Mac; not on hardware): GPIO layer
+(gpiozero), debounced remote, one Z controller, REMOTE STOP latch +
+recovery, diagnostics, deployment (systemd watchdog + pinctrl Z LOW,
+config.txt, udev, labwc kiosk), read-only capture tool, commissioning
+procedure. 346 tests.
 
 2026-10-20 — control-box wiring recorded: Pi GPIO pin map wired and
 authoritative in `../CONTROL_BOX_HARDWARE.md`; touchscreen = 7" 800×480 DSI;

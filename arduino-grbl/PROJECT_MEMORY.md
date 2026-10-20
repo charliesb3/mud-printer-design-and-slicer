@@ -123,6 +123,13 @@ In the new control box the Uno is connected to the Pi by USB (2026-10-20); pi-in
 
 No GRBL modifications associated with this new software project have yet been made.
 
+2026-10-20: capture tooling prepared, nothing run on the controller yet:
+`pi-interface/tools/grbl_capture.py` (read-only `$I` `$$` `$#` `$G`, hard
+whitelist) and `pi-interface/docs/grbl-capture-checklist.md` (capture
+procedure + a PREPARED, not executed, avrdude backup / flash procedure from
+the Pi). The Pi interface reads `$I` build info into its diagnostics.
+Firmware has NOT been flashed or changed.
+
 ---
 
 ## Decisions Made
@@ -136,6 +143,11 @@ No GRBL modifications associated with this new software project have yet been ma
 - Preserve manual Z capability (now through the Pi UI / wireless remote).
 - X/Y limit switches belong to GRBL (Uno), not the Pi (2026-10-14).
 - Do not control extrusion through this subsystem.
+- Stock GRBL 1.1 + standard Uno pin map, configured only through normal `$`
+  settings (size, steps/mm, rates, acceleration, direction invert, travel,
+  limits, homing — captured, never guessed). Do not reflash merely to strip
+  unused Z / spindle / coolant parsing; the Pi keeps speaking standard GRBL
+  (2026-10-20). Firmware flashing is never done from the normal printer UI.
 
 ---
 
@@ -172,7 +184,7 @@ No new firmware work has yet been completed for this project.
 
 ## Next Steps
 
-1. Before modifying firmware, document the existing working GRBL installation and configuration.
+1. Before modifying firmware, document the existing working GRBL installation and configuration — run the read-only capture (`pi-interface/docs/grbl-capture-checklist.md`; commissioning step 3) and commit it here as `grbl-settings-YYYY-MM-DD.txt`.
 2. Determine the exact GRBL version currently running.
 3. Record relevant machine settings and existing X/Y behavior.
 4. Preserve a known-good copy/configuration of the working controller before experimentation.
@@ -183,6 +195,12 @@ No new firmware work has yet been completed for this project.
 ---
 
 ## Last Updated
+
+2026-10-20 (pi-interface hardware pass)
+
+Read-only capture tool + checklist and a prepared (unexecuted) flash
+procedure; decision recorded: stock GRBL 1.1, settings only. No firmware
+change.
 
 2026-10-20 (Uno → DM556T wiring)
 

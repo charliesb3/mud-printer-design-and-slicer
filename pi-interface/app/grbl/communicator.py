@@ -65,7 +65,7 @@ class GRBLCommunicator:
         """Attach a transport and start the poll + read loops."""
         self._transport = transport
         self._running = True
-        self._state.connected = True
+        self._state.mark_link_up()
         self._poll_task = asyncio.create_task(self._poll_loop(), name="grbl-poll")
         self._read_task = asyncio.create_task(self._read_loop(), name="grbl-read")
 
@@ -224,6 +224,8 @@ class GRBLCommunicator:
                 key, value = kv
                 if key == "GC":
                     self._state.parser_state = value
+                elif key in ("VER", "OPT"):              # $I build info (read only)
+                    self._state.build_info[key] = value
                 elif key == "MSG":
                     self._state.add_event("message", value)
                 elif key[0] in "GPT" and key not in ("GC",):   # $#: G54…G59, G28, G30, G92, TLO, PRB
@@ -238,6 +240,7 @@ class GRBLCommunicator:
                 self._state.grbl_version = version
             self._state.mark_connected_idle()
             self._state.add_event("reset", line)
+            self._state.add_hw_event("grbl", f"GRBL started / reset: {line}")
             # Cancel any pending command — GRBL reset mid-command
             self._reject_pending(RuntimeError("GRBL reset"))
             self._state.console_add("rx", line)

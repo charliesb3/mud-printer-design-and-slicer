@@ -249,9 +249,10 @@ Potential responsibilities include:
 - sending G-code or other machine instructions
 - jogging X/Y
 - Z control: the Pi is the sole Z command source via the Cytron MD13S
-  (`CONTROL_BOX_HARDWARE.md`; not yet implemented)
+  (`CONTROL_BOX_HARDWARE.md`; software implemented 2026-10-20, not yet
+  commissioned on hardware)
 - reading the wireless remote (Kaleinavi dry contacts on Pi GPIO; wired
-  2026-10-20, software not yet implemented)
+  2026-10-20; software implemented 2026-10-20, not yet commissioned)
 - homing where appropriate
 - starting jobs
 - pausing jobs
@@ -358,6 +359,11 @@ The physical E-stop on the 120 VAC side is independent of the Pi, software
 and the RF remote. The wireless "REMOTE STOP" is a software / operational
 stop, never safety-rated, and must never be presented as an emergency stop.
 Details: `CONTROL_BOX_HARDWARE.md`.
+
+Defined 2026-10-20: REMOTE STOP stops Z, cancels jog and feed-holds GRBL
+through its real-time commands, holds the job (resumable), and LATCHES —
+no new motion until an operator clears it on a screen; clearing never moves
+anything (`pi-interface/PROJECT_MEMORY.md` → "REMOTE STOP semantics").
 
 ---
 
@@ -662,7 +668,7 @@ Important unresolved questions currently include:
 - What is the correct jog speed for this machine's scale? (Must be validated physically)
 - Does the Pi need to act as a Wi-Fi access point for offline field use?
 - Should the interface support job recovery after power failure? (The hardwired E-stop is believed to cut power to the Pi and Uno too — VERIFY; see `CONTROL_BOX_HARDWARE.md`.)
-- How should Pi-side Z control guarantee default STOP on boot / crash / loss of control (hardware pull-down + loss-of-control mechanism TBD)?
+- ~~How should Pi-side Z control guarantee default STOP on boot / crash / loss of control?~~ Decided 2026-10-20: config.txt boot LOW + app STOP paths + systemd pinctrl ExecStopPost + watchdog (`pi-interface/docs/deployment.md` §7). OPEN (commissioning blocker for Z): the MD13S PWM pull-down value — not given by the MD13S manual; 10 kΩ proposed, to be measured.
 - How should local/offline networking be implemented?
 
 ### Arduino / GRBL
@@ -707,6 +713,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-20 (Pi hardware integration — software)
+
+pi-interface made ready for the Raspberry Pi 4 and the wired control box (Mac-tested, NOT yet commissioned): one GPIO mapping layer (gpiozero / lgpio; Mac runs without GPIO), debounced active-low RF remote, the one manual Z controller (dead-man, UP+DOWN = STOP, fixed duty), REMOTE STOP latch + deliberate recovery, hardware diagnostics, systemd / kiosk / udev deployment, read-only GRBL capture tooling and a 10-step commissioning procedure. Jobs remain XY-only; no firmware change.
 
 2026-10-20 (Uno → DM556T wiring)
 

@@ -1,103 +1,111 @@
-# GRBL Configuration Capture Checklist
+# GRBL Capture Checklist (read-only) + prepared flash procedure
 
-Before connecting the Pi interface to the physical machine for the first time,
-complete this checklist to preserve the existing GRBL configuration.
+Purpose: record the existing controller's identity and configuration BEFORE
+anything is changed. The captured `$$` is the machine's known-working
+baseline; it must never be silently overwritten. Nothing in this checklist
+writes to the controller.
 
-The current GRBL configuration ($$) is the known-working baseline for this
-machine. It must be preserved and never silently overwritten.
-
----
-
-## Step 1 — Connect UGS (existing working setup)
-
-Connect your computer to the Arduino (Uno per the 2026-10-14 baseline; earlier docs
-said Mega — record which board it actually is) via USB using Universal G-code Sender,
-exactly as you do now for normal printing. Confirm GRBL connects and the machine
-responds.
+The control box uses the standard GRBL 1.1 Uno pin map for X/Y (X step D2,
+Y step D3, X dir D5, Y dir D6; Z D4 / D7 unused; Z is not a GRBL axis) —
+`../../CONTROL_BOX_HARDWARE.md` → "Arduino Uno → DM556T wiring". Machine
+size, steps/mm, rates, acceleration, direction inversion, travel, limits and
+homing are normal GRBL `$` settings: record them, never guess them.
 
 ---
 
-## Step 2 — Capture $$ (all settings)
+## Step 1 — Connect read-only
 
-In the UGS console, send:
+Either route is fine; both only READ.
 
-    $$
+**A. From the Pi (preferred once the control box is wired):**
 
-Copy the entire output to a file. Save it as:
+    sudo systemctl stop mudprinter                       # frees the serial port
+    cd ~/mudprintersoftware/pi-interface
+    .venv/bin/python tools/grbl_capture.py /dev/mudpr-grbl   # or /dev/ttyACM0 / /dev/ttyUSB0
+    sudo systemctl start mudprinter
 
-    arduino-grbl/grbl-settings-YYYY-MM-DD.txt
+`tools/grbl_capture.py` sends only `?`, `$I`, `$$`, `$#`, `$G` (a hard
+whitelist; tested) and writes `grbl-capture-<timestamp>.txt`. Opening the
+port resets the Uno (normal for Arduino USB serial): GRBL restarts from its
+EEPROM settings; nothing changes.
 
-This is the authoritative baseline. Every GRBL setting is recorded here.
+**B. From UGS on the existing computer (pre-control-box workflow):** connect
+as for normal printing and type the four queries below in the console,
+copying all output.
 
----
+**C. From the running pi-interface:** Advanced → Read from GRBL: Build info
+($I), Settings ($$), Parser state ($G), Offsets ($#) — same read-only
+queries; copy them from the console / tables.
 
-## Step 3 — Capture $# (coordinate offsets)
+## Step 2 — The four queries
 
-In the UGS console, send:
+| Query | Records |
+|---|---|
+| `$I` | build info: `[VER:1.1x.yyyymmdd:…]` and `[OPT:…]` (compile options) — confirms GRBL 1.1 and the variant |
+| `$$` | every setting: `$100/$101` steps/mm, `$110/$111` max rates, `$120/$121` acceleration, `$3` direction invert, `$130/$131` max travel, `$20` soft limits, `$21` hard limits, `$22` homing, `$13` report units, `$10` status mask … |
+| `$#` | coordinate offsets G54–G59, G28, G30, G92, TLO, PRB |
+| `$G` | parser / modal state |
 
-    $#
+Also note the startup line (`Grbl 1.1x ['$' for help]`).
 
-Copy the output to the same file or a companion file. This captures work
-coordinate offsets (G54–G59, G28, G30, TLO, PRB).
+## Step 3 — Record observations in the same file
 
----
+- Board actually installed (Uno vs the earlier-documented Mega) and whether
+  `$I` shows a stock GRBL 1.1 build — the stock Uno build matches the wired
+  pin map; a Mega fork or custom pin map does NOT and must be reported
+- Serial device seen (`/dev/ttyACM0` genuine Uno / `/dev/ttyUSB0` CH340) and
+  the USB identity used for the udev rule (`deployment.md` step 5)
+- Baud rate (115200 expected)
+- Any alarms / errors seen in normal use
+- Limit switches: wired to the Uno? `$21` / `$22` / `$5` values
 
-## Step 4 — Capture $I (build info)
+## Step 4 — Commit the capture
 
-In the UGS console, send:
-
-    $I
-
-Record the GRBL version string. Confirm which GRBL version and variant is
-running on the Arduino.
-
----
-
-## Step 5 — Record machine-specific observations
-
-In the same file, note:
-
-- Which USB port the Arduino appears on (e.g., /dev/cu.usbmodem1101 on Mac,
-  /dev/ttyUSB0 on Pi)
-- Baud rate confirmed working (almost certainly 115200)
-- Any observed GRBL alarm or error codes from normal use
-- The approximate step/mm values for X and Y ($100, $101)
-- The maximum travel limits if set ($130, $131)
-- Whether homing ($22) is enabled or disabled
-- Whether soft limits ($20) are enabled
-
----
-
-## Step 6 — Commit the captured settings
-
-Add the captured file to the arduino-grbl/ directory and commit it to Git.
-
+    cp grbl-capture-*.txt ~/mudprintersoftware/arduino-grbl/grbl-settings-YYYY-MM-DD.txt
     git add arduino-grbl/grbl-settings-YYYY-MM-DD.txt
-    git commit -m "Capture GRBL $$ baseline settings"
+    git commit -m "Capture GRBL baseline (\$I \$\$ \$# \$G)"
+
+Then record the version and key settings in `arduino-grbl/PROJECT_MEMORY.md`.
+
+## Step 5 — Before the first Pi-driven motion
+
+- `.env`: correct `SERIAL_PORT`, `BAUD_RATE`; `JOG_SPEED_MM_MIN=0` and
+  `Z_PWM_DUTY=0` for the first connection
+- Physical E-stop functional and within reach
+- Machine idle, clear of people and obstructions
+
+## Reminders
+
+The Pi interface speaks the standard GRBL serial protocol only. It never
+sends `$$=` / `$N=` setting writes, and the normal printer UI never flashes
+firmware. If settings ever look different, compare with the committed
+baseline.
 
 ---
 
-## Step 7 — Verify before first Pi connection
+## Prepared (NOT executed): future GRBL build / flash from the Pi
 
-Before connecting the Pi interface to the Arduino:
+Only if a concrete requirement ever needs a firmware change — the current
+plan is stock GRBL 1.1 with the standard Uno pin map, configured through `$`
+settings. Do not reflash merely to strip unused Z / spindle / coolant code.
 
-- Confirm the Pi interface .env file uses the correct SERIAL_PORT and BAUD_RATE
-- Confirm JOG_SPEED_MM_MIN is set to 0 (jogging disabled) for first connection
-- Confirm the physical E-stop is functional and within reach
-- Confirm the machine is in a safe, idle state (not mid-job)
+1. Capture first (Steps 1–4) — the `$$` file is the settings backup.
+2. Install tools: `sudo apt install -y avrdude` (and `arduino-cli` if
+   building from source).
+3. Back up the current firmware image (Uno / optiboot can read flash):
 
----
+       sudo systemctl stop mudprinter
+       avrdude -p atmega328p -c arduino -P /dev/mudpr-grbl -b 115200 -U flash:r:grbl-backup-YYYY-MM-DD.hex:i
 
-## Important Reminders
+   (EEPROM read through the bootloader may not be supported — `$$` is the
+   authoritative settings record.)
+4. Build the hex from an exact upstream tag (`gnea/grbl` v1.1h) with any
+   documented change, or use the release hex. Record the source and hash.
+5. Flash (operator decision, machine powered for motion OFF / E-stop pressed
+   as appropriate for the Uno's USB power):
 
-The Pi interface communicates with GRBL using the standard serial protocol.
-It does not modify GRBL settings.
+       avrdude -p atmega328p -c arduino -P /dev/mudpr-grbl -b 115200 -U flash:w:grbl.hex:i
 
-The Pi interface never sends $$= or $N= commands unless the user explicitly
-asks for that capability in the future.
-
-If GRBL settings appear to have changed unexpectedly, compare against the
-captured baseline file.
-
-The physical hardwired E-stop remains the real emergency stop.
-Software controls are not a substitute.
+6. After a GRBL version change EEPROM settings may be reset: restore from the
+   captured `$$` deliberately (operator, console, setting by setting), verify
+   with a new capture, then re-run the acceptance test from X/Y step 7.

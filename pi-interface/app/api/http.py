@@ -25,10 +25,14 @@ WebSocket (/ws):
     apply_lift_parameters {lift: int, target: float, thickness: float}  — operator target lift
                    height + layer thickness → the safe lift end (Hold to Apply)
     restore_planned_lifts {}
-    read_grbl      {what: "settings"|"parser"|"offsets"}  — read-only $$ / $G / $#
+    read_grbl      {what: "settings"|"parser"|"offsets"|"info"}  — read-only $$ / $G / $# / $I
     set_machine_profile {profile}  — THIS printer's machine profile (saved locally;
                    not while a job runs / holds / awaits a reposition)
     console_send   {command: str}
+    z_start        {direction: "up"|"down"}  — manual Z, held (dead-man, like jog)
+    z_heartbeat    {}  — sent every ~100 ms while a Z button is held
+    z_stop         {}
+    remote_stop_clear {}  — deliberate operator recovery from a latched REMOTE STOP
 
   Server → Client message types:
     state          — full machine/job state (broadcast every 200 ms, and
@@ -61,6 +65,17 @@ Dead-man jogging:
 
   GRBL 1.1+ is required for jog mode ($J=). The installed version must be
   verified during physical hardware acceptance testing.
+
+Manual Z (app/hardware/z.py): z_start / z_heartbeat / z_stop drive the ONE
+  Z controller — the RF remote's Z UP / Z DOWN use the same controller. Each
+  browser client is its own dead-man source; Z is allowed while a job runs
+  (Z is manual during printing) but never while REMOTE STOP is latched.
+
+REMOTE STOP (Kaleinavi CH1, `remote_stop()` below): an OPERATIONAL stop,
+  never an E-stop. Stops Z, cancels any jog (0x85), feed-holds GRBL (`!`)
+  and holds the job (resumable), then LATCHES: new motion is refused until an
+  operator clears it on a screen (`remote_stop_clear`, CH1 released). Clearing
+  never moves anything — a held job continues only with RESUME.
 """
 from __future__ import annotations
 
@@ -102,6 +117,11 @@ _jog_task: Optional[asyncio.Task] = None
 
 # Positioning move (Prime) in progress
 _position_task: Optional[asyncio.Task] = None
+
+
+def _latched() -> Optional[str]:
+    """The REMOTE STOP motion interlock (None: motion may be commanded)."""
+    return _state.remote_stop.refusal() if _state else None
 
 
 def init(
@@ -183,10 +203,13 @@ async def _jog_loop(axis: str, direction: int) -> None:
         _jog_axis = None
 
 
-async def _start_jog(axis: str, direction: int) -> None:
-    """Activate the jog loop for the given axis and direction."""
+async def _start_jog(axis: str, direction: int) -> Optional[str]:
+    """Activate the jog loop for the given axis and direction (returns a REMOTE STOP refusal)."""
     global _jog_axis, _jog_direction, _jog_last_heartbeat, _jog_task
 
+    if _latched():
+        log.info("Jog refused: REMOTE STOP latched")
+        return _latched()
     if config.JOG_SPEED_MM_MIN is None:
         log.warning("Jog requested but JOG_SPEED_MM_MIN is not configured")
         return
@@ -216,6 +239,7 @@ async def _start_jog(axis: str, direction: int) -> None:
     _jog_direction = direction
     _jog_last_heartbeat = time.monotonic()
     _jog_task = asyncio.create_task(_jog_loop(axis, direction), name="jog-loop")
+    return None
 
 
 async def _stop_jog() -> None:
@@ -241,6 +265,8 @@ async def _start_job() -> Optional[str]:
     if _current_job is None:
         log.warning("job_start: no current job")
         return "No job loaded."
+    if _latched():
+        return _latched()
     if not _current_job.executable:
         log.warning("job_start: job is not executable")
         return ("This job is not executable — it describes the building and its lifts only "
@@ -305,6 +331,8 @@ def _confirm_reposition(lift) -> Optional[str]:
         return "No job loaded."
     if not isinstance(lift, int) or isinstance(lift, bool):
         return "Confirmation must name the lift it confirms."
+    if _latched():
+        return _latched()
     if _state is None or not _state.connected:
         return "Not connected to GRBL."
     if _current_job.state == "awaiting_reposition":
@@ -406,7 +434,7 @@ async def _set_prime() -> Optional[str]:
 async def _prime() -> Optional[str]:
     """Start the move to the prime position (a background task)."""
     global _position_task
-    refusal = _setup_refusal()
+    refusal = _latched() or _setup_refusal()
     if refusal:
         return refusal
     assert _state is not None and _comm is not None
@@ -450,7 +478,7 @@ async def _run_positioning(line: str) -> None:
 
 async def _outline() -> Optional[str]:
     global _position_task
-    refusal = _setup_refusal()
+    refusal = _latched() or _setup_refusal()
     if refusal:
         return refusal
     assert _state is not None
@@ -509,7 +537,7 @@ async def _feed_override(step) -> Optional[str]:
 # Read-only GRBL queries (diagnostics)                                 #
 # ------------------------------------------------------------------ #
 
-READ_QUERIES = {"settings": "$$", "parser": "$G", "offsets": "$#"}
+READ_QUERIES = {"settings": "$$", "parser": "$G", "offsets": "$#", "info": "$I"}
 
 
 async def _read_grbl(what) -> Optional[str]:
@@ -542,6 +570,9 @@ async def _lift_message(msg_type: str, data: dict) -> tuple:
     job = _current_job
     if job is None or job.kind != "building":
         return ("Load a building job first.", None)
+    if msg_type in ("adjust_lift_end", "apply_lift_parameters", "restore_planned_lifts") and _latched():
+        # moving a lift end can release a paused job into streaming again
+        return (_latched(), None)
     if msg_type == "set_observed_layer":
         v = _job_number(data.get("thickness"), 0.05, 24.0)
         if v is None:
@@ -588,6 +619,101 @@ async def _cancel_positioning() -> None:
         _state.setup.moving = None
 
 
+# ------------------------------------------------------------------ #
+# REMOTE STOP (Kaleinavi CH1) — operational stop + latch, NOT an E-stop #
+# ------------------------------------------------------------------ #
+
+async def remote_stop(cause: str) -> None:
+    """
+    Command a no-motion state and latch it. Uses the normal mechanisms only:
+    Z → PWM 0 through the Z controller; X/Y → GRBL real-time jog cancel
+    (0x85) and feed hold (`!`), which bypass the command queue and leave the
+    streamed job intact; the job runner is held exactly as by HOLD, so the
+    job stays resumable. Idempotent (a repeated press re-sends the stop).
+    """
+    if _state is None:
+        return
+    rs = _state.remote_stop
+    first = rs.latch(cause)
+    actions = []
+    hw = _state.hardware
+    if hw is not None:
+        hw.z.stop_all("REMOTE STOP")
+        actions.append("Z stopped (PWM 0)")
+    jogging = bool(_jog_task and not _jog_task.done())
+    if _comm and _state.connected:
+        await _comm.send_realtime(b"\x85")       # jog cancel (ignored unless jogging)
+        await _comm.send_realtime(b"!")          # feed hold: decelerate, keep the planner / position
+        actions.append("GRBL feed hold sent (X/Y decelerate to a stop; position kept)")
+    else:
+        actions.append("GRBL not connected — no X/Y command sent")
+    if jogging:
+        await _stop_jog()
+        actions.append("manual jog cancelled")
+    job = _current_job
+    if job is not None:
+        if job.state == "running":
+            job.state = "held"
+            actions.append(f"job HELD at line {job.current_line} of {job.total_lines} (resumable)")
+        elif job.state == "held":
+            actions.append("job already held (resumable)")
+        elif job.state == "awaiting_reposition":
+            actions.append("job awaiting a frame reposition — confirmation blocked while latched")
+    if _state.setup.moving:
+        actions.append(f"{_state.setup.moving} move held (RESUME continues it, STOP abandons it)")
+    if first:
+        rs.actions = actions
+    _state.add_hw_event("remote_stop", f"REMOTE STOP {'LATCHED' if first else 'pressed again (still latched)'}"
+                                       f" — {cause}: " + "; ".join(actions))
+    log.warning("REMOTE STOP %s (%s): %s", "latched" if first else "re-sent", cause, "; ".join(actions))
+    # runs inside the hardware poll loop: never wait on browser sockets here
+    asyncio.get_running_loop().create_task(broadcast_state())
+
+
+def _clear_remote_stop() -> Optional[str]:
+    """Deliberate operator recovery. Never starts motion."""
+    if _state is None:
+        return "Not ready."
+    rs = _state.remote_stop
+    if not rs.latched:
+        return "REMOTE STOP is not latched."
+    hw = _state.hardware
+    if hw is not None and hw.backend.has_gpio:
+        ch = hw.remote.channels["remote_stop"]
+        if ch.pressed is None:
+            return "The REMOTE STOP input has not been read yet — try again in a moment."
+        if ch.pressed:
+            return "The REMOTE STOP input still reads PRESSED (CH1 contact closed) — release it first."
+    rs.clear()
+    _state.add_hw_event("remote_stop", "REMOTE STOP cleared by the operator (nothing moved)")
+    log.warning("REMOTE STOP cleared by the operator")
+    return None
+
+
+def _remote_stop_cleared_note() -> str:
+    job = _current_job
+    note = "REMOTE STOP cleared. Nothing has moved."
+    if job is not None and job.state == "held":
+        note += " The job is still HELD — press RESUME to continue it, or STOP to end it."
+    elif _state is not None and _state.grbl_state.startswith("Hold"):
+        note += " GRBL is in feed hold — RESUME continues any held motion, STOP abandons it."
+    return note
+
+
+def _z_source(ws) -> str:
+    return f"ui:{id(ws):x}"
+
+
+def _z_start(direction, ws) -> Optional[str]:
+    hw = _state.hardware if _state else None
+    if hw is None:
+        return "No Z hardware."
+    d = {"up": 1, "down": -1}.get(direction)
+    if d is None:
+        return "Z direction must be up or down."
+    return hw.z.request(_z_source(ws), d)
+
+
 async def _notify(ws: WebSocket, message: str, level: str = "warn") -> None:
     try:
         await ws.send_json({"type": "notice", "level": level, "message": message})
@@ -626,7 +752,7 @@ def _set_machine_profile(profile) -> Optional[str]:
     return None
 
 
-_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "confirm_reposition", "set_machine_profile",
+_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "z_start", "z_stop", "remote_stop_clear", "confirm_reposition", "set_machine_profile",
                    "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
                    "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
                    "apply_lift_parameters"}
@@ -642,7 +768,9 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
         direction = int(data.get("direction", 1))
         if axis not in ("X", "Y"):
             return
-        await _start_jog(axis, direction)
+        refusal = await _start_jog(axis, direction)
+        if refusal:
+            await _notify(ws, refusal)
 
     elif msg_type == "jog_heartbeat":
         _jog_last_heartbeat = time.monotonic()
@@ -657,6 +785,9 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
             _current_job.state = "held"
 
     elif msg_type == "resume":
+        if _latched():
+            await _notify(ws, _latched())
+            return
         if _comm:
             await _comm.send_realtime(b"~")  # GRBL cycle start
         if _current_job and _current_job.state == "held":
@@ -664,6 +795,23 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
 
     elif msg_type == "stop":
         await _stop_job()
+
+    elif msg_type == "z_start":
+        refusal = _z_start(data.get("direction"), ws)
+        if refusal:
+            await _notify(ws, refusal)
+
+    elif msg_type == "z_heartbeat":
+        if _state and _state.hardware:
+            _state.hardware.z.refresh(_z_source(ws))
+
+    elif msg_type == "z_stop":
+        if _state and _state.hardware:
+            _state.hardware.z.release(_z_source(ws))
+
+    elif msg_type == "remote_stop_clear":
+        refusal = _clear_remote_stop()
+        await _notify(ws, refusal or _remote_stop_cleared_note(), level="warn" if refusal else "info")
 
     elif msg_type == "job_start":
         refusal = await _start_job()
@@ -720,6 +868,9 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
         if _current_job and _current_job.is_active:
             log.debug("Console blocked: job is active")
             return
+        if _latched():
+            await _notify(ws, _latched())
+            return
         if _comm:
             try:
                 result = await _comm.send_command(command)
@@ -756,6 +907,8 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         log.debug("WebSocket error: %s", exc)
     finally:
         _ws_manager.disconnect(ws)
+        if _state and _state.hardware:          # a vanished client holds no Z (dead-man would also stop it)
+            _state.hardware.z.release(_z_source(ws))
 
 
 # ------------------------------------------------------------------ #

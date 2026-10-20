@@ -1,0 +1,13 @@
+# Stable name for the GRBL Arduino Uno: /dev/mudpr-grbl  (docs/deployment.md → "Stable serial device").
+# DO NOT install unedited. Discover the real attributes first, with the Uno plugged in:
+#   udevadm info -q property -n /dev/ttyACM0 | grep -E 'ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL_SHORT|ID_PATH='
+#   (a CH340 clone appears as /dev/ttyUSB0 instead)
+# Then copy to /etc/udev/rules.d/99-mudpr-grbl.rules, fill in ONE of the variants, and run
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# Variant A — genuine Uno (has a unique USB serial number; vendor 2341 = Arduino):
+#SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2341", ENV{ID_MODEL_ID}=="<model id>", ENV{ID_SERIAL_SHORT}=="<serial>", SYMLINK+="mudpr-grbl"
+#
+# Variant B — clone without a unique serial (e.g. CH340 1a86:7523): pin it to the physical
+# USB port instead (ID_PATH changes if the cable moves to another Pi USB port):
+#SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1a86", ENV{ID_MODEL_ID}=="7523", ENV{ID_PATH}=="<id path>", SYMLINK+="mudpr-grbl"

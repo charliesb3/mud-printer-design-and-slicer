@@ -146,3 +146,26 @@ class TestPrinterSettings:
 
     def test_preflight_is_shown_with_the_job(self, tree):
         assert _inside_id(tree, "job-preflight", "job-section")
+
+
+class TestHardwareUI:
+    def test_manual_z_with_the_machine_controls(self, tree):
+        for el in ("z-section", "z-up", "z-down", "z-status"):
+            assert _inside(tree, el, "col-mid"), el
+        assert tree.order.index("jog-section") < tree.order.index("z-section")
+
+    def test_remote_stop_panel_spans_and_is_never_an_estop(self, tree):
+        assert "rstop-panel" in tree.where and "btn-rstop-clear" in tree.where
+        for col in ("col-left", "col-mid", "col-view"):
+            assert not _inside(tree, "rstop-panel", col)
+        html = (STATIC / "index.html").read_text()
+        panel = html.split('id="rstop-panel"')[1].split('id="rstop-blocked"')[0]
+        assert "REMOTE STOP" in panel and "not the E-stop" in panel
+        assert "EMERGENCY" not in panel.upper()
+
+    def test_hardware_commissioning_panel_outside_the_columns(self, tree):
+        for el in ("hw-section", "hw-remote", "hw-z", "hw-events"):
+            assert el in tree.where, el
+        for col in ("col-left", "col-mid", "col-view"):
+            assert not _inside(tree, "hw-section", col)
+        assert 'data-read="info"' in (STATIC / "index.html").read_text()

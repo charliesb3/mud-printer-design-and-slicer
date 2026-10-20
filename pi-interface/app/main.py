@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import config
+from . import config, hardware, sdnotify
 from .api import http as http_module
 from .api.ws import ConnectionManager
 from .grbl.communicator import GRBLCommunicator
@@ -39,8 +39,18 @@ communicator = GRBLCommunicator(app_state)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — hardware FIRST: Z outputs driven to STOP and remote inputs
+    # configured (pull-ups) before any machine action is possible.
     http_module.init(app_state, communicator, ws_manager)
+    app_state.hardware = hardware.build(
+        config,
+        interlock=app_state.remote_stop.refusal,
+        on_remote_stop=http_module.remote_stop,
+        event=app_state.add_hw_event,
+    )
+    app_state.hardware.start()
+    log.info("Hardware backend: %s (manual Z %s)", app_state.hardware.backend.name,
+             f"duty {config.Z_PWM_DUTY:.2f}" if config.Z_PWM_DUTY > 0 else "DISABLED: Z_PWM_DUTY not set")
     from . import machine_profile
     app_state.machine_profile, app_state.machine_profile_problem = machine_profile.load(config.MACHINE_PROFILE_PATH)
     log.info("Machine profile: %s", app_state.machine_profile.get("name"))
@@ -56,9 +66,17 @@ async def lifespan(app: FastAPI):
             "Jog speed %.1f mm/min — NOT YET VALIDATED on physical machine",
             config.JOG_SPEED_MM_MIN,
         )
-    yield
-    # Shutdown
-    await communicator.stop()
+    watchdog = sdnotify.watchdog_interval_s()
+    if watchdog:
+        asyncio.create_task(sdnotify.watchdog_loop(watchdog), name="systemd-watchdog")
+    sdnotify.notify("READY=1")
+    try:
+        yield
+    finally:
+        # Shutdown — Z STOP first, whatever else fails
+        sdnotify.notify("STOPPING=1")
+        await app_state.hardware.stop()
+        await communicator.stop()
     log.info("Mud Printer Interface stopped")
 
 

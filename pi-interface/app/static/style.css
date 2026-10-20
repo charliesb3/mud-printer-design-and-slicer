@@ -730,3 +730,27 @@ html, body {
 .preflight-list { margin: 4px 0 0 16px; }
 .preflight-list li.fail { color: var(--red); } .preflight-list li.warn { color: var(--amber); }
 .preflight-list li.note { color: var(--text-muted); list-style: '— '; }
+
+/* --- REMOTE STOP (operational stop, latched; never styled or named as an E-stop) --- */
+.rstop-panel { border: 3px solid var(--red); background: #2a0d0d; }
+.rstop-title { color: var(--red); font-size: 1.3em; font-weight: 800; letter-spacing: 0.04em;
+               text-transform: uppercase; margin-bottom: 6px; }
+.rstop-text { font-size: 1.02em; margin-bottom: 4px; }
+.rstop-actions { font-size: 0.88em; color: var(--text-muted); margin: 0 0 8px 1.2em; }
+.rstop-note { font-size: 0.82em; color: var(--text-muted); margin-bottom: 10px; }
+.btn-rstop-clear { width: 100%; min-height: 64px; background: var(--btn-bg); }
+.btn-rstop-clear .hold-fill { background: rgba(74, 222, 128, 0.35); }
+.rstop-blocked { font-size: 0.85em; color: var(--amber); margin-top: 6px; min-height: 1.2em; }
+.rstop-badge { background: #7f1d1d; color: #fff; }
+
+/* --- Manual Z --- */
+.z-pad { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 330px; margin: 0 auto; }
+.z-btn { min-height: 64px; }
+.z-status { text-align: center; font-size: 0.88em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.z-status.moving { color: var(--green); font-weight: 700; }
+
+/* --- Hardware / commissioning --- */
+.hw-table td { padding: 2px 8px; font-size: 0.82em; }
+.hw-table tr.pressed td { color: var(--amber); font-weight: 700; }
+.diag-events .ev-remote_stop, .diag-events .ev-hardware { color: var(--red); }
+.diag-events .ev-z { color: var(--blue); }
