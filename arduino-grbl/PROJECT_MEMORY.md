@@ -32,14 +32,15 @@ Pi USB-A → Uno USB-B: serial + the Uno's power (wired 2026-10-20; no Pi GPIO u
 Arduino Uno / GRBL
         ↓
 step/direction control → three DM556T drivers: X, Y1, Y2
-        (observed 2026-10-20: X PUL+ D4 / DIR+ D5; Y1 + Y2 share PUL+ D3 /
-         DIR+ D6 = one logical Y axis; returns commoned to Uno GND —
+        (standard GRBL 1.1 Uno pin map: X PUL+ D2 / DIR+ D5; Y1 + Y2 share
+         PUL+ D3 / DIR+ D6 = one logical Y axis; returns commoned to Uno
+         GND; D4 / D7 (Z step / dir) unused —
          table: ../CONTROL_BOX_HARDWARE.md → "Arduino Uno → DM556T wiring")
 
-DISCREPANCY (2026-10-20, unresolved): stock GRBL 1.1 puts X step on D2 and
-Z step on D4. With the observed wiring a stock build would step X only on Z
-moves. The installed build (possibly modified) or the wiring must be
-confirmed before any Pi-driven motion; do not change either by assumption.
+HISTORY (2026-10-20): X step was found on D4 (stock Z step); the operator is
+rewiring it D4 → D2 so the machine uses the STANDARD GRBL 1.1 pin map — no
+custom pin map. Superseded; confirm the installed build is stock-pin-map
+GRBL 1.1 ($I) and check X with a slow jog.
         ↓
 X/Y machine motion
 
@@ -149,7 +150,7 @@ No GRBL modifications associated with this new software project have yet been ma
 - What coordinates Z with X/Y within a print job? (Pi-side; the undecided
   `z_within_lift` semantic in `contracts/mudjob/README.md`.)
 - Which board and GRBL build are actually installed (Uno vs earlier-documented Mega)?
-- Does the installed build drive X step on D4 (observed wiring) rather than stock D2? (See the discrepancy above.)
+- ~~Does the installed build drive X step on D4?~~ Superseded 2026-10-20: X rewired to stock D2; intended baseline = standard GRBL 1.1 Uno pin map (installed build still to confirm).
 - What homing/limit behavior currently exists?
 - What safety/interlock behavior may eventually be needed?
 - What machine-state information will the Raspberry Pi interface need from GRBL?
@@ -185,8 +186,9 @@ No new firmware work has yet been completed for this project.
 
 2026-10-20 (Uno → DM556T wiring)
 
-Observed driver wiring recorded; Y1 / Y2 shared PUL / DIR confirmed (no
-longer VERIFY); X step on D4 conflicts with stock GRBL 1.1 (D2) — open.
+Driver wiring recorded; Y1 / Y2 shared PUL / DIR confirmed (no longer
+VERIFY). X step observed on D4 → being rewired to D2: baseline = standard
+GRBL 1.1 Uno pin map (X step D2, Y step D3, X dir D5, Y dir D6).
 
 2026-10-20
 

@@ -59,7 +59,7 @@ hardware interfaces.
 
 ### X and Y
 
-X and Y motion are currently controlled by the Arduino (Uno — see `CONTROL_BOX_HARDWARE.md`; earlier documents said Mega) running GRBL, driving three DM556T drivers (X, Y1, Y2). Observed 2026-10-20: Y1 and Y2 share one PUL / DIR pair (one logical Y axis). The X step input is on Uno D4, which stock GRBL 1.1 uses for Z step — the installed firmware build must be confirmed (`CONTROL_BOX_HARDWARE.md` → "Arduino Uno → DM556T wiring").
+X and Y motion are currently controlled by the Arduino (Uno — see `CONTROL_BOX_HARDWARE.md`; earlier documents said Mega) running GRBL, driving three DM556T drivers (X, Y1, Y2). Observed 2026-10-20: Y1 and Y2 share one PUL / DIR pair (one logical Y axis). X/Y use the standard GRBL 1.1 Uno pin map (X step D2, Y step D3, X dir D5, Y dir D6; Z pins D4 / D7 unused) — `CONTROL_BOX_HARDWARE.md` → "Arduino Uno → DM556T wiring".
 
 This arrangement has already been used successfully to move and print with the machine.
 
@@ -710,7 +710,7 @@ Allow the architecture to evolve as the machine and software become better under
 
 2026-10-20 (Uno → DM556T wiring)
 
-Observed Uno → DM556T wiring recorded in `CONTROL_BOX_HARDWARE.md`; Y1 / Y2 shared step / direction confirmed; X step pin (D4) differs from stock GRBL 1.1 (D2) — open VERIFY. Z DOWN remote input confirmed as Pi physical 15 / GPIO22.
+Uno → DM556T wiring recorded in `CONTROL_BOX_HARDWARE.md`; Y1 / Y2 shared step / direction confirmed; X step (observed on D4) rewired to D2, so X/Y follow the standard GRBL 1.1 Uno pin map. Z DOWN remote input confirmed as Pi physical 15 / GPIO22.
 
 2026-10-20 (control box wiring)
 

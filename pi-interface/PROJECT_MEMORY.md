@@ -26,10 +26,9 @@ Z, UP + DOWN = STOP, PWM 0 on every exit path, startup = Z STOP). Do not
 renumber the pins; do not copy the table here. UGS is not installed on the
 Pi: this application replaces its operator functions.
 
-Before the first Pi-driven X/Y motion: the observed Uno wiring puts X step
-on D4, which stock GRBL 1.1 uses for Z step (`../CONTROL_BOX_HARDWARE.md` →
-"Arduino Uno → DM556T wiring"). Confirm the installed GRBL build first —
-under a stock build, X jogs and XY-only jobs would not move X.
+X/Y on the Uno use the standard GRBL 1.1 pin map (X step D2 after the
+2026-10-20 rewire; `../CONTROL_BOX_HARDWARE.md` → "Arduino Uno → DM556T
+wiring"); confirm X with a slow jog before the first Pi-driven motion.
 
 ---
 

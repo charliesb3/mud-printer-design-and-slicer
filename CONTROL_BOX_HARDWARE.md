@@ -89,45 +89,32 @@ Responsibilities (do not blur):
 | Power | the two 48 V PSUs (**VERIFY** which PSU feeds which driver) |
 | Limits | existing X/Y limit-switch hardware/connectors are to connect to the **Uno/GRBL**, not the Pi (current wiring and GRBL `$21`/`$22` state: **VERIFY**, see `pi-interface/docs/grbl-capture-checklist.md`) |
 
-### Arduino Uno → DM556T wiring (observed, authoritative)
+### Arduino Uno → DM556T wiring (authoritative)
 
-Physically observed in the control box 2026-10-20. Terminal names are the
-DM556T's own labels: **PUL+** is the step (STEP) input and **DIR+** the
-direction input.
+Standard **GRBL 1.1 Uno (ATmega328P) pin map** for X/Y — no custom pin
+map is needed. Terminal names are the DM556T's own labels: **PUL+** is the
+step (STEP) input and **DIR+** the direction input.
 
-| Driver | DM556T terminal | Arduino Uno pin |
-|---|---|---|
-| X | PUL+ (step) | digital **D4** |
-| X | DIR+ (direction) | digital **D5** |
-| Y1 and Y2 (both) | PUL+ (step) | digital **D3** |
-| Y1 and Y2 (both) | DIR+ (direction) | digital **D6** |
-| all three | signal returns (PUL− / DIR−) | commoned → Arduino **GND** |
-
-- Y1 and Y2 are driven in parallel from the same two Uno pins: they cannot be
-  commanded independently (no separate Y2 / auto-squaring axis).
-- Driver ENA terminals and limit-switch pins: not part of this observation.
-
-**DISCREPANCY with stock GRBL 1.1 (Uno / ATmega328P default pin map) —
-UNRESOLVED, do not "fix" either side by assumption.** Stock GRBL 1.1 uses:
-step X **D2** / Y **D3** / Z **D4**; direction X **D5** / Y **D6** / Z **D7**.
-
-| Signal | Observed | Stock GRBL 1.1 | Match |
+| Driver | DM556T terminal | Arduino Uno pin | GRBL 1.1 signal |
 |---|---|---|---|
-| X step | D4 | D2 (D4 = **Z** step) | **NO** |
-| X dir | D5 | D5 | yes |
-| Y step | D3 | D3 | yes |
-| Y dir | D6 | D6 | yes |
+| X | PUL+ (step) | digital **D2** | X step |
+| X | DIR+ (direction) | digital **D5** | X direction |
+| Y1 and Y2 (both) | PUL+ (step) | digital **D3** | Y step |
+| Y1 and Y2 (both) | DIR+ (direction) | digital **D6** | Y direction |
+| all three | signal returns (PUL− / DIR−) | commoned → Arduino **GND** | — |
+| — | — | D4, D7 | Z step / Z direction: **UNUSED** (Z is not a GRBL axis) |
 
-Under STOCK GRBL 1.1 with this wiring, X-axis moves would pulse D2 (not
-connected) and the X driver would step only on **Z** moves, with its
-direction taken from the X direction pin. XY-only jobs (no Z words) and X
-jogs would then not move X. Because the machine has moved and printed, one
-of these must be true — **VERIFY before any Pi-driven motion**: the
-installed firmware is a modified build with X step remapped to D4 (or with
-X/Z swapped), the wiring was changed since the machine last ran, or the
-observation is mistaken. Check: the installed GRBL build / `cpu_map`
-(source or `$I`), and a low-speed single-axis X jog with the operator at
-the E-stop.
+- Y1 and Y2 are driven in parallel from the same two Uno pins (observed
+  2026-10-20): one logical Y axis; they cannot be commanded independently
+  (no separate Y2 / auto-squaring axis).
+- Driver ENA terminals and limit-switch pins: not part of this record.
+- HISTORY (2026-10-20): X PUL+ was observed on **D4** (stock GRBL's Z step),
+  a discrepancy with the stock pin map. The operator is rewiring X step
+  **D4 → D2** to the standard map rather than relying on a custom firmware
+  pin map; the D4 discrepancy is SUPERSEDED. Still **VERIFY** that the
+  installed firmware is a stock-pin-map GRBL 1.1 Uno build (`$I`), and
+  check the rewired X with a low-speed single-axis jog, operator at the
+  E-stop, before Pi-driven motion.
 
 ## Z axis
 
@@ -384,7 +371,8 @@ numbers; documentation always shows BOTH the BCM number and the physical
 
 **4. VERIFY before final wiring**
 - [ ] Arduino board (Uno vs earlier-documented Mega) and GRBL build / settings
-- [ ] **X step on Uno D4 vs stock GRBL 1.1 D2** (D4 = stock Z step): firmware pin map or wiring — resolve before Pi-driven motion
+- [ ] X step rewired D4 → D2 (standard GRBL 1.1 map); confirm with a low-speed X jog
+- [x] ~~X step on Uno D4 vs stock GRBL 1.1 D2~~ — superseded: X rewired to D2 (2026-10-20)
 - [ ] Uno serial device name on the Pi (ttyACM0 / ttyUSB0)
 - [x] ~~Y1 / Y2 share the Y STEP/DIR command~~ — observed 2026-10-20: both on Uno D3 (PUL+) / D6 (DIR+)
 - [ ] which 48 V PSU feeds which driver
