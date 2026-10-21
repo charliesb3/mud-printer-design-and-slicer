@@ -720,7 +720,7 @@ Allow the architecture to evolve as the machine and software become better under
 
 2026-10-21 (Designer hosting)
 
-Designer / Slicer prepared for hosting on Render as the existing Flask app (Designer only, branch `restart/oct16-base`); GitHub Pages rejected. Verified locally under the production server; not yet launched.
+Designer / Slicer prepared for hosting on Render as the existing Flask app (Designer only, branch `restart/oct16-base`); GitHub Pages rejected. Verified locally under the production server; launched on Render Free and confirmed working end-to-end by the user (2026-10-21).
 
 2026-10-20 (Pi hardware integration — software)
 
