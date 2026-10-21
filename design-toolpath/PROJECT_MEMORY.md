@@ -377,6 +377,13 @@ PrintLayer    — assembles effective print geometry from all sources + treatmen
 
 **Summary (2026-10-06):** the Designer is checkpointed (5ed967d). On top of it, an UNCOMMITTED Z-phase batch adds Layer Designs (inheritance, shared lineage lattice, project bead width), semantic transforms for the Layer Assembly, and the Assembly subsystem (`layer_assembly/`, own memory). Start with "Z PHASE — CURRENT ARCHITECTURE" below; known open problem: transformed-junction lattice coherence (support findings at moving junctions). Testing tiers: same section → "Testing workflow".
 
+### HOSTED DEPLOYMENT — Render (2026-10-21; prepared + locally verified, NOT yet launched)
+
+- **Decision:** the existing Flask Designer / Slicer is hosted as ONE Render web service (repo-root `render.yaml`, Blueprint), `rootDir: design-toolpath`, branch `restart/oct16-base` (no merge into `main`, which holds archived code). Only the Designer is deployed; `pi-interface/` is never built or run there. GitHub Pages was REJECTED (2026-10-21): every geometry / routing / plan / export / project-file operation is server-side Python (~31k lines behind ~15 `/api` endpoints); a static site would need Pyodide or a rewrite.
+- **Server:** `gunicorn --chdir design_proto --workers 1 --threads 4 --timeout 0 --bind 0.0.0.0:$PORT app:app`. ONE process is REQUIRED: Generate Wall Systems / Plan Print results live in that process's caches (`_GENERATED`, `_PLANS`) and later requests (generated-layer view, Plan Print, Export Print Job) read them back — more processes would miss them ("generate again" / "plan again" 409s). `--timeout 0`: Generate / Plan are long synchronous requests (Render's HTTP limit ~100 min per Render staff; Railway rejected for its reported 60 s no-first-byte edge cutoff). `PYTHON_VERSION=3.9.6` (the tested interpreter; Render's default is newer and untested; 3.9 is past end-of-life — upgrade deliberately later). `LAYER_ASSEMBLY_WORKERS=0` (no variant worker processes — Free: 0.1 CPU / 512 MB; `os.cpu_count()` in a container may report the host's cores). `gunicorn` added to `design_proto/requirements.txt`.
+- **Verified locally (2026-10-21)** with the exact start command in a clean venv built from `requirements.txt`: the real page in headless Chrome — open project (bench_mixed, 84 layers) → Designer envelope + full route preview → Generate Wall Systems (404 s single-process on the dev Mac) → generated layer view → Plan Print (22 s) → Export `.mudjob` (7 lifts) → Save → Open → Save (identical); every `/api` call 200, no page exceptions.
+- **Known limits (NOT fixed, deliberately — host first):** the app is single-user in practice: one global background-job slot (`web._JOBS`: another user's Generate / Plan or any Assembly edit cancels yours), one global `_STACK_LOCK` (full-geometry work queues across users), tiny shared content-keyed caches (3–4 entries; other users evict yours). Content-keyed → no cross-user leakage; projects / `.mudjob` are never stored server-side. No auth / rate / size limits; error replies carry Python tracebacks. Render Free is far too slow for large buildings (0.1 CPU; spins down after 15 min idle) — use it to prove the deployment, small projects only.
+
 ### DRAWING CORRECTNESS + ARCHITECTURAL SNAP UX (Pass 1, 2026-10-15; manually reviewed, checkpoint 2026-10-15)
 
 - **Bug fixed — trimmed geometry was a snap target.** `_snapTargets` used every
@@ -1491,6 +1498,8 @@ MATERIAL / BEAD is a peer category to Design and Print / Toolpath. It will grow 
 
 ## Next Steps
 
+**2026-10-21 — HOSTING:** launch the Render Free test deployment from `render.yaml` (user, in the Render dashboard); then, before sharing the URL with several people: per-page background-job slots + larger caches (the multi-user fixes listed under "HOSTED DEPLOYMENT"), and a paid instance (Standard: 1 CPU / 2 GB) for real use.
+
 **2026-10-18 — NEXT MILESTONE (user, after the Dimension Behavior review):** junctions and end caps must consume / expose the persistent repeating Skin + Web construction as cleanly as corners and openings do (§Z.10 manual review). Multiple centres stays deferred. **Implemented and checkpointed (§Z.11); manual review: somewhat improved, complex junction jumps remain (NOT solved); Skin + Web work intentionally STOPPED here.** No next Skin + Web milestone is scheduled. Next decision: how a junction that APPEARS through Z (walls first touching; a lens run merging away) grows from the construction below (layer-to-layer carrying vs a canonical geometric junction motif).
 
 **2026-10-18 — RESTART on `8988108`.** No implementation is scheduled. Next: the user picks the first small milestone (candidates in `WALL_ARCHITECTURE.md` §Z.7); each milestone is judged against §Z.0, manually reviewed and checkpointed before the next. The items below are older context; where they conflict with §Z they are superseded (marked).
@@ -1571,6 +1580,8 @@ Current priority order (after the Wall Systems checkpoint, 2026-10-07, and its c
 ---
 
 ## Last Updated
+
+2026-10-21 — HOSTED DEPLOYMENT prepared: Render Blueprint (`render.yaml`), gunicorn single process, Python 3.9.6, `LAYER_ASSEMBLY_WORKERS=0`; full Designer → Generate → Plan → Export → Save / Open flow verified locally under the production command. GitHub Pages rejected (server-side Python). No Designer behavior changed.
 
 2026-10-18 — RESTART MILESTONE 1 (physical wall width + material controls) manually reviewed and committed as a checkpoint with known failures (`WALL_ARCHITECTURE.md` Z.8): a cut-join regression on Skin + Web walls under profile cuts (next fix), 14 goldens awaiting re-baseline, the envelope = full-build invariant awaiting a decision. Skin + Web single-layer not committed.
 

@@ -1,3 +1,4 @@
 flask>=2.3
 networkx>=3.0
 pytest>=7.0
+gunicorn>=23.0

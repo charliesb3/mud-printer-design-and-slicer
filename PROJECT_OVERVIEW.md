@@ -454,6 +454,10 @@ The whole-print plan (ordered layers → continuous runs, travels and layer tran
 
 The workflow is Designer → Assembly → Wall Systems → Print Simulation. The Designer and the Assembly edit ARCHITECTURE only: the walls themselves (each path is a wall owning its thickness, alignment, Corner R and end caps — Wall Groups were removed 2026-10-15; junction / end-cap shape is edited in the Designer) and lightweight wall ENVELOPES (the Designer's build stopped after walls, junctions, trims and openings). The printable CONSTRUCTION is a separate project-level data structure, WALL SYSTEMS (construction type + parameters, assigned to individual walls, the same in every layout state; one construction may span thicknesses), edited in its own workspace. Wall Systems, lattice and printable wall geometry are generated only by the explicit "Generate Wall Systems" (the existing full-resolution pipeline for the whole assembled building); the Print Simulation plans (routing, lifts, timing) only from CURRENT generated geometry and never generates it. Generated geometry that no longer matches the design is labelled OUTDATED, never treated as current. Envelope-level support is preliminary; bead-level support of the generated geometry is authoritative. The Assembly places layers and validates openings from the architecture only (envelopes, architectural pier / overhang rules), so changing a Wall System never changes the Assembly; construction-specific minimums are reported after generation in the Wall Systems inspection. Project files (schema 7) store each wall's envelope in the designs and the Wall Systems in the project; older files are migrated one way (geometry-preserving except reported Variant-specific physical properties, which are dropped). Details since 2026-10-15: `design-toolpath/WALL_ARCHITECTURE.md`. Details: `design-toolpath/DEFERRED_TOOLPATH_ARCHITECTURE.md`, `design-toolpath/layer_assembly/PROJECT_MEMORY.md` → "WALL GROUPS × WALL SYSTEMS WORKSPACE" and "DEFERRED PRINT PATHS".
 
+### The Designer / Slicer is hosted as the existing Flask app (2026-10-21)
+
+For sharing with others, the Design + Toolpath app runs unchanged as one Render web service (`render.yaml` at the repo root, branch `restart/oct16-base`, Designer only — never the Pi interface). Static hosting (GitHub Pages) was rejected because all geometry, routing, planning and export run in server-side Python. The hosted app is single-user in practice until its shared job slot / caches are made per-page. Details: `design-toolpath/PROJECT_MEMORY.md` → "HOSTED DEPLOYMENT".
+
 ### Do not replace GRBL without demonstrated need
 
 GRBL already operates the machine successfully.
@@ -713,6 +717,10 @@ Allow the architecture to evolve as the machine and software become better under
 ---
 
 ## Last Updated
+
+2026-10-21 (Designer hosting)
+
+Designer / Slicer prepared for hosting on Render as the existing Flask app (Designer only, branch `restart/oct16-base`); GitHub Pages rejected. Verified locally under the production server; not yet launched.
 
 2026-10-20 (Pi hardware integration — software)
 

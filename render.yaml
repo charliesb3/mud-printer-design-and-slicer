@@ -1,0 +1,23 @@
+# Render Blueprint — the hosted Designer / Slicer (design-toolpath) ONLY.
+# The Pi interface (pi-interface/) is not built or deployed here.
+#
+# One gunicorn process with threads: Generate Wall Systems / Plan Print
+# results are cached in that process and read back by later requests (layer
+# view, Plan Print, Export Print Job) — more processes would miss them.
+# --timeout 0: generation / planning are long synchronous requests.
+# LAYER_ASSEMBLY_WORKERS=0: no variant worker processes (Free: 0.1 CPU, 512 MB).
+services:
+  - type: web
+    name: mud-printer-designer
+    runtime: python
+    plan: free
+    branch: restart/oct16-base
+    rootDir: design-toolpath
+    buildCommand: pip install -r design_proto/requirements.txt
+    startCommand: gunicorn --chdir design_proto --workers 1 --threads 4 --timeout 0 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.6
+      - key: LAYER_ASSEMBLY_WORKERS
+        value: "0"
