@@ -171,6 +171,11 @@ pi-interface/
 │       ├── index.html      # Single-page app
 │       ├── style.css       # Dark touch-first theme
 │       └── app.js          # WS client, jog, hold buttons (stop, confirm), lifts UI
+├── scripts/
+│   ├── Deploy to Pi.command    # Mac double-click launcher (one-click deploy)
+│   ├── deploy.config.sample    # Template → copy to deploy.config (gitignored)
+│   ├── deploy_pi.sh            # Runs ON the Pi: preflight + git pull + restart
+│   └── preflight_state.py      # Shared pass/block decision (unit-tested)
 ├── tests/
 │   ├── mock_transport.py   # MockTransport + wait_until_sent helper
 │   ├── test_parser.py      # 34 tests
@@ -183,12 +188,14 @@ pi-interface/
 │   └── js/propose_check.js # runs app.js proposeLiftEnd for test_ui.py
 │   └── test_api.py         # 25 tests (building/export upload, .muddesign refusal, synced clients incl. setup)
 │   ├── test_hardware.py    # GPIO map, gpiozero backend (MockFactory), remote, Z, REMOTE STOP, lifecycle
-│   └── test_grbl_capture.py # capture tool sends read-only queries only
+│   ├── test_grbl_capture.py # capture tool sends read-only queries only
+│   └── test_preflight_state.py # Deploy preflight pass/block decision (one-click deploy)
 ├── tools/grbl_capture.py   # read-only $I $$ $# $G capture to a file (service stopped)
 ├── deploy/                 # mudprinter.service (systemd), kiosk.sh (labwc), 99-mudpr-grbl.rules.example
 ├── docs/
 │   ├── grbl-capture-checklist.md  # read-only capture + prepared (not executed) flash procedure
 │   ├── deployment.md              # Pi OS, config.txt Z STOP, venv, systemd, udev, kiosk, Z default-STOP layers
+│   ├── one-click-deploy.md        # Mac → Pi one-click deploy workflow
 │   └── acceptance-test.md         # 10-step control-box commissioning + M1 functional checks
 ├── .env.example
 ├── requirements.txt
@@ -572,6 +579,30 @@ synchronous fixture context.
 `@app.on_event("startup")` is deprecated in current FastAPI. Using the
 `@asynccontextmanager lifespan` pattern instead.
 
+### One-click Mac → Pi deploy (2026-10-23)
+Three-file workflow in `pi-interface/scripts/`:
+- `Deploy to Pi.command` — double-clickable from Finder on the Mac.
+- `deploy_pi.sh` — runs over SSH on the Pi.
+- `preflight_state.py` — shared pass/block decision, imported by both
+  `deploy_pi.sh` (over stdin) and `tests/test_preflight_state.py`.
+
+Order of operations on the Pi: fetch `/api/state` → preflight (abort if
+`Run`/`Jog`/`Hold*` or `job.state ∈ {running, held}` or state
+unverifiable) → refuse pull if working tree is dirty / detached-HEAD →
+`git pull --ff-only` → `pip install` only if `requirements.txt` sha256
+changed since the last successful deploy (sentinel in `.venv/`) →
+`sudo systemctl restart mudprinter` → wait up to 15 s for both
+`is-active` AND `/api/state` to respond; abort with a specific exit code
+and a journalctl command if either fails. `.env`, `jobs/`, and GRBL
+settings are not touched.
+
+Exit codes: 0 success, 2 refused (controller state), 3 refused (repo
+state), 4 verification failed after restart, 255 SSH problem. The Mac
+launcher maps each to a plain-English message in the Terminal window.
+
+No automatic deploy on git push — the operator is physically beside a
+moving machine; the deploy must be a deliberate, acknowledged action.
+
 ---
 
 ## Test Strategy
@@ -583,17 +614,22 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-346 tests total, all passing on Python 3.9 (Mac, 2026-10-20; 291 before the
-hardware integration pass — `test_hardware.py` uses MockBackend + a fake
-clock and gpiozero's MockFactory for the real backend). Earlier: 262 tests
-(196 before the controller features pass, 246 before the UI pass;
-`test_ui.py` checks the dashboard structure from index.html and runs the
-UI's proposal rule under Node against the server's):
-the 78 M1 tests unchanged + lift / building-job / contract / setup tests.
-`MockTransport` can answer `?` polls with a settable `status_reply` (used to
-simulate Run→Idle around a lift drain, positions, alarms) and print scripted
-`replies` before an ok (the `$$` listing). API tests that need machine state set directly patch
-out `main._connection_loop` (`offline_client` fixture).
+346 tests total before the one-click deploy consolidation, all passing on
+Python 3.9 (Mac, 2026-10-20; 291 before the hardware integration pass —
+`test_hardware.py` uses MockBackend + a fake clock and gpiozero's
+MockFactory for the real backend). Earlier: 262 tests (196 before the
+controller features pass, 246 before the UI pass; `test_ui.py` checks the
+dashboard structure from index.html and runs the UI's proposal rule under
+Node against the server's): the 78 M1 tests unchanged + lift / building-job
+/ contract / setup tests. `MockTransport` can answer `?` polls with a
+settable `status_reply` (used to simulate Run→Idle around a lift drain,
+positions, alarms) and print scripted `replies` before an ok (the `$$`
+listing). API tests that need machine state set directly patch out
+`main._connection_loop` (`offline_client` fixture).
+
+Deploy preflight: `tests/test_preflight_state.py` (18 tests) covers the
+pass/block decision used by the Mac → Pi one-click launcher
+(`scripts/preflight_state.py`).
 
 ---
 
@@ -853,6 +889,12 @@ of the new panels.
 ---
 
 ## Last Updated
+
+2026-10-23 — consolidation on top of oct16-base: brought in the one-click
+Mac → Pi deploy workflow (`scripts/Deploy to Pi.command`, `deploy_pi.sh`,
+`preflight_state.py`, `docs/one-click-deploy.md`, 18 preflight tests). The
+hardware-integrated controller is authoritative; the launcher restarts the
+existing systemd `mudprinter` service unchanged.
 
 2026-10-20 — hardware integration pass (Mac; not on hardware): GPIO layer
 (gpiozero), debounced remote, one Z controller, REMOTE STOP latch +
