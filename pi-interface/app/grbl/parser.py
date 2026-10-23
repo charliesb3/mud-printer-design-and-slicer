@@ -19,6 +19,7 @@ class StatusReport:
     wpos_x: float | None
     wpos_y: float | None
     feed_rate: float | None
+    feed_override_pct: int | None = None   # Ov:feed% — current GRBL feed override
 
 
 # Position fields: MPos:x,y,z or WPos:x,y,z
@@ -26,6 +27,8 @@ _MPOS_RE = re.compile(r'MPos:(-?[\d.]+),(-?[\d.]+)')
 _WPOS_RE = re.compile(r'WPos:(-?[\d.]+),(-?[\d.]+)')
 # Feed/speed: FS:feed,spindle
 _FS_RE = re.compile(r'FS:(-?[\d.]+)')
+# Overrides: Ov:feed,rapid,spindle (GRBL 1.1, each 0–200 percent)
+_OV_RE = re.compile(r'Ov:(\d+),(\d+),(\d+)')
 
 # GRBL 0.9: <State,MPos:x,y,z,WPos:x,y,z> — comma-separated, no | characters
 _GRBL09_RE = re.compile(r'^<(\w+),MPos:(-?[\d.]+),(-?[\d.]+)(?:[^>]*)>')
@@ -51,6 +54,7 @@ def parse_status_report(line: str) -> StatusReport | None:
             state, sub_state = state_field, None
 
         mpos_x = mpos_y = wpos_x = wpos_y = feed_rate = None
+        feed_override_pct: int | None = None
 
         pm = _MPOS_RE.search(rest)
         if pm:
@@ -64,6 +68,10 @@ def parse_status_report(line: str) -> StatusReport | None:
         if fm:
             feed_rate = float(fm.group(1))
 
+        om = _OV_RE.search(rest)
+        if om:
+            feed_override_pct = int(om.group(1))
+
         return StatusReport(
             state=state,
             sub_state=sub_state,
@@ -72,6 +80,7 @@ def parse_status_report(line: str) -> StatusReport | None:
             wpos_x=wpos_x,
             wpos_y=wpos_y,
             feed_rate=feed_rate,
+            feed_override_pct=feed_override_pct,
         )
 
     # GRBL 0.9 format: <State,MPos:x,y,z,WPos:x,y,z>

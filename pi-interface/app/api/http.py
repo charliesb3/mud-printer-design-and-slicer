@@ -8,6 +8,7 @@ WebSocket (/ws):
   Client → Server message types:
     jog_start      {axis: "X"|"Y", direction: 1|-1}
     jog_heartbeat  {}  — sent every ~100 ms while button held
+    jog_set_speed  {speed_in_s: float}  OR  {speed_mm_min: float}
     jog_stop       {}
     hold           {}
     resume         {}
@@ -90,13 +91,23 @@ def init(
 # Jog management                                                       #
 # ------------------------------------------------------------------ #
 
-def _jog_step_mm() -> float:
-    """Distance per incremental jog command at the configured speed and interval."""
-    speed = config.JOG_SPEED_MM_MIN
-    if speed is None:
+def _current_jog_speed_mm_min() -> float:
+    """
+    The current operator-selected jog speed (read fresh each iteration).
+
+    Returns 0 if jogging is disabled (either because the default is unset
+    or the operator has set the speed to zero through the UI).
+    """
+    if _state is None:
         return 0.0
-    # One step covers exactly one send-interval worth of motion at configured speed.
-    return speed * config.JOG_SEND_INTERVAL_S / 60.0
+    speed = _state.current_jog_speed_mm_min
+    if speed is None or speed <= 0:
+        return 0.0
+    # Clamp against the hard ceiling as a defence-in-depth check.
+    max_speed = config.JOG_SPEED_MAX_MM_MIN
+    if max_speed is not None and speed > max_speed:
+        return max_speed
+    return speed
 
 
 async def _jog_loop(axis: str, direction: int) -> None:
@@ -105,24 +116,22 @@ async def _jog_loop(axis: str, direction: int) -> None:
 
     Each iteration:
     1. Check heartbeat timeout → cancel jog if expired.
-    2. Send one incremental $J= command.
-    3. Wait for GRBL ok (this paces the loop to GRBL's buffer consumption).
-    4. Repeat.
+    2. Read the current jog speed from AppState (operator may have changed it).
+    3. Send one incremental $J= command sized to one send-interval of motion.
+    4. Wait for GRBL ok (this paces the loop to GRBL's buffer consumption).
+    5. Repeat.
 
     Max runaway on connection loss ≈ 1–2 jog step distances.
     """
     global _jog_axis, _jog_direction, _jog_last_heartbeat
 
-    step = _jog_step_mm()
-    if step == 0:
-        log.warning("Jog step is zero — jogging is disabled (JOG_SPEED_MM_MIN not set)")
+    initial_speed = _current_jog_speed_mm_min()
+    if initial_speed == 0:
+        log.warning("Jog not started — current jog speed is zero")
         return
 
-    speed = config.JOG_SPEED_MM_MIN
-    assert speed is not None
-
-    log.info("Jog loop started: %s%+d at %.1f mm/min, %.3f mm/step",
-             axis, direction, speed, step)
+    log.info("Jog loop started: %s%+d at %.1f mm/min",
+             axis, direction, initial_speed)
 
     try:
         while True:
@@ -131,7 +140,12 @@ async def _jog_loop(axis: str, direction: int) -> None:
                 log.debug("Jog heartbeat timeout (%.2f s) — stopping", age)
                 break
 
-            distance = direction * step
+            speed = _current_jog_speed_mm_min()
+            if speed <= 0:
+                log.debug("Jog speed set to zero — stopping")
+                break
+            step_mm = speed * config.JOG_SEND_INTERVAL_S / 60.0
+            distance = direction * step_mm
             cmd = f"$J=G91 {axis}{distance:.3f} F{speed:.0f}"
             try:
                 result = await _comm.send_command(cmd, timeout=3.0)  # type: ignore[union-attr]
@@ -157,6 +171,9 @@ async def _start_jog(axis: str, direction: int) -> None:
 
     if config.JOG_SPEED_MM_MIN is None:
         log.warning("Jog requested but JOG_SPEED_MM_MIN is not configured")
+        return
+    if _current_jog_speed_mm_min() == 0:
+        log.warning("Jog requested but current jog speed is zero")
         return
 
     if _state and _state.grbl_state not in ("Idle", "Jog"):
@@ -253,6 +270,21 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
 
     elif msg_type == "jog_heartbeat":
         _jog_last_heartbeat = time.monotonic()
+
+    elif msg_type == "jog_set_speed":
+        # Operator-adjusted jog speed; accepts either in/s or mm/min, clamped
+        # on the server to the configured ceiling.
+        if _state is None:
+            return
+        if "speed_in_s" in data:
+            from ..state import in_s_to_mm_min
+            speed_mm_min = in_s_to_mm_min(float(data["speed_in_s"]))
+        elif "speed_mm_min" in data:
+            speed_mm_min = float(data["speed_mm_min"])
+        else:
+            return
+        stored = _state.set_jog_speed_mm_min(speed_mm_min)
+        log.info("Jog speed set to %.1f mm/min (requested %.1f)", stored, speed_mm_min)
 
     elif msg_type == "jog_stop":
         await _stop_jog()

@@ -100,7 +100,14 @@ Do not treat an extruder as a GRBL axis or introduce extrusion-control requireme
 
 ## Current State
 
-Arduino Mega + GRBL currently control X/Y.
+Arduino + GRBL currently control X/Y.
+
+**Board model discrepancy (noted 2026-10-23):** earlier memory described
+the controller as an Arduino **Mega**. The user described the current
+first-motion hardware as an Arduino **Uno** with three DM556T drivers
+(X, Y-left, Y-right sharing the Y step/dir signal). The actual board
+model should be visually confirmed on the physical machine during the
+GRBL capture checklist before the first jog test.
 
 The system has successfully moved and printed with the physical machine.
 
@@ -109,6 +116,18 @@ UGS is currently used as the higher-level sender/interface.
 Z remains manually controlled.
 
 No GRBL modifications associated with this new software project have yet been made.
+
+### Drivetrain, as reported for the first motion test (2026-10-23)
+
+- NEMA 23 stepper motors (1.8°, 200 full steps/rev)
+- 20 : 1 gearboxes
+- 12-tooth sprockets
+- ANSI #25 chain (**assumed — physically verify pitch**)
+- Three DM556T drivers; all DIP switches currently DOWN
+  (**microstep setting unverified — physically verify from the DM556T label**)
+
+See `arduino-grbl/steps-per-mm-calculation.md` for the full `$100` / `$101`
+derivation, the microstep → steps/mm table, and the verification procedure.
 
 ---
 
@@ -165,6 +184,18 @@ No new firmware work has yet been completed for this project.
 ---
 
 ## Last Updated
+
+2026-10-23
+
+Added `arduino-grbl/steps-per-mm-calculation.md` recording the X/Y
+`$100` / `$101` derivation for the current drivetrain (NEMA 23 + 20:1
+gearbox + 12-tooth sprocket + ANSI #25 chain), including a microstep-vs-
+steps/mm table and the independent verification procedure. Flagged items
+requiring physical verification: DM556T microstep setting (all DIP down
+is NOT a reliable inference), chain pitch (ANSI #25 assumed), direction
+invert. Also recorded the Arduino Uno vs Mega discrepancy — the current
+first-motion hardware is reportedly an **Uno**, previously recorded as a
+Mega. No firmware changes.
 
 2026-10-03
 

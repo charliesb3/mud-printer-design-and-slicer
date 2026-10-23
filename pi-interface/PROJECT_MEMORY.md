@@ -126,12 +126,20 @@ All settings in `.env`. Key values:
 |---|---|---|
 | `SERIAL_PORT` | `/dev/ttyUSB0` | Set per machine |
 | `BAUD_RATE` | `115200` | Standard GRBL baud |
-| `JOG_SPEED_MM_MIN` | `0` | **0 = jogging disabled**. Must be validated on machine before enabling |
+| `JOG_SPEED_MM_MIN` | `0` | **0 = jogging disabled**. Default jog speed at startup |
+| `JOG_SPEED_MAX_MM_MIN` | `0` | Hard ceiling for the UI jog-speed slider. Must be validated on hardware |
 | `JOG_SEND_INTERVAL_S` | `0.15` | Interval between incremental jog commands |
 | `JOG_TIMEOUT_S` | `0.3` | Dead-man timeout — motion stops if no heartbeat |
+| `PRINTER_ENVELOPE_X_IN` | `0` | Nominal usable X travel (display only, NOT enforced) |
+| `PRINTER_ENVELOPE_Y_IN` | `0` | Nominal usable Y travel (display only, NOT enforced) |
+| `PRINTER_EXTENTS_VERIFIED` | `0` | Set to `1` only after physically confirming usable travel |
 | `STATUS_POLL_INTERVAL_S` | `0.2` | How often `?` is sent to GRBL |
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `8000` | HTTP port |
+
+Template `pi-interface/.env.firstmotion` holds the conservative first-motion
+test values (jog default 300 mm/min, ceiling 900 mm/min, 120 × 120 in
+envelope marked unverified).
 
 ---
 
@@ -178,6 +186,31 @@ actual safety device. This is explicitly displayed in the UI.
 Jogging is disabled by default until the speed is validated on the actual
 machine. The UI shows a warning if jogging is disabled.
 
+### Operator-adjustable jog speed (2026-10-23)
+The configured `JOG_SPEED_MM_MIN` is the DEFAULT at startup; the operator
+adjusts the live speed from the UI, which sends `jog_set_speed` over the
+WebSocket. The server stores the current speed in `AppState` and the jog
+loop reads it fresh each iteration (so a slider change applies within one
+jog-step time without restarting the jog). The server clamps against the
+`JOG_SPEED_MAX_MM_MIN` ceiling as a defence-in-depth check in addition to
+the HTML slider's `max` attribute. UI shows jog speed in in/s; GRBL always
+receives mm/min.
+
+### Printer envelope is nominal, not enforced (2026-10-23)
+`PRINTER_ENVELOPE_X_IN` / `PRINTER_ENVELOPE_Y_IN` describe the nominal design
+envelope. They are DISPLAY-ONLY and are NOT enforced as soft limits by this
+software — GRBL firmware remains the only enforced bound on physical travel.
+UI shows an "Unconfigured printer (extents not set)" warning when they're
+unset, and a "nominal, not physically verified" warning until
+`PRINTER_EXTENTS_VERIFIED=1`.
+
+### Print speed display in in/s + feed override (2026-10-23)
+The state exposes `feed_rate_in_s` (current), `planned_feed_rate_in_s`
+(current / override%) and `feed_override_pct` (parsed from GRBL `Ov:`
+status). GRBL communication stays in mm/min; conversion is purely a
+display concern. The UI shows Planned / Override / Actual as three
+read-outs beside the current job.
+
 ### asyncio.shield() in send_command
 The pending future is shielded from task cancellation. This prevents a cancelled
 runner task from corrupting the communicator's internal state, which must remain
@@ -203,7 +236,9 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-78 tests total, all passing on Python 3.9 (Mac development environment).
+91 tests total (78 Milestone 1 + 13 for jog-speed / envelope / unit
+conversion added 2026-10-23), all passing on Python 3.9 (Mac development
+environment).
 
 ---
 
@@ -271,6 +306,16 @@ All application code has been written:
 ---
 
 ## Last Updated
+
+2026-10-23
+
+Prepared for FIRST PHYSICAL MOTION TEST (manual jog). Added
+operator-adjustable jog speed (UI in in/s, GRBL in mm/min, server-clamped
+to ceiling); printer envelope config as display-only (not enforced);
+GRBL `Ov:` feed-override parsing + Planned / Override / Actual print-speed
+read-out. `.env.firstmotion` provides conservative first-motion defaults
+(300 mm/min default, 900 mm/min ceiling, 120 × 120 in nominal unverified
+envelope). Tests: 91 (+13), all green on Mac.
 
 2026-10-03
 

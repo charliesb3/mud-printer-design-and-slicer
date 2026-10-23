@@ -81,6 +81,16 @@ class TestParseStatusReport:
         assert r is not None
         assert r.state == "Idle"
 
+    def test_feed_override_extracted(self):
+        r = parse_status_report("<Run|MPos:0,0,0|FS:1000,0|Ov:125,100,100>")
+        assert r is not None
+        assert r.feed_override_pct == 125
+
+    def test_feed_override_default_none(self):
+        r = parse_status_report("<Idle|MPos:0,0,0|FS:0,0>")
+        assert r is not None
+        assert r.feed_override_pct is None
+
 
 class TestWelcomeMessage:
     def test_grbl_11(self):

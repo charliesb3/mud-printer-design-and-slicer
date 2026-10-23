@@ -103,11 +103,12 @@ function handleState(s) {
       ? baseState : "other"
   );
 
-  // Position + feed rate
+  // Position + feed rate (in/s in the top bar; mm/min via the Job section)
   const connected = s.connected;
   document.getElementById("pos-x").textContent = connected ? s.x.toFixed(3) : "—";
   document.getElementById("pos-y").textContent = connected ? s.y.toFixed(3) : "—";
-  document.getElementById("feed-rate").textContent = connected ? s.feed_rate.toFixed(0) : "—";
+  const feedInS = (s.feed_rate_in_s != null) ? s.feed_rate_in_s : 0;
+  document.getElementById("feed-rate").textContent = connected ? feedInS.toFixed(3) : "—";
 
   // Jog buttons
   renderJogSection(s);
@@ -121,6 +122,7 @@ function handleState(s) {
 
 function renderJogSection(s) {
   const warn = document.getElementById("jog-warning");
+  const envWarn = document.getElementById("envelope-warning");
   const btns = document.querySelectorAll(".jog-btn");
   const canJog = s.connected
     && s.jog_enabled
@@ -133,7 +135,69 @@ function renderJogSection(s) {
     warn.classList.remove("visible");
   }
 
+  if (s.envelope_warning) {
+    envWarn.textContent = s.envelope_warning;
+    envWarn.classList.add("visible");
+  } else {
+    envWarn.classList.remove("visible");
+  }
+
   btns.forEach(btn => { btn.disabled = !canJog; });
+
+  renderJogSpeedControl(s);
+  renderEnvelope(s);
+}
+
+function renderJogSpeedControl(s) {
+  const slider = document.getElementById("jog-speed-slider");
+  const label = document.getElementById("jog-speed-in-s");
+  const meta = document.getElementById("jog-speed-meta");
+
+  const maxInS = s.jog_speed_max_in_s || 0;
+  const curInS = s.jog_speed_in_s || 0;
+
+  slider.disabled = !s.jog_enabled;
+
+  // Update the slider range to reflect the server-side ceiling.
+  if (parseFloat(slider.max) !== maxInS) {
+    slider.max = maxInS.toString();
+    // step: pick a reasonable resolution regardless of ceiling
+    slider.step = (maxInS > 0 ? Math.max(0.001, maxInS / 200) : 0.001).toFixed(4);
+  }
+
+  // Only overwrite the slider's position when the user is NOT currently
+  // dragging it, so the UI stays responsive during drag.
+  if (!slider.matches(":active") && document.activeElement !== slider) {
+    slider.value = curInS.toString();
+  }
+
+  label.textContent = curInS.toFixed(3);
+
+  if (!s.jog_enabled) {
+    meta.textContent = "Jog disabled — set JOG_SPEED_MM_MIN in .env";
+    meta.classList.add("warn");
+  } else {
+    const maxMm = s.jog_speed_max_mm_min || 0;
+    const curMm = s.jog_speed_mm_min || 0;
+    meta.textContent =
+      `${curMm.toFixed(0)} / ${maxMm.toFixed(0)} mm/min`
+      + ` (max ${maxInS.toFixed(3)} in/s)`;
+    meta.classList.remove("warn");
+  }
+}
+
+function renderEnvelope(s) {
+  const el = document.getElementById("envelope-display");
+  if (s.envelope_x_in != null && s.envelope_y_in != null) {
+    const verifiedTag = s.envelope_verified
+      ? ""
+      : "  — nominal, not physically verified";
+    el.textContent =
+      `Envelope: ${s.envelope_x_in.toFixed(1)} × ${s.envelope_y_in.toFixed(1)} in${verifiedTag}`;
+    el.style.display = "block";
+  } else {
+    el.style.display = "none";
+  }
 }
 
 function renderControls(s) {
@@ -155,6 +219,16 @@ function renderJobSection(s) {
   const progressWrap = document.getElementById("progress-wrap");
   const progressFill = document.getElementById("progress-fill");
   const startBtn = document.getElementById("btn-start");
+
+  // Print-speed display — update regardless of whether a job is loaded.
+  const planned = document.getElementById("planned-speed-in-s");
+  const actual = document.getElementById("actual-speed-in-s");
+  const ov = document.getElementById("feed-override-pct");
+  const plannedInS = (s.planned_feed_rate_in_s != null) ? s.planned_feed_rate_in_s : 0;
+  const actualInS = (s.feed_rate_in_s != null) ? s.feed_rate_in_s : 0;
+  planned.textContent = plannedInS.toFixed(3);
+  actual.textContent = actualInS.toFixed(3);
+  ov.textContent = (s.feed_override_pct != null ? s.feed_override_pct : 100).toString();
 
   if (!job) {
     fileEl.textContent = "No job loaded";
@@ -341,6 +415,16 @@ function attachControls() {
   });
   document.getElementById("btn-start").addEventListener("click", () => {
     send({ type: "job_start" });
+  });
+
+  // Jog speed slider — send on input so the backend sees changes immediately,
+  // including while a jog is in progress.
+  const slider = document.getElementById("jog-speed-slider");
+  const label = document.getElementById("jog-speed-in-s");
+  slider.addEventListener("input", () => {
+    const v = parseFloat(slider.value);
+    label.textContent = v.toFixed(3);
+    send({ type: "jog_set_speed", speed_in_s: v });
   });
 }
 

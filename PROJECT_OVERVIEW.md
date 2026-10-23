@@ -406,14 +406,24 @@ manual control of linear actuator
 Extrusion:
 independently controlled external pumping system
 
-### Pi Interface — Milestone 1 Software Complete (Mac)
+### Pi Interface — Milestone 1 Software Complete (Mac); first motion prep
 
 The Raspberry Pi Printer Interface Milestone 1 has been fully implemented
 in software and is passing all tests on Mac.
 
 The software is ready for Pi deployment and physical machine testing.
 
-See `pi-interface/PROJECT_MEMORY.md` for full details.
+2026-10-23 — prepared for FIRST PHYSICAL MOTION TEST (manual jog): added
+operator-adjustable jog speed (UI in in/s, GRBL in mm/min, server-clamped
+to ceiling), nominal printer envelope config as display-only (not
+enforced), GRBL `Ov:` feed-override parsing and Planned / Override /
+Actual print-speed read-out. `.env.firstmotion` holds the conservative
+first-motion defaults. `arduino-grbl/steps-per-mm-calculation.md`
+documents the derivation of `$100` / `$101` for the current drivetrain
+and the microstep setting that must be physically verified.
+
+See `pi-interface/PROJECT_MEMORY.md` and `arduino-grbl/PROJECT_MEMORY.md`
+for full details.
 
 ### Design + Toolpath — Phase 2 (Toolpath) Prototype Complete
 
