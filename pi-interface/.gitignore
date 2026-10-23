@@ -9,6 +9,9 @@ venv/
 # Environment
 .env
 
+# Local deployment config (Pi hostname / user, per operator)
+scripts/deploy.config
+
 # Job storage (runtime data, not committed)
 /jobs/
 

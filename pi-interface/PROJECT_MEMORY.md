@@ -100,15 +100,22 @@ pi-interface/
 │       ├── index.html      # Single-page app
 │       ├── style.css       # Dark touch-first theme
 │       └── app.js          # WS client, jog events, stop hold-to-confirm
+├── scripts/
+│   ├── Deploy to Pi.command    # Mac double-click launcher
+│   ├── deploy.config.sample    # Template → copy to deploy.config (gitignored)
+│   ├── deploy_pi.sh            # Runs ON the Pi: preflight + git pull + restart
+│   └── preflight_state.py      # Shared pass/block decision (unit-tested)
 ├── tests/
-│   ├── mock_transport.py   # MockTransport + wait_until_sent helper
-│   ├── test_parser.py      # 34 tests
-│   ├── test_communicator.py # 18 tests
-│   ├── test_runner.py      # 13 tests
-│   └── test_api.py         # 13 tests
+│   ├── mock_transport.py       # MockTransport + wait_until_sent helper
+│   ├── test_parser.py          # GRBL response parsing
+│   ├── test_communicator.py    # Transport, locking, read loop
+│   ├── test_runner.py          # Job streamer
+│   ├── test_api.py             # HTTP + WS surface
+│   └── test_preflight_state.py # Deploy preflight pass/block decision
 ├── docs/
 │   ├── grbl-capture-checklist.md  # Capture $$ baseline before first use
 │   ├── deployment.md              # Pi OS, systemd, kiosk, networking
+│   ├── one-click-deploy.md        # Mac → Pi one-click workflow
 │   └── acceptance-test.md         # Physical machine acceptance criteria
 ├── .env.example
 ├── requirements.txt
@@ -192,6 +199,30 @@ synchronous fixture context.
 `@app.on_event("startup")` is deprecated in current FastAPI. Using the
 `@asynccontextmanager lifespan` pattern instead.
 
+### One-click Mac → Pi deploy (2026-10-23)
+Three-file workflow in `pi-interface/scripts/`:
+- `Deploy to Pi.command` — double-clickable from Finder on the Mac.
+- `deploy_pi.sh` — runs over SSH on the Pi.
+- `preflight_state.py` — shared pass/block decision, imported by both
+  `deploy_pi.sh` (over stdin) and `tests/test_preflight_state.py`.
+
+Order of operations on the Pi: fetch `/api/state` → preflight (abort if
+`Run`/`Jog`/`Hold*` or `job.state ∈ {running, held}` or state
+unverifiable) → refuse pull if working tree is dirty / detached-HEAD →
+`git pull --ff-only` → `pip install` only if `requirements.txt` sha256
+changed since the last successful deploy (sentinel in `.venv/`) →
+`sudo systemctl restart mudprinter` → wait up to 15 s for both
+`is-active` AND `/api/state` to respond; abort with a specific exit code
+and a journalctl command if either fails. `.env`, `jobs/`, and GRBL
+settings are not touched.
+
+Exit codes: 0 success, 2 refused (controller state), 3 refused (repo
+state), 4 verification failed after restart, 255 SSH problem. The Mac
+launcher maps each to a plain-English message in the Terminal window.
+
+No automatic deploy on git push — the operator is physically beside a
+moving machine; the deploy must be a deliberate, acknowledged action.
+
 ---
 
 ## Test Strategy
@@ -203,7 +234,8 @@ Key invariant used in hold/resume tests: in `send_command()`, `_pending_future`
 is created **before** `write_line()` appends to `sent_lines`. Therefore,
 `wait_until_sent(transport, n)` guarantees the future exists before injecting ok.
 
-78 tests total, all passing on Python 3.9 (Mac development environment).
+96 tests total (78 Milestone 1 + 18 deploy preflight), all passing on
+Python 3.9 (Mac development environment).
 
 ---
 
@@ -271,6 +303,16 @@ All application code has been written:
 ---
 
 ## Last Updated
+
+2026-10-23
+
+Added one-click Mac → Pi deploy workflow:
+`Deploy to Pi.command` → ssh → `deploy_pi.sh` → preflight (controller
+must be Idle/Disconnected/Alarm; no running/held job) → `git pull
+--ff-only` → `pip install` only when `requirements.txt` changed →
+`sudo systemctl restart mudprinter` → verify active + HTTP responsive.
+Shared `preflight_state.py` with pytest coverage. One-time setup
+documented in `docs/one-click-deploy.md`. Tests 78 → 96, all green.
 
 2026-10-03
 

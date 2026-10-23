@@ -1,0 +1,21 @@
+# Mud Printer — Mac → Pi deployment config
+#
+# 1. Copy this file to deploy.config in the same directory.
+# 2. Edit PI_HOST and PI_USER to match your Raspberry Pi.
+# 3. Set up passwordless SSH to the Pi (see docs/one-click-deploy.md).
+#
+# deploy.config is gitignored so your Pi hostname / user stay local.
+
+# Hostname or IP address of the Pi, e.g. "mudprinter.local" or "192.168.1.42".
+PI_HOST="mudprinter.local"
+
+# Pi login user (the one whose home directory holds mudprintersoftware/).
+PI_USER="pi"
+
+# Optional overrides — these have sensible defaults on the Pi side and
+# normally do not need to be set here.
+#
+# REPO_DIR="/home/pi/mudprintersoftware"
+# SERVICE="mudprinter"
+# HOST_URL="http://localhost:8000"
+# REMOTE_SCRIPT="~/mudprintersoftware/pi-interface/scripts/deploy_pi.sh"
