@@ -172,10 +172,11 @@ pi-interface/
 │       ├── style.css       # Dark touch-first theme
 │       └── app.js          # WS client, jog, hold buttons (stop, confirm), lifts UI
 ├── scripts/
-│   ├── Deploy to Pi.command    # Mac double-click launcher (one-click deploy)
-│   ├── deploy.config.sample    # Template → copy to deploy.config (gitignored)
-│   ├── deploy_pi.sh            # Runs ON the Pi: preflight + git pull + restart
-│   └── preflight_state.py      # Shared pass/block decision (unit-tested)
+│   ├── Deploy to Pi.command        # Mac double-click launcher (one-click deploy)
+│   ├── deploy.config.sample        # Template → copy to deploy.config (gitignored)
+│   ├── deploy_pi.sh                # Runs ON the Pi: preflight + git pull + restart
+│   ├── consolidation_migrate.sh    # One-time M4 atomic swap + venv rewrite + auto-rollback
+│   └── preflight_state.py          # Shared pass/block decision (unit-tested)
 ├── tests/
 │   ├── mock_transport.py   # MockTransport + wait_until_sent helper
 │   ├── test_parser.py      # 34 tests
@@ -889,6 +890,22 @@ of the new panels.
 ---
 
 ## Last Updated
+
+2026-10-23 — consolidation migration M1-M3 complete on the Pi; M4 failed
+once on venv shebang paths and auto-rolled back; fix landed. The Python
+venv's wrapper scripts (`uvicorn`, `fastapi`, `pytest`, …) bake an
+absolute path to the interpreter in their shebang. When M3 creates the
+venv at `.NEW`, every wrapper's shebang reads
+`/mudprinter-controller.NEW/.venv/bin/python3` — a path that **ceases
+to exist the moment M4 renames `.NEW` to the live path**. systemd then
+exec-fails with `203/EXEC` and the misleading "No such file or
+directory" (referring to the shebang's interpreter, not the wrapper).
+Fix added to `scripts/consolidation_migrate.sh`: an idempotent
+`grep + sed` rewrite between the rename and `systemctl start`, plus a
+pre-start `uvicorn --version` sanity check that rolls back BEFORE
+systemd gets to attempt a restart loop. Documented in
+`docs/consolidation-migration.md` → Phase M3 warning + Phase M4
+required-step list + risks table.
 
 2026-10-23 — consolidation on top of oct16-base: brought in the one-click
 Mac → Pi deploy workflow (`scripts/Deploy to Pi.command`, `deploy_pi.sh`,

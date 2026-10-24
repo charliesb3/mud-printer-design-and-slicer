@@ -119,8 +119,48 @@ and inert.
 
 ## Migration — Phase M3: a dedicated venv for the new tree
 
-Reuse the SAME dependencies the running service has (don't `pip install`
-network dependencies if the Pi might be offline later). Simplest:
+> **Known failure mode: stale venv shebangs after M4 rename.**
+> Python `venv` wrapper scripts (`uvicorn`, `fastapi`, `pytest`, `pip`, …)
+> have an **absolute path to the Python interpreter baked into their
+> shebang**. If the venv was created or copied at the staging path
+> `~/mudprinter-controller.NEW/...`, every wrapper's shebang will contain
+> `/mudprinter-controller.NEW/.venv/bin/python3` — a path that **ceases
+> to exist the moment M4 renames the directory**. systemd then fails to
+> exec uvicorn with status `203/EXEC` and the misleading message
+> "No such file or directory" (referring to the shebang's interpreter,
+> not the wrapper script).
+>
+> **Required mitigation:** M4 must rewrite the venv's baked paths from
+> the staging path to the final live path immediately after the rename
+> and before `systemctl start`. The committed migration script
+> `pi-interface/scripts/consolidation_migrate.sh` does this with an
+> idempotent `grep + sed` pass and verifies `uvicorn --version` runs
+> before releasing the service.
+>
+> The venv's `python` symlink itself is fine — it resolves through to
+> `/usr/bin/python3`, which is path-independent. Only the pip-installed
+> console-script wrappers break.
+
+Two acceptable ways to produce the `.NEW` venv — pick ONE:
+
+**Option A — duplicate the running venv (recommended if you want
+byte-identical dependencies and no PyPI dependency).** `cp -a` the live
+venv, then rewrite the baked paths from the OLD live path to the
+staging path (`.NEW`). Smoke tests then run under the new tree's venv
+cleanly. M4 will later rewrite from `.NEW` to the final live path.
+
+```
+cp -a ~/mudprinter-controller/pi-interface/.venv \
+      ~/mudprinter-controller.NEW/pi-interface/.venv
+
+OLD=/home/dirtworks/mudprinter-controller
+STAGING=/home/dirtworks/mudprinter-controller.NEW
+grep -rlI --include='*' "$OLD" \
+    ~/mudprinter-controller.NEW/pi-interface/.venv 2>/dev/null | \
+    xargs -r sed -i "s|${OLD}|${STAGING}|g"
+```
+
+**Option B — fresh venv + pip install from PyPI.**
 
 ```
 python3 -m venv --system-site-packages \
@@ -130,8 +170,9 @@ python3 -m venv --system-site-packages \
     -q -r ~/mudprinter-controller.NEW/pi-interface/requirements.txt
 ```
 
-`--system-site-packages` lets the venv see Pi-OS-installed
-`python3-gpiozero` / `python3-lgpio`, matching `PROJECT_MEMORY.md`.
+Either option **ends up with venv scripts pointing at the staging path
+`.NEW`.** This is correct for M3 (so smoke tests work) but requires the
+M4 rewrite step to be correct for the live service.
 
 **Smoke test the new venv OUT OF BAND, with the service STILL running
 from the old tree:**
@@ -143,6 +184,10 @@ cd ~/mudprinter-controller.NEW/pi-interface
 
 # Import the app module (does NOT bind the port, does NOT touch GPIO).
 .venv/bin/python -c "from app.main import app; print('import OK')"
+
+# Verify uvicorn's shebang resolves (sanity check for M4):
+head -1 .venv/bin/uvicorn               # should point to .NEW/python3
+.venv/bin/uvicorn --version             # should print the version
 ```
 
 The running service continues to serve the controller UI the entire time.
@@ -153,23 +198,62 @@ The running service continues to serve the controller UI the entire time.
 
 ## Migration — Phase M4: atomic directory swap
 
-This is the only step that briefly stops the service. The swap is a
-`mv` of directories — atomic on the same filesystem; the old tree is
-PRESERVED by renaming, not deleted.
+This is the only step that briefly stops the service. Prefer the
+committed migration script, which encodes the correct order including
+the venv shebang rewrite and automatic rollback:
 
 ```
-# Stop the service deliberately (controller must be Idle first).
+# One command, runs the whole M4 flow with auto-rollback.
+sudo bash <path-to-repo>/pi-interface/scripts/consolidation_migrate.sh
+```
+
+The script does, in this exact order:
+
+1. **Preflight guard** — refuses to proceed if `/api/state` is not
+   reachable, GRBL is `Run`/`Jog`/`Hold*`, the job is `running`/`held`,
+   or REMOTE STOP is latched. Uses the same unit-tested
+   `preflight_state.py` module as the one-click deploy launcher.
+2. **`systemctl stop mudprinter`**.
+3. **Atomic rename** — `mv ~/mudprinter-controller ~/mudprinter-controller.BAK-<ts>`
+   then `mv ~/mudprinter-controller.NEW ~/mudprinter-controller`. Both
+   `mv`s are atomic on the same filesystem.
+4. **Rewrite venv shebangs** — `grep + sed` from the staging path
+   (`.NEW`) to the final live path across every wrapper script. See
+   the warning in Phase M3 for why this is required. The step is
+   idempotent and verified (reports count of stale references before
+   and after).
+5. **Pre-start sanity** — `uvicorn --version` must succeed from the
+   live path BEFORE systemd starts the service. If this fails, the
+   script rolls back **before** systemd gets a chance to flap in a
+   203/EXEC restart loop.
+6. **`systemctl start mudprinter`**.
+7. **Verification** — up to 30 s wait for `is-active` + HTTP
+   `/api/state` to respond. New jog-speed UI element present in `/`.
+   Post-start state is `Idle` / `Disconnected` / `Alarm` (not
+   `Run` / `Jog` / `Hold`). `.env` still contains
+   `JOG_SPEED_MM_MIN=0` and `Z_PWM_DUTY=0`.
+8. **Auto-rollback** — on any failure, `systemctl stop`, rename the
+   failed tree to `.FAILED-<ts>`, restore from `.BAK-<ts>`,
+   `systemctl start`, verify the restored service.
+
+**Equivalent manual sequence** (for reference — error-prone, avoid if
+possible):
+
+```
 sudo systemctl stop mudprinter
 
-# Atomic rename: old becomes .BAK, new takes over the ExecStart path.
 mv ~/mudprinter-controller      ~/mudprinter-controller.BAK
 mv ~/mudprinter-controller.NEW  ~/mudprinter-controller
 
-# Start the service (systemd ExecStart is unchanged; it now resolves to
-# the new tree's venv).
-sudo systemctl start mudprinter
+# REQUIRED — rewrite the venv's baked staging path to the live path.
+grep -rlI --include='*' /home/dirtworks/mudprinter-controller.NEW \
+    ~/mudprinter-controller/pi-interface/.venv 2>/dev/null | \
+    xargs -r sed -i "s|/home/dirtworks/mudprinter-controller.NEW|/home/dirtworks/mudprinter-controller|g"
 
-# Verify.
+# REQUIRED sanity — must succeed before systemctl start.
+~/mudprinter-controller/pi-interface/.venv/bin/uvicorn --version
+
+sudo systemctl start mudprinter
 sudo systemctl is-active mudprinter
 curl -fsS http://localhost:8000/api/state | python3 -m json.tool | head -20
 ```
@@ -191,7 +275,8 @@ Expected successful state:
 - [ ] GRBL serial reconnect works (replug USB, UI reconnects)
 - [ ] No ERROR entries in `sudo journalctl -u mudprinter -n 200`
 
-**Rollback for M4** (if ANY of the above fails):
+**Rollback for M4** (if ANY of the above fails — the migration script
+does this automatically):
 
 ```
 sudo systemctl stop mudprinter
@@ -204,6 +289,36 @@ sudo systemctl is-active mudprinter   # must be 'active' again
 The rollback is also atomic; the service is back on the known-working
 tree within seconds, with the failed `.FAILED` tree preserved for
 inspection.
+
+**Note:** the rollback above does NOT need to re-run the venv shebang
+rewrite — the `.BAK` tree's shebangs still point at
+`/mudprinter-controller/.venv/python3`, which is the restored live
+path.
+
+**Reusing a `.FAILED-<ts>` tree for another attempt.** The failed tree
+is a byte-complete copy of what was going to be `.NEW`, with the only
+material difference being venv shebangs that point at the live path
+(from an in-place diagnostic rewrite) or at `.NEW` (if nothing was
+touched after the rollback). To reuse:
+
+```
+# Rename back to the staging path.
+mv ~/mudprinter-controller.FAILED-<ts> ~/mudprinter-controller.NEW
+
+# Normalize the venv's baked paths to the staging path, whatever they
+# were before (idempotent).
+for stale in /home/dirtworks/mudprinter-controller \
+             /home/dirtworks/mudprinter-controller.FAILED-<ts>; do
+    grep -rlI --include='*' "$stale" \
+        ~/mudprinter-controller.NEW/pi-interface/.venv 2>/dev/null | \
+        xargs -r sed -i "s|${stale}|/home/dirtworks/mudprinter-controller.NEW|g"
+done
+
+# Smoke test.
+~/mudprinter-controller.NEW/pi-interface/.venv/bin/uvicorn --version
+```
+
+Then re-run M4 (the script).
 
 Keep `~/mudprinter-controller.BAK` for at least one successful
 deploy cycle (several days of normal use). Remove it only when you are
@@ -256,13 +371,14 @@ tested.
 
 | Risk | Mitigation |
 |---|---|
-| Service won't start from new tree | M3 import test is first — fail fast before M4. M4 rollback restores old tree in seconds. |
+| **Venv wrapper shebangs reference staging path after M4 rename → systemd 203/EXEC on start** | **Observed and fixed 2026-10-23.** M4 script now rewrites the baked staging path to the live path and verifies `uvicorn --version` BEFORE `systemctl start`. If that fails, the script rolls back before systemd gets to attempt a restart. See warning in Phase M3. |
+| Service won't start from new tree | Pre-start `uvicorn --version` sanity check in M4; immediate auto-rollback if it fails. M3 import test runs first — fails fast long before M4. |
 | `.env` not copied → GRBL port wrong | M2 explicit copy; `git status` after M2 proves it's gitignored and present. |
 | `machine_profile.json` lost → envelope / preflight gaps | M2 copies it if present; if absent, the controller starts with defaults ("Unconfigured printer") and the operator re-enters settings in the UI. No motion is lost; preflight gets less strict. |
 | GRBL capture logs lost | M2 copies `grbl-capture-*.txt`. Also kept in `~/mudprinter-controller.BAK` after M4. |
-| Dependencies drift (lgpio / gpiozero version) | `--system-site-packages` + `requirements.txt` matches what the hardware integration pass validated. |
+| Dependencies drift (lgpio / gpiozero version) | `cp -a` the running venv (Option A) gives byte-identical deps. If using fresh venv (Option B), `--system-site-packages` + `requirements.txt` matches what the hardware integration pass validated. |
 | systemd ExecStart suddenly broken | Not changed. The migration is a directory swap at the exact path `ExecStart` already references. |
-| Service restart during motion | Preflight (M4 explicit human check + the one-click launcher's `/api/state` preflight thereafter) refuses to proceed on anything other than Idle/Disconnected/Alarm. |
+| Service restart during motion | Preflight (`preflight_state.py`, 18 pytest cases) refuses to proceed on anything other than Idle/Disconnected/Alarm. |
 | Z PWM default-STOP missed during swap | `ExecStopPost=+/usr/bin/pinctrl set 18 op dl` (and GPIO23) runs on every service stop, including the M4 `systemctl stop` and any rollback. |
 
 ---
