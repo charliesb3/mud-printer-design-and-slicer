@@ -33,6 +33,16 @@ def _code(line: str) -> Optional[int]:
 MM_PER_IN = 25.4
 
 
+def mm_min_to_in_s(mm_min: float) -> float:
+    """mm/min → in/s (positive magnitudes; direction handled separately)."""
+    return mm_min / MM_PER_IN / 60.0
+
+
+def in_s_to_mm_min(in_s: float) -> float:
+    """in/s → mm/min."""
+    return in_s * MM_PER_IN * 60.0
+
+
 class MachineSetup:
     """
     The operator-established XY references (Pi-owned, in memory; 2026-10-14).
@@ -149,6 +159,10 @@ class AppState:
         # startup; authoritative for job preflight) + a load problem, if any
         self.machine_profile: dict = _mp.default_profile()
         self.machine_profile_problem: Optional[str] = None
+        # Operator-adjustable jog speed. Starts at the configured default
+        # (`JOG_SPEED_MM_MIN`); clamped to `[0, JOG_SPEED_MAX_MM_MIN]` from the
+        # UI. None ⇒ jogging disabled.
+        self.current_jog_speed_mm_min: Optional[float] = config.JOG_SPEED_MM_MIN
         self._console: deque = deque(maxlen=config.CONSOLE_MAX_LINES)
 
     # --- GRBL state updates ---
@@ -241,6 +255,21 @@ class AppState:
         self.reset_seq += 1
         self.overrides = None          # GRBL resets overrides to 100 %; known again at the next Ov report
 
+    # --- Jog speed control ---
+
+    def set_jog_speed_mm_min(self, speed_mm_min: float) -> float:
+        """Clamp and store a new current jog speed. Returns the stored value in mm/min."""
+        max_speed = config.JOG_SPEED_MAX_MM_MIN
+        if max_speed is None or max_speed <= 0:
+            # No ceiling configured → jogging stays disabled.
+            return 0.0
+        if speed_mm_min < 0:
+            speed_mm_min = 0.0
+        if speed_mm_min > max_speed:
+            speed_mm_min = max_speed
+        self.current_jog_speed_mm_min = speed_mm_min if speed_mm_min > 0 else None
+        return speed_mm_min
+
     # --- Console ---
 
     def console_add(self, direction: str, line: str) -> None:
@@ -270,6 +299,15 @@ class AppState:
                 "Use with caution."
             )
 
+        max_jog = config.JOG_SPEED_MAX_MM_MIN or 0.0
+        cur_jog = self.current_jog_speed_mm_min
+        # Planned feed = reported feed ÷ feed-override%, computed from the
+        # existing hardware-integrated `overrides` tuple so we don't shadow it.
+        feed_ov_pct = 100
+        if self.overrides and self.overrides[0]:
+            feed_ov_pct = int(self.overrides[0])
+        planned_feed = self.feed_rate / (feed_ov_pct / 100.0) if feed_ov_pct > 0 else self.feed_rate
+
         return {
             "type": "state",
             "connected": self.connected,
@@ -277,9 +315,16 @@ class AppState:
             "x": round(self.mpos_x, 3),
             "y": round(self.mpos_y, 3),
             "feed_rate": round(self.feed_rate, 1),
+            "feed_rate_in_s": round(mm_min_to_in_s(self.feed_rate), 3),
+            "planned_feed_rate": round(planned_feed, 1),
+            "planned_feed_rate_in_s": round(mm_min_to_in_s(planned_feed), 3),
             "grbl_version": self.grbl_version,
-            "jog_enabled": config.JOG_SPEED_MM_MIN is not None,
+            "jog_enabled": config.JOG_SPEED_MM_MIN is not None and max_jog > 0,
             "jog_warning": jog_warning,
+            "jog_speed_mm_min": round(cur_jog, 1) if cur_jog else 0.0,
+            "jog_speed_in_s": round(mm_min_to_in_s(cur_jog), 3) if cur_jog else 0.0,
+            "jog_speed_max_mm_min": round(max_jog, 1),
+            "jog_speed_max_in_s": round(mm_min_to_in_s(max_jog), 3) if max_jog else 0.0,
             "job": self.job.to_dict() if self.job else None,
             "setup": self._setup_dict(),
             "remote_stop": self.remote_stop.to_dict(),

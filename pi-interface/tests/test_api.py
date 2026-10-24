@@ -343,3 +343,62 @@ class TestSynchronizedClients:
             else:
                 raise AssertionError("no notice")
             assert "Not connected" in m["message"]
+
+
+class TestJogSpeedState:
+    """Pins the first-motion jog-speed fields exposed in /api/state."""
+
+    def test_state_exposes_jog_speed_fields(self, client):
+        data = client.get("/api/state").json()
+        for field in ("jog_speed_mm_min", "jog_speed_in_s",
+                      "jog_speed_max_mm_min", "jog_speed_max_in_s"):
+            assert field in data, f"Missing jog-speed field: {field}"
+
+    def test_state_exposes_print_speed_in_in_per_s(self, client):
+        data = client.get("/api/state").json()
+        for field in ("feed_rate_in_s", "planned_feed_rate", "planned_feed_rate_in_s"):
+            assert field in data, f"Missing print-speed field: {field}"
+
+
+class TestJogSpeedWS:
+    def test_jog_set_speed_clamped_to_max(self, client):
+        from app import config
+        from app.api import http as http_mod
+        orig_default, orig_max = config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN
+        config.JOG_SPEED_MAX_MM_MIN = 900.0
+        config.JOG_SPEED_MM_MIN = 300.0
+        try:
+            with client.websocket_connect("/ws") as ws:
+                _ = ws.receive_json()
+                ws.send_json({"type": "jog_set_speed", "speed_mm_min": 99999})
+            data = client.get("/api/state").json()
+            assert data["jog_speed_mm_min"] == 900.0
+        finally:
+            config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN = orig_default, orig_max
+            http_mod._state.current_jog_speed_mm_min = orig_default
+
+    def test_jog_set_speed_in_s_converted_to_mm_min(self, client):
+        from app import config
+        from app.api import http as http_mod
+        orig_default, orig_max = config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN
+        config.JOG_SPEED_MAX_MM_MIN = 9144.0  # 6 in/s
+        config.JOG_SPEED_MM_MIN = 300.0
+        try:
+            with client.websocket_connect("/ws") as ws:
+                _ = ws.receive_json()
+                # 0.5 in/s → 762 mm/min
+                ws.send_json({"type": "jog_set_speed", "speed_in_s": 0.5})
+            data = client.get("/api/state").json()
+            assert abs(data["jog_speed_mm_min"] - 762.0) < 0.5
+        finally:
+            config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN = orig_default, orig_max
+            http_mod._state.current_jog_speed_mm_min = orig_default
+
+
+class TestInchConversion:
+    def test_mm_min_to_in_s_known_values(self):
+        from app.state import mm_min_to_in_s, in_s_to_mm_min
+        assert abs(mm_min_to_in_s(25.4) - (1 / 60.0)) < 1e-9
+        assert abs(mm_min_to_in_s(3048.0) - 2.0) < 1e-9
+        for mm_min in (100.0, 300.0, 900.0, 3048.0, 9144.0):
+            assert abs(in_s_to_mm_min(mm_min_to_in_s(mm_min)) - mm_min) < 1e-9

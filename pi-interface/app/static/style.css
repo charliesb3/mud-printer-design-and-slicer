@@ -175,6 +175,40 @@ html, body {
 }
 .jog-warning.visible { display: block; }
 
+.speed-control { margin-bottom: 10px; }
+.speed-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.speed-label { font-size: 0.85em; color: var(--text-muted); }
+.speed-value {
+  font-family: var(--font-mono);
+  color: var(--text);
+  font-size: 1.0em;
+}
+.speed-unit { color: var(--text-muted); font-size: 0.85em; }
+.speed-buttons { gap: 6px; }
+.btn-jog-speed {
+  flex: 1;
+  padding: 8px 2px;
+  font-size: 0.95em;
+}
+.btn-jog-speed.active {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+.speed-meta {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  margin-top: 4px;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+.speed-meta.warn { color: var(--amber); }
+
 .jog-pad {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;

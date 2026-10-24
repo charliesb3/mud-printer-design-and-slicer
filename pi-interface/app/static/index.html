@@ -214,6 +214,19 @@
       <div class="section" id="jog-section">
         <div class="section-title">Manual Jog (X / Y)</div>
         <div class="jog-warning" id="jog-warning"></div>
+        <div class="speed-control">
+          <div class="speed-row">
+            <span class="speed-label">Jog speed</span>
+            <span class="speed-value"><span id="jog-speed-in-s">0.000</span><span class="speed-unit"> in/s</span></span>
+          </div>
+          <div class="controls-row speed-buttons">
+            <button class="ctrl-btn btn-jog-speed" data-frac="0.25">¼</button>
+            <button class="ctrl-btn btn-jog-speed" data-frac="0.5">½</button>
+            <button class="ctrl-btn btn-jog-speed" data-frac="0.75">¾</button>
+            <button class="ctrl-btn btn-jog-speed" data-frac="1.0">Max</button>
+          </div>
+          <div class="speed-meta" id="jog-speed-meta"></div>
+        </div>
         <div class="jog-pad">
           <div></div>
           <button class="jog-btn" id="jog-yp" data-axis="Y" data-dir="1">Y+</button>

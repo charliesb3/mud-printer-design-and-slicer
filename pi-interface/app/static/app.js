@@ -194,6 +194,37 @@ function renderJogSection(s) {
   }
 
   btns.forEach(btn => { btn.disabled = !canJog; });
+  renderJogSpeedControl(s);
+}
+
+function renderJogSpeedControl(s) {
+  const label = document.getElementById("jog-speed-in-s");
+  const meta = document.getElementById("jog-speed-meta");
+  if (!label || !meta) return;
+
+  const maxInS = s.jog_speed_max_in_s || 0;
+  const curInS = s.jog_speed_in_s || 0;
+  const maxMm = s.jog_speed_max_mm_min || 0;
+  const curMm = s.jog_speed_mm_min || 0;
+
+  label.textContent = curInS.toFixed(3);
+  document.querySelectorAll(".btn-jog-speed").forEach(b => {
+    b.disabled = !s.jog_enabled;
+    const frac = parseFloat(b.dataset.frac || "0");
+    const target = frac * maxInS;
+    // Highlight the preset closest to the current speed (within ½ step).
+    b.classList.toggle("active", s.jog_enabled && Math.abs(target - curInS) < 0.001);
+  });
+
+  if (!s.jog_enabled) {
+    meta.textContent = "Jog disabled — set JOG_SPEED_MM_MIN in .env";
+    meta.classList.add("warn");
+  } else {
+    meta.textContent =
+      `${curMm.toFixed(0)} / ${maxMm.toFixed(0)} mm/min` +
+      ` (max ${maxInS.toFixed(3)} in/s)`;
+    meta.classList.remove("warn");
+  }
 }
 
 function renderControls(s) {
@@ -1243,6 +1274,20 @@ function attachControls() {
   });
   document.getElementById("btn-start").addEventListener("click", () => {
     send({ type: "job_start" });
+  });
+
+  // Jog speed presets (¼ / ½ / ¾ / Max of the configured ceiling). Each
+  // button sends `jog_set_speed` with the exact in/s fraction; the server
+  // clamps against the ceiling. Clicks mid-jog are honoured — the jog loop
+  // reads the live speed each iteration.
+  document.querySelectorAll(".btn-jog-speed").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const frac = parseFloat(btn.dataset.frac || "0");
+      const s = lastState || {};
+      const maxInS = s.jog_speed_max_in_s || 0;
+      const target = frac * maxInS;
+      send({ type: "jog_set_speed", speed_in_s: target });
+    });
   });
 }
 
