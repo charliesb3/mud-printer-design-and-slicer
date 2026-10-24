@@ -196,6 +196,79 @@ No new firmware work has yet been completed for this project.
 
 ## Last Updated
 
+2026-10-23 — first-motion GRBL configuration applied
+
+Pre-change capture committed at
+`arduino-grbl/captures/grbl-pre-first-motion-2026-10-23_235310.txt`.
+
+Operator-stated drivetrain for the first X/Y motion test (2026-10-23):
+
+- Arduino **Uno** running GRBL **1.1h** (confirmed via `$I`: `[VER:1.1h.20190825]`)
+- Three STEPPERONLINE DM556T drivers (X, Y1, Y2 — Y1/Y2 share Y step/dir)
+- All 8 DIP switches ON on each driver — operator asserts 200 ppr full step
+  (**UNVERIFIED against DM556T V4.0 label**: typical DM556T SW5-SW8 convention
+  reads SW5-SW8 all ON as a high microstep, NOT full step. Operator must
+  physically read the driver label and confirm, or verify empirically on
+  the first measured jog.)
+- NEMA 23 steppers, 1.8° / 200 full steps per rev
+- 20:1 planetary gearboxes
+- 12-tooth drive sprockets
+- ANSI #25 chain (**assumed**; measure to confirm)
+- Nominal working envelope: 120 × 120 in = 3048 × 3048 mm (**unverified**)
+
+Settings applied (via Pi WebSocket `console_send`, verified by `$$` re-read):
+
+| Setting | Pre-value | Post-value | Rationale |
+|---|---|---|---|
+| `$100` X steps/mm | 23.805 | **52.493** | theoretical from drivetrain at M=1 |
+| `$101` Y steps/mm | 23.805 | **52.493** | same |
+| `$110` X max rate | 1500.000 mm/min | **381.000** mm/min | 15 in/min = 0.25 in/s |
+| `$111` Y max rate | 1500.000 mm/min | **381.000** mm/min | same |
+| `$130` X max travel | 3352.800 mm | **3048.000** mm | 120 in nominal |
+| `$131` Y max travel | 3200.400 mm | **3048.000** mm | 120 in nominal |
+
+Settings preserved (verified unchanged):
+
+- `$3=0` direction invert mask — **must be observed during first X+ / Y+ jog**
+- `$20=0` soft limits DISABLED
+- `$21=0` hard limits DISABLED
+- `$22=0` homing DISABLED
+- `$120=5.000`, `$121=5.000` acceleration (mm/s²) — already conservative
+- `$0=10`, `$1=25`, `$2=0`, `$10=1`, `$13=0`, step pulse timing and reporting
+
+**Known discrepancy**: `$100` pre-value `23.805` corresponds to a drivetrain
+ratio that doesn't match the stated geometry (ratio 2.206, not a standard
+microstep divisor). Either the pre-value was from a prior empirical
+calibration on different mechanics, or the stated geometry needs
+re-verification. The planned initial jog speed (46 mm/min ≈ 0.03 in/s)
+bounds the per-step motion to ~0.1 mm, so a wrong `$100` is observable but
+not dangerous on the first short jog. Verification procedure:
+`arduino-grbl/steps-per-mm-calculation.md` → "Independent verification
+procedure".
+
+**Rollback**: send through the controller console
+`$100=23.805 $101=23.805 $110=1500 $111=1500 $130=3352.8 $131=3200.4`.
+Full pre-change capture at
+`arduino-grbl/captures/grbl-pre-first-motion-2026-10-23_235310.txt`.
+
+Remaining commissioning items (gating first-print safety):
+
+- **DM556T microstep label** — read the top-of-driver microstep table and
+  confirm "all 8 ON → 200 ppr" matches, or recompute `$100`.
+- **Chain pitch** — confirm ANSI #25 (6.35 mm) by measurement.
+- **Direction convention** — observe X+ / Y+ as positive machine motion on
+  first jog; flip `$3` bit if reversed.
+- **Steps/mm by measurement** — jog a defined small distance, measure actual
+  travel, apply correction factor to `$100` / `$101` if needed.
+- **Physical travel limits** — the nominal 120 × 120 in envelope is NOT
+  verified. First jogs stay well inside expected travel.
+- **Z axis** — Z stays off via `Z_PWM_DUTY=0` in Pi `.env`. Z PWM / dir
+  commissioning (`docs/acceptance-test.md` steps 1-4) is a separate
+  session, not yet performed.
+- **REMOTE STOP physical test** — software reports CH1 armed but the
+  button has not been physically pressed to confirm latch + GRBL feed
+  hold + job hold work end-to-end.
+
 2026-10-20 (pi-interface hardware pass)
 
 Read-only capture tool + checklist and a prepared (unexecuted) flash

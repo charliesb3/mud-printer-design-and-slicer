@@ -891,6 +891,45 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-23 — first-motion software configuration applied on the Pi
+(no physical motion yet).
+
+Current controller state at session end:
+
+- Consolidated branch `consolidate/trunk` running from
+  `/home/dirtworks/mudprinter-controller/pi-interface`. GPIO fix applied
+  (`pyvenv.cfg` → `include-system-site-packages=true`), `hardware.backend='gpio'`,
+  gpiozero → LGPIOFactory, all 6 remote channels armed except CH3 Z DOWN
+  (reports pressed at startup — physical button may be stuck, Z stays off).
+- `.env` edited for first-motion jog test, picked up by service restart via
+  the one-click launcher (`Deploy to Pi.command`):
+  `JOG_SPEED_MM_MIN=46` (≈ 0.030 in/s), `JOG_SPEED_MAX_MM_MIN=381`
+  (matches GRBL `$110`), `Z_PWM_DUTY=0` (Z disabled),
+  `HARDWARE_BACKEND=gpio`, `SERIAL_PORT=/dev/ttyACM0`.
+  Backup: `pi-interface/.env.pre-first-motion-2026-10-23_235618`.
+- Machine profile set via WS to `"Mud Printer (nominal, unverified)"`,
+  120 × 120 in envelope. Persisted to `machine_profile.json`. UI shows the
+  "nominal, unverified" wording so the operator knows this is not an
+  enforced travel limit.
+- GRBL `$$` captured pre-change, committed at
+  `arduino-grbl/captures/grbl-pre-first-motion-2026-10-23_235310.txt`.
+  New values `$100=52.493`, `$101=52.493`, `$110=381`, `$111=381`,
+  `$130=3048`, `$131=3048`. Safety settings preserved
+  (`$20=0`, `$22=0`, `$21=0`, direction mask `$3=0`).
+
+Known discrepancy: pre-change `$100` was `23.805`, which doesn't match the
+stated drivetrain (gives ratio 2.206 vs. new 52.493 — not a standard
+microstep divisor). First jog at 0.03 in/s will reveal whether the new
+value or the old one matches physical reality; bounded error per step at
+that speed is ~0.1 mm. See `arduino-grbl/PROJECT_MEMORY.md` for the
+commissioning items that gate first motion.
+
+One-click deploy workflow validated end-to-end against the live
+controller: `/tmp/apply_first_motion_env.sh` left in place as a reusable
+.env-change restart script with auto-rollback. `scripts/deploy_pi.sh`
+tested with the same restart cycle (git pull no-op, pip install already
+satisfied, systemctl restart + verify).
+
 2026-10-23 — consolidation migration M1-M3 complete on the Pi; M4 failed
 once on venv shebang paths and auto-rolled back; fix landed. The Python
 venv's wrapper scripts (`uvicorn`, `fastapi`, `pytest`, …) bake an

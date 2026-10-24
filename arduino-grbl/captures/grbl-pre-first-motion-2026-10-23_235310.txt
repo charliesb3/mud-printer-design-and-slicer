@@ -1,0 +1,58 @@
+GRBL capture — 2026-10-23 23:53:10
+Via: controller WebSocket read_grbl queries (read-only)
+
+== Build info ($I) ==
+  [OPT: V,15,128]
+  [VER: 1.1h.20190825:]
+
+== Settings ($$) ==
+  $0 = 10           (Step pulse time (µs))
+  $1 = 25           (Step idle delay (ms))
+  $2 = 0            (Step pulse invert (mask))
+  $3 = 0            (Step direction invert (mask))
+  $4 = 0            (Invert step enable pin)
+  $5 = 0            (Invert limit pins)
+  $6 = 0            (Invert probe pin)
+  $10 = 1            (Status report options (mask))
+  $11 = 0.010        (Junction deviation (mm))
+  $12 = 0.002        (Arc tolerance (mm))
+  $13 = 0            (Report in inches)
+  $20 = 0            (Soft limits enable)
+  $21 = 0            (Hard limits enable)
+  $22 = 0            (Homing cycle enable)
+  $23 = 0            (Homing direction invert (mask))
+  $24 = 25.000       (Homing locate feed rate (mm/min))
+  $25 = 500.000      (Homing search seek rate (mm/min))
+  $26 = 250          (Homing switch debounce delay (ms))
+  $27 = 1.000        (Homing switch pull-off distance (mm))
+  $30 = 1000         (Maximum spindle speed (RPM))
+  $31 = 0            (Minimum spindle speed (RPM))
+  $32 = 0            (Laser-mode enable)
+  $100 = 23.805       (X steps/mm)
+  $101 = 23.805       (Y steps/mm)
+  $102 = 250.000      (Z steps/mm)
+  $110 = 1500.000     (X max rate (mm/min))
+  $111 = 1500.000     (Y max rate (mm/min))
+  $112 = 500.000      (Z max rate (mm/min))
+  $120 = 5.000        (X acceleration (mm/s²))
+  $121 = 5.000        (Y acceleration (mm/s²))
+  $122 = 10.000       (Z acceleration (mm/s²))
+  $130 = 3352.800     (X max travel (mm))
+  $131 = 3200.400     (Y max travel (mm))
+  $132 = 200.000      (Z max travel (mm))
+
+== Coordinate offsets ($#) ==
+  [G28: 0.000,0.000,0.000]
+  [G30: 0.000,0.000,0.000]
+  [G54: 0.000,0.000,0.000]
+  [G55: 0.000,0.000,0.000]
+  [G56: 0.000,0.000,0.000]
+  [G57: 0.000,0.000,0.000]
+  [G58: 0.000,0.000,0.000]
+  [G59: 0.000,0.000,0.000]
+  [G92: 0.000,0.000,0.000]
+  [PRB: 0.000,0.000,0.000:0]
+  [TLO: 0.000]
+
+== Parser state ($G) ==
+  G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0
