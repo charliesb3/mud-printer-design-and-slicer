@@ -1,21 +1,27 @@
 # Mud Printer — Mac → Pi deployment config
 #
 # 1. Copy this file to deploy.config in the same directory.
-# 2. Edit PI_HOST and PI_USER to match your Raspberry Pi.
+# 2. Edit PI_HOST / PI_USER for your Pi. If your controller lives
+#    somewhere other than /home/<PI_USER>/mudprinter-controller, also
+#    set REPO_DIR (as an ABSOLUTE path — no ~ or $HOME).
 # 3. Set up passwordless SSH to the Pi (see docs/one-click-deploy.md).
 #
-# deploy.config is gitignored so your Pi hostname / user stay local.
+# deploy.config is gitignored so each operator's local values stay off GitHub.
 
-# Hostname or IP address of the Pi, e.g. "mudprinter.local" or "192.168.1.42".
+# Hostname or IP of the Pi.
 PI_HOST="mudprinter.local"
 
-# Pi login user (the one whose home directory holds mudprintersoftware/).
+# Pi login user.
 PI_USER="pi"
 
-# Optional overrides — these have sensible defaults on the Pi side and
-# normally do not need to be set here.
-#
-# REPO_DIR="/home/pi/mudprintersoftware"
+# Absolute path to the Pi's controller repo (contains pi-interface/).
+# The launcher derives REMOTE_SCRIPT from this. If unset, defaults to
+#   /home/${PI_USER}/mudprinter-controller
+# which matches the consolidation-migration layout. Set this ONLY if
+# your Pi has the repo in a different location.
+# REPO_DIR="/home/pi/mudprinter-controller"
+
+# Rare overrides — defaults in deploy_pi.sh are sensible.
 # SERVICE="mudprinter"
 # HOST_URL="http://localhost:8000"
-# REMOTE_SCRIPT="~/mudprintersoftware/pi-interface/scripts/deploy_pi.sh"
+# REMOTE_SCRIPT="/home/pi/mudprinter-controller/pi-interface/scripts/deploy_pi.sh"

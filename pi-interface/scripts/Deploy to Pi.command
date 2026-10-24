@@ -33,9 +33,18 @@ source "$CONFIG"
 
 : "${PI_HOST:?Set PI_HOST in deploy.config}"
 : "${PI_USER:?Set PI_USER in deploy.config}"
-REMOTE_SCRIPT="${REMOTE_SCRIPT:-\$HOME/mudprintersoftware/pi-interface/scripts/deploy_pi.sh}"
 
-# Build environment-override prefix for anything the config overrode.
+# REPO_DIR is the ABSOLUTE path to the controller repo on the Pi. Deriving it
+# here (Mac side) means the string the Pi receives has NO shell variables left
+# to expand, so no quoting hazard across the ssh boundary. Default matches the
+# consolidation-migration layout (/home/<PI_USER>/mudprinter-controller); the
+# operator overrides via deploy.config when their layout differs.
+REPO_DIR="${REPO_DIR:-/home/${PI_USER}/mudprinter-controller}"
+REMOTE_SCRIPT="${REMOTE_SCRIPT:-${REPO_DIR}/pi-interface/scripts/deploy_pi.sh}"
+
+# Build environment-override prefix. REPO_DIR / SERVICE / HOST_URL become env
+# vars so deploy_pi.sh picks them up. Every value is quoted so paths with
+# spaces survive the ssh hop (the Pi's shell re-parses this string).
 remote_env=""
 for v in REPO_DIR SERVICE HOST_URL; do
     if [[ -n "${!v:-}" ]]; then
@@ -45,17 +54,22 @@ for v in REPO_DIR SERVICE HOST_URL; do
 done
 
 printf "Target : %s@%s\n" "$PI_USER" "$PI_HOST"
+printf "Repo   : %s\n" "$REPO_DIR"
 printf "Script : %s\n\n" "$REMOTE_SCRIPT"
 printf "Connecting (sudo may prompt for the Pi's password) ...\n\n"
 
 # -t allocates a TTY so interactive `sudo` on the Pi works.
 # ServerAliveInterval keeps a long install from timing out behind a NAT.
+# The remote command is a single string the Pi's login shell parses. We use
+# DOUBLE quotes around $REMOTE_SCRIPT so the Pi's shell sees them as syntax
+# (not literal), preserves any spaces, and does not try to expand it as a
+# variable (it is already a fully-resolved absolute path).
 if ssh \
     -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=4 \
     -t \
     "$PI_USER@$PI_HOST" \
-    "$remote_env bash '$REMOTE_SCRIPT'"
+    "${remote_env}bash \"${REMOTE_SCRIPT}\""
 then
     rc=0
 else

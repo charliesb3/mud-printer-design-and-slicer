@@ -14,7 +14,7 @@
 # Nothing in this script touches .env, /dev/*, GRBL firmware, or GRBL settings.
 #
 # Environment overrides (defaults in parens):
-#   REPO_DIR    (~/mudprintersoftware)
+#   REPO_DIR    (~/mudprinter-controller — the consolidation-migration layout)
 #   SERVICE     (mudprinter)
 #   HOST_URL    (http://localhost:8000)
 #
@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-REPO_DIR="${REPO_DIR:-$HOME/mudprintersoftware}"
+REPO_DIR="${REPO_DIR:-$HOME/mudprinter-controller}"
 PI_IFACE_DIR="$REPO_DIR/pi-interface"
 VENV="$PI_IFACE_DIR/.venv"
 SERVICE="${SERVICE:-mudprinter}"
