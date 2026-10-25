@@ -216,32 +216,37 @@ async def _jog_loop(axis: str, direction: int) -> None:
         # Guard: a stop that arrived before the task scheduled must prevent
         # even the single $J= from going out.
         if _jog_stopping:
-            log.debug("Jog aborted before $J= — _jog_stopping already set")
+            log.warning("JOG DIAG: aborted before $J= — _jog_stopping=True already")
             return
         try:
+            log.info("JOG DIAG: calling send_command for %s", cmd)
             result = await _comm.send_command(cmd, timeout=3.0)  # type: ignore[union-attr]
+            log.info("JOG DIAG: send_command returned result=%r", result)
         except asyncio.CancelledError:
-            # Cancellation during the $J= write — finally still sends 0x85.
+            log.info("JOG DIAG: send_command cancelled")
             raise
         except Exception as exc:
-            log.debug("Jog $J= send exception: %s", exc)
+            log.warning("JOG DIAG: send_command exception type=%s msg=%s",
+                        type(exc).__name__, exc)
             return
         if result.startswith("error:"):
-            log.warning("Jog $J= rejected by GRBL: %s", result)
+            log.warning("JOG DIAG: Jog $J= rejected by GRBL: %s", result)
             return
 
         # Jog is running in GRBL. Monitor heartbeat only — no more writes.
+        log.info("JOG DIAG: entering heartbeat loop")
         while True:
             if _jog_stopping:
-                log.debug("Jog loop sees _jog_stopping — exiting")
+                log.info("JOG DIAG: heartbeat loop sees _jog_stopping — exiting")
                 break
             age = time.monotonic() - _jog_last_heartbeat
             if age > config.JOG_TIMEOUT_S:
-                log.debug("Jog heartbeat timeout (%.2f s) — stopping", age)
+                log.info("JOG DIAG: heartbeat timeout (%.2f s)", age)
                 break
             try:
                 await asyncio.sleep(config.JOG_SEND_INTERVAL_S)
             except asyncio.CancelledError:
+                log.info("JOG DIAG: heartbeat sleep cancelled")
                 raise
     finally:
         # The ONLY place 0x85 is sent for a jog session — every exit path
@@ -253,7 +258,7 @@ async def _jog_loop(axis: str, direction: int) -> None:
             try:
                 await _comm.send_realtime(b"\x85")
             except Exception as exc:
-                log.debug("send_realtime(0x85) on jog end failed: %s", exc)
+                log.warning("JOG DIAG: send_realtime(0x85) failed: %s", exc)
         _jog_axis = None
 
 
