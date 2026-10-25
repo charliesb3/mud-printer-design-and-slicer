@@ -168,6 +168,32 @@ class TestHardwareUI:
             assert _inside(tree, el, "col-mid"), el
         assert tree.order.index("jog-section") < tree.order.index("z-section")
 
+    def test_held_input_release_safety_handlers_present(self):
+        """Pin the eighth-pass hardening — the client must have:
+          * global visibilitychange / blur / pagehide / beforeunload stops
+          * pointerup / pointercancel / lostpointercapture on held buttons
+          * a client-side max-hold ceiling that matches the server
+        If any of these disappears, the Z/jog release safety story weakens
+        and this test must fail so the regression is caught.
+        """
+        js = (STATIC / "app.js").read_text()
+        # Global stop-all for focus / visibility loss.
+        assert 'stopAllHeldInputs' in js
+        assert '"visibilitychange"' in js
+        assert '"blur"' in js
+        assert '"pagehide"' in js
+        assert '"beforeunload"' in js
+        # Pointer Events + capture on held buttons.
+        assert 'setPointerCapture' in js
+        assert '"pointerdown"' in js
+        assert '"pointerup"' in js
+        assert '"pointercancel"' in js
+        assert '"lostpointercapture"' in js
+        # Client-side max-hold ceiling exists for both jog and Z.
+        assert 'INPUT_MAX_HOLD_MS' in js
+        assert 'jogMaxHoldTimer' in js
+        assert 'zMaxHoldTimer' in js
+
     def test_remote_stop_panel_spans_and_is_never_an_estop(self, tree):
         assert "rstop-panel" in tree.where and "btn-rstop-clear" in tree.where
         for col in ("col-left", "col-mid", "col-view"):

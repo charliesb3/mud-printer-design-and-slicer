@@ -1044,6 +1044,62 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (eighth pass) — Held-input release handling hardened.
+
+**Why:** Operator reported hitting `Z_MAX_RUN_S=30` (server-side ceiling)
+without recalling having held the touchscreen button for 30 seconds.
+Audit of the Z button code found gaps where a released finger / cursor
+could leave the client's heartbeat `setInterval` running indefinitely:
+no `visibilitychange` / `blur` / `pagehide` handlers, no Pointer Events
+with `setPointerCapture`, no client-side max-hold timer, no handling
+for `lostpointercapture`. The journal cannot distinguish "continuous
+30 s hold" from "missed release + heartbeat kept flowing" after the
+fact — heartbeats aren't logged and the ZController only records
+`Z UP start`, `Z STOP (...)`, and the ceiling warning. See the report
+on this task for the inconclusive log evidence.
+
+**Fix (`app/static/app.js`):**
+
+- `startZ` / `startJog` now set a client-side `INPUT_MAX_HOLD_MS = 30 s`
+  timer (matching the server's `Z_MAX_RUN_S`); if it fires it calls the
+  corresponding `stopZ` / `stopJog` as a backstop. The server-side
+  dead-man (`Z_TIMEOUT_S=0.3`) and run ceiling remain unchanged — they
+  are now the LAST line of defence, not the only one.
+- New global `attachGlobalReleaseHandlers()` wires
+  `visibilitychange`, `window.blur`, `window.pagehide`, and
+  `window.beforeunload` to `stopAllHeldInputs()`. Any OS-level focus
+  loss, tab background, screen lock, or navigation now actively
+  releases every held input from the client side — the UI no longer
+  waits for the server to notice.
+- New shared `attachHeldButton(btn, onStart, onStop)` replaces the
+  per-handler touch + mouse wiring on both Z and jog buttons. It uses
+  Pointer Events exclusively (`pointerdown`, `pointerup`,
+  `pointercancel`, `lostpointercapture`, `pointerleave`) and calls
+  `setPointerCapture` on `pointerdown`, so the ORIGINAL button
+  receives the release event even when the finger / cursor is dragged
+  off the button, over another element, or past the window edge.
+- `attachHeldButton` also installs a `MutationObserver` on each
+  button's `disabled` attribute; if the server disables the button
+  mid-press (e.g. REMOTE STOP latches, Z fault, GRBL alarm), the UI
+  calls `stopZ` / `stopJog` immediately rather than waiting for an
+  event that may never arrive.
+
+**Server-side invariants unchanged** (verified by regression tests):
+- `Z_TIMEOUT_S = 0.3` dead-man heartbeat (test_ui_z_dead_man).
+- `Z_MAX_RUN_S = 30` continuous-run ceiling (new
+  test_z_max_run_ceiling_still_fires).
+- `z_stop` clears the per-WS source request (new
+  test_z_stop_message_releases_the_source).
+- WS endpoint `finally` releases every held Z source for a dropped
+  socket (new test_ws_cleanup_releases_held_z).
+
+**UI structure test:**
+`tests/test_ui.py::TestHardwareUI::test_held_input_release_safety_
+handlers_present` pins the presence of every element of the hardened
+release chain. If any disappears the test fails.
+
+Tests: 392 passed, 1 skipped on Mac (+4 new).
+
 2026-10-25 (seventh pass) — Z button double-wiring bug fixed.
 
 **Symptom:** Operator reported that pressing Z UP / Z DOWN sometimes

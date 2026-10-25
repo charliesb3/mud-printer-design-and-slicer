@@ -1185,11 +1185,44 @@ function fmtDuration(secs) {
 }
 
 // ------------------------------------------------------------------ //
-// Jog controls (dead-man / fail-safe)                                 //
+// Held-input (jog + Z) release safety                                 //
+// --------------------------------------------------------------------
+// Design (eighth-pass hardening, 2026-10-25):
+//
+//  * One Pointer Events implementation for BOTH jog and Z buttons.
+//    Pointer events unify mouse + touch + pen; `setPointerCapture`
+//    on pointerdown guarantees the SAME button receives pointerup /
+//    pointercancel / lostpointercapture even if the finger / cursor
+//    is dragged off, over another element, or past the window edge.
+//
+//  * Global `visibilitychange`, `blur`, `pagehide` handlers call
+//    `stopAllHeldInputs()`. If the tab is backgrounded or the
+//    browser loses focus, both held jog AND held Z are released
+//    immediately — the UI never relies on the server's dead-man
+//    timeout as the primary stop mechanism.
+//
+//  * `window.onbeforeunload` is implicit: closing the tab closes
+//    the WS, the server's websocket_endpoint `finally` releases
+//    every held source for that WS.
+//
+//  * Client-side belt-and-braces: an INPUT_MAX_HOLD_MS timer stops
+//    the input even if every event path above fails. The number
+//    matches the server's `Z_MAX_RUN_S` so client and server agree
+//    on the ceiling.
+//
+// The server-side `Z_TIMEOUT_S=0.3` dead-man and `Z_MAX_RUN_S=30`
+// run ceiling are the ultimate safety net below all of this; they
+// remain unchanged.
 // ------------------------------------------------------------------ //
+
+// Hard client-side ceiling for any held input. Matches server
+// Z_MAX_RUN_S / jog usage patterns. If this timer fires something
+// has gone wrong — log and release.
+const INPUT_MAX_HOLD_MS = 30 * 1000;
 
 let jogHeartbeatInterval = null;
 let jogActive = false;
+let jogMaxHoldTimer = null;
 
 function startJog(axis, dir) {
   if (jogActive) stopJog();
@@ -1199,6 +1232,13 @@ function startJog(axis, dir) {
   jogHeartbeatInterval = setInterval(() => {
     send({ type: "jog_heartbeat" });
   }, 100);
+  clearTimeout(jogMaxHoldTimer);
+  jogMaxHoldTimer = setTimeout(() => {
+    if (jogActive) {
+      console.warn("Jog client max-hold ceiling reached — stopping");
+      stopJog();
+    }
+  }, INPUT_MAX_HOLD_MS);
 }
 
 function stopJog() {
@@ -1206,7 +1246,109 @@ function stopJog() {
   jogActive = false;
   clearInterval(jogHeartbeatInterval);
   jogHeartbeatInterval = null;
+  clearTimeout(jogMaxHoldTimer);
+  jogMaxHoldTimer = null;
   send({ type: "jog_stop" });
+}
+
+let zHeartbeatInterval = null;
+let zActive = false;
+let zMaxHoldTimer = null;
+
+function startZ(direction) {
+  if (zActive) stopZ();
+  zActive = true;
+  send({ type: "z_start", direction });
+  zHeartbeatInterval = setInterval(() => send({ type: "z_heartbeat" }), 100);
+  clearTimeout(zMaxHoldTimer);
+  zMaxHoldTimer = setTimeout(() => {
+    if (zActive) {
+      console.warn("Z client max-hold ceiling reached — stopping");
+      stopZ();
+    }
+  }, INPUT_MAX_HOLD_MS);
+}
+
+function stopZ() {
+  if (!zActive) return;
+  zActive = false;
+  clearInterval(zHeartbeatInterval);
+  zHeartbeatInterval = null;
+  clearTimeout(zMaxHoldTimer);
+  zMaxHoldTimer = null;
+  send({ type: "z_stop" });
+}
+
+// Any time the browser loses visibility / focus / is being
+// backgrounded, stop every held input. Belt-and-braces for the
+// case where OS-level focus loss means no pointerup fires.
+function stopAllHeldInputs() {
+  if (jogActive) stopJog();
+  if (zActive) stopZ();
+}
+
+// Attach once. Idempotent — safe to call from the DOMContentLoaded block
+// AND from any future test harness.
+let _globalReleaseHandlersAttached = false;
+function attachGlobalReleaseHandlers() {
+  if (_globalReleaseHandlersAttached) return;
+  _globalReleaseHandlersAttached = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") stopAllHeldInputs();
+  });
+  window.addEventListener("blur", stopAllHeldInputs);
+  window.addEventListener("pagehide", stopAllHeldInputs);
+  window.addEventListener("beforeunload", stopAllHeldInputs);
+}
+
+// Shared Pointer Events wiring for a press-and-hold button that
+// starts/stops some held action. Callers provide `onStart()` and
+// `onStop()`. Guarantees release on EVERY release path: pointerup
+// (same spot), pointercancel (OS cancel), lostpointercapture (DOM
+// re-render / capture released), pointerleave (cursor exits while
+// not captured — rare fallback). Also calls `onStop()` if the
+// button becomes disabled while pressed.
+function attachHeldButton(btn, onStart, onStop, {skipFn} = {}) {
+  let pointerId = null;
+
+  const begin = (e) => {
+    if (btn.disabled) return;
+    if (skipFn && skipFn()) return;
+    if (pointerId !== null) return;
+    pointerId = e.pointerId;
+    try { btn.setPointerCapture(pointerId); } catch (_) { /* older browsers */ }
+    btn.classList.add("pressing");
+    onStart();
+  };
+
+  const end = (e) => {
+    if (e && e.pointerId != null && pointerId != null && e.pointerId !== pointerId) return;
+    if (pointerId !== null) {
+      try { btn.releasePointerCapture(pointerId); } catch (_) {}
+    }
+    pointerId = null;
+    btn.classList.remove("pressing");
+    onStop();
+  };
+
+  btn.addEventListener("pointerdown", begin);
+  btn.addEventListener("pointerup", end);
+  btn.addEventListener("pointercancel", end);
+  btn.addEventListener("lostpointercapture", end);
+  // Pointerleave is a last-resort for the case where no pointer
+  // capture was granted (older browsers). It is ignored if we
+  // released capture ourselves on pointerup.
+  btn.addEventListener("pointerleave", (e) => {
+    if (pointerId !== null) end(e);
+  });
+  // If the button is disabled mid-press, no further pointer events
+  // reach it. Watch for disabled -> true via MutationObserver so we
+  // can stop immediately.
+  const mo = new MutationObserver(() => {
+    if (btn.disabled && pointerId !== null) end({pointerId});
+  });
+  mo.observe(btn, {attributes: true, attributeFilter: ["disabled"]});
+  return () => mo.disconnect();
 }
 
 function attachJogButton(btn) {
@@ -1220,98 +1362,13 @@ function attachJogButton(btn) {
   if (!axis || !["X", "Y"].includes(axis) || !Number.isFinite(dir)) {
     return;
   }
-  let touchId = null;
-
-  // Touch events (primary for Pi touchscreen)
-  btn.addEventListener("touchstart", (e) => {
-    e.preventDefault(); // suppress mouse events on mobile
-    if (touchId !== null) return;
-    touchId = e.changedTouches[0].identifier;
-    btn.classList.add("pressing");
-    startJog(axis, dir);
-  }, { passive: false });
-
-  const touchEnd = (e) => {
-    const t = Array.from(e.changedTouches).find(t => t.identifier === touchId);
-    if (!t) return;
-    touchId = null;
-    btn.classList.remove("pressing");
-    stopJog();
-  };
-  btn.addEventListener("touchend", touchEnd);
-  btn.addEventListener("touchcancel", touchEnd);
-
-  // Mouse events (Mac browser)
-  btn.addEventListener("mousedown", (e) => {
-    if (touchId !== null) return; // already handled by touch
-    btn.classList.add("pressing");
-    startJog(axis, dir);
-  });
-  btn.addEventListener("mouseup", () => {
-    btn.classList.remove("pressing");
-    stopJog();
-  });
-  btn.addEventListener("mouseleave", () => {
-    if (btn.classList.contains("pressing")) {
-      btn.classList.remove("pressing");
-      stopJog();
-    }
-  });
-}
-
-// ------------------------------------------------------------------ //
-// Manual Z buttons (dead-man, like jog: heartbeat while held)          //
-// ------------------------------------------------------------------ //
-
-let zHeartbeatInterval = null;
-let zActive = false;
-
-function startZ(direction) {
-  if (zActive) stopZ();
-  zActive = true;
-  send({ type: "z_start", direction });
-  zHeartbeatInterval = setInterval(() => send({ type: "z_heartbeat" }), 100);
-}
-
-function stopZ() {
-  if (!zActive) return;
-  zActive = false;
-  clearInterval(zHeartbeatInterval);
-  zHeartbeatInterval = null;
-  send({ type: "z_stop" });
+  attachHeldButton(btn, () => startJog(axis, dir), () => stopJog());
 }
 
 function attachZButton(btn) {
   const dir = btn.dataset.zdir;
-  let touchId = null;
-  btn.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    if (touchId !== null || btn.disabled) return;
-    touchId = e.changedTouches[0].identifier;
-    btn.classList.add("pressing");
-    startZ(dir);
-  }, { passive: false });
-  const touchEnd = (e) => {
-    const t = Array.from(e.changedTouches).find(t => t.identifier === touchId);
-    if (!t) return;
-    touchId = null;
-    btn.classList.remove("pressing");
-    stopZ();
-  };
-  btn.addEventListener("touchend", touchEnd);
-  btn.addEventListener("touchcancel", touchEnd);
-  btn.addEventListener("mousedown", () => {
-    if (touchId !== null || btn.disabled) return;
-    btn.classList.add("pressing");
-    startZ(dir);
-  });
-  const mouseEnd = () => {
-    if (!btn.classList.contains("pressing")) return;
-    btn.classList.remove("pressing");
-    stopZ();
-  };
-  btn.addEventListener("mouseup", mouseEnd);
-  btn.addEventListener("mouseleave", mouseEnd);
+  if (!dir || !["up", "down"].includes(dir)) return;
+  attachHeldButton(btn, () => startZ(dir), () => stopZ());
 }
 
 // ------------------------------------------------------------------ //
@@ -1560,6 +1617,11 @@ function attachConsole() {
 // ------------------------------------------------------------------ //
 
 document.addEventListener("DOMContentLoaded", () => {
+  // Global release handlers (visibilitychange / blur / pagehide /
+  // beforeunload) stop every held input immediately. Attach ONCE,
+  // before any button handlers that depend on them.
+  attachGlobalReleaseHandlers();
+
   // Attach jog buttons
   document.querySelectorAll(".jog-btn").forEach(attachJogButton);
 

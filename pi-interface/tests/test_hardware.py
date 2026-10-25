@@ -409,6 +409,60 @@ class TestRemoteZ:
         await rig.run(0.2)                                       # heartbeats stopped (client gone)
         assert rig.z.command == 0 and rig.backend.duty == 0.0
 
+    async def test_z_stop_message_releases_the_source(self, rig):
+        """A clean z_stop clears the per-WS source request so no heartbeat
+        can keep Z alive after a release."""
+        ws = FakeWS()
+        await msg({"type": "z_start", "direction": "up"}, ws)
+        assert rig.z.command == UP
+        source = http_module._z_source(ws)
+        assert source in rig.z._requests
+        await msg({"type": "z_stop"}, ws)
+        await rig.run(0.01)
+        assert rig.z.command == 0 and rig.backend.duty == 0.0
+        assert source not in rig.z._requests, "z_stop did not release the source"
+
+    async def test_z_max_run_ceiling_still_fires(self, rig, monkeypatch):
+        """Server-side 30 s ceiling (`Z_MAX_RUN_S`) is unchanged — if a
+        client somehow keeps heartbeats flowing past the ceiling, the
+        controller still forces STOP + blocks until all inputs are released."""
+        # Shrink the ceiling so the test is fast; this is a knob on the
+        # ZController, so no code change is required.
+        rig.z.max_run_s = 0.5
+        ws = FakeWS()
+        await msg({"type": "z_start", "direction": "up"}, ws)
+        assert rig.z.command == UP
+        for _ in range(10):
+            await msg({"type": "z_heartbeat"}, ws)
+            await rig.run(0.1)
+        # By now > 0.5 s of continuous run — ceiling should have fired.
+        assert rig.z.command == 0 and rig.z.blocked and "maximum continuous run" in rig.z.blocked
+        # Blocked until every input is released, even if heartbeats continue.
+        await msg({"type": "z_heartbeat"}, ws)
+        await rig.run(0.1)
+        assert rig.z.command == 0 and rig.z.blocked
+        # Explicit release clears the block for the next deliberate press.
+        await msg({"type": "z_stop"}, ws)
+        await rig.run(0.1)
+        assert rig.z.blocked is None
+
+    async def test_ws_cleanup_releases_held_z(self, rig):
+        """Simulate the WebSocket endpoint's `finally` cleanup: when a WS
+        disappears while Z is held, the source MUST be released. This is
+        the primary safety net for a closed browser tab mid-press.
+        """
+        ws = FakeWS()
+        await msg({"type": "z_start", "direction": "down"}, ws)
+        assert rig.z.command == DOWN
+        source = http_module._z_source(ws)
+        assert source in rig.z._requests
+        # Simulate the endpoint's finally block — this is literally the
+        # cleanup line in websocket_endpoint.
+        rig.state.hardware.z.release(source)
+        await rig.run(0.01)
+        assert rig.z.command == 0 and rig.backend.duty == 0.0
+        assert source not in rig.z._requests
+
     async def test_aux_and_extrusion_do_nothing(self, rig):
         writes = (len(rig.transport.sent_lines),)
         z_log = list(rig.backend.z_log)
