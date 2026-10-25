@@ -226,7 +226,7 @@ html, body {
   margin: 0 auto;
 }
 
-.jog-btn {
+.jog-btn, .z-btn {
   background: var(--jog-bg);
   border: 2px solid #2a4a6a;
   border-radius: 8px;
@@ -241,11 +241,12 @@ html, body {
   transition: background 0.1s, transform 0.1s;
   min-height: 60px;
 }
-.jog-btn:active, .jog-btn.pressing {
+.jog-btn:active, .jog-btn.pressing,
+.z-btn:active, .z-btn.pressing {
   background: var(--jog-active);
   transform: scale(0.97);
 }
-.jog-btn:disabled {
+.jog-btn:disabled, .z-btn:disabled {
   background: var(--surface2);
   border-color: var(--border);
   color: var(--gray);
@@ -722,7 +723,7 @@ html, body {
 
 /* Jog: compact */
 .jog-pad { max-height: 190px; max-width: 270px; gap: 6px; }
-.jog-btn { min-height: 52px; font-size: 1.15em; }
+.jog-btn, .z-btn { min-height: 52px; font-size: 1.15em; }
 
 /* Toolpath view: the right area */
 #path-canvas { aspect-ratio: 5 / 4; }

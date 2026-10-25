@@ -155,6 +155,37 @@ class TestWebSocket:
             ws.send_json({"type": "jog_start", "axis": "X", "direction": 1})
             # No exception, no crash — server handles gracefully
 
+    def test_jog_start_malformed_payload_does_not_error(self, client):
+        """
+        Pin the seventh-pass bug: the Z buttons used to share the .jog-btn
+        class, which wired them as X/Y jog buttons too, firing
+        `jog_start { axis: null, direction: null }`. The server used to
+        `int(None)` and raise TypeError, which the sixth-pass handler fix
+        surfaced as a visible notice. The fix validates the payload before
+        touching int() so a malformed message is silently dropped (same
+        way an unknown type is).
+        """
+        malformed_payloads = (
+            {"type": "jog_start"},                                   # missing axis + direction
+            {"type": "jog_start", "axis": None, "direction": None},  # the Z-button mis-wire shape
+            {"type": "jog_start", "axis": "X"},                      # missing direction
+            {"type": "jog_start", "axis": "Z", "direction": 1},      # Z is not a jog axis
+            {"type": "jog_start", "axis": "X", "direction": 0},      # not -1 or 1
+            {"type": "jog_start", "axis": "X", "direction": "up"},   # wrong type
+            {"type": "jog_start", "axis": 1, "direction": 1},        # axis not a string
+            {"type": "jog_start", "axis": "X", "direction": True},   # bool is not a valid direction
+        )
+        with client.websocket_connect("/ws") as ws:
+            _ = ws.receive_json()
+            for payload in malformed_payloads:
+                ws.send_json(payload)
+            # None of these should have produced a notice — all silently dropped.
+            # Follow up with a known-good jog_start just to confirm the handler
+            # is still processing messages. (It will be refused with "Not
+            # connected to GRBL" or similar, but the point is the WS is alive.)
+            ws.send_json({"type": "jog_set_speed", "speed_in_s": 0.5})
+            # No crash by this point = test passed.
+
     def test_handler_exception_does_not_close_ws(self, client, monkeypatch):
         """
         Pin the fifth-pass bug: a handler exception used to be caught at

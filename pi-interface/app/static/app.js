@@ -1212,6 +1212,14 @@ function stopJog() {
 function attachJogButton(btn) {
   const axis = btn.dataset.axis;
   const dir  = parseInt(btn.dataset.dir, 10);
+  // Belt-and-braces: Z buttons used to share the .jog-btn class and were
+  // wired here by mistake, firing a jog_start with axis=null direction=null
+  // (JSON converts NaN to null) that threw TypeError server-side. The
+  // Z buttons no longer carry .jog-btn, and if any new unlabelled button
+  // slips in with the class, skip it rather than send a malformed message.
+  if (!axis || !["X", "Y"].includes(axis) || !Number.isFinite(dir)) {
+    return;
+  }
   let touchId = null;
 
   // Touch events (primary for Pi touchscreen)

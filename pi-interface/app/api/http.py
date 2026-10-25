@@ -845,10 +845,23 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
     msg_type = data.get("type")
 
     if msg_type == "jog_start":
-        axis = data.get("axis", "X").upper()
-        direction = int(data.get("direction", 1))
+        # Validate payload defensively — a stray message with
+        # `{"direction": null}` would throw TypeError here (`int(None)`),
+        # which under the sixth-pass handler fix surfaces as a user-
+        # visible "Internal error handling 'jog_start'" notice. That is
+        # unnecessary and alarming for a routine payload-shape issue.
+        raw_axis = data.get("axis")
+        raw_dir = data.get("direction")
+        if not isinstance(raw_axis, str):
+            return
+        axis = raw_axis.upper()
         if axis not in ("X", "Y"):
             return
+        if not isinstance(raw_dir, (int, float)) or isinstance(raw_dir, bool):
+            return
+        if raw_dir not in (-1, 1):
+            return
+        direction = int(raw_dir)
         refusal = await _start_jog(axis, direction)
         if refusal:
             await _notify(ws, refusal)
