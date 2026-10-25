@@ -1044,6 +1044,78 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (seventh pass) — Z button double-wiring bug fixed.
+
+**Symptom:** Operator reported that pressing Z UP / Z DOWN sometimes
+produced actual actuator motion AND sometimes a UI notice "Internal
+error handling 'jog_start' — see Pi logs." After a few presses the
+actuator stopped responding entirely.
+
+**Root cause** (confirmed from the Pi journal, verbatim):
+```
+TypeError: int() argument must be a string, a bytes-like object or
+            a real number, not 'NoneType'
+  File ".../api/http.py", line 849, in _handle_message
+    direction = int(data.get("direction", 1))
+```
+The Z buttons in `index.html` carried `class="jog-btn z-btn"`. The JS
+wires `.jog-btn` → `attachJogButton` (reads `dataset.axis` /
+`dataset.dir`, both undefined for Z buttons; `parseInt(undefined, 10)`
+is `NaN`; `JSON.stringify({direction: NaN})` becomes
+`{"direction":null}`) AND `.z-btn` → `attachZButton` (correctly sends
+`z_start`). Every Z press therefore fired BOTH a bogus
+`jog_start { axis: null, direction: null }` and a valid
+`z_start { direction: "up" | "down" }`.
+
+Server-side `_handle_message`'s jog_start path then did `int(None)`
+and threw TypeError. The sixth-pass defensive handler caught it, logged
+the full traceback, and sent the client a visible notice — the exact
+notice the operator saw. The actuator genuinely moved on every press
+(z_start processed cleanly in parallel), confirmed by the interleaved
+`Z UP start (ui:…, duty 0.50)` lines in the same journal.
+
+The "actuator stopped responding" phase was a different and correct
+behaviour: the Z controller hit its documented 30-second run limit
+(`Z_MAX_RUN_S=30`) and blocked further motion until all Z inputs were
+released. The journal records:
+```
+WARNING app.hardware.z — Z stopped: maximum continuous run 30 s reached.
+```
+That is not a fault — it is the dead-man ceiling behaving as designed.
+
+**Fix:**
+- `app/static/index.html`: removed `jog-btn` class from the Z buttons;
+  they now carry `class="z-btn"` only. Shared visual styling moved
+  to `.jog-btn, .z-btn { … }` in `app/static/style.css` (including
+  the responsive `@media` block).
+- `app/static/app.js` `attachJogButton`: belt-and-braces early return
+  if `axis` or `dir` is not valid X/Y jog data, so any future
+  unlabelled `.jog-btn` element is ignored rather than firing a
+  malformed `jog_start`.
+- `app/api/http.py` `_handle_message` jog_start path: defensive
+  payload validation before `int()`. Malformed payloads are silently
+  dropped (same way an unknown `type` is).
+
+**Regression test:**
+`tests/test_api.py::TestWebSocket::test_jog_start_malformed_payload_
+does_not_error` covers 8 malformed shapes including the exact
+`{axis: null, direction: null}` the operator was hitting. 388 passed.
+
+**End-to-end verification on live Pi (post-deploy):**
+A WS probe that fires the OLD payload shape (`jog_start { axis: null,
+direction: null }` immediately followed by `z_start up`) produces no
+notice and no close; the Z controller shows `cmd=UP duty=0.5
+dir=HIGH` for the whole hold and `Z STOP` on release. Journal for the
+new PID has `Z UP start` + `Z STOP` with no TypeError.
+
+**Hardware status on the actuator itself:**
+It works. During the operator's session the Pi drove GPIO18 at PWM
+50 % + GPIO23 HIGH as commanded, and the actuator produced visible
+downward motion. The intermittent initial no-move was almost
+certainly a reseated terminal contact that improved during multimeter
+probing. The 30 s run limit is a safety ceiling, not a fault — press
+Z again after release and motion resumes.
+
 2026-10-25 (sixth pass) — WebSocket handler exceptions no longer close
 the WebSocket.
 
