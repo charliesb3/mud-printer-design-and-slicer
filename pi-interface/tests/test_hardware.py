@@ -432,57 +432,103 @@ def running_job(n=40) -> CurrentJob:
 
 class TestJogRelease:
     """
-    Deliberate release-to-stop semantics (fix for the operator-observed
-    "second burst" after releasing an X/Y jog button):
+    Single-shot jog model (2026-10-25). Each press-and-hold session emits
+    EXACTLY ONE `$J=…` line (at start) and EXACTLY ONE `0x85` real-time byte
+    (at release / heartbeat timeout / cancel). GRBL never has more than one
+    jog in its planner, and no further `$J=` can ever be written after a
+    release.
 
-    - `jog_stop` writes GRBL's jog-cancel real-time byte (0x85) BEFORE the
-      loop task is cancelled, so no further `$J=` step is queued into GRBL's
-      planner on the way out;
-    - after `jog_stop` returns, no more `$J=` lines are written even if a
-      pending `ok` arrives afterwards;
-    - a repeat / overlapping `jog_start` cannot start the jog from the
-      previous button hold — the stop is awaited first.
+    These tests substitute for physical verification of the "second burst"
+    fix. Byte-level serial atomicity between a jog `$J=` and the stop `0x85`
+    is covered separately in TestSerialWriteOrdering (byte interleave is the
+    other half of the second-burst root cause).
     """
 
-    async def test_jog_stop_sends_0x85_and_queues_no_more_steps(self, rig):
+    async def test_jog_start_writes_exactly_one_long_distance_line(self, rig, monkeypatch):
+        monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
         ws = FakeWS()
         await msg({"type": "jog_start", "axis": "X", "direction": 1}, ws)
-        await wait_until_sent(rig.transport, 1)                           # one $J= in flight
-        jogs_before = sum(1 for l in rig.transport.sent_lines if l.startswith("$J="))
+        await wait_until_sent(rig.transport, 1)
+        # Give the heartbeat loop time to settle in its wait — it must NOT
+        # write a second $J=.
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+            await msg({"type": "jog_heartbeat"}, ws)
+        jogs = [l for l in rig.transport.sent_lines if l.startswith("$J=")]
+        assert len(jogs) == 1, f"expected exactly one $J=, got {jogs!r}"
+        line = jogs[0]
+        # 10 in × 25.4 = 254 mm; direction = +.
+        assert "X254.000" in line or "X254.0" in line, line
+        assert "G21" in line and "G91" in line, line
+        # Clean up.
+        await msg({"type": "jog_stop"}, ws)
+
+    async def test_jog_stop_sends_0x85_and_no_more_jogs_after(self, rig, monkeypatch):
+        monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
+        ws = FakeWS()
+        await msg({"type": "jog_start", "axis": "X", "direction": 1}, ws)
+        await wait_until_sent(rig.transport, 1)
         raws_before = len(rig.transport.raw_sent)
 
         await msg({"type": "jog_stop"}, ws)
-        # 0x85 was written (by _stop_jog before cancel, and again by the loop's
-        # finally — both are safe); the task has exited.
+        # 0x85 written by the task's finally — the one place it is sent.
         new_raws = rig.transport.raw_sent[raws_before:]
-        assert b"\x85" in new_raws
+        assert b"\x85" in new_raws, new_raws
+        # The task has exited.
         assert http_module._jog_task is None or http_module._jog_task.done()
+        # No $J= appears after the single startup one, even if a late ok
+        # drains in afterwards.
+        await asyncio.sleep(0.15)
+        jogs = [l for l in rig.transport.sent_lines if l.startswith("$J=")]
+        assert len(jogs) == 1, f"$J= written after release: {jogs!r}"
 
-        # Let any lingering `ok` responses drain; no $J= must follow.
-        await asyncio.sleep(0.1)
-        jogs_after = sum(1 for l in rig.transport.sent_lines if l.startswith("$J="))
-        assert jogs_after == jogs_before, (
-            f"$J= written after release: {rig.transport.sent_lines[jogs_before:]}")
+    async def test_heartbeat_timeout_cancels_without_a_second_jog(self, rig, monkeypatch):
+        monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
+        monkeypatch.setattr(config, "JOG_TIMEOUT_S", 0.1)
+        ws = FakeWS()
+        await msg({"type": "jog_start", "axis": "Y", "direction": -1}, ws)
+        await wait_until_sent(rig.transport, 1)
+        raws_before = len(rig.transport.raw_sent)
+        # Stop sending heartbeats; the loop should time out and send 0x85.
+        await asyncio.sleep(0.3)
+        new_raws = rig.transport.raw_sent[raws_before:]
+        assert b"\x85" in new_raws, new_raws
+        jogs = [l for l in rig.transport.sent_lines if l.startswith("$J=")]
+        assert len(jogs) == 1, f"$J= written on heartbeat timeout: {jogs!r}"
 
-    async def test_repeat_jog_start_awaits_previous_release(self, rig):
-        # Rapid press / release / press — the second press cannot sneak in
-        # until the previous task's stop has completed. The 0x85 is sent and
-        # the new jog starts fresh (not resumed from the old loop).
+    async def test_repeat_press_release_press(self, rig, monkeypatch):
+        monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
         wsA = FakeWS()
         await msg({"type": "jog_start", "axis": "X", "direction": 1}, wsA)
         await wait_until_sent(rig.transport, 1)
-
         await msg({"type": "jog_stop"}, wsA)
         assert http_module._jog_task is None or http_module._jog_task.done()
+        # Fresh press on a different axis.
         wsB = FakeWS()
         await msg({"type": "jog_start", "axis": "Y", "direction": -1}, wsB)
-        # The new task is running fresh, and _jog_stopping is cleared by the
-        # start so the fresh loop writes its first step.
-        task = http_module._jog_task
-        assert task is not None and not task.done()
+        await wait_until_sent(rig.transport, 2)
+        jogs = [l for l in rig.transport.sent_lines if l.startswith("$J=")]
+        assert len(jogs) == 2, f"expected 2 jog lines, got {jogs!r}"
+        assert "X254" in jogs[0]
+        assert "Y-254" in jogs[1]
+        # No internal retention of the stop flag.
         assert not http_module._jog_stopping
-        # Clean up.
         await msg({"type": "jog_stop"}, wsB)
+
+    async def test_rapid_press_release_no_dangling_task(self, rig, monkeypatch):
+        monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
+        # 10 fast cycles.
+        ws = FakeWS()
+        for _ in range(10):
+            await msg({"type": "jog_start", "axis": "X", "direction": 1}, ws)
+            await asyncio.sleep(0.01)
+            await msg({"type": "jog_stop"}, ws)
+        assert http_module._jog_task is None or http_module._jog_task.done()
+        # Every session wrote exactly 1 $J= and ≥1 0x85.
+        jogs = [l for l in rig.transport.sent_lines if l.startswith("$J=")]
+        cancels = sum(1 for b in rig.transport.raw_sent if b == b"\x85")
+        assert 1 <= len(jogs) <= 10
+        assert cancels >= len(jogs), f"cancels={cancels} jogs={len(jogs)}"
 
 
 class TestRemoteStop:

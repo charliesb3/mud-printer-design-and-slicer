@@ -35,13 +35,22 @@ elif JOG_SPEED_MM_MIN is not None:
 else:
     JOG_SPEED_MAX_MM_MIN = None
 
-# How often (seconds) the backend sends an incremental jog command.
-# Each step covers: current_jog_speed_mm_min * JOG_SEND_INTERVAL_S / 60 mm.
-# Maximum axis travel after browser connection loss ≈ 1–2 step distances.
-JOG_SEND_INTERVAL_S: float = float(os.getenv("JOG_SEND_INTERVAL_S", "0.15"))
+# How often (seconds) the backend polls the jog heartbeat / stop flag inside
+# a single-shot jog session. This is NOT a command-send interval; the loop
+# sends ONE $J= at jog_start and ONE 0x85 at jog_stop, no steps in between.
+JOG_SEND_INTERVAL_S: float = float(os.getenv("JOG_SEND_INTERVAL_S", "0.05"))
 
 # Backend stops sending jog commands if no heartbeat received within this interval.
 JOG_TIMEOUT_S: float = float(os.getenv("JOG_TIMEOUT_S", "0.3"))
+
+# Single-shot jog distance (inches). On jog_start the server sends ONE
+# $J=G21 G91 <axis><distance> F<speed>; GRBL stops naturally at the end of
+# the move. Release / heartbeat timeout / UI STOP sends GRBL's 0x85 jog-cancel
+# real-time byte, which decelerates immediately. The operator releases and
+# re-presses to continue beyond this distance; it is deliberately NOT the
+# machine envelope — GRBL soft/hard limits are disabled on this printer and
+# we don't want a single jog line to reach a mechanical end-stop.
+JOG_SINGLE_DISTANCE_IN: float = float(os.getenv("JOG_SINGLE_DISTANCE_IN", "10.0"))
 
 # GRBL status poll interval in seconds (0.2 = 5 Hz)
 STATUS_POLL_INTERVAL_S: float = float(os.getenv("STATUS_POLL_INTERVAL_S", "0.2"))

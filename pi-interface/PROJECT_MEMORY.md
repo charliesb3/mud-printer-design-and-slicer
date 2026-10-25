@@ -470,24 +470,144 @@ separate stop message. Rejected because browser disconnect during jog would
 leave the machine running.
 
 ### Deliberate jog release: 0x85 BEFORE cancel, with a stopping flag (2026-10-25)
-Fix for an operator-observed "second burst" after releasing a jog button.
-Root cause: the jog cancel byte (0x85) used to be written only from the jog
-task's `finally` block, which runs AFTER the task is cancelled. Between the
-cancel and the finally running, the task's current `await send_command(…)`
-could have already written one more `$J=` step onto the serial line; GRBL
-then played that step after the UI believed it had stopped.
-Fix (`app/api/http.py`):
-- `jog_stop` → `_stop_jog()` writes `0x85` via `send_realtime` IMMEDIATELY
-  (bypasses the send lock, so it reaches GRBL even while the loop is mid-
-  `send_command`), THEN cancels the loop task; the task's `finally` writes
-  `0x85` again as belt-and-braces for heartbeat-timeout / error exits.
-- A module-level `_jog_stopping` flag is checked at the top of each loop
-  iteration AND again immediately before each `send_command` — so a release
-  that arrives while a previous `send_command` is awaiting `ok` cannot race
-  the next step through the serial write even if cancel hasn't propagated.
-- `_start_jog` awaits any previous `_stop_jog` and resets `_jog_stopping`.
-Tests: `tests/test_hardware.py::TestJogRelease` — `jog_stop` emits 0x85
-and no further `$J=` is written; a repeat press awaits the previous release.
+*(SUPERSEDED 2026-10-25 by the single-shot jog model + byte-level serial
+write lock, below. The flag + the 0x85-before-cancel ordering stayed; the
+underlying model changed.)* First-pass software fix for the operator-observed
+"second burst": the jog cancel byte (0x85) was written from the jog task's
+`finally` block, so a release could race one more `$J=` through the serial
+write while the task was mid-`send_command`. The flag + ordering fix passed
+automated tests on Mac but FAILED physical testing — the second burst was
+still observed on hardware. Root cause was actually TWO issues (both now
+addressed below): a byte-level serial write race, AND the planner-queue
+depth from incremental streaming.
+
+### Single-shot jog + serial write lock (2026-10-25, replaces the above)
+
+Operator-observed on hardware: "the previous software fix FAILED physical
+testing" — jog release still produced a short burst after the apparent stop.
+
+Investigation of the full chain
+`UI pointer → WS jog_stop → _stop_jog → send_realtime(0x85)`
+and
+`jog_loop → send_command($J=…)` revealed TWO co-contributing bugs:
+
+**Bug 1 — Serial byte interleave race (`app/grbl/transport.py`).**
+`SerialTransport.write_line` and `write_raw` both used
+`asyncio.to_thread(self._serial.write, data)` which dispatches to the default
+`ThreadPoolExecutor` (multiple workers). pyserial's `Serial.write()` is not
+thread-safe. A concurrent `write_line("$J=G21 G91 X7.620 F3048")` and
+`write_raw(b"\x85")` could land on different workers and interleave at the
+kernel-serial-byte level. GRBL processes real-time bytes (`?`, `!`, `~`,
+`0x85`, `0x18`) immediately as they are read, so an embedded `0x85` inside
+the parsed `$J=` would cancel the current jog, and THEN the finished `$J=`
+line would be parsed as a NEW jog — the "second burst" after release.
+
+Fix: add a `threading.Lock` in `SerialTransport` (`_write_lock`) and route
+both writes through `_locked_write`. Every serial write is now atomic on
+the wire relative to every other write. Test:
+`tests/test_communicator.py::TestSerialWriteOrdering::`
+`test_concurrent_writes_never_interleave_bytes` (uses a `SlowSerial` fake
+with a deliberate concurrency window).
+
+**Bug 2 — Planner-queue buildup from incremental streaming
+(`app/api/http.py`).**
+The incremental jog loop sent small `$J=…` steps and awaited `ok`. GRBL
+ok's a `$J=` as soon as it is parsed and added to the planner, NOT when the
+motion completes. So the loop filled GRBL's 15-block planner with queued
+jog steps; on release, 0x85 had to flush that whole queue AND then
+decelerate from the current speed. Even with Bug 1 fixed, a release had
+multiple queued jogs still in-flight AND a long controlled decel to go.
+
+Fix: switch the jog model to SINGLE-SHOT. On `jog_start` the server sends
+exactly ONE `$J=G21 G91 <axis>±<JOG_SINGLE_DISTANCE_IN × 25.4> F<speed>`;
+GRBL executes that one move and stops naturally at its end. The task does
+NOT write anything more during the hold — it only polls the heartbeat timer
+and the stop flag. On release / heartbeat-timeout / cancel, the task's
+`finally` writes 0x85, which decelerates the single in-flight jog at $120 /
+$121. There is NEVER more than one jog in GRBL's planner.
+
+Defaults (`.env.example`): `JOG_SINGLE_DISTANCE_IN=10.0` (10 inches). The
+operator releases and re-presses to continue beyond that. Deliberately NOT
+the machine envelope — soft/hard limits are off ($20/$21=0) so a single
+jog line must not reach a mechanical end-stop.
+
+Browser-disconnect safety is unchanged: the heartbeat loop sends 0x85 on
+timeout (default 0.3 s) regardless of why the heartbeat stopped.
+
+Tests (`tests/test_hardware.py::TestJogRelease`): exactly one `$J=` per
+session, one `0x85` on release, heartbeat timeout cancels, rapid press/
+release has no dangling task, repeat press writes a fresh jog line.
+
+Note on the long-decel observation (separate from the second burst): with
+`$120=$121=5 mm/s²` the controlled decel from 2.0 in/s = 50.8 mm/s takes
+~10 s. That is pure GRBL physics, independent of this software fix. The
+staged acceleration procedure below is the way to shorten it.
+
+### Staged X/Y acceleration procedure (operator, not auto-applied)
+`$120 / $121 = 5 mm/s²` is extremely conservative. Target decel at 2.0 in/s:
+
+| $120 / $121 (mm/s²) | Decel from 2.0 in/s | When to use |
+|---:|---:|---|
+| 5 (current) | 10.2 s | status quo — too slow for jogging |
+| 25 (5×)   | 2.0 s | first increment: confirm no chain slap / lost steps |
+| 50 (10×)  | 1.0 s | after 25 passes a measured 10 mm commanded = 10 mm actual |
+| 100 (20×) | 0.5 s | after 50 passes same check at 2.0 in/s |
+| 170 (34×) | 0.3 s | user target; aggressive for this drivetrain |
+
+Procedure for each step:
+1. In the UI's Advanced → Diagnostics → Settings ($$), capture current values.
+2. Advanced → Console: send `$120=<new>` and `$121=<new>`.
+3. $$ to verify.
+4. Jog X+ and X− at 2.0 in/s for ≥ 6 in; measure actual travel against a
+   tape; confirm it matches commanded distance (no step loss).
+5. Repeat at Y.
+6. If any step shows chain slap, backlash growth, missed steps, or stall,
+   STOP and roll back to the previous step with `$120=<prev>` and
+   `$121=<prev>`.
+
+The controller does NOT apply these automatically. The operator decides when
+to progress.
+
+### Stepper heating when stationary (observation 2026-10-25)
+Reported hot stationary motors with `$1=25 ms` (step idle delay). GRBL $1
+schedules the enable-pin to deactivate after 25 ms of no steps, but the
+hardware doc (`CONTROL_BOX_HARDWARE.md`) explicitly records that "Driver
+ENA terminals and limit-switch pins: not part of this record" — so whether
+GRBL's D8 (stepper enable) is actually wired to the DM556T ENA pins is
+UNKNOWN. If D8 is not wired, GRBL's enable has no effect and the drivers
+stay energized continuously; a thermal increase while stationary is then a
+driver-current issue, not a GRBL firmware issue.
+
+Operator actions required (none of these are software changes):
+1. Visually inspect: is Uno D8 wired to all three DM556T ENA− pins?
+2. Read the DM556T label for SW1–SW4 current configuration and compare
+   against the NEMA 23 motor nameplate current (motors should run below
+   nameplate for sustained duty).
+3. If D8 is wired: `$1=25` should already disable drivers 25 ms after the
+   last step. If motors stay hot, verify `$4` (invert step enable mask)
+   matches the DM556T ENA polarity.
+4. If D8 is not wired: lower DIP-switch current, or wire D8 → ENA− on all
+   three drivers.
+
+The repository does NOT recommend disabling GRBL's enable mechanism
+(`$1=255`) as a workaround — doing so sacrifices position retention
+between jogs and compromises the holding torque the drivers currently
+provide against external loads.
+
+### Z activation (operator-controlled first motion, 2026-10-25)
+`Z_PWM_DUTY` was 0 (disabled) until this pass. `.env.firstmotion` now sets
+`Z_PWM_DUTY=0.5` — a moderate first-motion value for the 12 V linear
+actuator. The duty is applied ONLY while a Z UP / Z DOWN button is held;
+PWM returns to 0 on release, heartbeat timeout, STOP, REMOTE STOP, service
+shutdown, and (via `config.txt gpio=18=op,dl`) Pi boot. The existing
+Z controller behaviour is unchanged: dead-man heartbeat, UP + DOWN = STOP +
+blocked, run-time limit, exception → STOP + fault, release blocks until
+every input is released.
+
+Still open (hardware verification before Z use): the MD13S PWM external
+pull-down (proposed 10 kΩ) must be fitted and measured so PWM reads LOW
+during Pi power-up / boot (`docs/deployment.md` §7). Software alone cannot
+guarantee this. The deployment report flags this as an operator check item.
 
 ### Server-owned job runner
 The job runner is an asyncio.Task on the server. Browser connect/disconnect has
@@ -923,6 +1043,29 @@ of the new panels.
 ---
 
 ## Last Updated
+
+2026-10-25 (second pass) — single-shot jog + serial write lock + Z duty.
+Replaces the first-pass "0x85 before cancel" fix which passed automated
+tests but FAILED physical testing. Changes:
+- `app/grbl/transport.py`: threading.Lock around pyserial.Serial.write().
+  Serializes bytes on the wire; eliminates the $J=/0x85 byte-interleave
+  race that was producing the second burst.
+- `app/api/http.py`: `_jog_loop` rewritten SINGLE-SHOT — ONE $J= at start,
+  heartbeat-only monitoring during hold, ONE 0x85 at release. No
+  incremental streaming; GRBL planner never holds > 1 jog.
+- `app/config.py`: `JOG_SINGLE_DISTANCE_IN=10.0` added; `JOG_SEND_INTERVAL_S`
+  is now the heartbeat-poll interval, default lowered to 0.05 s.
+- `.env.firstmotion`: `Z_PWM_DUTY=0.5` (was 0); added
+  `JOG_SINGLE_DISTANCE_IN=10.0`.
+- `.env.example`: updated commentary to describe single-shot model + Z duty.
+- Tests: 4 new (3 jog-release scenarios + 1 byte-ordering race). 382 passed
+  + 1 skipped.
+- See the two new "Key Decisions" entries: "Single-shot jog + serial write
+  lock" and "Staged X/Y acceleration procedure".
+
+**Not yet exercised on hardware.** Previous first-pass fix stopped physical
+testing after a brief trial — the second burst persisted. The staged
+acceleration procedure is operator-controlled.
 
 2026-10-25 — jog UI reworked for 2.0 in/s + post-release burst fixed.
 Changes in `app/api/http.py`, `app/static/index.html`, `app/static/app.js`,

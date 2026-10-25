@@ -65,6 +65,18 @@ class SerialTransport(GRBLTransport):
         self._read_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._running = False
         self._reader_thread: threading.Thread | None = None
+        # Serial byte-stream serialization lock.
+        # asyncio.to_thread() dispatches to the default ThreadPoolExecutor
+        # which has multiple worker threads, so concurrent write_line /
+        # write_raw calls can run on different threads simultaneously.
+        # pyserial's Serial.write() does NOT serialize access to the port,
+        # so without this lock the kernel can interleave bytes from the
+        # two writes. GRBL reads real-time bytes (?, !, ~, 0x85, 0x18, …)
+        # mid-line and processes them immediately, so an interleaved
+        # 0x85 inside a $J= line would cancel the current jog AND then the
+        # rest of the $J= would be parsed as a new jog — producing the
+        # "second burst" after release observed on hardware.
+        self._write_lock: threading.Lock = threading.Lock()
 
     async def connect(self) -> None:
         """Open the serial port and start the background reader thread."""
@@ -109,11 +121,17 @@ class SerialTransport(GRBLTransport):
     async def write_line(self, line: str) -> None:
         assert self._serial is not None
         data = (line.strip() + "\n").encode("ascii", errors="replace")
-        await asyncio.to_thread(self._serial.write, data)
+        await asyncio.to_thread(self._locked_write, data)
 
     async def write_raw(self, data: bytes) -> None:
         assert self._serial is not None
-        await asyncio.to_thread(self._serial.write, data)
+        await asyncio.to_thread(self._locked_write, data)
+
+    def _locked_write(self, data: bytes) -> None:
+        """Atomic serial write — see self._write_lock docstring."""
+        assert self._serial is not None
+        with self._write_lock:
+            self._serial.write(data)
 
     def is_open(self) -> bool:
         return self._running and self._serial is not None and self._serial.is_open

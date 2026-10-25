@@ -168,76 +168,92 @@ def _current_jog_speed_mm_min() -> float:
 
 async def _jog_loop(axis: str, direction: int) -> None:
     """
-    Send small incremental jog commands while heartbeats are fresh.
+    SINGLE-SHOT JOG MODEL (2026-10-25, replaces incremental streaming).
 
-    Each iteration:
-    1. Check heartbeat timeout → cancel jog if expired.
-    2. Read the operator's current jog speed from AppState (so a slider
-       change applies within one step without restarting the jog).
-    3. Send one incremental $J= command sized to one send-interval of motion.
-    4. Wait for GRBL ok (paces the loop to GRBL's buffer consumption).
-    5. Repeat.
+    On jog_start the loop sends ONE `$J=G21 G91 <axis><distance> F<speed>`
+    line to GRBL with a conservative long distance (`JOG_SINGLE_DISTANCE_IN`,
+    default 10 in). GRBL executes that single move and stops naturally at
+    its end. While the operator holds the button, this task does NOT send
+    anything more — it only polls the heartbeat timer and the stop flag.
+    On release / heartbeat-timeout / cancel, the finally clause sends GRBL's
+    `0x85` jog-cancel real-time byte, which decelerates the single in-flight
+    jog at $120 / $121 and clears GRBL's planner.
 
-    Max runaway on connection loss ≈ 1–2 jog step distances.
+    Why single-shot:
+    - Incremental streaming filled GRBL's 15-block planner with queued $J=
+      lines, so on release a 0x85 had to flush several buffered steps.
+    - Concurrent `write_line($J=…)` and `write_raw(0x85)` could interleave
+      at the serial byte level (asyncio.to_thread uses multiple workers,
+      pyserial's write is not thread-safe). GRBL processes real-time bytes
+      mid-line, so an interleaved 0x85 would cancel the current jog AND then
+      the rest of the parsed $J= would start a NEW jog — the "second burst"
+      observed on hardware. SerialTransport now holds a threading.Lock, and
+      this loop no longer writes multiple $J= lines, so the interleave race
+      cannot occur.
+
+    Safety:
+    - Dead-man heartbeat: if browser disconnects or heartbeats stop, finally
+      runs and 0x85 cancels within one JOG_SEND_INTERVAL_S (default 50 ms)
+      + decel at $120.
+    - Stop flag (`_jog_stopping`) short-circuits BEFORE the single $J= write
+      if a release arrived during startup.
+    - On GRBL error / connection loss, finally still sends 0x85.
     """
     global _jog_axis, _jog_direction, _jog_last_heartbeat
 
-    initial_speed = _current_jog_speed_mm_min()
-    if initial_speed == 0:
+    speed = _current_jog_speed_mm_min()
+    if speed <= 0:
         log.warning("Jog not started — current jog speed is zero")
         return
 
-    log.info("Jog loop started: %s%+d at %.1f mm/min",
-             axis, direction, initial_speed)
+    # One long jog line — distance in mm, feed in mm/min.
+    distance_mm = direction * (config.JOG_SINGLE_DISTANCE_IN * 25.4)
+    cmd = f"$J=G21 G91 {axis}{distance_mm:.3f} F{speed:.0f}"
+    log.info("Jog start: %s %.1f mm @ %.1f mm/min (single-shot)",
+             axis, distance_mm, speed)
 
     try:
+        # Guard: a stop that arrived before the task scheduled must prevent
+        # even the single $J= from going out.
+        if _jog_stopping:
+            log.debug("Jog aborted before $J= — _jog_stopping already set")
+            return
+        try:
+            result = await _comm.send_command(cmd, timeout=3.0)  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            # Cancellation during the $J= write — finally still sends 0x85.
+            raise
+        except Exception as exc:
+            log.debug("Jog $J= send exception: %s", exc)
+            return
+        if result.startswith("error:"):
+            log.warning("Jog $J= rejected by GRBL: %s", result)
+            return
+
+        # Jog is running in GRBL. Monitor heartbeat only — no more writes.
         while True:
-            # A stop request short-circuits the loop BEFORE any further write
-            # — _stop_jog already sent 0x85 ahead of us, so we must not queue
-            # another $J= on top of it.
             if _jog_stopping:
                 log.debug("Jog loop sees _jog_stopping — exiting")
                 break
-
             age = time.monotonic() - _jog_last_heartbeat
             if age > config.JOG_TIMEOUT_S:
                 log.debug("Jog heartbeat timeout (%.2f s) — stopping", age)
                 break
-
-            speed = _current_jog_speed_mm_min()
-            if speed <= 0:
-                log.debug("Jog speed set to zero — stopping")
-                break
-            step_mm = speed * config.JOG_SEND_INTERVAL_S / 60.0
-            distance = direction * step_mm
-            # G21 in the jog line (non-modal in GRBL jogging): steps and speed
-            # are millimetres whatever units mode jobs / positioning left active.
-            cmd = f"$J=G21 G91 {axis}{distance:.3f} F{speed:.0f}"
             try:
-                # Re-check right before writing: a release that arrives while
-                # the previous send_command was awaiting `ok` must not race
-                # the next step through the serial write.
-                if _jog_stopping:
-                    break
-                result = await _comm.send_command(cmd, timeout=3.0)  # type: ignore[union-attr]
-                if result.startswith("error:"):
-                    log.warning("Jog command error: %s", result)
-                    break
+                await asyncio.sleep(config.JOG_SEND_INTERVAL_S)
             except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                log.debug("Jog send exception: %s", exc)
-                break
+                raise
     finally:
-        # Belt-and-braces: 0x85 is sent by _stop_jog before cancelling us, but
-        # also send it on heartbeat-timeout / error paths so the exit always
-        # cancels any step still buffered in GRBL's planner.
-        log.info("Jog loop ended — sending cancel (0x85)")
+        # The ONLY place 0x85 is sent for a jog session — every exit path
+        # passes through here (release, heartbeat timeout, cancel, error).
+        # SerialTransport._write_lock guarantees the byte stream is atomic
+        # relative to any other serial write (e.g. a late ok from the $J=).
+        log.info("Jog end — sending GRBL jog-cancel 0x85")
         if _comm:
             try:
                 await _comm.send_realtime(b"\x85")
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("send_realtime(0x85) on jog end failed: %s", exc)
         _jog_axis = None
 
 
@@ -283,26 +299,24 @@ async def _start_jog(axis: str, direction: int) -> Optional[str]:
 
 async def _stop_jog() -> None:
     """
-    Stop the jog loop immediately.
+    Stop the current jog session.
 
-    Order matters here: send GRBL's jog-cancel real-time byte (0x85) BEFORE
-    cancelling the loop task. The task may be mid-`send_command` on the next
-    `$J=` step; cancelling first lets that write finish and reach GRBL, which
-    then plays the step after we think we have stopped — the "second burst"
-    the operator sees. 0x85 bypasses the send lock and reaches GRBL directly;
-    GRBL discards the planner buffer and decelerates to a stop immediately.
+    With the single-shot jog model + SerialTransport._write_lock, this is
+    simple: set the stop flag so the task's heartbeat loop exits on its next
+    poll, then cancel the task. The task's finally clause is the ONE place
+    0x85 is written — guaranteed atomic on the wire relative to any pending
+    $J= ok reader and any status-poll `?`.
 
-    `_jog_stopping` additionally guards the loop so no new step is written
-    between its heartbeat check and its next write.
+    Order:
+    1. `_jog_stopping = True` — the heartbeat loop exits on next tick
+       (≤ JOG_SEND_INTERVAL_S), and if the task is still in the one $J=
+       send_command it will skip the write-after-send phase.
+    2. `_jog_task.cancel()` — ends the heartbeat sleep immediately.
+    3. `await _jog_task` — the task's finally sends 0x85 to GRBL.
     """
     global _jog_task, _jog_axis, _jog_stopping
     _jog_stopping = True
     _jog_axis = None
-    if _comm:
-        try:
-            await _comm.send_realtime(b"\x85")
-        except Exception as exc:
-            log.debug("send_realtime(0x85) on stop failed: %s", exc)
     if _jog_task and not _jog_task.done():
         _jog_task.cancel()
         try:

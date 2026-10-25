@@ -1,0 +1,38 @@
+GRBL capture — 2026-10-25 13:33:49 (local, Mac side)
+Via: controller WebSocket read_grbl queries (read-only)
+Captured BEFORE raising $110 / $111 from 381 to 3048 mm/min
+Pi service: active, consolidate/trunk at 925b01d
+Session goal: enable UI preset 2.0 in/s jogging
+
+== Build info ($I) ==
+  [OPT: V,15,128]
+  [VER: 1.1h.20190825:]
+
+== Relevant settings ($$, parsed) ==
+  $3   = 0           (Step direction invert (mask))
+  $13  = 0           (Report in inches)
+  $20  = 0           (Soft limits enable)
+  $21  = 0           (Hard limits enable)
+  $22  = 0           (Homing cycle enable)
+  $100 = 52.493      (X steps/mm)
+  $101 = 52.493      (Y steps/mm)
+  $102 = 250.000     (Z steps/mm)
+  $110 = 381.000     (X max rate (mm/min))             <- 0.25 in/s, to be raised
+  $111 = 381.000     (Y max rate (mm/min))             <- 0.25 in/s, to be raised
+  $112 = 500.000     (Z max rate (mm/min))
+  $120 = 5.000       (X acceleration (mm/s²))          (NOT changed this session)
+  $121 = 5.000       (Y acceleration (mm/s²))          (NOT changed this session)
+  $122 = 10.000      (Z acceleration (mm/s²))
+  $130 = 3048.000    (X max travel (mm))
+  $131 = 3048.000    (Y max travel (mm))
+  $132 = 200.000     (Z max travel (mm))
+
+Full $$ listing not re-captured verbatim here — see
+arduino-grbl/captures/grbl-pre-first-motion-2026-10-23_235310.txt for
+the complete pre-first-motion capture; between then and this session the
+operator wrote $100/$101 to 52.493, $110/$111 to 381, $130/$131 to 3048.
+
+Planned change:
+  $110 = 3048
+  $111 = 3048
+Rollback (if needed): $110=381  $111=381.
