@@ -1044,6 +1044,64 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (sixth pass) — WebSocket handler exceptions no longer close
+the WebSocket.
+
+**Observed symptom (operator):** pressing Z UP / Z DOWN on the touchscreen
+immediately turned the client's "browser connected" indicator red and
+briefly showed "Reconnecting," then recovered after ~1 s. X/Y jog did
+not produce this. The service journal showed NO `z_start` log line
+from the browser presses — the handler never got a chance to log
+"Jog start"-style breadcrumbs before the socket died.
+
+**Root cause (code inspection):** `websocket_endpoint` wrapped the whole
+receive loop in `try: ... except Exception as exc: log.debug(...)` and
+then `finally: _ws_manager.disconnect(ws)`. Any exception from
+`_handle_message` (serialization slip, GPIO read error inside the
+`broadcast_state` that fires after a `z_start`, or anywhere else in
+the chain) was caught at DEBUG level — invisible by default — and the
+`finally` closed the socket. The browser's `onclose` fired, status
+flipped to "Reconnecting", 1500 ms later `connectWS` reopened the
+socket and status went green. No visible trace. The fact that
+automated probes couldn't reproduce it (they sampled state updates
+but never actually caused handler exceptions) left the fault in place.
+
+**Fix (`app/api/http.py`):**
+- `websocket_endpoint` now catches handler exceptions PER MESSAGE,
+  logs them at WARNING with `log.exception` (full traceback), sends
+  the client a `notice`, and keeps the socket open. Only an actual
+  WebSocket framing / transport error now closes the connection.
+- `broadcast_state` wraps its `self._state.to_dict()` + broadcast in
+  a `try: ... except: log.exception` so a bad broadcast cannot
+  propagate out through the handler.
+- The initial-state send on connect is also protected.
+
+**Regression test:**
+`tests/test_api.py::TestWebSocket::test_handler_exception_does_not_
+close_ws` monkey-patches `_handle_message` to raise, then verifies
+the server emits a `notice` to the client AND accepts a follow-up
+message on the same socket. 387 passed on Mac.
+
+**Automated verification of the Z path (post-fix):** A WS probe from
+the Mac to the Pi over the LAN runs `z_start up` + 100 ms heartbeats
+for 3.7 s, observes `cmd=UP duty=0.5 dir=HIGH` the entire time, no
+close, no notice. The server-side GPIO backend IS producing real
+PWM on GPIO18 during this probe — i.e., any EMI / power-coupling
+root cause would reproduce here too. It does not.
+
+**Remaining physical check** (if the operator's browser STILL shows
+the red-flash after this deploy): press Z UP once from the browser,
+then `ssh dirtworks@192.168.1.144 'journalctl -u mudprinter -n 30
+--no-pager | grep -A20 "WebSocket handler error"'` — the fix now
+logs the exception type, the message type (`'z_start'`), and the
+full Python traceback.
+
+**Still open on the Z actuator itself** (unchanged from the fifth
+pass): the actuator does not move despite correct GPIO18 PWM 50 %
+and GPIO23 DIR HIGH signals; measured output across the actuator
+is reported as ~1.5 V. The next physical check sequence is in the
+report, not here, since it is not durable project knowledge.
+
 2026-10-25 (fifth pass) — Speed sliders, touchscreen scrollbar, Z software
 readiness confirmed.
 
