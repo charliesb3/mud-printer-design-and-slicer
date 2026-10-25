@@ -190,15 +190,21 @@ html, body {
   font-size: 1.0em;
 }
 .speed-unit { color: var(--text-muted); font-size: 0.85em; }
-.speed-buttons { gap: 6px; }
+.speed-buttons { gap: 6px; flex-wrap: wrap; }
 .btn-jog-speed {
-  flex: 1;
+  flex: 1 1 60px;
+  min-width: 48px;
   padding: 8px 2px;
   font-size: 0.95em;
 }
 .btn-jog-speed.active {
   outline: 2px solid var(--blue);
   outline-offset: -2px;
+}
+.speed-nudge .btn-jog-nudge {
+  flex: 1 1 50%;
+  padding: 10px 2px;
+  font-size: 0.95em;
 }
 .speed-meta {
   font-size: 0.75em;

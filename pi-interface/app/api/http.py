@@ -115,6 +115,10 @@ _jog_axis: Optional[str] = None
 _jog_direction: int = 1
 _jog_last_heartbeat: float = 0.0
 _jog_task: Optional[asyncio.Task] = None
+# True from the moment a release is requested until the task has exited.
+# The loop checks this before every write so no further $J= steps are queued
+# into GRBL after a release.
+_jog_stopping: bool = False
 
 # Positioning move (Prime) in progress
 _position_task: Optional[asyncio.Task] = None
@@ -188,6 +192,13 @@ async def _jog_loop(axis: str, direction: int) -> None:
 
     try:
         while True:
+            # A stop request short-circuits the loop BEFORE any further write
+            # — _stop_jog already sent 0x85 ahead of us, so we must not queue
+            # another $J= on top of it.
+            if _jog_stopping:
+                log.debug("Jog loop sees _jog_stopping — exiting")
+                break
+
             age = time.monotonic() - _jog_last_heartbeat
             if age > config.JOG_TIMEOUT_S:
                 log.debug("Jog heartbeat timeout (%.2f s) — stopping", age)
@@ -203,6 +214,11 @@ async def _jog_loop(axis: str, direction: int) -> None:
             # are millimetres whatever units mode jobs / positioning left active.
             cmd = f"$J=G21 G91 {axis}{distance:.3f} F{speed:.0f}"
             try:
+                # Re-check right before writing: a release that arrives while
+                # the previous send_command was awaiting `ok` must not race
+                # the next step through the serial write.
+                if _jog_stopping:
+                    break
                 result = await _comm.send_command(cmd, timeout=3.0)  # type: ignore[union-attr]
                 if result.startswith("error:"):
                     log.warning("Jog command error: %s", result)
@@ -213,16 +229,21 @@ async def _jog_loop(axis: str, direction: int) -> None:
                 log.debug("Jog send exception: %s", exc)
                 break
     finally:
-        # Send jog cancel as a safety net regardless of why we stopped.
+        # Belt-and-braces: 0x85 is sent by _stop_jog before cancelling us, but
+        # also send it on heartbeat-timeout / error paths so the exit always
+        # cancels any step still buffered in GRBL's planner.
         log.info("Jog loop ended — sending cancel (0x85)")
         if _comm:
-            await _comm.send_realtime(b"\x85")
+            try:
+                await _comm.send_realtime(b"\x85")
+            except Exception:
+                pass
         _jog_axis = None
 
 
 async def _start_jog(axis: str, direction: int) -> Optional[str]:
     """Activate the jog loop for the given axis and direction (returns a REMOTE STOP refusal)."""
-    global _jog_axis, _jog_direction, _jog_last_heartbeat, _jog_task
+    global _jog_axis, _jog_direction, _jog_last_heartbeat, _jog_task, _jog_stopping
 
     if _latched():
         log.info("Jog refused: REMOTE STOP latched")
@@ -247,14 +268,12 @@ async def _start_jog(axis: str, direction: int) -> Optional[str]:
         log.debug("Jog rejected: positioning move in progress")
         return
 
-    # Cancel previous jog task if still running
+    # Cancel any previous jog task — and make sure the previous button hold
+    # has been fully released before this new deliberate press starts anything.
     if _jog_task and not _jog_task.done():
-        _jog_task.cancel()
-        try:
-            await _jog_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await _stop_jog()
 
+    _jog_stopping = False
     _jog_axis = axis
     _jog_direction = direction
     _jog_last_heartbeat = time.monotonic()
@@ -263,15 +282,34 @@ async def _start_jog(axis: str, direction: int) -> Optional[str]:
 
 
 async def _stop_jog() -> None:
-    """Stop the jog loop immediately."""
-    global _jog_task, _jog_axis
+    """
+    Stop the jog loop immediately.
+
+    Order matters here: send GRBL's jog-cancel real-time byte (0x85) BEFORE
+    cancelling the loop task. The task may be mid-`send_command` on the next
+    `$J=` step; cancelling first lets that write finish and reach GRBL, which
+    then plays the step after we think we have stopped — the "second burst"
+    the operator sees. 0x85 bypasses the send lock and reaches GRBL directly;
+    GRBL discards the planner buffer and decelerates to a stop immediately.
+
+    `_jog_stopping` additionally guards the loop so no new step is written
+    between its heartbeat check and its next write.
+    """
+    global _jog_task, _jog_axis, _jog_stopping
+    _jog_stopping = True
     _jog_axis = None
+    if _comm:
+        try:
+            await _comm.send_realtime(b"\x85")
+        except Exception as exc:
+            log.debug("send_realtime(0x85) on stop failed: %s", exc)
     if _jog_task and not _jog_task.done():
         _jog_task.cancel()
         try:
             await _jog_task
         except (asyncio.CancelledError, Exception):
             pass
+    _jog_task = None
 
 
 # ------------------------------------------------------------------ #

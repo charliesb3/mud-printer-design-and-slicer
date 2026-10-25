@@ -208,13 +208,18 @@ function renderJogSpeedControl(s) {
   const curMm = s.jog_speed_mm_min || 0;
 
   label.textContent = curInS.toFixed(3);
+  // Preset buttons target an absolute in/s value. Each preset is disabled if
+  // jogging is disabled OR its target would exceed the configured ceiling —
+  // so an operator can never pick a speed GRBL cannot deliver.
   document.querySelectorAll(".btn-jog-speed").forEach(b => {
-    b.disabled = !s.jog_enabled;
-    const frac = parseFloat(b.dataset.frac || "0");
-    const target = frac * maxInS;
-    // Highlight the preset closest to the current speed (within ½ step).
-    b.classList.toggle("active", s.jog_enabled && Math.abs(target - curInS) < 0.001);
+    const target = parseFloat(b.dataset.inS || "0");
+    const abovelim = target > maxInS + 1e-6;
+    b.disabled = !s.jog_enabled || abovelim;
+    b.classList.toggle("active", s.jog_enabled && !abovelim && Math.abs(target - curInS) < 0.0005);
   });
+  // Nudge buttons: enabled whenever jogging is enabled; they are clamped
+  // server-side against [0, ceiling].
+  document.querySelectorAll(".btn-jog-nudge").forEach(b => { b.disabled = !s.jog_enabled; });
 
   if (!s.jog_enabled) {
     meta.textContent = "Jog disabled — set JOG_SPEED_MM_MIN in .env";
@@ -1276,17 +1281,24 @@ function attachControls() {
     send({ type: "job_start" });
   });
 
-  // Jog speed presets (¼ / ½ / ¾ / Max of the configured ceiling). Each
-  // button sends `jog_set_speed` with the exact in/s fraction; the server
-  // clamps against the ceiling. Clicks mid-jog are honoured — the jog loop
-  // reads the live speed each iteration.
+  // Jog speed presets: discrete absolute values in in/s. The server clamps
+  // against the ceiling, so a preset above the configured ceiling is also
+  // disabled in the UI. Clicks mid-jog are honoured — the jog loop reads
+  // the live speed each iteration.
   document.querySelectorAll(".btn-jog-speed").forEach(btn => {
     btn.addEventListener("click", () => {
-      const frac = parseFloat(btn.dataset.frac || "0");
-      const s = lastState || {};
-      const maxInS = s.jog_speed_max_in_s || 0;
-      const target = frac * maxInS;
+      const target = parseFloat(btn.dataset.inS || "0");
       send({ type: "jog_set_speed", speed_in_s: target });
+    });
+  });
+  // Nudge buttons: ± 0.05 in/s increments for fine positioning speeds.
+  document.querySelectorAll(".btn-jog-nudge").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const delta = parseFloat(btn.dataset.nudge || "0");
+      const s = lastState || {};
+      const cur = s.jog_speed_in_s || 0;
+      const next = Math.round((cur + delta) * 100) / 100;      // keep clean 0.01 steps
+      send({ type: "jog_set_speed", speed_in_s: Math.max(0, next) });
     });
   });
 }

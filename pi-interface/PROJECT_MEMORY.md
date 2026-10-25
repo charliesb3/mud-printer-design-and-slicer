@@ -469,6 +469,26 @@ Previous approach considered and rejected: one large jog move that requires a
 separate stop message. Rejected because browser disconnect during jog would
 leave the machine running.
 
+### Deliberate jog release: 0x85 BEFORE cancel, with a stopping flag (2026-10-25)
+Fix for an operator-observed "second burst" after releasing a jog button.
+Root cause: the jog cancel byte (0x85) used to be written only from the jog
+task's `finally` block, which runs AFTER the task is cancelled. Between the
+cancel and the finally running, the task's current `await send_command(…)`
+could have already written one more `$J=` step onto the serial line; GRBL
+then played that step after the UI believed it had stopped.
+Fix (`app/api/http.py`):
+- `jog_stop` → `_stop_jog()` writes `0x85` via `send_realtime` IMMEDIATELY
+  (bypasses the send lock, so it reaches GRBL even while the loop is mid-
+  `send_command`), THEN cancels the loop task; the task's `finally` writes
+  `0x85` again as belt-and-braces for heartbeat-timeout / error exits.
+- A module-level `_jog_stopping` flag is checked at the top of each loop
+  iteration AND again immediately before each `send_command` — so a release
+  that arrives while a previous `send_command` is awaiting `ok` cannot race
+  the next step through the serial write even if cancel hasn't propagated.
+- `_start_jog` awaits any previous `_stop_jog` and resets `_jog_stopping`.
+Tests: `tests/test_hardware.py::TestJogRelease` — `jog_stop` emits 0x85
+and no further `$J=` is written; a repeat press awaits the previous release.
+
 ### Server-owned job runner
 The job runner is an asyncio.Task on the server. Browser connect/disconnect has
 no effect on it. This is a hard requirement from the user.
@@ -565,6 +585,19 @@ actual safety device. This is explicitly displayed in the UI.
 ### JOG_SPEED_MM_MIN=0 default
 Jogging is disabled by default until the speed is validated on the actual
 machine. The UI shows a warning if jogging is disabled.
+
+### Jog speed presets: discrete absolute values (2026-10-25)
+Product target: X/Y maximum selectable manual jog speed = 2.0 in/s
+(= 120 in/min = 3048 mm/min). The UI exposes DISCRETE absolute-value preset
+buttons (0.05 / 0.1 / 0.25 / 0.5 / 1.0 / 2.0 in/s) plus ±0.05 in/s nudge
+buttons for fine positioning speeds — no slider. A preset above the
+configured ceiling (`JOG_SPEED_MAX_MM_MIN`) is disabled in the UI; the
+server clamps the WS `jog_set_speed` message defensively.
+GRBL must independently permit the ceiling: `$110` / `$111` ≥ the ceiling
+in mm/min or GRBL silently clamps the feed. The first-motion env template
+(`.env.firstmotion`) documents the console commands and the required
+pre-change capture. Do not change `$120` / `$121` (acceleration) solely to
+raise the ceiling.
 
 ### asyncio.shield() in send_command
 The pending future is shielded from task cancellation. This prevents a cancelled
@@ -890,6 +923,28 @@ of the new panels.
 ---
 
 ## Last Updated
+
+2026-10-25 — jog UI reworked for 2.0 in/s + post-release burst fixed.
+Changes in `app/api/http.py`, `app/static/index.html`, `app/static/app.js`,
+`app/static/style.css`, `.env.firstmotion`, `.env.example`:
+- Jog preset buttons rebuilt as DISCRETE absolute in/s targets (0.05, 0.1,
+  0.25, 0.5, 1.0, 2.0 in/s) plus ±0.05 nudge buttons.
+- `.env.firstmotion` sets `JOG_SPEED_MM_MIN=76` (0.05 in/s startup) and
+  `JOG_SPEED_MAX_MM_MIN=3048` (2.0 in/s ceiling). Operator must also raise
+  GRBL `$110` / `$111` to 3048 mm/min on the Arduino console (`$110=3048`,
+  `$111=3048`) BEFORE the UI's 2.0 in/s preset will actually deliver 2.0 in/s
+  — GRBL silently clamps feeds to its own axis-max rate.
+- Post-release burst fix (see "Deliberate jog release: 0x85 BEFORE cancel"):
+  `_stop_jog` now writes GRBL's `0x85` jog-cancel real-time byte BEFORE
+  cancelling the loop task; a module-level `_jog_stopping` flag short-
+  circuits the loop so no further `$J=` step is written after a release.
+  Verified by `tests/test_hardware.py::TestJogRelease` (2 new tests).
+- Not yet exercised on hardware.
+
+Test suite: 378 passed + 1 skipped (the 2 new `TestJogRelease` tests are
+included; the skip is the view-fidelity test gated on a user-local fixture).
+
+Nothing committed — awaiting operator physical verification.
 
 2026-10-23 — first-motion software configuration applied on the Pi
 (no physical motion yet).

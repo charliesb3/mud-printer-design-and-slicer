@@ -430,6 +430,61 @@ def running_job(n=40) -> CurrentJob:
                       lines=[f"G1 X{i} F100" for i in range(n)])
 
 
+class TestJogRelease:
+    """
+    Deliberate release-to-stop semantics (fix for the operator-observed
+    "second burst" after releasing an X/Y jog button):
+
+    - `jog_stop` writes GRBL's jog-cancel real-time byte (0x85) BEFORE the
+      loop task is cancelled, so no further `$J=` step is queued into GRBL's
+      planner on the way out;
+    - after `jog_stop` returns, no more `$J=` lines are written even if a
+      pending `ok` arrives afterwards;
+    - a repeat / overlapping `jog_start` cannot start the jog from the
+      previous button hold — the stop is awaited first.
+    """
+
+    async def test_jog_stop_sends_0x85_and_queues_no_more_steps(self, rig):
+        ws = FakeWS()
+        await msg({"type": "jog_start", "axis": "X", "direction": 1}, ws)
+        await wait_until_sent(rig.transport, 1)                           # one $J= in flight
+        jogs_before = sum(1 for l in rig.transport.sent_lines if l.startswith("$J="))
+        raws_before = len(rig.transport.raw_sent)
+
+        await msg({"type": "jog_stop"}, ws)
+        # 0x85 was written (by _stop_jog before cancel, and again by the loop's
+        # finally — both are safe); the task has exited.
+        new_raws = rig.transport.raw_sent[raws_before:]
+        assert b"\x85" in new_raws
+        assert http_module._jog_task is None or http_module._jog_task.done()
+
+        # Let any lingering `ok` responses drain; no $J= must follow.
+        await asyncio.sleep(0.1)
+        jogs_after = sum(1 for l in rig.transport.sent_lines if l.startswith("$J="))
+        assert jogs_after == jogs_before, (
+            f"$J= written after release: {rig.transport.sent_lines[jogs_before:]}")
+
+    async def test_repeat_jog_start_awaits_previous_release(self, rig):
+        # Rapid press / release / press — the second press cannot sneak in
+        # until the previous task's stop has completed. The 0x85 is sent and
+        # the new jog starts fresh (not resumed from the old loop).
+        wsA = FakeWS()
+        await msg({"type": "jog_start", "axis": "X", "direction": 1}, wsA)
+        await wait_until_sent(rig.transport, 1)
+
+        await msg({"type": "jog_stop"}, wsA)
+        assert http_module._jog_task is None or http_module._jog_task.done()
+        wsB = FakeWS()
+        await msg({"type": "jog_start", "axis": "Y", "direction": -1}, wsB)
+        # The new task is running fresh, and _jog_stopping is cleared by the
+        # start so the fresh loop writes its first step.
+        task = http_module._jog_task
+        assert task is not None and not task.done()
+        assert not http_module._jog_stopping
+        # Clean up.
+        await msg({"type": "jog_stop"}, wsB)
+
+
 class TestRemoteStop:
     async def press_stop(self, rig):
         rig.backend.press(pins.REMOTE_STOP)

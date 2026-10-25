@@ -220,10 +220,16 @@
             <span class="speed-value"><span id="jog-speed-in-s">0.000</span><span class="speed-unit"> in/s</span></span>
           </div>
           <div class="controls-row speed-buttons">
-            <button class="ctrl-btn btn-jog-speed" data-frac="0.25">¼</button>
-            <button class="ctrl-btn btn-jog-speed" data-frac="0.5">½</button>
-            <button class="ctrl-btn btn-jog-speed" data-frac="0.75">¾</button>
-            <button class="ctrl-btn btn-jog-speed" data-frac="1.0">Max</button>
+            <button class="ctrl-btn btn-jog-speed" data-in-s="0.05">0.05</button>
+            <button class="ctrl-btn btn-jog-speed" data-in-s="0.1">0.1</button>
+            <button class="ctrl-btn btn-jog-speed" data-in-s="0.25">0.25</button>
+            <button class="ctrl-btn btn-jog-speed" data-in-s="0.5">0.5</button>
+            <button class="ctrl-btn btn-jog-speed" data-in-s="1.0">1.0</button>
+            <button class="ctrl-btn btn-jog-speed" data-in-s="2.0">2.0</button>
+          </div>
+          <div class="controls-row speed-buttons speed-nudge">
+            <button class="ctrl-btn btn-jog-nudge" data-nudge="-0.05" title="Decrease jog speed by 0.05 in/s">− 0.05</button>
+            <button class="ctrl-btn btn-jog-nudge" data-nudge="0.05" title="Increase jog speed by 0.05 in/s">+ 0.05</button>
           </div>
           <div class="speed-meta" id="jog-speed-meta"></div>
         </div>
