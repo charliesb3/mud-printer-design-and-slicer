@@ -155,6 +155,44 @@ class TestWebSocket:
             ws.send_json({"type": "jog_start", "axis": "X", "direction": 1})
             # No exception, no crash — server handles gracefully
 
+    def test_handler_exception_does_not_close_ws(self, client, monkeypatch):
+        """
+        Pin the fifth-pass bug: a handler exception used to be caught at
+        log.debug then the `finally` block disconnected the client, so a
+        single bad message silently closed the WS. The browser then
+        auto-reconnected ~1.5 s later — the symptom "WS turns red on z_start,
+        green again a second later". The handler now logs the traceback and
+        notifies the client, but the socket stays open.
+        """
+        from app.api import http as http_module
+
+        async def boom(_data, _ws):
+            raise RuntimeError("synthetic test error")
+        monkeypatch.setattr(http_module, "_handle_message", boom)
+
+        with client.websocket_connect("/ws") as ws:
+            _ = ws.receive_json()                               # initial state
+            ws.send_json({"type": "anything"})
+            # The handler raised. The server should have sent us a notice
+            # AND kept the socket open. Drain any messages for up to 2 s and
+            # confirm we see a notice without the socket closing.
+            got_notice = False
+            for _ in range(10):
+                m = ws.receive_json()
+                if m.get("type") == "notice":
+                    got_notice = True
+                    assert "Internal error" in m.get("message", "")
+                    break
+            assert got_notice, "server did not notify the client of the handler error"
+            # The socket must still be open — send another message and expect
+            # ANOTHER notice (the server is still processing messages).
+            ws.send_json({"type": "another"})
+            for _ in range(10):
+                m = ws.receive_json()
+                if m.get("type") == "notice":
+                    return
+            assert False, "WS closed after the first exception"
+
 
 class TestJogConfiguration:
     def test_jog_disabled_without_speed(self, client):

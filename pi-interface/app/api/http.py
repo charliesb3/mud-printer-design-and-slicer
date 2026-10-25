@@ -794,10 +794,19 @@ async def _notify(ws: WebSocket, message: str, level: str = "warn") -> None:
 
 
 async def broadcast_state() -> None:
-    """Push the current state to every client now (not waiting for the 200 ms loop)."""
-    sync_job_state_to_appstate()
-    if _ws_manager and _state and _ws_manager.client_count > 0:
-        await _ws_manager.broadcast(_state.to_dict())
+    """Push the current state to every client now (not waiting for the 200 ms loop).
+
+    Errors here are LOCAL to this broadcast — never propagate out, because this
+    is called from the WebSocket message handler and an unhandled exception
+    would otherwise close the WebSocket (see commentary on
+    `websocket_endpoint`).
+    """
+    try:
+        sync_job_state_to_appstate()
+        if _ws_manager and _state and _ws_manager.client_count > 0:
+            await _ws_manager.broadcast(_state.to_dict())
+    except Exception:
+        log.exception("broadcast_state failed")
 
 
 # ------------------------------------------------------------------ #
@@ -977,25 +986,54 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
+    """
+    One WebSocket client. The outer loop is for the SOCKET lifecycle only:
+    - WebSocketDisconnect = client went away — expected, silent cleanup.
+    - Any other exception in `receive_json` (framing, I/O) = also closes.
+    - Exceptions from `_handle_message` are CAUGHT PER-MESSAGE and logged
+      with a traceback so one bad message cannot silently drop the socket.
+      Before 2026-10-25 (fourth-pass bug) this handler caught every
+      exception at `log.debug` and let the `finally` disconnect the client
+      — a single serialization slip, GPIO read-time error, or state-
+      build error during a `z_start` broadcast would kick the browser
+      offline for ~1 s with no visible log. Operator saw this on z_start.
+    """
     assert _ws_manager is not None
     assert _state is not None
 
     await _ws_manager.connect(ws)
     # Send full state immediately so a reconnecting client syncs instantly
-    await ws.send_json(_state.to_dict())
+    try:
+        await ws.send_json(_state.to_dict())
+    except Exception:
+        log.exception("WebSocket: initial state send failed; closing")
+        _ws_manager.disconnect(ws)
+        return
 
     try:
         while True:
             data = await ws.receive_json()
-            await _handle_message(data, ws)
+            try:
+                await _handle_message(data, ws)
+            except Exception:
+                msg_type = data.get("type") if isinstance(data, dict) else None
+                log.exception("WebSocket handler error (type=%r)", msg_type)
+                # Tell the client there was an error but KEEP THE SOCKET OPEN.
+                try:
+                    await _notify(ws, f"Internal error handling {msg_type!r} — see Pi logs.")
+                except Exception:
+                    log.exception("Could not notify client of handler error")
     except WebSocketDisconnect:
         pass
-    except Exception as exc:
-        log.debug("WebSocket error: %s", exc)
+    except Exception:
+        log.exception("WebSocket receive/transport error")
     finally:
         _ws_manager.disconnect(ws)
         if _state and _state.hardware:          # a vanished client holds no Z (dead-man would also stop it)
-            _state.hardware.z.release(_z_source(ws))
+            try:
+                _state.hardware.z.release(_z_source(ws))
+            except Exception:
+                log.exception("Error releasing Z on WS cleanup")
 
 
 # ------------------------------------------------------------------ #
