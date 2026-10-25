@@ -121,9 +121,7 @@ class GRBLCommunicator:
             self._pending_future = loop.create_future()
             future = self._pending_future
             try:
-                log.info("SEND DIAG: writing to serial: %r", command.strip())
                 await self._transport.write_line(command)
-                log.info("SEND DIAG: write_line returned, awaiting ok")
                 self._last_command = command.strip()
                 self._state.console_add("tx", command.strip())
                 if live:
@@ -132,17 +130,9 @@ class GRBLCommunicator:
                     asyncio.shield(future),
                     timeout=effective_timeout,
                 )
-                log.info("SEND DIAG: future resolved: %r", result)
                 return result
             except asyncio.TimeoutError:
                 log.warning("GRBL command timed out: %s", command.strip())
-                raise
-            except asyncio.CancelledError:
-                log.info("SEND DIAG: cancelled during wait for %r", command.strip())
-                raise
-            except Exception as exc:
-                log.warning("SEND DIAG: exception for %r: %s / %s",
-                            command.strip(), type(exc).__name__, exc)
                 raise
             finally:
                 self._pending_future = None
@@ -258,8 +248,6 @@ class GRBLCommunicator:
 
         # Normal acknowledgement
         if line == "ok":
-            if self._last_command and "$J=" in str(self._last_command):
-                log.info("DISPATCH DIAG: ok received for %s", self._last_command)
             self._resolve_pending("ok")
             self._state.console_add("rx", line)
             return
@@ -272,8 +260,6 @@ class GRBLCommunicator:
                 detail = ""
             if self._last_command:
                 detail = f"{detail} (after: {self._last_command})"
-            log.warning("DISPATCH DIAG: GRBL error line %r (last_command=%s)",
-                        line, self._last_command)
             self._state.add_event("error", line, detail)
             self._resolve_pending(line)
             self._state.console_add("rx", line)

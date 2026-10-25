@@ -1044,6 +1044,39 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (third pass) — hardware trace confirms single-shot jog + serial
+write lock work correctly on real GRBL; "no motion" report traced to speed
++ acceleration physics, not code.
+
+The operator reported after the second-pass deploy that X/Y jog produced
+no visible physical motion. A diagnostic logging commit (`1fc0f4c`, now
+reverted) elevated every exit path in `_jog_loop`, `send_command` and
+`_dispatch` to INFO/WARNING. One operator-triggered jog captured the full
+chain:
+```
+17:19:28.083  Jog start: X 254.0 mm @ 762.0 mm/min (single-shot)
+17:19:28.083  TX: $J=G21 G91 X254.000 F762
+17:19:28.094  RX ok (11 ms round trip)
+17:19:28.095  entering heartbeat loop
+17:19:29.580  heartbeat sleep cancelled  (operator released at t=1.5 s)
+17:19:29.580  sending 0x85
+```
+The $J= line DID reach GRBL and was executed. The perceived "no motion"
+was caused by:
+- UI's startup default `JOG_SPEED_MM_MIN=46` (= 0.030 in/s): at
+  `$120=5 mm/s²` and 1-s hold the total travel is ~0.77 mm = 0.030 in,
+  which looks like "no motion" on a 10×10 ft machine.
+- Even at the operator's chosen 762 mm/min = 0.5 in/s, `$120=5` caps the
+  velocity reached in 1 s to 5 mm/s (0.2 in/s) and total travel to
+  ~5 mm = 0.2 in. Also easily missed visually.
+The staged X/Y acceleration procedure in this file (Key Decisions →
+"Staged X/Y acceleration procedure") is the next concrete step: raise
+`$120 / $121` from 5 → 25 → 50 → 100 → 170 mm/s² with physical checks at
+each stage. No further code change is needed for X/Y jogging.
+
+Diagnostic logging reverted in the follow-on commit; the single-shot jog
++ serial write lock + Z duty 0.5 remain as deployed.
+
 2026-10-25 (second pass) — single-shot jog + serial write lock + Z duty.
 Replaces the first-pass "0x85 before cancel" fix which passed automated
 tests but FAILED physical testing. Changes:
