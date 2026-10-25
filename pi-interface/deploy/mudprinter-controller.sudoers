@@ -1,0 +1,31 @@
+# Mud Printer Controller — narrow passwordless sudo.
+#
+# INSTALL this file ONCE on the Pi so the desktop launcher and remote
+# deployments can start / restart the mudprinter.service without a
+# password. The scope is deliberately narrow: only specific `systemctl`
+# verbs against the mudprinter service. No shell escape, no editing.
+#
+# Install:
+#   sudo install -m 0440 -o root -g root \
+#     /home/dirtworks/mudprinter-controller/pi-interface/deploy/mudprinter-controller.sudoers \
+#     /etc/sudoers.d/mudprinter-controller
+#   sudo visudo -c   # validate the whole sudoers tree
+#
+# Verify the sudoers file parses:
+#   sudo visudo -cf /etc/sudoers.d/mudprinter-controller
+#
+# Remove (restores password-required behaviour):
+#   sudo rm /etc/sudoers.d/mudprinter-controller
+#
+# The sudoers filename MUST NOT contain a dot, so the ".sudoers" suffix is
+# dropped during install (the target file is just "mudprinter-controller").
+
+dirtworks ALL=(root) NOPASSWD: /bin/systemctl restart mudprinter
+dirtworks ALL=(root) NOPASSWD: /bin/systemctl start mudprinter
+dirtworks ALL=(root) NOPASSWD: /bin/systemctl stop mudprinter
+dirtworks ALL=(root) NOPASSWD: /bin/systemctl status mudprinter
+dirtworks ALL=(root) NOPASSWD: /bin/systemctl is-active mudprinter
+dirtworks ALL=(root) NOPASSWD: /bin/systemctl show mudprinter *
+# install(1) is used to copy the .desktop file into /home/dirtworks/Desktop
+# with the right ownership — a one-shot action during initial setup.
+dirtworks ALL=(dirtworks) NOPASSWD: /usr/bin/install

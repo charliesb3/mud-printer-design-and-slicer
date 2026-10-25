@@ -9,7 +9,10 @@ venv/
 # Environment
 .env
 
-# Local deployment config (Pi hostname / user, per operator)
+# Local deployment config: historically at pi-interface/scripts/deploy.config.
+# From 2026-10-25 the authoritative location is the REPO ROOT (/deploy.config),
+# ignored by the root .gitignore. This entry stays only to catch an old copy
+# left behind on a developer machine.
 scripts/deploy.config
 
 # Job storage (runtime data, not committed)

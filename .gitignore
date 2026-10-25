@@ -1,6 +1,10 @@
-.claude/
+.claude/*
+!.claude/settings.json
 .DS_Store
 __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+# Local Mac-side Pi deployment config at repo root (operator-specific).
+# The sample `deploy.config.sample` IS tracked.
+/deploy.config

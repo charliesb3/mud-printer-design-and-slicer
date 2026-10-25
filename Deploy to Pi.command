@@ -2,12 +2,19 @@
 #
 # Mud Printer — one-click deploy from Mac to Pi.
 #
-# Double-click this file in Finder. macOS opens it in Terminal, this script
-# SSHes into the Pi, runs scripts/deploy_pi.sh over the connection, and prints
-# the result. The actual safety checks + git pull + pip install + service
-# restart all run on the Pi (see deploy_pi.sh).
+# Lives at the REPO ROOT (next to PROJECT_OVERVIEW.md). Double-click this
+# file in Finder; macOS opens it in Terminal, this script SSHes into the
+# Pi and runs pi-interface/scripts/deploy_pi.sh over the connection. All
+# safety checks + git pull + pip install + service restart happen on the
+# Pi (see deploy_pi.sh).
 #
-# One-time setup is documented in docs/one-click-deploy.md.
+# Companion files, also at the repo root:
+#   deploy.config         — gitignored, operator-specific (PI_HOST / PI_USER)
+#   deploy.config.sample  — template, tracked in git
+#
+# Claude Code can also drive the same deployment via SSH directly, without
+# this launcher (see pi-interface/docs/one-click-deploy.md → "Automated
+# deployment"). This launcher stays for manual deploys from Finder.
 
 set -euo pipefail
 

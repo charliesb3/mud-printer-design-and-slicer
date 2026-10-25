@@ -1,0 +1,42 @@
+{
+  "$comment": "Project-level Claude Code permissions for mudprintersoftware. Narrow by design — read commentary before widening. See .claude/settings.local.json for per-developer overrides.",
+  "permissions": {
+    "allow": [
+      "Bash(./Deploy to Pi.command*)",
+      "Bash(bash ./Deploy to Pi.command*)",
+      "Bash(git push origin consolidate/trunk*)",
+      "Bash(git push --set-upstream origin consolidate/trunk*)",
+      "Bash(git push -u origin consolidate/trunk*)",
+      "Bash(ssh*dirtworks@192.168.1.144*)",
+      "Bash(ssh*dirtworks@mudslinger*)",
+      "Bash(scp*dirtworks@192.168.1.144*)",
+      "Bash(scp*dirtworks@mudslinger*)",
+      "Bash(curl*192.168.1.144*)",
+      "Bash(curl*mudslinger*)",
+      "Bash(nc*192.168.1.144*)",
+      "Bash(nc*mudslinger*)",
+      "Bash(pi-interface/.venv/bin/python*)",
+      "Bash(pi-interface/.venv/bin/pytest*)",
+      "Bash(pi-interface/.venv/bin/pip list*)",
+      "Bash(./pi-interface/.venv/bin/python*)",
+      "Bash(.venv/bin/python*)",
+      "Bash(pytest*)",
+      "Bash(bash -n*)"
+    ],
+    "deny": [
+      "Bash(git push*--force*)",
+      "Bash(git push*-f*)",
+      "Bash(git push*:main*)",
+      "Bash(git push*:master*)",
+      "Bash(git push origin main*)",
+      "Bash(git push origin master*)",
+      "Bash(git push --mirror*)",
+      "Bash(git push --delete*)",
+      "Bash(git push --prune*)",
+      "Bash(ssh*rm -rf*)",
+      "Bash(ssh*sudo rm*)",
+      "Bash(ssh*mkfs*)",
+      "Bash(ssh*dd if*of*/dev*)"
+    ]
+  }
+}

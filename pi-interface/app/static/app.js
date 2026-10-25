@@ -1247,6 +1247,26 @@ function attachRemoteStopClear() {
     () => send({ type: "remote_stop_clear" }));
 }
 
+// ---- Exit kiosk (hold 1.5 s) — closes Chromium kiosk; backend keeps running
+const EXIT_KIOSK_HOLD_MS = 1500;
+
+function attachExitKiosk() {
+  const btn = document.getElementById("btn-exit-kiosk");
+  if (!btn) return;
+  attachHoldButton(btn, EXIT_KIOSK_HOLD_MS, async () => {
+    try {
+      const resp = await fetch("/api/exit_kiosk", { method: "POST" });
+      const data = await resp.json();
+      if (!data.ok) {
+        showNotice(data.error || "Exit kiosk failed.");
+      }
+      // On success Chromium is closing right now; nothing more to do.
+    } catch (e) {
+      showNotice("Exit kiosk request failed: " + e);
+    }
+  });
+}
+
 function attachHardwarePanel() {
   const toggle = document.getElementById("hw-toggle");
   const body = document.getElementById("hw-body");
@@ -1413,6 +1433,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".z-btn").forEach(attachZButton);
   attachRemoteStopClear();
   attachHardwarePanel();
+  attachExitKiosk();
   attachView();
   attachPrinter();
 

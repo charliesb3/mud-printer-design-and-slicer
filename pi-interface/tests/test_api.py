@@ -402,3 +402,71 @@ class TestInchConversion:
         assert abs(mm_min_to_in_s(3048.0) - 2.0) < 1e-9
         for mm_min in (100.0, 300.0, 900.0, 3048.0, 9144.0):
             assert abs(in_s_to_mm_min(mm_min_to_in_s(mm_min)) - mm_min) < 1e-9
+
+
+class TestExitKiosk:
+    """POST /api/exit_kiosk signals the Chromium PID written by launch-kiosk.sh.
+    Backend is unaffected. Covers: missing PID file, stale PID, successful signal."""
+
+    def test_missing_pid_file_reports_not_running(self, client, tmp_path, monkeypatch):
+        from app.api import http as http_mod
+        monkeypatch.setattr(http_mod, "KIOSK_PID_PATH", str(tmp_path / "nope.pid"))
+        resp = client.post("/api/exit_kiosk")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["ok"] is False and d["running"] is False
+        assert "No kiosk" in d["error"]
+
+    def test_stale_pid_reports_already_exited(self, client, tmp_path, monkeypatch):
+        from app.api import http as http_mod
+        import os
+        # Find a PID that is almost certainly dead: fork a child that exits
+        # immediately, record its PID, wait for it, use it.
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        os.waitpid(pid, 0)
+        pid_file = tmp_path / "kiosk.pid"
+        pid_file.write_text(str(pid))
+        monkeypatch.setattr(http_mod, "KIOSK_PID_PATH", str(pid_file))
+        resp = client.post("/api/exit_kiosk")
+        d = resp.json()
+        assert d["ok"] is False and d["running"] is False
+        assert "already exited" in d["error"]
+
+    def test_live_pid_is_signaled(self, client, tmp_path, monkeypatch):
+        from app.api import http as http_mod
+        import os
+        import signal
+        import time
+        # Fork a child that sleeps so we have a live PID to signal.
+        pid = os.fork()
+        if pid == 0:
+            # Child: SIGTERM handler exits cleanly.
+            signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+            time.sleep(5)
+            os._exit(1)   # if we ever get here, the test failed
+        try:
+            pid_file = tmp_path / "kiosk.pid"
+            pid_file.write_text(str(pid))
+            monkeypatch.setattr(http_mod, "KIOSK_PID_PATH", str(pid_file))
+            resp = client.post("/api/exit_kiosk")
+            d = resp.json()
+            assert d["ok"] is True
+            assert d["signaled_pid"] == pid
+            # The child's SIGTERM handler exits — reap it.
+            for _ in range(50):
+                waited, _ = os.waitpid(pid, os.WNOHANG)
+                if waited:
+                    break
+                time.sleep(0.02)
+            assert waited == pid, "child did not exit after SIGTERM"
+        finally:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass

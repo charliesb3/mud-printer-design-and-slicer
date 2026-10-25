@@ -1,6 +1,7 @@
 r"""
 Regression tests for the Mac → Pi one-click deploy launcher
-(`scripts/Deploy to Pi.command`).
+(`Deploy to Pi.command` at the REPO ROOT — moved from
+`pi-interface/scripts/` on 2026-10-25).
 
 The bug these tests pin: on first use, the launcher's remote command
 contained a literal `$HOME` (because of an escaped `\$HOME` default in
@@ -25,8 +26,11 @@ from pathlib import Path
 import pytest
 
 
+# The launcher lives at the REPO ROOT alongside PROJECT_OVERVIEW.md.
+# `tests/test_launcher.py` is 2 levels down (pi-interface/tests/), so the
+# repo root is parents[2].
 LAUNCHER = (
-    Path(__file__).resolve().parent.parent / "scripts" / "Deploy to Pi.command"
+    Path(__file__).resolve().parents[2] / "Deploy to Pi.command"
 )
 
 

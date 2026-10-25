@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Mud Printer Controller
+GenericName=Mud Printer Controller
+Comment=Open the Mud Printer Controller in fullscreen kiosk mode
+Exec=/home/dirtworks/mudprinter-controller/pi-interface/deploy/launch-kiosk.sh
+Icon=applications-engineering
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=false
+Keywords=mud;printer;kiosk;controller;

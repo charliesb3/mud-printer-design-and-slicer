@@ -1044,6 +1044,55 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (fourth pass) — Pi desktop launcher + autonomous deploy workflow.
+
+**Desktop integration (new):**
+- `pi-interface/deploy/launch-kiosk.sh` — Pi-side script invoked by the
+  `~/Desktop/Mud Printer Controller.desktop` icon. Starts
+  `mudprinter.service` if inactive (via narrow passwordless sudo), waits
+  for `/api/state`, launches Chromium `--kiosk`, writes Chromium's PID
+  to `/tmp/mudprinter-kiosk.pid` so the UI's new "Exit" button can send
+  SIGTERM. If a kiosk is already running, raises it instead of starting
+  a second one.
+- `pi-interface/deploy/Mud Printer Controller.desktop` — the double-tap
+  launcher entry, installed at `~/Desktop/` by
+  `pi-interface/deploy/setup-controller.sh`.
+- `/api/exit_kiosk` POST endpoint — reads the kiosk PID file, sends
+  SIGTERM, returns `{ok, signaled_pid}`. The service is untouched.
+- Status-bar "Exit" button (hold 1.5 s) calls `/api/exit_kiosk`. The
+  existing boot-time `~/.config/labwc/autostart` → `kiosk.sh` path is
+  unchanged — automatic startup on power-on still works. Reopening the
+  controller after exit uses the desktop icon.
+
+**Autonomous deployment (new):**
+- `pi-interface/deploy/mudprinter-controller.sudoers` — narrow NOPASSWD
+  rule for `/bin/systemctl {restart,start,stop,status,is-active,show}
+  mudprinter` and the one-shot `/usr/bin/install` used by setup. Install
+  via `sudo install -m 0440 ... /etc/sudoers.d/mudprinter-controller`.
+- `pi-interface/deploy/setup-controller.sh` — idempotent one-time Pi
+  install that validates and installs the sudoers rule, drops the
+  `.desktop` icon, and verifies passwordless sudo works. Runs via
+  `ssh -t ... sudo bash ...`.
+- `.claude/settings.json` (project-level, TRACKED) — narrow allow /
+  deny lists so Claude Code can push to `consolidate/trunk`, SSH to
+  the Pi, run the deploy launcher, and run pytest without approval
+  prompts. Force-pushes, pushes to main / master, and shell-command
+  SSH payloads for destructive ops stay denied.
+- `.gitignore` adjusted: `.claude/*` ignored EXCEPT
+  `.claude/settings.json`.
+
+**File relocations:**
+- `Deploy to Pi.command` and `deploy.config.sample` moved to repo root
+  (where the operator put the launcher by hand). `deploy.config` moved
+  along with them (gitignored). The launcher's `SCRIPT_DIR` resolves
+  the config next to it; `tests/test_launcher.py` updated to the new
+  path. One authoritative deployment underneath: `pi-interface/scripts/
+  deploy_pi.sh` on the Pi; the Finder launcher and Claude Code both
+  drive it over SSH.
+
+Tests: 385 passed + 1 skipped (3 new `TestExitKiosk` cases; 8 launcher
+tests updated to the new path).
+
 2026-10-25 (third pass) — hardware trace confirms single-shot jog + serial
 write lock work correctly on real GRBL; "no motion" report traced to speed
 + acceleration physics, not code.

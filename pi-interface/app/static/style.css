@@ -794,3 +794,22 @@ html, body {
 .hw-table tr.pressed td { color: var(--amber); font-weight: 700; }
 .diag-events .ev-remote_stop, .diag-events .ev-hardware { color: var(--red); }
 .diag-events .ev-z { color: var(--blue); }
+
+/* --- Exit kiosk button (status bar, hold-to-exit) --- */
+.exit-kiosk-btn {
+  position: relative;
+  margin-left: 8px;
+  padding: 6px 14px;
+  font-size: 0.85em;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  min-width: 56px;
+}
+.exit-kiosk-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.exit-kiosk-btn .hold-fill { background: rgba(251, 191, 36, 0.35); }
+.exit-kiosk-btn.holding { color: var(--text); border-color: var(--amber); }
+.exit-kiosk-btn span { position: relative; z-index: 1; }

@@ -1080,6 +1080,40 @@ async def get_state():
 
 
 # ------------------------------------------------------------------ #
+# Exit kiosk — close the Chromium fullscreen window WITHOUT stopping   #
+# the backend. Reads the PID written by pi-interface/deploy/           #
+# launch-kiosk.sh and sends SIGTERM. The backend keeps running so a    #
+# subsequent desktop launch reconnects to it instantly.                #
+# ------------------------------------------------------------------ #
+
+KIOSK_PID_PATH: str = "/tmp/mudprinter-kiosk.pid"
+
+
+@router.post("/api/exit_kiosk")
+async def exit_kiosk():
+    """Signal the kiosk launcher to close Chromium. Backend is untouched."""
+    import os
+    import signal
+    try:
+        with open(KIOSK_PID_PATH) as f:
+            pid = int(f.read().strip())
+    except FileNotFoundError:
+        return {"ok": False, "error": "No kiosk is running (no PID file).",
+                "running": False}
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": f"Could not read kiosk PID file: {exc}"}
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return {"ok": False, "error": "Kiosk process already exited.",
+                "running": False}
+    except PermissionError as exc:
+        return {"ok": False, "error": f"Not permitted to signal pid {pid}: {exc}"}
+    log.info("Exit kiosk: SIGTERM sent to pid %d (backend keeps running)", pid)
+    return {"ok": True, "signaled_pid": pid}
+
+
+# ------------------------------------------------------------------ #
 # Accessors for main.py background loops                              #
 # ------------------------------------------------------------------ #
 
