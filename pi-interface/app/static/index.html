@@ -156,22 +156,29 @@
           </div>
           <div class="est-note" id="params-note"></div>
         </div>
-        <div class="param-sub">Speed</div>
-        <div class="kv-grid" id="planned-speeds"></div>
-        <div class="override-row">
-          <div class="override-value"><span id="ovr-value">—</span><span class="override-unit">feed</span></div>
-          <div class="override-gauge" title="Feed override (GRBL 10–200 %)">
-            <div class="override-fill" id="ovr-fill"></div><div class="override-100"></div>
-          </div>
+        <div class="param-sub">Print speed</div>
+        <div class="speed-primary">
+          <span class="speed-value-xl"><span id="print-speed-value">—</span></span>
+          <span class="speed-unit-xl">in/s</span>
+        </div>
+        <div class="speed-slider-row">
+          <button class="step-btn speed-step-btn" id="print-speed-minus" title="−1 % feed override">−</button>
+          <input type="range" id="print-speed-slider" class="speed-slider"
+                 min="10" max="200" step="1" value="100" />
+          <button class="step-btn speed-step-btn" id="print-speed-plus" title="+1 % feed override">+</button>
+        </div>
+        <div class="speed-slider-ticks">
+          <span>50 %</span><span>100 %</span><span>200 %</span>
+        </div>
+        <div class="speed-secondary" id="print-speed-secondary">
+          <span id="print-speed-meta">Load a job for speed control.</span>
         </div>
         <div class="controls-row override-buttons">
           <button class="ctrl-btn btn-ovr" data-step="-10">−10%</button>
-          <button class="ctrl-btn btn-ovr" data-step="-1">−1%</button>
           <button class="ctrl-btn btn-ovr btn-ovr-reset" data-step="reset">100%</button>
-          <button class="ctrl-btn btn-ovr" data-step="1">+1%</button>
           <button class="ctrl-btn btn-ovr" data-step="10">+10%</button>
         </div>
-        <div class="est-note" id="ovr-note">GRBL feed override: applies to feed moves at once (10–200 %).</div>
+        <div class="est-note" id="ovr-note">Print speed slider = GRBL feed override (10–200 %). Applies to feed moves at once; estimates stay at 100 %.</div>
       </div>
 
     </div><!-- .col-left -->
@@ -219,21 +226,15 @@
         <div class="section-title">Manual Jog (X / Y)</div>
         <div class="jog-warning" id="jog-warning"></div>
         <div class="speed-control">
-          <div class="speed-row">
-            <span class="speed-label">Jog speed</span>
-            <span class="speed-value"><span id="jog-speed-in-s">0.000</span><span class="speed-unit"> in/s</span></span>
+          <div class="speed-primary">
+            <span class="speed-value-xl"><span id="jog-speed-in-s">0.000</span></span>
+            <span class="speed-unit-xl">in/s</span>
           </div>
-          <div class="controls-row speed-buttons">
-            <button class="ctrl-btn btn-jog-speed" data-in-s="0.05">0.05</button>
-            <button class="ctrl-btn btn-jog-speed" data-in-s="0.1">0.1</button>
-            <button class="ctrl-btn btn-jog-speed" data-in-s="0.25">0.25</button>
-            <button class="ctrl-btn btn-jog-speed" data-in-s="0.5">0.5</button>
-            <button class="ctrl-btn btn-jog-speed" data-in-s="1.0">1.0</button>
-            <button class="ctrl-btn btn-jog-speed" data-in-s="2.0">2.0</button>
-          </div>
-          <div class="controls-row speed-buttons speed-nudge">
-            <button class="ctrl-btn btn-jog-nudge" data-nudge="-0.05" title="Decrease jog speed by 0.05 in/s">− 0.05</button>
-            <button class="ctrl-btn btn-jog-nudge" data-nudge="0.05" title="Increase jog speed by 0.05 in/s">+ 0.05</button>
+          <div class="speed-slider-row">
+            <button class="step-btn speed-step-btn" id="jog-speed-minus" title="−0.05 in/s">−</button>
+            <input type="range" id="jog-speed-slider" class="speed-slider"
+                   min="0" max="100" step="1" value="50" />
+            <button class="step-btn speed-step-btn" id="jog-speed-plus" title="+0.05 in/s">+</button>
           </div>
           <div class="speed-meta" id="jog-speed-meta"></div>
         </div>

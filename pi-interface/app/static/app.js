@@ -197,10 +197,18 @@ function renderJogSection(s) {
   renderJogSpeedControl(s);
 }
 
+// Jog-speed slider state. The slider is 0-100 (percent of configured ceiling);
+// the user never sees the percentage. jogSliderDirty tracks whether the user
+// is actively dragging — while dirty, state broadcasts don't overwrite the
+// slider position (so the thumb doesn't jump mid-drag).
+let jogSliderDirty = false;
+const JOG_NUDGE_IN_S = 0.05;
+
 function renderJogSpeedControl(s) {
   const label = document.getElementById("jog-speed-in-s");
+  const slider = document.getElementById("jog-speed-slider");
   const meta = document.getElementById("jog-speed-meta");
-  if (!label || !meta) return;
+  if (!label || !slider || !meta) return;
 
   const maxInS = s.jog_speed_max_in_s || 0;
   const curInS = s.jog_speed_in_s || 0;
@@ -208,28 +216,69 @@ function renderJogSpeedControl(s) {
   const curMm = s.jog_speed_mm_min || 0;
 
   label.textContent = curInS.toFixed(3);
-  // Preset buttons target an absolute in/s value. Each preset is disabled if
-  // jogging is disabled OR its target would exceed the configured ceiling —
-  // so an operator can never pick a speed GRBL cannot deliver.
-  document.querySelectorAll(".btn-jog-speed").forEach(b => {
-    const target = parseFloat(b.dataset.inS || "0");
-    const abovelim = target > maxInS + 1e-6;
-    b.disabled = !s.jog_enabled || abovelim;
-    b.classList.toggle("active", s.jog_enabled && !abovelim && Math.abs(target - curInS) < 0.0005);
-  });
-  // Nudge buttons: enabled whenever jogging is enabled; they are clamped
-  // server-side against [0, ceiling].
-  document.querySelectorAll(".btn-jog-nudge").forEach(b => { b.disabled = !s.jog_enabled; });
+
+  // Slider shows percent-of-ceiling (0-100). Enabled only when jogging is
+  // configured. Not updated while the user is actively dragging it.
+  slider.disabled = !s.jog_enabled;
+  if (!jogSliderDirty && s.jog_enabled && maxInS > 0) {
+    const pct = Math.max(0, Math.min(100, Math.round(100 * curInS / maxInS)));
+    slider.value = String(pct);
+  }
+  const stepButtons = document.querySelectorAll("#jog-speed-minus, #jog-speed-plus");
+  stepButtons.forEach(b => { b.disabled = !s.jog_enabled; });
 
   if (!s.jog_enabled) {
     meta.textContent = "Jog disabled — set JOG_SPEED_MM_MIN in .env";
     meta.classList.add("warn");
   } else {
     meta.textContent =
-      `${curMm.toFixed(0)} / ${maxMm.toFixed(0)} mm/min` +
-      ` (max ${maxInS.toFixed(3)} in/s)`;
+      `${curMm.toFixed(0)} / ${maxMm.toFixed(0)} mm/min  (max ${maxInS.toFixed(3)} in/s)`;
     meta.classList.remove("warn");
   }
+}
+
+function sendJogSpeedInS(inS) {
+  const s = lastState || {};
+  const maxInS = s.jog_speed_max_in_s || 0;
+  const clamped = Math.max(0, Math.min(maxInS, inS));
+  send({ type: "jog_set_speed", speed_in_s: clamped });
+}
+
+function attachJogSpeedSlider() {
+  const slider = document.getElementById("jog-speed-slider");
+  if (!slider) return;
+  // input: fires continuously while dragging — update the big display and
+  // suppress the next broadcast overwrite. change: fires on release — final
+  // commit to the server.
+  slider.addEventListener("input", () => {
+    jogSliderDirty = true;
+    const pct = parseFloat(slider.value);
+    const maxInS = (lastState || {}).jog_speed_max_in_s || 0;
+    const target = (pct / 100) * maxInS;
+    const label = document.getElementById("jog-speed-in-s");
+    if (label) label.textContent = target.toFixed(3);
+  });
+  slider.addEventListener("change", () => {
+    const pct = parseFloat(slider.value);
+    const maxInS = (lastState || {}).jog_speed_max_in_s || 0;
+    sendJogSpeedInS((pct / 100) * maxInS);
+    // Release ownership so the next state broadcast refreshes the slider.
+    jogSliderDirty = false;
+  });
+  // Make sure a flick / drag-cancel also releases ownership.
+  slider.addEventListener("pointerup", () => { jogSliderDirty = false; });
+  slider.addEventListener("pointercancel", () => { jogSliderDirty = false; });
+
+  const minus = document.getElementById("jog-speed-minus");
+  const plus = document.getElementById("jog-speed-plus");
+  const step = (delta) => () => {
+    const s = lastState || {};
+    const cur = s.jog_speed_in_s || 0;
+    const next = Math.round((cur + delta) * 100) / 100;
+    sendJogSpeedInS(Math.max(0, next));
+  };
+  if (minus) minus.addEventListener("click", step(-JOG_NUDGE_IN_S));
+  if (plus)  plus.addEventListener("click", step(JOG_NUDGE_IN_S));
 }
 
 function renderControls(s) {
@@ -578,25 +627,126 @@ function renderProgress(s) {
   }
 }
 
-// ---- Speeds + live feed override (GRBL real-time bytes; value read back from GRBL)
+// ---- Print speed (in/s primary, feed-override % secondary)
+// GRBL feed override is 10 % – 200 %. The slider spans that range; the big
+// display is the effective print speed in in/s (planned × override). ± fine
+// buttons = ±1 %, lower-row buttons = ±10 % and "100 %" reset. Slider commit
+// on release sends the minimum number of GRBL real-time bytes to reach the
+// target. Multi-feed-rate jobs: the big display is based on the PRINT feed
+// (print_in/60) so the number corresponds to the single most relevant speed;
+// the secondary line names it as the print feed.
+let printSliderDirty = false;
+
+function _planned_print_in_s(s) {
+  const feeds = s.job && s.job.machine && s.job.machine.feeds_in_min;
+  if (!feeds || !feeds.print) return null;
+  return feeds.print / 60.0;
+}
+
 function renderSpeed(s) {
-  const job = s.job;
-  const feeds = job && job.machine && job.machine.feeds_in_min;
+  const bigNum = document.getElementById("print-speed-value");
+  const slider = document.getElementById("print-speed-slider");
+  const meta = document.getElementById("print-speed-meta");
+  const minusBtn = document.getElementById("print-speed-minus");
+  const plusBtn = document.getElementById("print-speed-plus");
+  if (!bigNum || !slider || !meta) return;
+
+  const planned = _planned_print_in_s(s);
   const ov = feedOverride(s);
-  const eff = (f) => (ov && ov !== 100) ? ` → ${fmtNum(f * ov / 100)} in/min at ${ov}%` : "";
-  kvGrid(document.getElementById("planned-speeds"), feeds ? [
-    ["Print speed (planned)", `${fmtNum(feeds.print)} in/min (${fmtNum(feeds.print / 60)} in/s)${eff(feeds.print)}`],
-    ["Travel speed (planned)", `${fmtNum(feeds.travel)} in/min (${fmtNum(feeds.travel / 60)} in/s)${eff(feeds.travel)}`],
-  ] : [["Planned speeds", job ? "from the G-code F words" : "load a job"]]);
-  const val = document.getElementById("ovr-value");
-  val.textContent = ov != null ? ov + "%" : (s.connected ? "100%?" : "—");
-  val.className = "override-value" + (ov != null && ov !== 100 ? " changed" : "");
-  const pos = ov != null ? (ov - 10) / 190 : (100 - 10) / 190;
-  document.getElementById("ovr-fill").style.width = (100 * Math.max(0, Math.min(1, pos))) + "%";
+  const feeds = s.job && s.job.machine && s.job.machine.feeds_in_min;
+
+  // Primary big number
+  if (planned == null) {
+    bigNum.textContent = "—";
+    slider.disabled = true;
+    if (minusBtn) minusBtn.disabled = true;
+    if (plusBtn)  plusBtn.disabled  = true;
+    document.querySelectorAll(".btn-ovr").forEach(b => { b.disabled = true; });
+    meta.textContent = s.job ? "This job has no planned print speed in its G-code."
+                             : "Load a job for speed control.";
+    meta.classList.remove("ovr-changed");
+    return;
+  }
+  slider.disabled = !s.connected;
+  if (minusBtn) minusBtn.disabled = !s.connected;
+  if (plusBtn)  plusBtn.disabled  = !s.connected;
   document.querySelectorAll(".btn-ovr").forEach(b => { b.disabled = !s.connected; });
-  document.getElementById("ovr-note").textContent = ov == null && s.connected
-    ? "GRBL has not reported its override yet (it reports after a change or every few status reports)."
-    : "GRBL feed override: applies to feed moves at once (10–200 %). Estimates stay at 100 %.";
+
+  // Slider position = GRBL-reported override, unless we're mid-drag.
+  if (!printSliderDirty) {
+    slider.value = String(ov != null ? ov : 100);
+  }
+  // During a drag, show the preview-at-slider effective speed; otherwise
+  // show the actual effective (GRBL-override-applied) speed.
+  const sliderOv = parseFloat(slider.value);
+  const liveOv = printSliderDirty ? sliderOv : (ov != null ? ov : 100);
+  const effective = planned * liveOv / 100;
+  bigNum.textContent = effective.toFixed(2);
+
+  // Secondary line: planned-at-100% + current override + a hint when more
+  // than one feed rate is present in the job (so the single number here is
+  // clearly the print feed, not every move's feed).
+  const differentTravel = feeds && Math.abs((feeds.travel || 0) - (feeds.print || 0)) > 1e-3;
+  let secondary = `planned ${planned.toFixed(2)} in/s at 100 %`;
+  secondary += ov == null && s.connected
+    ? "  ·  GRBL has not yet reported its override"
+    : `  ·  override ${Math.round(liveOv)} %`;
+  if (differentTravel) {
+    secondary += `  ·  travel moves use ${(feeds.travel / 60).toFixed(2)} in/s at 100 %`;
+  }
+  meta.textContent = secondary;
+  meta.classList.toggle("ovr-changed", liveOv !== 100);
+
+  const note = document.getElementById("ovr-note");
+  if (note) {
+    note.textContent = ov == null && s.connected
+      ? "GRBL has not reported its override yet (it reports after a change or every few status reports)."
+      : "Print speed slider = GRBL feed override (10–200 %). Applies to feed moves at once; estimates stay at 100 %.";
+  }
+}
+
+// Send the sequence of GRBL feed-override real-time bytes to move the current
+// override to `targetPct`. GRBL has ±10 (0x91 / 0x92) and ±1 (0x93 / 0x94)
+// steps + reset (0x90). We use the minimum number of 10-steps first then
+// 1-steps.
+function sendFeedOverrideTo(targetPct) {
+  const s = lastState || {};
+  const cur = feedOverride(s);
+  if (cur == null) {
+    // Fast path when GRBL hasn't reported yet: reset to 100 % then step.
+    send({ type: "feed_override", step: "reset" });
+    if (targetPct === 100) return;
+  }
+  const start = cur != null ? cur : 100;
+  const clamped = Math.max(10, Math.min(200, Math.round(targetPct)));
+  let delta = clamped - start;
+  const sendStep = (step) => send({ type: "feed_override", step });
+  while (delta >= 10) { sendStep(10); delta -= 10; }
+  while (delta <= -10) { sendStep(-10); delta += 10; }
+  while (delta >= 1) { sendStep(1); delta -= 1; }
+  while (delta <= -1) { sendStep(-1); delta += 1; }
+}
+
+function attachPrintSpeedSlider() {
+  const slider = document.getElementById("print-speed-slider");
+  if (!slider) return;
+  slider.addEventListener("input", () => {
+    printSliderDirty = true;
+    renderSpeed(lastState);
+  });
+  slider.addEventListener("change", () => {
+    const target = parseFloat(slider.value);
+    sendFeedOverrideTo(target);
+    // Give GRBL a tick to report back, then release ownership.
+    setTimeout(() => { printSliderDirty = false; renderSpeed(lastState); }, 250);
+  });
+  slider.addEventListener("pointerup", () => { setTimeout(() => { printSliderDirty = false; }, 250); });
+  slider.addEventListener("pointercancel", () => { printSliderDirty = false; });
+
+  const minus = document.getElementById("print-speed-minus");
+  const plus = document.getElementById("print-speed-plus");
+  if (minus) minus.addEventListener("click", () => send({ type: "feed_override", step: -1 }));
+  if (plus)  plus.addEventListener("click",  () => send({ type: "feed_override", step: 1 }));
 }
 
 // ---- Print parameters: target lift height + layer thickness → the lift's layer count.
@@ -1301,26 +1451,6 @@ function attachControls() {
     send({ type: "job_start" });
   });
 
-  // Jog speed presets: discrete absolute values in in/s. The server clamps
-  // against the ceiling, so a preset above the configured ceiling is also
-  // disabled in the UI. Clicks mid-jog are honoured — the jog loop reads
-  // the live speed each iteration.
-  document.querySelectorAll(".btn-jog-speed").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const target = parseFloat(btn.dataset.inS || "0");
-      send({ type: "jog_set_speed", speed_in_s: target });
-    });
-  });
-  // Nudge buttons: ± 0.05 in/s increments for fine positioning speeds.
-  document.querySelectorAll(".btn-jog-nudge").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const delta = parseFloat(btn.dataset.nudge || "0");
-      const s = lastState || {};
-      const cur = s.jog_speed_in_s || 0;
-      const next = Math.round((cur + delta) * 100) / 100;      // keep clean 0.01 steps
-      send({ type: "jog_set_speed", speed_in_s: Math.max(0, next) });
-    });
-  });
 }
 
 // ------------------------------------------------------------------ //
@@ -1436,6 +1566,8 @@ document.addEventListener("DOMContentLoaded", () => {
   attachExitKiosk();
   attachView();
   attachPrinter();
+  attachJogSpeedSlider();
+  attachPrintSpeedSlider();
 
   // Attach other controls
   attachControls();

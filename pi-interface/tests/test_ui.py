@@ -89,17 +89,31 @@ class TestLayout:
 
     def test_speed_and_lift_parameters_together(self, tree):
         for el in ("p-target-value", "p-thick-value", "btn-apply-params", "btn-restore-lifts",
-                   "planned-speeds", "ovr-value"):
+                   "print-speed-value", "print-speed-slider", "print-speed-plus", "print-speed-minus"):
             assert _inside_id(tree, el, "params-section"), el
         steps = (STATIC / "index.html").read_text()
         assert 'data-param="target"' in steps and 'data-param="thickness"' in steps
-        for step in ("-10", "-1", "reset", "1", "10"):
+        # The ±10 % feed override shortcuts and 100 % reset are preserved.
+        for step in ("-10", "10", "reset"):
             assert f'data-step="{step}"' in steps
 
+    def test_speed_sliders_are_present(self, tree):
+        for el in ("print-speed-slider", "jog-speed-slider"):
+            assert el in tree.where, el
+        # Both sliders are range inputs.
+        html = (STATIC / "index.html").read_text()
+        assert 'id="print-speed-slider" class="speed-slider"' in html
+        assert 'id="jog-speed-slider" class="speed-slider"' in html
+
     def test_low_level_controls_removed(self, tree):
-        for gone in ("adjust-select", "obs-height", "obs-measure", "obs-thickness", "lift-section", "setup-section"):
+        for gone in ("adjust-select", "obs-height", "obs-measure", "obs-thickness", "lift-section", "setup-section",
+                     "ovr-value", "ovr-fill", "planned-speeds"):
             assert gone not in tree.where, gone
-        assert 'type="range"' not in (STATIC / "index.html").read_text()      # no draggable live slider
+        # The old 6-preset / 2-nudge jog-speed buttons are gone — the slider
+        # replaces them.
+        html = (STATIC / "index.html").read_text()
+        assert 'class="ctrl-btn btn-jog-speed"' not in html
+        assert 'class="ctrl-btn btn-jog-nudge"' not in html
 
 
 def _cases():

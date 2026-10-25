@@ -1044,6 +1044,72 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (fifth pass) — Speed sliders, touchscreen scrollbar, Z software
+readiness confirmed.
+
+**Print speed control (replaces the percentage-dominated panel):**
+- `app/static/index.html`: the Speed sub-panel now shows a large in/s
+  number as the PRIMARY display, a horizontal `<input type="range"
+  min="10" max="200" value="100">` as the override control, ±1 % step
+  buttons flanking the slider, and the ±10 % / 100 % shortcut row below.
+- `app/static/app.js` `renderSpeed()`: computes the planned print speed
+  from `s.job.machine.feeds_in_min.print / 60`, applies the current
+  feed override from GRBL's `Ov:` report, shows the effective in/s;
+  when the user is dragging the slider, uses the slider position as the
+  override preview; the secondary line shows planned-at-100 % and the
+  override percentage. Jobs with a different travel feed get a hint so
+  the single big number is clearly the print feed, not every move.
+- `attachPrintSpeedSlider()`: on slider release, sends the minimum GRBL
+  real-time byte sequence (±10 first, then ±1) to move the override to
+  the chosen value. ± step buttons each send one 0x93 / 0x94 (1 %).
+- No job loaded: the big display reads `—`, the slider / step buttons
+  disable, the secondary line reads "Load a job for speed control."
+
+**Jog speed control (replaces the 6 preset + 2 nudge buttons):**
+- `app/static/index.html`: large in/s number + one horizontal slider +
+  ± 0.05 in/s step buttons. The slider is percentage-of-ceiling (0 –
+  100 %); the operator only ever sees in/s.
+- `app/static/app.js` `renderJogSpeedControl()`: broadcast updates do
+  not overwrite the slider while the user is dragging
+  (`jogSliderDirty`). On release, `jog_set_speed` with the computed
+  `speed_in_s`.
+- Max jog ceiling (`JOG_SPEED_MAX_MM_MIN`) preserved; the slider ends
+  at the configured maximum.
+- Test coverage: `tests/test_ui.py::TestLayout::test_speed_sliders_
+  are_present` and `test_low_level_controls_removed` pin that both
+  sliders exist and that the old preset / nudge button classes are
+  gone.
+
+**Touchscreen scrollbar:**
+- `app/static/style.css` has a `@media (pointer: coarse)` block that
+  widens the webkit scrollbar to 22 px with a 48 px minimum thumb
+  height and 11 px radius (comfortable for a 7" touchscreen finger).
+  Firefox uses `scrollbar-width: thick`. Desktop browsers (`pointer:
+  fine`) keep the default narrow bar.
+
+**Z-axis control — software path confirmed healthy:**
+- A WS probe (sending `z_start` → heartbeats → `z_stop`) on the
+  deployed service showed the backend driving `pwm_duty 0 → 0.5` and
+  `dir_level LOW → HIGH` within one state broadcast, and back to
+  `pwm_duty 0` on release. The GPIO backend (`GpioZeroBackend`), the
+  `ZController` resolver, the WS handler, the UI touch events, and the
+  dead-man loop are all wired and functional.
+- "Z UP / Z DOWN do not appear to work" is NOT a software bug. It is a
+  physical / wiring symptom. The operator must physically verify:
+    1. GPIO18 (pin 12, PWM) is wired to the MD13S PWM input and the
+       external pull-down resistor is fitted (see `docs/deployment.md`
+       §7 — proposed 10 kΩ, measured on the installed MD13S).
+    2. GPIO23 (pin 16, DIR) is wired to the MD13S DIR input.
+    3. 12 V actuator supply is live.
+    4. If the actuator moves in the WRONG direction on Z UP, flip
+       `Z_DIR_INVERT=true` in the Pi `.env` and redeploy; do NOT change
+       `pins.Z_DIR_LEVEL_UP` in code.
+- No software change was needed for Task 4.
+
+Tests: 385 passed + 1 skipped on Mac (unchanged, +1 new UI test to
+verify both sliders exist, -1 removed assertion that the old percent
+display dominates the Speed panel).
+
 2026-10-25 (fourth pass) — Pi desktop launcher + autonomous deploy workflow.
 
 **Desktop integration (new):**
