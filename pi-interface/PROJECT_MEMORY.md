@@ -1044,6 +1044,36 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-26 (sixteenth pass, part 4) — XY jog-speed floor 0.25 in/s.
+
+**Physical observation (operator).** Below 0.25 in/s the XY gantry
+would stall: the planner commanded motion but the steppers skipped
+or refused to break static friction. 0.25 in/s is the empirical
+reliable floor.
+
+**Change.** New constant `config.JOG_SPEED_FLOOR_MM_MIN` =
+`0.25 × 25.4 × 60 = 381 mm/min`. `AppState.set_jog_speed_mm_min`
+clamps any positive request below the floor UP to it; a request of
+exactly 0 still disables jogging. The startup default
+(`JOG_SPEED_MM_MIN` from `.env`) is clamped the same way, so a
+lingering old-env value cannot produce an unreliably slow jog. UI
+slider minimum is pinned to `floor / max × 100` percent so the
+operator can't drag below it. The ± 0.05 in/s nudge buttons are
+unchanged — the server clamp enforces the floor if a user clicks
+past it.
+
+**Preserved.** Max feed, GRBL `$110` / `$111`, step-per-mm
+calibration, every jog safety path (dead-man, max-run, STOP
+latches, REMOTE STOP). No change to the single-shot jog model.
+
+**UI state additions.** `jog_speed_floor_mm_min`,
+`jog_speed_floor_in_s` in the WS payload.
+
+**Tests** (478 passed, 1 skipped). New:
+- `test_jog_set_speed_below_floor_is_clamped_up`
+- `test_state_exposes_jog_floor`
+- `test_startup_default_below_floor_is_clamped_up`
+
 2026-10-26 (sixteenth pass, part 3) — Kaleinavi remote remap:
 CH3 disabled, Z DOWN moved to CH4, extrusion to CH5.
 

@@ -22,6 +22,14 @@ BAUD_RATE: int = int(os.getenv("BAUD_RATE", "115200"))
 _jog_speed_raw = float(os.getenv("JOG_SPEED_MM_MIN", "0"))
 JOG_SPEED_MM_MIN: float | None = _jog_speed_raw if _jog_speed_raw > 0 else None
 
+# Sixteenth-pass physical test (2026-10-26): below 0.25 in/s the XY
+# gantry stalls under load — the planner commands motion but the
+# steppers skip or refuse to break static friction. 0.25 in/s is the
+# empirical floor for RELIABLE motion. The UI slider minimum, the
+# `set_jog_speed` WS handler, and the persisted-value loader all
+# clamp against this floor. 0.25 in/s = 381 mm/min.
+JOG_SPEED_FLOOR_MM_MIN: float = 0.25 * 25.4 * 60.0
+
 # Hard ceiling for the UI jog-speed slider. Defaults to the configured
 # default when unset, so the slider has no travel until the operator
 # explicitly raises the ceiling in .env. See

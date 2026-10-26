@@ -463,6 +463,54 @@ class TestJogSpeedWS:
             config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN = orig_default, orig_max
             http_mod._state.current_jog_speed_mm_min = orig_default
 
+    def test_jog_set_speed_below_floor_is_clamped_up(self, client):
+        """Sixteenth-pass: positive requests below 0.25 in/s (381 mm/min)
+        are clamped UP to the floor. Zero is still accepted (disables
+        jogging — distinct from 'too slow')."""
+        from app import config
+        from app.api import http as http_mod
+        orig_default, orig_max = config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN
+        config.JOG_SPEED_MAX_MM_MIN = 3048.0
+        config.JOG_SPEED_MM_MIN = 500.0
+        try:
+            with client.websocket_connect("/ws") as ws:
+                _ = ws.receive_json()
+                # 0.1 in/s = 152.4 mm/min — below the 0.25 in/s floor.
+                ws.send_json({"type": "jog_set_speed", "speed_in_s": 0.1})
+            data = client.get("/api/state").json()
+            assert abs(data["jog_speed_mm_min"] - config.JOG_SPEED_FLOOR_MM_MIN) < 0.5
+            # Zero still disables (not clamped to the floor).
+            with client.websocket_connect("/ws") as ws:
+                _ = ws.receive_json()
+                ws.send_json({"type": "jog_set_speed", "speed_in_s": 0.0})
+            data = client.get("/api/state").json()
+            assert data["jog_speed_mm_min"] == 0.0
+        finally:
+            config.JOG_SPEED_MM_MIN, config.JOG_SPEED_MAX_MM_MIN = orig_default, orig_max
+            http_mod._state.current_jog_speed_mm_min = orig_default
+
+    def test_state_exposes_jog_floor(self, client):
+        from app import config
+        data = client.get("/api/state").json()
+        assert "jog_speed_floor_mm_min" in data and "jog_speed_floor_in_s" in data
+        # Floor is 0.25 in/s = 381 mm/min (rounded to one decimal).
+        assert abs(data["jog_speed_floor_in_s"] - 0.25) < 1e-6
+        assert abs(data["jog_speed_floor_mm_min"] - config.JOG_SPEED_FLOOR_MM_MIN) < 0.5
+
+    def test_startup_default_below_floor_is_clamped_up(self):
+        """A .env default jog speed below the floor is bumped up to the
+        floor at AppState creation — a lingering old config can't produce
+        an unreliably slow jog."""
+        from app import config
+        from app.state import AppState
+        orig_default = config.JOG_SPEED_MM_MIN
+        config.JOG_SPEED_MM_MIN = 100.0            # 100 mm/min ≈ 0.066 in/s
+        try:
+            s = AppState()
+            assert s.current_jog_speed_mm_min == config.JOG_SPEED_FLOOR_MM_MIN
+        finally:
+            config.JOG_SPEED_MM_MIN = orig_default
+
 
 class TestInchConversion:
     def test_mm_min_to_in_s_known_values(self):

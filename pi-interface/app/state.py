@@ -226,9 +226,16 @@ class AppState:
         # progress; None otherwise.
         self.z_move_in_flight: Optional[tuple] = None
         # Operator-adjustable jog speed. Starts at the configured default
-        # (`JOG_SPEED_MM_MIN`); clamped to `[0, JOG_SPEED_MAX_MM_MIN]` from the
-        # UI. None ⇒ jogging disabled.
-        self.current_jog_speed_mm_min: Optional[float] = config.JOG_SPEED_MM_MIN
+        # (`JOG_SPEED_MM_MIN`); clamped to `[JOG_SPEED_FLOOR_MM_MIN,
+        # JOG_SPEED_MAX_MM_MIN]` from the UI. None ⇒ jogging disabled.
+        # Sixteenth-pass floor-clamp also applies to the startup default:
+        # a .env value above 0 but below the floor is bumped up to the
+        # floor, so a configuration left over from before the
+        # physical-floor pass does not produce an unreliably slow jog.
+        _init_jog = config.JOG_SPEED_MM_MIN
+        if _init_jog is not None and 0 < _init_jog < config.JOG_SPEED_FLOOR_MM_MIN:
+            _init_jog = config.JOG_SPEED_FLOOR_MM_MIN
+        self.current_jog_speed_mm_min: Optional[float] = _init_jog
         self._console: deque = deque(maxlen=config.CONSOLE_MAX_LINES)
 
     # --- GRBL state updates ---
@@ -324,13 +331,22 @@ class AppState:
     # --- Jog speed control ---
 
     def set_jog_speed_mm_min(self, speed_mm_min: float) -> float:
-        """Clamp and store a new current jog speed. Returns the stored value in mm/min."""
+        """Clamp and store a new current jog speed. Returns the stored value in mm/min.
+
+        Sixteenth-pass floor: `JOG_SPEED_FLOOR_MM_MIN` (0.25 in/s). A
+        positive request below the floor is clamped UP to the floor
+        (motion was unreliable below it on the physical gantry). A
+        request of exactly 0 still disables jogging — the operator can
+        still set zero deliberately, which is distinct from "too slow."
+        """
         max_speed = config.JOG_SPEED_MAX_MM_MIN
         if max_speed is None or max_speed <= 0:
             # No ceiling configured → jogging stays disabled.
             return 0.0
         if speed_mm_min < 0:
             speed_mm_min = 0.0
+        elif 0 < speed_mm_min < config.JOG_SPEED_FLOOR_MM_MIN:
+            speed_mm_min = config.JOG_SPEED_FLOOR_MM_MIN
         if speed_mm_min > max_speed:
             speed_mm_min = max_speed
         self.current_jog_speed_mm_min = speed_mm_min if speed_mm_min > 0 else None
@@ -411,6 +427,10 @@ class AppState:
             "jog_speed_in_s": round(mm_min_to_in_s(cur_jog), 3) if cur_jog else 0.0,
             "jog_speed_max_mm_min": round(max_jog, 1),
             "jog_speed_max_in_s": round(mm_min_to_in_s(max_jog), 3) if max_jog else 0.0,
+            # Sixteenth-pass physical floor: UI slider minimum, below which
+            # the gantry stalls. The server also clamps.
+            "jog_speed_floor_mm_min": round(config.JOG_SPEED_FLOOR_MM_MIN, 1),
+            "jog_speed_floor_in_s": round(mm_min_to_in_s(config.JOG_SPEED_FLOOR_MM_MIN), 3),
             "job": self.job.to_dict() if self.job else None,
             "setup": self._setup_dict(),
             "remote_stop": self.remote_stop.to_dict(),

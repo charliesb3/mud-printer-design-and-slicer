@@ -235,14 +235,22 @@ function renderJogSpeedControl(s) {
   const curInS = s.jog_speed_in_s || 0;
   const maxMm = s.jog_speed_max_mm_min || 0;
   const curMm = s.jog_speed_mm_min || 0;
+  // Sixteenth-pass floor (0.25 in/s): slider minimum is pinned to the
+  // percent that corresponds to the floor so the user can't drag below
+  // it. The server also clamps.
+  const floorInS = s.jog_speed_floor_in_s || 0;
+  const floorPct = (maxInS > 0 && floorInS > 0)
+    ? Math.max(0, Math.min(100, Math.round(100 * floorInS / maxInS))) : 0;
 
   label.textContent = curInS.toFixed(3);
 
-  // Slider shows percent-of-ceiling (0-100). Enabled only when jogging is
+  // Slider shows percent-of-ceiling (0-100 by default, floor-100 when a
+  // physical floor is in effect). Enabled only when jogging is
   // configured. Not updated while the user is actively dragging it.
   slider.disabled = !s.jog_enabled;
+  slider.min = String(floorPct);
   if (!jogSliderDirty && s.jog_enabled && maxInS > 0) {
-    const pct = Math.max(0, Math.min(100, Math.round(100 * curInS / maxInS)));
+    const pct = Math.max(floorPct, Math.min(100, Math.round(100 * curInS / maxInS)));
     slider.value = String(pct);
   }
   const stepButtons = document.querySelectorAll("#jog-speed-minus, #jog-speed-plus");
@@ -252,8 +260,9 @@ function renderJogSpeedControl(s) {
     meta.textContent = "Jog disabled — set JOG_SPEED_MM_MIN in .env";
     meta.classList.add("warn");
   } else {
+    const floorNote = floorInS > 0 ? `  (min ${floorInS.toFixed(2)} in/s)` : "";
     meta.textContent =
-      `${curMm.toFixed(0)} / ${maxMm.toFixed(0)} mm/min  (max ${maxInS.toFixed(3)} in/s)`;
+      `${curMm.toFixed(0)} / ${maxMm.toFixed(0)} mm/min  (max ${maxInS.toFixed(3)} in/s)${floorNote}`;
     meta.classList.remove("warn");
   }
 }
