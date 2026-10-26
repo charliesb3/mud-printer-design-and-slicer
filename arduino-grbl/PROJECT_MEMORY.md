@@ -196,9 +196,45 @@ No new firmware work has yet been completed for this project.
 
 ## Last Updated
 
-2026-10-25 (proposal, awaiting operator approval, NOT applied) —
-Acceleration raise + modest junction-deviation bump for smoother
-cornering.
+2026-10-25 (applied) — Acceleration raise + modest junction-deviation
+bump for smoother cornering.
+
+Operator approved; applied live via the controller WS (`console_send`,
+same path as the earlier calibration write) and verified by re-reading
+`$$`.
+
+| setting | before | after | effect |
+|---|---|---|---|
+| `$120` X accel  | 5.000 | **50.000** mm/s² | 10× — decel from max feed drops from 10.16 s / 258 mm to 1.02 s / 25.8 mm |
+| `$121` Y accel  | 5.000 | **50.000** mm/s² | 10× — same |
+| `$11`  JD       | 0.010 | **0.020** mm | √2 × corner-speed limit at every angle; geometric error ≤ 20 µm (invisible for mud) |
+
+Every other GRBL setting is unchanged (verified by diff of
+`arduino-grbl/captures/grbl-post-calibration-2026-10-25_194854.txt`
+and `grbl-post-accel-raise-2026-10-25_205205.txt`). `$130 / $131`
+travel limits, `$100 / $101` steps/mm (post-calibration 25.921 /
+25.297), `$110 / $111` max feed, `$13` (mm reporting), all unchanged.
+
+GRBL state after the writes: `Idle`, connected. Writes persist in
+Arduino EEPROM across power-cycles.
+
+Capture: `arduino-grbl/captures/grbl-post-accel-raise-2026-10-25_205205.txt`.
+
+**Follow-up** (operator decision, not yet applied): `$11 = 0.050 mm`
+(5× default) if the operator wants visibly tighter cornering —
+geometric error ≤ 50 µm (0.002 in), still invisible for a 10+ mm
+clay nozzle. Keep `$120 / $121 = 50`.
+
+Record of accel / JD history:
+
+| Date | `$120` | `$121` | `$11` | Verified by |
+|---|---|---|---|---|
+| 2026-10-25 (pre-raise) | 5.000 | 5.000 | 0.010 | WS read-back; capture `grbl-post-calibration-2026-10-25_194854.txt` |
+| **2026-10-25 (current)** | **50.000** | **50.000** | **0.020** | WS read-back post-write; capture `grbl-post-accel-raise-2026-10-25_205205.txt`; operator-approved |
+
+---
+
+2026-10-25 — X/Y steps-per-mm calibration (measured 2× error)
 
 **Current (verified live via WS `read_grbl` 2026-10-25):**
 - `$120 = $121 = 5.000 mm/s²` (acceleration)

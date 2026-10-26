@@ -1044,6 +1044,47 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (fifteenth pass) — Controlled-decel STOP: fixed the
+Hold:0 handling bug the operator caught, then deployed.
+
+**Bug.** The fourteenth-pass `_finalize_stop_after_decel` waited for
+`grbl_state == "Idle"` before sending `0x18`. But GRBL after `!`
+(feed hold) transitions `Run` → `Hold:1` (decelerating) → `Hold:0`
+(fully stopped) and **stays in Hold:0** indefinitely — it does not
+return to Idle on its own; only `~` (cycle start) or `0x18` (soft
+reset) move it. The 5 s "wait for Idle" would always time out; the
+subsequent `0x18` was fired from the timeout path, which is a race
+(if the Hold:0 state hadn't yet landed on the Pi side, the reset
+could still catch motion-in-progress and raise ALARM:3).
+
+**Fix** (`_wait_for_grbl_motion_stopped`): accept **either** `"Idle"`
+or `"Hold:0"` as the motion-stopped condition. `"Hold:1"` is
+explicitly excluded (still decelerating — reset there raises ALARM:3).
+`AppState.update_from_status` preserves the subcode in the state
+string (e.g. literal `"Hold:0"` / `"Hold:1"`), so a string compare
+is sufficient.
+
+Function renamed from `_wait_for_grbl_idle` to
+`_wait_for_grbl_motion_stopped` to reflect the actual semantics.
+The 5 s timeout + `0x18`-anyway behavior is retained as a safety net
+for a pathological decel.
+
+**Deployed to the Pi** (commit `<see git`>, HEAD advanced):
+touchscreen STOP + REMOTE STOP + HOLD + hardwired E-stop all preserved;
+no job commands stream after STOP; Z stops explicitly; job marked
+`stopped` (not resumable); HOLD remains `!` / `~` (resumable).
+
+**Tests** (424 passed, 1 skipped). New:
+- `test_stop_soft_resets_from_hold_0_not_only_idle` — regression
+  for the exact bug the operator flagged
+- `test_hold_1_is_not_motion_stopped` — guards against the subtle
+  reset-in-motion race in Hold:1
+
+**GRBL motion settings applied** this turn (operator-approved):
+`$120 = 50`, `$121 = 50`, `$11 = 0.020`. Capture at
+`arduino-grbl/captures/grbl-post-accel-raise-2026-10-25_205205.txt`.
+See `arduino-grbl/PROJECT_MEMORY.md`.
+
 2026-10-25 (follow-up, no code change) — Operator re-requested
 "editable printer dimensions" + "faster accel / smoother cornering."
 

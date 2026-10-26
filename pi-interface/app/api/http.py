@@ -536,31 +536,57 @@ async def _stop_job() -> None:
             pass
 
 
-async def _wait_for_grbl_idle(timeout_s: float = 5.0) -> bool:
-    """True once GRBL reports Idle, False on timeout. Polls the
-    broadcast `_state.grbl_state` every 50 ms (status reports arrive
-    at `GRBL_STATUS_POLL_INTERVAL_S`)."""
+async def _wait_for_grbl_motion_stopped(timeout_s: float = 5.0) -> bool:
+    """
+    Fifteenth-pass fix: wait for GRBL to be MOTIONLESS, not for Idle.
+
+    After `!` (feed hold), GRBL transitions: `Run` → `Hold:1`
+    (decelerating) → `Hold:0` (fully stopped). GRBL does NOT then
+    transition from `Hold:0` back to `Idle` on its own — it stays in
+    `Hold:0` until `~` (cycle start) or `0x18` (soft reset) is sent.
+    So an "await Idle" after feed hold would always time out and the
+    reset would race the decel.
+
+    Soft reset is safe once motion is stopped, regardless of the
+    `Idle` / `Hold:0` distinction. We wait for either `grbl_state ==
+    "Idle"` (if `!` was sent while already idle) or `"Hold:0"`
+    (decel complete after `!` from `Run`). `"Hold:1"` is explicitly
+    excluded — it is the decelerating sub-state.
+
+    Status-report subcodes are preserved by `AppState.update_from_status`
+    (e.g. the string literal is `"Hold:0"` or `"Hold:1"`), so a plain
+    string compare works.
+    """
     if _state is None:
         return False
     deadline = asyncio.get_event_loop().time() + timeout_s
+    STOPPED = {"Idle", "Hold:0"}
     while asyncio.get_event_loop().time() < deadline:
-        if _state.grbl_state == "Idle":
+        if _state.grbl_state in STOPPED:
             return True
         await asyncio.sleep(0.05)
     return False
 
 
 async def _finalize_stop_after_decel() -> None:
-    """Spawned by `_stop_job` — waits for GRBL to settle, then sends
-    0x18 (soft reset) to clear the Hold:0 state. Separate task so the
-    WS handler returns immediately."""
+    """
+    Spawned by `_stop_job`. Waits for GRBL to be motionless (`Hold:0`
+    or `Idle`), then sends `0x18` (soft reset) to clear the Hold:0
+    state. Separate task so the WS handler returns immediately.
+
+    If GRBL does not settle within the timeout (very long decel
+    distances before `$120` is raised), we send `0x18` anyway — the
+    worst case is one `ALARM:3` and the operator having to clear it,
+    which is strictly better than leaving GRBL stuck in Hold:0 with
+    an unresponsive UI.
+    """
     if _comm is None:
         return
-    idle = await _wait_for_grbl_idle(timeout_s=5.0)
-    if not idle:
-        log.warning("STOP: GRBL did not reach Idle within 5 s "
-                    "(decel at $120 may be too slow at the current feed) "
-                    "— sending soft reset anyway; expect ALARM:3.")
+    stopped = await _wait_for_grbl_motion_stopped(timeout_s=5.0)
+    if not stopped:
+        log.warning("STOP: GRBL did not reach a motion-stopped state "
+                    "(Hold:0 / Idle) within 5 s — sending soft reset "
+                    "anyway; expect ALARM:3.")
     try:
         await _comm.send_realtime(b"\x18")
     except Exception:

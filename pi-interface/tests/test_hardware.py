@@ -615,8 +615,8 @@ class TestTouchscreenStop:
 
     async def test_stop_does_not_send_soft_reset_while_moving(self, rig):
         """0x18 must NOT be sent until the controlled decel completes
-        (GRBL reports Idle). While the mock reports Run, no soft reset
-        should land."""
+        (GRBL motion-stopped — Hold:0 or Idle). While the mock
+        reports Run, no soft reset should land."""
         rig.transport.clear_sent()
         rig.transport.status_reply = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>"
         await asyncio.sleep(0.1)                       # let one Run status land
@@ -630,6 +630,67 @@ class TestTouchscreenStop:
         # Now GRBL settles — soft reset should land within 5 s.
         rig.transport.status_reply = "<Idle|MPos:0.000,0.000,0.000|FS:0,0>"
         for _ in range(100):
+            await asyncio.sleep(0.05)
+            if b"\x18" in rig.transport.raw_sent:
+                break
+        assert b"\x18" in rig.transport.raw_sent
+        http_module._current_job = None
+
+    async def test_stop_soft_resets_from_hold_0_not_only_idle(self, rig):
+        """
+        Fifteenth-pass fix: after `!`, GRBL does NOT auto-transition
+        from Hold:0 to Idle. The finalize task must accept Hold:0 as
+        a motion-stopped state and send 0x18 anyway. Previously it
+        only matched 'Idle' and would time out, logging a warning
+        and sending 0x18 as a last resort (race-prone).
+        """
+        rig.transport.clear_sent()
+        # Simulate GRBL settling into Hold:0 (feed-hold complete) and
+        # STAYING there — the bug the operator caught.
+        rig.transport.status_reply = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>"
+        await asyncio.sleep(0.1)
+        http_module._current_job = SimpleNamespace(
+            is_active=True, state="running",
+        )
+        await msg({"type": "stop"})
+        await asyncio.sleep(0.3)
+        assert b"\x18" not in rig.transport.raw_sent
+        # Transition the mock into Hold:0 — decel complete, NOT Idle.
+        rig.transport.status_reply = "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>"
+        # The finalize task should recognize this and send 0x18 quickly
+        # (well under the 5 s timeout).
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if b"\x18" in rig.transport.raw_sent:
+                break
+        assert b"\x18" in rig.transport.raw_sent, \
+            "soft reset should fire once GRBL reports Hold:0 (motion stopped), " \
+            "not require a transition to Idle that GRBL never makes on its own"
+        http_module._current_job = None
+
+    async def test_hold_1_is_not_motion_stopped(self, rig):
+        """
+        Hold:1 (decelerating sub-state) must NOT be treated as
+        motion-stopped — a soft reset at that point would raise
+        ALARM:3 (reset while in motion). The finalize task must wait
+        for Hold:0 or Idle specifically.
+        """
+        rig.transport.clear_sent()
+        rig.transport.status_reply = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>"
+        await asyncio.sleep(0.1)
+        http_module._current_job = SimpleNamespace(
+            is_active=True, state="running",
+        )
+        await msg({"type": "stop"})
+        # Transition to Hold:1 — still decelerating. 0x18 must NOT fire.
+        rig.transport.status_reply = "<Hold:1|MPos:0.000,0.000,0.000|FS:500,0>"
+        await asyncio.sleep(0.4)
+        assert b"\x18" not in rig.transport.raw_sent, \
+            "soft reset must wait for Hold:0 (decel complete) — Hold:1 " \
+            "is still decelerating"
+        # Confirm the usual completion path still lands 0x18 once Hold:0 arrives.
+        rig.transport.status_reply = "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>"
+        for _ in range(40):
             await asyncio.sleep(0.05)
             if b"\x18" in rig.transport.raw_sent:
                 break
