@@ -69,7 +69,15 @@ class RemoteInputs:
         return (not level) if pins.REMOTE_ACTIVE_LOW else bool(level)
 
     def poll(self) -> list:
-        """Sample every input once; return the debounced transitions."""
+        """Sample every input once; return the debounced transitions.
+
+        Disabled channels (sixteenth-pass): the pin is still read (so the
+        pull-up stays configured and the level is visible for diagnostics)
+        but no transitions are ever emitted and no arming is required. A
+        disabled channel permanently reports `armed=False`, `pressed=None`
+        so `is_pressed()` always returns False — safely ignoring any held
+        contact / wiring glitch on that channel.
+        """
         if not self._backend.has_gpio:
             return []
         now = self._clock()
@@ -80,6 +88,11 @@ class RemoteInputs:
             if level is None:
                 continue
             st.level = level
+            if not st.channel.enabled:
+                # Read the raw level for diagnostics but do nothing else:
+                # no debounce, no armed state, no transitions. A held
+                # contact on a disabled channel is NOT an event.
+                continue
             raw = self.interpret(level)
             if raw != st.candidate:
                 st.candidate, st.since = raw, now
@@ -106,8 +119,14 @@ class RemoteInputs:
         return out
 
     def is_pressed(self, key: str) -> bool:
-        """Debounced AND armed pressed state (what software acts on)."""
+        """Debounced AND armed pressed state (what software acts on).
+
+        Disabled channels always return False: the poll loop never
+        advances their state beyond the initial unknown.
+        """
         st = self.channels[key]
+        if not st.channel.enabled:
+            return False
         return bool(st.pressed and st.armed)
 
     def to_list(self) -> list:
@@ -117,8 +136,11 @@ class RemoteInputs:
             "label": st.channel.label,
             "bcm": st.channel.bcm,
             "physical": st.channel.physical,
+            "enabled": st.channel.enabled,
             "level": None if st.level is None else ("HIGH" if st.level else "LOW"),
-            "state": ("unknown" if st.pressed is None else "pressed" if st.pressed else "released"),
+            "state": ("disabled" if not st.channel.enabled
+                      else "unknown" if st.pressed is None
+                      else "pressed" if st.pressed else "released"),
             "armed": st.armed,
             "held_at_startup": st.held_at_startup,
         } for st in self.channels.values()]

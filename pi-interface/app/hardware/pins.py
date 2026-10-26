@@ -18,22 +18,42 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RemoteChannel:
-    key: str          # stable software name
-    channel: int      # Kaleinavi channel number
-    bcm: int          # BCM GPIO number (used in code)
-    physical: int     # 40-pin header pin (documentation / diagnostics)
-    label: str        # operator-facing name
+    key: str              # stable software name
+    channel: int          # Kaleinavi channel number
+    bcm: int              # BCM GPIO number (used in code)
+    physical: int         # 40-pin header pin (documentation / diagnostics)
+    label: str            # operator-facing name
+    enabled: bool = True  # sixteenth-pass: disabled channels are
+                          # polled only to keep the pull-up configured;
+                          # they emit NO transitions, require NO arming,
+                          # and never trigger motion / warnings / faults.
 
 
-# Kaleinavi CH1–CH6, in channel order. Functions are the wired assignment.
+# Kaleinavi CH1–CH6, in channel order (2026-10-26 remap).
+#
+# Previous (pre-sixteenth-pass):
+#   CH1 REMOTE STOP, CH2 Z UP, CH3 Z DOWN, CH4 Extrusion, CH5/CH6 AUX.
+#
+# New assignment:
+#   CH1 REMOTE STOP   (unchanged)
+#   CH2 Z UP          (unchanged)
+#   CH3 DISABLED      (ignored in software — pin stays pulled up but
+#                      presses produce no event)
+#   CH4 Z DOWN        (moved from CH3 — same handheld button, new GPIO)
+#   CH5 Extrusion     (pause / resume — reserved; no pump output yet)
+#   CH6 SPARE         (unchanged — no function, reserved)
+#
+# Physical GPIO assignments are NOT changed — only the software mapping.
 REMOTE_STOP = RemoteChannel("remote_stop", 1, 17, 11, "REMOTE STOP")
-Z_UP = RemoteChannel("z_up", 2, 27, 13, "Z UP")
-Z_DOWN = RemoteChannel("z_down", 3, 22, 15, "Z DOWN")
-EXTRUSION = RemoteChannel("extrusion", 4, 5, 29, "Extrusion pause / resume (no output defined)")
-AUX1 = RemoteChannel("aux1", 5, 6, 31, "AUX 1 (reserved)")
-AUX2 = RemoteChannel("aux2", 6, 13, 33, "AUX 2 (reserved)")
+Z_UP        = RemoteChannel("z_up",        2, 27, 13, "Z UP")
+DISABLED_CH3 = RemoteChannel("disabled_ch3", 3, 22, 15,
+                              "DISABLED (ignored)", enabled=False)
+Z_DOWN      = RemoteChannel("z_down",      4,  5, 29, "Z DOWN")
+EXTRUSION   = RemoteChannel("extrusion",   5,  6, 31,
+                             "Extrusion pause / resume (reserved — no output)")
+SPARE       = RemoteChannel("spare",       6, 13, 33, "Spare (reserved)")
 
-REMOTE_CHANNELS: tuple = (REMOTE_STOP, Z_UP, Z_DOWN, EXTRUSION, AUX1, AUX2)
+REMOTE_CHANNELS: tuple = (REMOTE_STOP, Z_UP, DISABLED_CH3, Z_DOWN, EXTRUSION, SPARE)
 
 # Remote inputs are active LOW (pull-up; contact closes to GND).
 REMOTE_ACTIVE_LOW = True

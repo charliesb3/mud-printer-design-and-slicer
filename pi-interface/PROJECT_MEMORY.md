@@ -1044,6 +1044,71 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-26 (sixteenth pass, part 3) — Kaleinavi remote remap:
+CH3 disabled, Z DOWN moved to CH4, extrusion to CH5.
+
+**New remote assignment** (physical GPIO wiring UNCHANGED — only the
+software mapping is remapped):
+
+| CH | GPIO | Function | enabled |
+|----|------|----------|---------|
+| 1  | 17   | REMOTE STOP (unchanged) | yes |
+| 2  | 27   | Z UP (unchanged) | yes |
+| 3  | 22   | **DISABLED / ignored** (new) | **no** |
+| 4  |  5   | **Z DOWN** (moved from CH3) | yes |
+| 5  |  6   | **Extrusion pause / resume** (reserved — no pump output) | yes |
+| 6  | 13   | SPARE (reserved) | yes |
+
+**Disabled-channel semantics** (`pins.RemoteChannel.enabled`, new field,
+default True). The pin stays configured with pull-up so it does not
+float, but `RemoteInputs.poll` short-circuits:
+- No startup "closed-at-startup" warning emitted.
+- No arming required or tracked (`armed` stays False).
+- No transitions emitted — pressing, releasing, bouncing all ignored.
+- `is_pressed(key)` always returns False.
+- UI payload reports `state="disabled"`, `enabled=False`.
+- Service `_transition` has a belt-and-braces guard: even if a disabled
+  Transition somehow surfaced, it is dropped before any motion /
+  event could be triggered.
+
+**Preserved:**
+- CH1 REMOTE STOP, CH2 Z UP: unchanged.
+- Both Z buttons remain momentary press-and-hold (ZController's
+  dead-man + max-run logic is untouched).
+- `pins.all_bcm()` still includes GPIO22 (so the input is pulled up
+  by `GpioZeroBackend` on startup — a floating input is unsafe even
+  when the channel is ignored).
+
+**No code changes outside `pins.py`, `remote.py`, `service.py`.** The
+WS payload automatically picks up the new label / `enabled` field via
+the existing `remote.to_list()` path; the UI already renders the
+`remote` list, so no HTML / JS change needed to show the new labels.
+
+**Tests** (475 passed, 1 skipped). New / updated:
+- `TestPinMap::test_exact_wired_map` — pins per the remap, with
+  `enabled` per channel.
+- `TestPinMap::test_disabled_channel_pin_is_still_configured` — GPIO22
+  stays in `all_bcm()`.
+- `TestRemoteZ::test_extrusion_and_spare_log_but_do_nothing` — CH5
+  / CH6 log without motion (replaces the old
+  `test_aux_and_extrusion_do_nothing`).
+- `TestRemoteZ::test_ch3_disabled_press_does_nothing` — pressing
+  CH3 (GPIO22) commands no motion, posts no CH3 event, UI shows
+  `state="disabled"`.
+- `TestRemoteZ::test_ch4_now_commands_z_down` — pressing CH4 (GPIO5)
+  commands Z DOWN.
+- `TestRemoteZ::test_ch3_closed_at_startup_does_not_warn_or_arm` —
+  disabled channel held LOW at boot: no transitions, no startup
+  warning, no arming required.
+- `TestRemoteInputs::test_nothing_before_settle_then_released_and_armed`
+  — updated to assert `state="disabled"` + `armed=False` for CH3.
+
+**Deployment.** Committed + pushed. The Pi was offline at the time of
+this pass (`192.168.1.144` not reachable); the previous commit
+`29ab8c8` (automatic-Z infrastructure) is also pending deploy. When
+the Pi returns, `git pull` on the Pi applies both at once; auto-Z
+mode stays `manual` by default — no physical motion is initiated.
+
 2026-10-25 (sixteenth pass, part 2) — Automatic Z between .mudjob
 layers with absolute reference heights (SCAFFOLDING, DEPLOYED,
 GATED BEHIND MANUAL DEFAULT).

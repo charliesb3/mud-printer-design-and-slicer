@@ -5,10 +5,12 @@ controller, and runs ONE polling loop (remote sampling + Z dead-man checks).
 Remote functions call the same machine operations as the UI:
 - CH1 REMOTE STOP press → `on_remote_stop` (api/http.py: the same stop the
   application uses everywhere — latches, stops Z, cancels jog, feed hold);
-- CH2 / CH3 Z UP / Z DOWN → the common ZController (sources remote_up /
+- CH2 Z UP / CH4 Z DOWN → the common ZController (sources remote_up /
   remote_down; both held = contradictory = STOP);
-- CH4 extrusion pause / resume, CH5 / CH6 AUX: logged only — no pump
-  output exists and AUX has no function.
+- CH3 is DISABLED (sixteenth-pass remap): no transitions, no arming,
+  pin stays pulled up. See pins.py for the full remap rationale.
+- CH5 extrusion pause / resume (reserved — no pump output), CH6 SPARE:
+  logged only.
 """
 from __future__ import annotations
 
@@ -84,6 +86,12 @@ class HardwareService:
 
     async def _transition(self, t: Transition) -> None:
         ch = t.channel
+        if not ch.enabled:
+            # Belt-and-braces: RemoteInputs.poll already filters disabled
+            # channels, so no Transition for them is ever emitted. This
+            # guard is here so a future bug in `poll` can't accidentally
+            # wake a disabled channel into motion.
+            return
         what = "pressed" if t.pressed else "released"
         if t.startup:
             msg = f"Remote CH{ch.channel} {ch.label}: closed at startup — not armed until released"

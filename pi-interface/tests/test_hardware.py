@@ -60,15 +60,22 @@ def make_z(backend=None, clock=None, duty=0.6, interlock=lambda: None, **kw) -> 
 
 class TestPinMap:
     def test_exact_wired_map(self):
+        """Sixteenth-pass remap (2026-10-26): CH3 disabled, CH4 is Z DOWN,
+        CH5 is extrusion, CH6 spare. Physical GPIO wiring unchanged."""
         got = {c.key: (c.channel, c.bcm, c.physical) for c in pins.REMOTE_CHANNELS}
         assert got == {
-            "remote_stop": (1, 17, 11),
-            "z_up": (2, 27, 13),
-            "z_down": (3, 22, 15),
-            "extrusion": (4, 5, 29),
-            "aux1": (5, 6, 31),
-            "aux2": (6, 13, 33),
+            "remote_stop":  (1, 17, 11),
+            "z_up":         (2, 27, 13),
+            "disabled_ch3": (3, 22, 15),
+            "z_down":       (4,  5, 29),
+            "extrusion":    (5,  6, 31),
+            "spare":        (6, 13, 33),
         }
+        # CH3 is the ONLY disabled channel.
+        enabled = {c.key: c.enabled for c in pins.REMOTE_CHANNELS}
+        assert enabled == {"remote_stop": True, "z_up": True,
+                            "disabled_ch3": False, "z_down": True,
+                            "extrusion": True, "spare": True}
         assert (pins.Z_PWM_BCM, pins.Z_PWM_PHYSICAL) == (18, 12)
         assert (pins.Z_DIR_BCM, pins.Z_DIR_PHYSICAL) == (23, 16)
         assert pins.SIGNAL_GROUND_PHYSICAL == 9
@@ -77,6 +84,12 @@ class TestPinMap:
     def test_no_duplicates_and_never_physical_27(self):
         assert len(set(pins.all_bcm())) == len(pins.all_bcm()) == 8
         assert 27 not in [c.physical for c in pins.REMOTE_CHANNELS]      # the erroneous CH6 diagram
+
+    def test_disabled_channel_pin_is_still_configured(self):
+        """A disabled channel's BCM must still appear in all_bcm() so
+        the GPIO is pulled up at startup — a floating input is unsafe
+        even when the channel is ignored."""
+        assert pins.DISABLED_CH3.bcm in pins.all_bcm()
 
     def test_pin_numbers_live_only_in_pins_py(self):
         # no other module configures a GPIO by number
@@ -153,12 +166,25 @@ def run_remote(remote, clock, seconds, step=0.01):
 
 class TestRemoteInputs:
     def test_nothing_before_settle_then_released_and_armed(self):
+        """
+        Sixteenth-pass CH3 remap: disabled channels report "disabled"
+        from the first poll (no settle delay — they are never armed).
+        Every enabled channel settles into "released" + armed as before.
+        """
         b, clk = MockBackend(), Clock()
         r = RemoteInputs(b, debounce_s=0.05, clock=clk)
         r.poll()
-        assert all(c["state"] == "unknown" for c in r.to_list())
+        for row in r.to_list():
+            if row["enabled"]:
+                assert row["state"] == "unknown", row
+            else:
+                assert row["state"] == "disabled" and row["armed"] is False, row
         assert run_remote(r, clk, 0.3) == []
-        assert all(c["state"] == "released" and c["armed"] for c in r.to_list())
+        for row in r.to_list():
+            if row["enabled"]:
+                assert row["state"] == "released" and row["armed"], row
+            else:
+                assert row["state"] == "disabled" and row["armed"] is False, row
 
     def test_bounce_shorter_than_debounce_is_ignored(self):
         b, clk = MockBackend(), Clock()
@@ -566,10 +592,12 @@ class TestRemoteZ:
         assert rig.z.command == 0 and rig.backend.duty == 0.0
         assert source not in rig.z._requests
 
-    async def test_aux_and_extrusion_do_nothing(self, rig):
+    async def test_extrusion_and_spare_log_but_do_nothing(self, rig):
+        """Sixteenth-pass remap: CH5 extrusion + CH6 spare are logged
+        but command no motion. CH3 is DISABLED and tested separately."""
         writes = (len(rig.transport.sent_lines),)
         z_log = list(rig.backend.z_log)
-        for ch in (pins.EXTRUSION, pins.AUX1, pins.AUX2):
+        for ch in (pins.EXTRUSION, pins.SPARE):
             rig.backend.press(ch)
             await rig.run(0.1)
             rig.backend.release(ch)
@@ -579,7 +607,73 @@ class TestRemoteZ:
         assert [b for b in rig.transport.raw_sent if b != b"?"] == []
         assert not rig.state.remote_stop.latched
         texts = [e["text"] for e in rig.state.hw_events]
-        assert any("CH4" in t and "pressed" in t for t in texts)   # logged, nothing else
+        assert any("CH5" in t and "pressed" in t for t in texts)   # CH5 extrusion is logged
+
+    async def test_ch3_disabled_press_does_nothing(self, rig):
+        """
+        Sixteenth-pass CH3 remap: the channel is DISABLED. Pressing /
+        releasing it must NOT:
+          * command Z motion,
+          * emit a startup "closed at startup" warning,
+          * require arming,
+          * post an hw_event with the channel number.
+        The pin stays pulled up (configured) so the input doesn't float.
+        """
+        writes = (len(rig.transport.sent_lines),)
+        z_log = list(rig.backend.z_log)
+        texts_before = [e["text"] for e in rig.state.hw_events]
+        rig.backend.press(pins.DISABLED_CH3)
+        await rig.run(0.2)
+        rig.backend.release(pins.DISABLED_CH3)
+        await rig.run(0.2)
+        assert rig.z.command == 0
+        assert rig.backend.z_log == z_log
+        assert len(rig.transport.sent_lines) == writes[0]
+        texts_after = [e["text"] for e in rig.state.hw_events]
+        # No new events referencing CH3 should have appeared.
+        new = [t for t in texts_after if t not in texts_before]
+        assert not any("CH3" in t for t in new), new
+        # The channel is marked disabled in the broadcast payload.
+        row = next(r for r in rig.state.hardware.remote.to_list()
+                    if r["key"] == "disabled_ch3")
+        assert row["enabled"] is False and row["state"] == "disabled"
+
+    async def test_ch4_now_commands_z_down(self, rig):
+        """Sixteenth-pass CH3→CH4 remap: pressing CH4 (GPIO5) must command
+        Z DOWN, exactly as pressing CH3 (GPIO22) used to."""
+        rig.backend.press(pins.Z_DOWN)                   # Z_DOWN is now CH4
+        await rig.run(0.2)
+        assert rig.z.command == DOWN
+        rig.backend.release(pins.Z_DOWN)
+        await rig.run(0.2)
+        assert rig.z.command == 0
+        assert pins.Z_DOWN.channel == 4 and pins.Z_DOWN.bcm == 5
+
+    async def test_ch3_closed_at_startup_does_not_warn_or_arm(self, mock_factory):
+        """
+        A disabled channel whose contact is closed at startup must NOT
+        emit a startup warning, must NOT require arming before use, and
+        must NOT prevent any other channel from working. Uses a fresh
+        RemoteInputs so we see the initial-arming path.
+        """
+        from app import config, hardware, sdnotify
+        from app.hardware.backend import GpioZeroBackend
+        from app.hardware.remote import RemoteInputs
+        # Start with CH3 held LOW (pressed at boot) and all others HIGH.
+        gz_backend = GpioZeroBackend(1000, pin_factory=mock_factory)
+        mock_factory.pin(pins.DISABLED_CH3.bcm).drive_low()
+        remote = RemoteInputs(gz_backend, debounce_s=0.01, settle_s=0.02,
+                               clock=lambda: __import__("time").monotonic())
+        # Simulate the settle period.
+        import time
+        time.sleep(0.05)
+        transitions = remote.poll()
+        assert transitions == []                     # disabled channel: no startup event
+        state = remote.channels["disabled_ch3"]
+        assert state.pressed is None and state.armed is False
+        # Other channels are untouched.
+        assert remote.is_pressed("disabled_ch3") is False
+        gz_backend.close()
 
 
 def running_job(n=40) -> CurrentJob:
