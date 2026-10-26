@@ -76,6 +76,19 @@ MACHINE_PROFILE_PATH: Path = Path(os.getenv("MACHINE_PROFILE_PATH", "machine_pro
 # `.env` Z_PWM_DUTY is the FACTORY default; the file is the live value.
 Z_SETTING_PATH: Path = Path(os.getenv("Z_SETTING_PATH", "z_setting.json"))
 
+# Time-based Z calibration (sixteenth pass). Measured UP / DOWN speeds in
+# inches per second at a specific PWM duty. Auto-Z advancement refuses to
+# command motion when the stored duty does not match the current ZController
+# duty (speed does not scale linearly with PWM).
+Z_CALIBRATION_PATH: Path = Path(os.getenv("Z_CALIBRATION_PATH", "z_calibration.json"))
+
+# Auto-Z mode (sixteenth pass). "manual" is the only mode that commands no
+# Z motion automatically; it is the DEFAULT and the only safe mode until the
+# operator has calibrated and established the Z origin. "auto_confirm" pauses
+# at every layer transition for operator confirmation; "auto" moves without
+# intervention. See app/jobs/auto_z.py.
+Z_MODE_PATH: Path = Path(os.getenv("Z_MODE_PATH", "z_mode.json"))
+
 # Job storage directory (relative to pi-interface/ when running locally)
 JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", "jobs"))
 

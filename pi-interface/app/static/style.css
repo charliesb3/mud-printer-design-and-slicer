@@ -793,6 +793,22 @@ html, body {
 .hw-subsection { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
                  margin: 6px 0 14px; background: var(--surface2); }
 
+/* --- Sixteenth-pass: automatic Z between layers (status panel) --- */
+.auto-z-panel { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+                margin: 6px 0; font-size: 0.86em; background: var(--surface2); }
+.auto-z-title-row { font-weight: 700; align-items: center; margin-bottom: 4px; }
+.auto-z-title { color: var(--text); }
+.auto-z-mode { background: var(--surface); color: var(--text); border: 1px solid var(--border);
+               border-radius: 4px; padding: 2px 6px; font-size: 1em; }
+.auto-z-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0;
+              border-top: 1px dashed transparent; }
+.auto-z-row + .auto-z-row { border-top-color: #223; }
+.auto-z-row span:first-child { color: var(--text-muted); }
+.auto-z-row span:last-child { font-variant-numeric: tabular-nums; }
+.auto-z-buttons { gap: 8px; justify-content: flex-start; }
+.auto-z-fault { margin-top: 6px; padding: 6px 10px; border: 2px solid var(--amber);
+                background: #2a1d05; border-radius: 4px; color: var(--text); }
+
 /* --- REMOTE STOP (operational stop, latched; never styled or named as an E-stop) --- */
 .rstop-panel { border: 3px solid var(--red); background: #2a0d0d; }
 .rstop-title { color: var(--red); font-size: 1.3em; font-weight: 800; letter-spacing: 0.04em;

@@ -104,6 +104,9 @@ from ..grbl.communicator import GRBLCommunicator
 from ..jobs.current_job import CurrentJob, JobFormatError, load_job_from_file
 from ..jobs.motion import path_payload
 from .. import machine_profile as machine_profile_mod
+from .. import z_calibration
+from .. import z_mode as z_mode_mod
+from ..jobs import auto_z
 from ..jobs.runner import DRAIN_COMMAND, JobRunner
 from ..state import AppState
 from .ws import ConnectionManager
@@ -464,7 +467,14 @@ async def _start_job() -> Optional[str]:
 
     assert _comm is not None
     _current_job.reset_progress()
-    runner = JobRunner(_comm, _current_job, origin_feed_in_min=origin_feed)
+    # Sixteenth-pass: inject the auto-Z layer-boundary hook ONLY in auto
+    # modes. In "manual" (the default), the runner behaves exactly as
+    # before — layer marks stream through without interruption. The hook
+    # itself checks preconditions and latches `z_fault` on anything
+    # unsafe.
+    hook = _on_layer_boundary_hook if _state and _state.z_mode != "manual" else None
+    runner = JobRunner(_comm, _current_job, origin_feed_in_min=origin_feed,
+                       on_layer_boundary=hook)
     _runner_task = asyncio.create_task(runner.run(), name="job-runner")
     return None
 
@@ -1060,10 +1070,290 @@ def _z_start(direction, ws) -> Optional[str]:
     hw = _state.hardware if _state else None
     if hw is None:
         return "No Z hardware."
+    # Sixteenth-pass: _latched() now covers both REMOTE STOP and the
+    # stop_fault latch. ZController's own `interlock` only knows about
+    # REMOTE STOP; this gate catches both.
+    refusal = _latched()
+    if refusal:
+        return refusal
     d = {"up": 1, "down": -1}.get(direction)
     if d is None:
         return "Z direction must be up or down."
     return hw.z.request(_z_source(ws), d)
+
+
+# ------------------------------------------------------------------ #
+# Sixteenth-pass: automatic Z between .mudjob layers                   #
+# ------------------------------------------------------------------ #
+
+def _sync_z_move_tracker() -> None:
+    """
+    Fold Z-command transitions into `z_estimate_in`.
+
+    Called from the broadcast loop (~200 ms cadence). Watches the
+    `ZController.command` transitions regardless of who initiated them
+    (touchscreen, RF remote, auto-Z, dead-man timeout, max-run limit,
+    STOP, REMOTE STOP). The operator rule is: EVERY manual or automatic
+    Z movement is folded into one estimate; a direction change counted
+    as "both halves" is accurate enough — ZController zeros PWM between
+    reversals, so the two segments appear as two 0→dir transitions.
+
+    If the Z origin isn't set or calibration is incomplete, we still
+    note the transition (so the next move after an origin establishment
+    starts clean) but do NOT update the estimate.
+    """
+    if _state is None or _state.hardware is None:
+        return
+    cmd = int(getattr(_state.hardware.z, "command", 0) or 0)
+    tracker = _state.z_move_in_flight                   # None | (direction, started_at_monotonic)
+    now = time.monotonic()
+    if cmd and tracker is None:
+        _state.z_move_in_flight = ("up" if cmd > 0 else "down", now)
+    elif cmd and tracker is not None:
+        # Reversal (0→up or 0→down between polls would miss the first
+        # half; practically, ZController._set zeros PWM before starting
+        # the opposite direction, so this path is rare but handled).
+        tracked_dir = tracker[0]
+        want_dir = "up" if cmd > 0 else "down"
+        if tracked_dir != want_dir:
+            _flush_z_segment(now)
+            _state.z_move_in_flight = (want_dir, now)
+    elif not cmd and tracker is not None:
+        _flush_z_segment(now)
+
+
+def _flush_z_segment(now_monotonic: float) -> None:
+    """Internal: close out the currently-tracked segment, update estimate."""
+    if _state is None or _state.z_move_in_flight is None:
+        return
+    direction, started_at = _state.z_move_in_flight
+    _state.z_move_in_flight = None
+    if not _state.z_origin_set or _state.z_estimate_in is None:
+        return
+    elapsed = max(0.0, now_monotonic - started_at)
+    new_est = auto_z.apply_manual_move_to_estimate(
+        _state.z_estimate_in, direction, elapsed, _state.z_calibration)
+    if new_est is not None:
+        _state.z_estimate_in = round(new_est, 4)
+
+
+def _set_z_calibration(raw) -> Optional[str]:
+    """Save operator-measured UP/DOWN speeds at the current PWM duty.
+
+    Payload: `{up_in_per_s, down_in_per_s}`. The current ZController PWM
+    duty is captured automatically so later writes that don't match it
+    don't become stale.
+    """
+    if _state is None or _state.hardware is None:
+        return "No Z hardware."
+    if not isinstance(raw, dict):
+        return "Z calibration payload must be an object."
+    duty = _state.hardware.z.duty                     # the ZController's live PWM duty
+    if duty <= 0:
+        return ("Z PWM duty is 0 — set a duty > 0 before calibrating "
+                "(Hardware / Commissioning → Z speed slider).")
+    merged = dict(_state.z_calibration or {})
+    for k in ("up_in_per_s", "down_in_per_s"):
+        if k in raw:
+            merged[k] = raw.get(k)
+    merged["pwm_duty"] = duty
+    try:
+        saved = z_calibration.save(config.Z_CALIBRATION_PATH, merged)
+    except OSError as exc:
+        return f"Z calibration could not be saved to {config.Z_CALIBRATION_PATH}: {exc}"
+    _state.z_calibration = saved
+    log.info("Z calibration saved: up=%s in/s, down=%s in/s @ duty=%.3f",
+             saved.get("up_in_per_s"), saved.get("down_in_per_s"), duty)
+    return None
+
+
+def _set_z_origin() -> Optional[str]:
+    """Operator-initiated: declare current Z position = 0 (the origin)."""
+    if _state is None:
+        return "Not ready."
+    _state.z_origin_set = True
+    _state.z_estimate_in = 0.0
+    _state.z_fault = {"latched": False, "cause": None, "since": None}
+    log.info("Z origin established — estimate = 0.00 in")
+    return None
+
+
+def _clear_z_origin() -> Optional[str]:
+    """Operator-initiated: forget the origin + estimate (e.g. after
+    exceeding plausible drift, or before a fresh calibration)."""
+    if _state is None:
+        return "Not ready."
+    _state.z_origin_set = False
+    _state.z_estimate_in = None
+    _state.z_fault = {"latched": False, "cause": None, "since": None}
+    log.info("Z origin cleared — estimate unknown")
+    return None
+
+
+def _set_z_mode(mode) -> Optional[str]:
+    """Change the auto-Z mode. Refuses if preconditions aren't met for
+    auto modes (see auto_z.can_enable_auto)."""
+    if _state is None or _state.hardware is None:
+        return "No Z hardware."
+    if mode not in auto_z.Z_MODES:
+        return f"Z mode must be one of {', '.join(auto_z.Z_MODES)}."
+    duty = _state.hardware.z.duty
+    refusal = auto_z.can_enable_auto(mode, _state.z_origin_set,
+                                     _state.z_calibration, duty,
+                                     _state.z_estimate_in)
+    if refusal:
+        return refusal
+    try:
+        z_mode_mod.save(config.Z_MODE_PATH, mode)
+    except OSError as exc:
+        return f"Z mode could not be saved to {config.Z_MODE_PATH}: {exc}"
+    _state.z_mode = mode
+    log.info("Z mode set to %s", mode)
+    return None
+
+
+def _correct_z_estimate(raw) -> Optional[str]:
+    """Operator correction after a visual measurement."""
+    if _state is None:
+        return "Not ready."
+    if not _state.z_origin_set:
+        return "Set the Z origin first."
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return "Z estimate correction must be a number (inches above origin)."
+    if v < -1000 or v > 1000:                      # sanity
+        return "Z estimate must be within ±1000 in."
+    _state.z_estimate_in = round(v, 4)
+    log.info("Z estimate corrected by operator → %.4f in", v)
+    return None
+
+
+def _clear_z_fault() -> Optional[str]:
+    """Operator-initiated: clear a Z fault latch (never resumes motion)."""
+    if _state is None:
+        return "Not ready."
+    if not _state.z_fault.get("latched"):
+        return "Z fault is not latched."
+    _state.z_fault = {"latched": False, "cause": None, "since": None}
+    log.info("Z fault cleared by operator")
+    return None
+
+
+def _latch_z_fault(cause: str) -> None:
+    if _state is None:
+        return
+    _state.z_fault = {"latched": True, "cause": cause, "since": time.time()}
+    _state.add_event("z", f"Z fault: {cause}")
+    log.warning("Z fault latched: %s", cause)
+
+
+async def _execute_auto_z_move(plan: auto_z.AutoZPlan) -> bool:
+    """
+    Run the planned Z move: command the ZController in `plan.direction`
+    for `plan.duration_s` seconds, refresh the dead-man every 100 ms,
+    then release.
+
+    Returns True on success. On any interruption (STOP, REMOTE STOP,
+    HOLD, hardware fault, dead-man blocked), latches `z_fault` and
+    returns False — the job pauses, operator must intervene.
+
+    This path uses the same ZController API as the UI/remote, so every
+    safety interlock (dead-man, max-run, interlock, fault) applies to
+    auto-Z unchanged.
+    """
+    if _state is None or _state.hardware is None:
+        _latch_z_fault("No Z hardware for auto-Z move.")
+        return False
+    if plan.direction is None or plan.duration_s <= 0:
+        return True
+    if plan.duration_s > _state.hardware.z.max_run_s:
+        _latch_z_fault(
+            f"Planned Z move {plan.duration_s:.2f} s exceeds the Z max-run "
+            f"ceiling ({_state.hardware.z.max_run_s:.1f} s). Shorten the layer "
+            f"or recalibrate for a faster PWM duty.")
+        return False
+    direction_int = 1 if plan.direction == "up" else -1
+    source = "auto-z-runner"
+    refusal = _state.hardware.z.request(source, direction_int)
+    if refusal is not None:
+        _latch_z_fault(f"Z refused: {refusal}")
+        return False
+    deadline = time.monotonic() + plan.duration_s
+    try:
+        while time.monotonic() < deadline:
+            # Honour operator interrupts promptly.
+            if _state.remote_stop.latched or _state.stop_fault.latched:
+                _latch_z_fault("Motion latch asserted during auto-Z move.")
+                return False
+            if _current_job is None or _current_job.state == "stopped":
+                return False
+            if _state.hardware.z.command == 0:
+                # ZController released by STOP / dead-man timeout / fault.
+                _latch_z_fault("Z stopped unexpectedly during auto-Z move "
+                               f"(last_stop: {_state.hardware.z.last_stop}).")
+                return False
+            _state.hardware.z.refresh(source)
+            await asyncio.sleep(0.1)
+    finally:
+        _state.hardware.z.release(source)
+        _sync_z_move_tracker()
+    return True
+
+
+async def _on_layer_boundary_hook(prev_layer_idx: int, next_layer_idx: int,
+                                   next_layer_z_in) -> bool:
+    """
+    Sixteenth-pass auto-Z layer-boundary hook, injected into `JobRunner`
+    when `z_mode != "manual"`. See JobRunner for the contract.
+
+    * Computes the plan from the ABSOLUTE next-layer target (not an
+      incremental "+ layer thickness"). The target may come from
+      layout.layer_bottom (preferred — the start of the next layer) or
+      from the number of layers printed so far × operator-set thickness.
+    * In `auto_confirm` mode: sets `job.state = "awaiting_reposition"`
+      and waits. Operator confirms via the existing confirm_reposition
+      message (we reuse that flow). Lift reposition is NOT ambiguous
+      because this path only fires INSIDE a lift (lift boundaries are
+      handled by `_finish_lift`).
+    * In `auto` mode: executes the plan.
+    * Any failed plan (negative delta, missing calibration, Z fault)
+      pauses the job with a Z fault.
+    """
+    if _state is None:
+        return False
+    duty = _state.hardware.z.duty if _state.hardware else 0.0
+    plan = auto_z.plan_z_move(_state.z_estimate_in, next_layer_z_in,
+                              _state.z_calibration, duty)
+    log.info("Auto-Z layer-boundary: prev=%s next=%s target_z=%s plan=%s",
+             prev_layer_idx, next_layer_idx, next_layer_z_in, plan.to_dict())
+    if not plan.valid:
+        _latch_z_fault(plan.reason)
+        return False
+    if plan.direction is None:
+        return True                                      # already at target
+    if _state.z_mode == "auto_confirm":
+        job = _current_job
+        if job is not None:
+            job.state = "awaiting_reposition"
+            try:
+                job.begin_wait()
+            except Exception:
+                pass
+            while job.state == "awaiting_reposition":
+                await asyncio.sleep(0.05)
+            try:
+                job.end_wait()
+            except Exception:
+                pass
+            if job.state == "stopped":
+                return False
+    ok = await _execute_auto_z_move(plan)
+    if not ok:
+        if _current_job is not None:
+            _current_job.state = "held"
+        return False
+    return True
 
 
 async def _notify(ws: WebSocket, message: str, level: str = "warn") -> None:
@@ -1115,6 +1405,8 @@ def _set_machine_profile(profile) -> Optional[str]:
 
 _STATE_CHANGING = {"hold", "resume", "stop", "job_start", "z_start", "z_stop", "set_z_duty",
                    "remote_stop_clear", "stop_fault_clear",
+                   "set_z_calibration", "set_z_origin", "clear_z_origin",
+                   "set_z_mode", "correct_z_estimate", "clear_z_fault",
                    "confirm_reposition", "set_machine_profile",
                    "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
                    "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
@@ -1199,11 +1491,45 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
     elif msg_type == "z_stop":
         if _state and _state.hardware:
             _state.hardware.z.release(_z_source(ws))
+            _sync_z_move_tracker()                          # fold immediately
 
     elif msg_type == "set_z_duty":
         refusal = _set_z_duty(data.get("duty"))
         if refusal:
             await _notify(ws, refusal)
+
+    elif msg_type == "set_z_calibration":
+        refusal = _set_z_calibration(data.get("calibration") or {
+            "up_in_per_s": data.get("up_in_per_s"),
+            "down_in_per_s": data.get("down_in_per_s"),
+        })
+        await _notify(ws, refusal or "Z calibration saved.",
+                       level="warn" if refusal else "info")
+
+    elif msg_type == "set_z_origin":
+        refusal = _set_z_origin()
+        await _notify(ws, refusal or "Z origin established (estimate = 0.00 in).",
+                       level="warn" if refusal else "info")
+
+    elif msg_type == "clear_z_origin":
+        refusal = _clear_z_origin()
+        await _notify(ws, refusal or "Z origin cleared.",
+                       level="warn" if refusal else "info")
+
+    elif msg_type == "set_z_mode":
+        refusal = _set_z_mode(data.get("mode"))
+        await _notify(ws, refusal or f"Z mode set to {data.get('mode')}.",
+                       level="warn" if refusal else "info")
+
+    elif msg_type == "correct_z_estimate":
+        refusal = _correct_z_estimate(data.get("z_in"))
+        await _notify(ws, refusal or "Z estimate corrected.",
+                       level="warn" if refusal else "info")
+
+    elif msg_type == "clear_z_fault":
+        refusal = _clear_z_fault()
+        await _notify(ws, refusal or "Z fault cleared.",
+                       level="warn" if refusal else "info")
 
     elif msg_type == "remote_stop_clear":
         refusal = _clear_remote_stop()

@@ -67,10 +67,22 @@ def origin_return_line(feed_in_min: float) -> str:
 
 class JobRunner:
     def __init__(self, communicator: GRBLCommunicator, job: CurrentJob,
-                 origin_feed_in_min: float | None = None) -> None:
+                 origin_feed_in_min: float | None = None,
+                 on_layer_boundary=None) -> None:
+        """
+        * `on_layer_boundary(prev_layer_idx, next_layer_idx, next_layer_z_in)`
+          — sixteenth-pass hook, awaited AFTER draining GRBL at every
+          within-lift layer-mark crossing. Returns True to continue, False
+          to abort. If None (default — "manual" Z mode), no pause is
+          inserted and the runner streams through layer marks unchanged.
+          Lift boundaries continue to use `_finish_lift` and are NOT
+          surfaced through this hook (frame reposition is a different
+          operator-step from an in-frame Z advance).
+        """
         self._comm = communicator
         self._job = job
         self._origin_feed = origin_feed_in_min
+        self._on_layer_boundary = on_layer_boundary
 
     async def run(self) -> None:
         """Stream the job. Designed to be run as an asyncio Task."""
@@ -142,6 +154,25 @@ class JobRunner:
                     log.info("Frame reposition confirmed — starting lift %d", ended + 2)
                 else:
                     log.info("Lift %d extended by the operator — continuing without a reposition", ended + 1)
+            # Sixteenth-pass auto-Z: WITHIN-LIFT layer boundary. Fires only
+            # when the layer index at `i` differs from the layer index at
+            # `i - 1` AND we're not sitting on a lift boundary (lifts own
+            # the reposition flow). The hook is NOT invoked at i == 0.
+            if self._on_layer_boundary is not None and i > 0:
+                prev_seg = job.layout.segment_at(i - 1)
+                next_seg = job.layout.segment_at(i)
+                if (prev_seg and next_seg
+                        and prev_seg[1] != next_seg[1]
+                        and not job.layout.is_boundary(i)):
+                    if not await self._drain(job.layout.lift_of(i) - 1):
+                        return
+                    cont = await self._on_layer_boundary(
+                        prev_seg[1], next_seg[1], next_seg[2])
+                    if not cont:
+                        log.info("Layer-boundary hook aborted the job at line %d", i)
+                        return
+                    if job.state == "stopped":
+                        return
             job.current_lift = job.layout.lift_of(i)
             line = lines[i]
 

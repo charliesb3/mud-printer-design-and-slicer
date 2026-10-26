@@ -1044,6 +1044,91 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (sixteenth pass, part 2) — Automatic Z between .mudjob
+layers with absolute reference heights (SCAFFOLDING, DEPLOYED,
+GATED BEHIND MANUAL DEFAULT).
+
+**Operator rule.** Every layer has an absolute Z target measured
+from the operator-established origin: `layer_k = k × layer_thickness`.
+Manual Z adjustments during a layer update the ESTIMATE only, never
+the layer targets. Required movement at a boundary is `next_target −
+estimate`. If the estimate is above the next target, DO NOT auto-lower
+— pause for operator intervention.
+
+**Data model** (`app/jobs/auto_z.py`, `app/z_calibration.py`,
+`app/z_mode.py`):
+- `AutoZPlan`: `{valid, direction, delta_in, duration_s, requires_operator, reason}`.
+- Pure fns: `layer_target_in`, `plan_z_move`, `apply_manual_move_to_estimate`,
+  `can_enable_auto`.
+- Persistent files: `z_calibration.json` (`up_in_per_s`, `down_in_per_s`,
+  `pwm_duty`, `calibrated_at`), `z_mode.json` (default `"manual"`).
+- **Origin NOT persisted** across restarts — the operator must
+  re-establish it so a drifting estimate doesn't survive a reboot
+  (`main.py` resets `z_origin_set=False`, `z_estimate_in=None` at startup).
+
+**AppState additions** (serialized in `to_dict().auto_z`):
+`mode`, `origin_set`, `estimate_in`, `calibration`, `fault`.
+
+**WS endpoints** (new): `set_z_calibration`, `set_z_origin`,
+`clear_z_origin`, `set_z_mode`, `correct_z_estimate`, `clear_z_fault`.
+All go through `_latched()` for motion refusal.
+
+**Estimate tracker** (`_sync_z_move_tracker`, called from the
+broadcast loop): watches `ZController.command` transitions regardless
+of source (touchscreen, RF remote, auto-Z, dead-man timeout, STOP,
+REMOTE STOP). Folds `elapsed × speed` into `z_estimate_in` on
+non-zero → 0 transitions. No origin / no calibration → tracker still
+observes transitions but does NOT update the estimate.
+
+**Runner integration** (`JobRunner(..., on_layer_boundary=...)` optional
+callback): at every within-lift layer-mark crossing, the runner drains
+GRBL and invokes the hook. The hook is None in `"manual"` mode (default)
+— runner behavior unchanged. In `"auto_confirm"` / `"auto"` modes,
+`_on_layer_boundary_hook` computes the plan and either waits for operator
+confirmation or executes the move. Lift boundaries continue to use
+`_finish_lift` (frame reposition is a separate step).
+
+**Auto-Z move executor** (`_execute_auto_z_move`): routes through the
+SAME `ZController.request/refresh/release` API as the touchscreen /
+remote. Every safety interlock (dead-man, max-run, interlock, hardware
+fault, STOP latches) applies to auto-Z unchanged. On any interruption
+(STOP, REMOTE STOP, HOLD, hardware fault, max-run exceeded, Z blocked)
+the executor latches `z_fault` and the job pauses.
+
+**Gating.** `z_mode` defaults to `"manual"` and is persisted. Switching
+to `"auto_confirm"` or `"auto"` is REFUSED unless the origin is set,
+calibration is complete, and the ZController's live PWM duty matches
+the calibration duty.
+
+**Z fault latch** (`AppState.z_fault = {latched, cause, since}`):
+set by the auto-Z executor on any interruption or by the layer hook
+when the plan is invalid. Cleared only by `clear_z_fault` — never
+auto-resumes motion.
+
+**UI** (sub-panels):
+- Current Job area → `#auto-z-panel`: mode selector, origin status,
+  estimated Z, current / next layer references, planned Z movement,
+  calibration status, Set / Clear origin buttons, Z fault banner.
+- Hardware/Commissioning → `#z-cal-section`: Z calibration form
+  (current PWM duty readout, UP / DOWN speed inputs, Save button,
+  calibrated-at timestamp).
+
+**Default behavior (shipped, deployed).** `z_mode == "manual"` → no
+auto-Z activity. The runner streams .mudjobs exactly as before.
+Operator must deliberately switch mode after calibrating + setting
+origin to enable auto-Z. Physical commissioning still requires
+operator approval.
+
+**Tests** (471 passed, 1 skipped). New files:
+- `test_auto_z.py` — 27 pure-function tests
+- `test_auto_z_ws.py` — 18 WS integration tests
+
+Covers: absolute layer references, manual adjustments-don't-shift-
+targets, auto plan with/without preconditions, estimate folding,
+mode gating, calibration persistence, mode persistence, restart
+reset of origin, interrupted moves (fault latch), existing safety
+interlocks unchanged, layer-hook gating.
+
 2026-10-25 (sixteenth pass, part 1) — STOP timeout safety correction.
 
 **Change.** `_finalize_stop_after_decel` previously fell back to

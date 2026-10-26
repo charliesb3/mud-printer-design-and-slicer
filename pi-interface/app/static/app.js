@@ -186,6 +186,7 @@ function handleState(s) {
   renderDiagnostics(s);
   renderRemoteStop(s);
   renderStopFault(s);
+  renderAutoZ(s);
   renderZ(s);
   renderHardware(s);
 }
@@ -1073,6 +1074,103 @@ function attachFeatureControls() {
   document.getElementById("btn-restore-lifts").addEventListener("click", () => send({ type: "restore_planned_lifts" }));
   document.querySelectorAll("[data-read]").forEach(b =>
     b.addEventListener("click", () => send({ type: "read_grbl", what: b.dataset.read })));
+}
+
+// ---- Sixteenth-pass: automatic Z between layers (status panel + calibration)
+function renderAutoZ(s) {
+  const az = s.auto_z || {};
+  const cal = az.calibration || {};
+  const job = s.job || null;
+  const fmt = (v, u = "in") => v == null ? "—" : `${Number(v).toFixed(3)} ${u}`;
+
+  // Mode selector — don't clobber while the operator is editing.
+  const sel = document.getElementById("z-mode-select");
+  if (sel && document.activeElement !== sel) sel.value = az.mode || "manual";
+
+  // Origin + estimate (always visible).
+  document.getElementById("z-origin-status").textContent =
+    az.origin_set ? "set — estimate 0.00 in at origin" : "NOT set (operator must establish)";
+  document.getElementById("z-estimate").textContent =
+    az.estimate_in == null ? "unknown" : fmt(az.estimate_in);
+
+  // Current / next layer from the job's layout. Not every job carries
+  // layer metadata — fall back to "—".
+  let curZ = null, nextZ = null;
+  if (job && job.preflight) {
+    const lift = (job.progress && job.progress.lift) || {};
+    // Prefer the operator's observed layer thickness × current line's
+    // layer index; otherwise fall back to layout.layer_top at the
+    // current line from the preflight. Best-effort: the backend's
+    // segments[] isn't fully exposed, so we show whatever we have.
+    const liftIdx = (job.current_lift != null) ? job.current_lift : null;
+    if (lift && lift.z_bottom != null) curZ = lift.z_bottom;
+    if (lift && lift.z_top != null) nextZ = lift.z_top;
+  }
+  document.getElementById("z-layer-current").textContent =
+    curZ == null ? "—" : fmt(curZ);
+  document.getElementById("z-layer-next").textContent =
+    nextZ == null ? "—" : fmt(nextZ);
+
+  // Plan: delta = next - estimate.
+  const plan = document.getElementById("z-plan");
+  if (nextZ != null && az.estimate_in != null) {
+    const delta = nextZ - az.estimate_in;
+    if (Math.abs(delta) < 0.0001) plan.textContent = "at target";
+    else if (delta > 0) plan.textContent = `UP ${fmt(delta)} (need calibration)`;
+    else plan.textContent = `Z above target by ${fmt(-delta)} — operator must intervene`;
+  } else {
+    plan.textContent = "—";
+  }
+
+  // Calibration readout.
+  const calEl = document.getElementById("z-cal-status");
+  if (cal.up_in_per_s != null && cal.down_in_per_s != null && cal.pwm_duty != null) {
+    calEl.textContent = `UP ${cal.up_in_per_s} in/s · DOWN ${cal.down_in_per_s} in/s @ duty ${(cal.pwm_duty * 100).toFixed(0)}%`;
+  } else {
+    calEl.textContent = "not calibrated";
+  }
+
+  // HW/Commissioning Z calibration form.
+  const z = (s.hardware || {}).z;
+  const duty = z ? z.duty_config : null;
+  const zcDuty = document.getElementById("zc-duty");
+  if (zcDuty) zcDuty.textContent = duty == null ? "—" : `${(duty * 100).toFixed(0)}%`;
+  const setField = (id, v) => {
+    const f = document.getElementById(id);
+    if (f && document.activeElement !== f) f.value = v == null ? "" : v;
+  };
+  setField("zc-up", cal.up_in_per_s);
+  setField("zc-down", cal.down_in_per_s);
+  const zcAt = document.getElementById("zc-at");
+  if (zcAt) zcAt.textContent = cal.calibrated_at
+    ? new Date(cal.calibrated_at * 1000).toLocaleString() : "—";
+
+  // Z fault.
+  const fault = az.fault || {};
+  const faultEl = document.getElementById("auto-z-fault");
+  if (faultEl) {
+    faultEl.hidden = !fault.latched;
+    if (fault.latched) {
+      document.getElementById("z-fault-cause").textContent = fault.cause || "unknown";
+    }
+  }
+}
+
+function attachAutoZ() {
+  const sel = document.getElementById("z-mode-select");
+  if (sel) sel.addEventListener("change", () => send({ type: "set_z_mode", mode: sel.value }));
+  const btn = (id, msg) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", msg);
+  };
+  btn("btn-z-origin-set",   () => send({ type: "set_z_origin" }));
+  btn("btn-z-origin-clear", () => send({ type: "clear_z_origin" }));
+  btn("btn-z-fault-clear",  () => send({ type: "clear_z_fault" }));
+  btn("btn-z-cal-save", () => {
+    const n = (id) => { const v = document.getElementById(id).value.trim(); return v === "" ? null : parseFloat(v); };
+    send({ type: "set_z_calibration",
+           calibration: { up_in_per_s: n("zc-up"), down_in_per_s: n("zc-down") } });
+  });
 }
 
 // ---- STOP fault (fifteenth-pass): motion-stopped confirmation timeout
@@ -2051,6 +2149,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".z-btn").forEach(attachZButton);
   attachRemoteStopClear();
   attachStopFault();
+  attachAutoZ();
   attachHardwarePanel();
   attachExitKiosk();
   attachView();

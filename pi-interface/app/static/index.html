@@ -140,6 +140,35 @@
           <div class="preflight-title" id="preflight-title"></div>
           <ul class="preflight-list" id="preflight-list"></ul>
         </div>
+        <!-- Sixteenth-pass: automatic Z between layers.
+             Status panel inside the Current Job section — visible always
+             (not only during a job) so the operator can establish the Z
+             origin and see the current mode / estimate / plan at a glance.
+             Calibration itself lives in Hardware / Commissioning. -->
+        <div class="auto-z-panel" id="auto-z-panel">
+          <div class="auto-z-row auto-z-title-row">
+            <span class="auto-z-title">Z mode</span>
+            <select id="z-mode-select" class="auto-z-mode">
+              <option value="manual">Manual (default)</option>
+              <option value="auto_confirm">Automatic — confirm each layer</option>
+              <option value="auto">Automatic</option>
+            </select>
+          </div>
+          <div class="auto-z-row"><span>Z origin</span><span id="z-origin-status">not set</span></div>
+          <div class="auto-z-row"><span>Estimated Z</span><span id="z-estimate">—</span></div>
+          <div class="auto-z-row"><span>Current layer reference</span><span id="z-layer-current">—</span></div>
+          <div class="auto-z-row"><span>Next layer target</span><span id="z-layer-next">—</span></div>
+          <div class="auto-z-row"><span>Planned Z movement</span><span id="z-plan">—</span></div>
+          <div class="auto-z-row"><span>Calibration</span><span id="z-cal-status">—</span></div>
+          <div class="auto-z-row auto-z-buttons">
+            <button class="small-btn" id="btn-z-origin-set">Set Z origin here</button>
+            <button class="small-btn" id="btn-z-origin-clear">Clear Z origin</button>
+          </div>
+          <div class="auto-z-fault" id="auto-z-fault" hidden>
+            <strong>Z fault:</strong> <span id="z-fault-cause"></span>
+            <button class="small-btn" id="btn-z-fault-clear">Clear Z fault</button>
+          </div>
+        </div>
         <!-- Fourteenth-pass: prominent prepared-for mismatch panel (shown
              when the job was designed for a different printer envelope).
              Rendered separately so it's visible even when the preflight
@@ -406,6 +435,26 @@
         <table class="diag-table hw-table" id="hw-remote"></table>
         <div class="diag-title">Manual Z output (Cytron MD13S)</div>
         <div class="diag-grid" id="hw-z"></div>
+        <!-- Sixteenth-pass: Z calibration. Operator measures UP/DOWN
+             travel at a known duration + the current PWM duty, enters the
+             speed (in/s). Required for enabling auto-Z. -->
+        <div class="hw-subsection" id="z-cal-section">
+          <div class="diag-title">Z calibration (time-based, open-loop)</div>
+          <p class="est-note">The Z actuator has NO position feedback. Automatic Z between layers uses
+            calibrated UP / DOWN speeds AT A SPECIFIC PWM duty. Measure the travel over a known hold
+            duration at the current duty, then enter in/s below. Changing the PWM duty invalidates the
+            calibration (speed does not scale linearly). The estimate persists across restarts in RAM
+            only — the <strong>origin must be re-established manually</strong> after every reboot.</p>
+          <div class="printer-grid">
+            <label for="zc-duty">Current PWM duty</label><span id="zc-duty">—</span>
+            <label for="zc-up">UP speed (in/s)</label><input id="zc-up" type="number" min="0.001" step="0.01" inputmode="decimal" />
+            <label for="zc-down">DOWN speed (in/s)</label><input id="zc-down" type="number" min="0.001" step="0.01" inputmode="decimal" />
+            <label>Calibrated at</label><span id="zc-at">—</span>
+          </div>
+          <div class="controls-row compact">
+            <button class="ctrl-btn btn-setup" id="btn-z-cal-save">Save Z calibration</button>
+          </div>
+        </div>
         <div class="diag-title">Hardware events</div>
         <div class="diag-events" id="hw-events"></div>
         <p class="est-note">Check each remote button here with motion disabled (JOG_SPEED_MM_MIN=0, Z_PWM_DUTY=0)

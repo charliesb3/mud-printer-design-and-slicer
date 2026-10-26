@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import config, hardware, sdnotify, z_setting
+from . import config, hardware, sdnotify, z_calibration, z_mode, z_setting
 from .api import http as http_module
 from .api.ws import ConnectionManager
 from .grbl.communicator import GRBLCommunicator
@@ -61,6 +61,17 @@ async def lifespan(app: FastAPI):
     from . import machine_profile
     app_state.machine_profile, app_state.machine_profile_problem = machine_profile.load(config.MACHINE_PROFILE_PATH)
     log.info("Machine profile: %s", app_state.machine_profile.get("name"))
+    # Sixteenth-pass: Z calibration + Z mode loaded here. The Z ORIGIN is
+    # deliberately NOT persisted — the operator must re-establish it after
+    # every restart so a drifting estimate doesn't survive power loss.
+    app_state.z_calibration = z_calibration.load(config.Z_CALIBRATION_PATH)
+    app_state.z_mode = z_mode.load(config.Z_MODE_PATH)
+    app_state.z_origin_set = False
+    app_state.z_estimate_in = None
+    log.info("Z mode: %s · calibration: up=%s in/s, down=%s in/s @ duty=%s · origin: NOT SET (operator must re-establish)",
+             app_state.z_mode, app_state.z_calibration.get("up_in_per_s"),
+             app_state.z_calibration.get("down_in_per_s"),
+             app_state.z_calibration.get("pwm_duty"))
     config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
     asyncio.create_task(_connection_loop(), name="grbl-connection")
     asyncio.create_task(_broadcast_loop(), name="ws-broadcast")
@@ -136,6 +147,7 @@ async def _broadcast_loop() -> None:
         await asyncio.sleep(0.2)
         try:
             http_module.sync_job_state_to_appstate()
+            http_module._sync_z_move_tracker()       # sixteenth-pass: Z estimate update
             if ws_manager.client_count > 0:
                 await ws_manager.broadcast(app_state.to_dict())
         except Exception as exc:

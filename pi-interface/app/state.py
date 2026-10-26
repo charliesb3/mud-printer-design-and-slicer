@@ -203,6 +203,28 @@ class AppState:
         # startup; authoritative for job preflight) + a load problem, if any
         self.machine_profile: dict = _mp.default_profile()
         self.machine_profile_problem: Optional[str] = None
+        # Automatic Z between layers (sixteenth pass). Loaded from
+        # Z_CALIBRATION_PATH / Z_MODE_PATH at startup.
+        # z_estimate_in: estimated Z position in inches above the operator-
+        #   set origin; None when origin unknown (e.g. just after restart).
+        # z_origin_set: True iff the operator deliberately established the
+        #   origin at the current estimated position (= 0).
+        # z_mode: "manual" (default) | "auto_confirm" | "auto".
+        # z_calibration: {up_in_per_s, down_in_per_s, pwm_duty, calibrated_at}.
+        # z_fault: a latch for an interrupted auto-Z move (operator-clear only).
+        # The origin is NEVER restored across restarts — the operator must
+        # re-establish it so a drifting estimate does not survive a reboot.
+        self.z_mode: str = "manual"
+        self.z_origin_set: bool = False
+        self.z_estimate_in: Optional[float] = None
+        self.z_calibration: dict = {"version": 1, "up_in_per_s": None,
+                                     "down_in_per_s": None, "pwm_duty": None,
+                                     "calibrated_at": None}
+        self.z_fault: dict = {"latched": False, "cause": None, "since": None}
+        # Last manual Z move the http layer observed (for tracking estimate
+        # updates). Tuple (direction, started_at_monotonic) while a move is in
+        # progress; None otherwise.
+        self.z_move_in_flight: Optional[tuple] = None
         # Operator-adjustable jog speed. Starts at the configured default
         # (`JOG_SPEED_MM_MIN`); clamped to `[0, JOG_SPEED_MAX_MM_MIN]` from the
         # UI. None ⇒ jogging disabled.
@@ -396,6 +418,13 @@ class AppState:
             "hardware": self._hardware_dict(),
             "machine": {"profile": self.machine_profile, "envelope": _mp.envelope(self.machine_profile),
                         "problem": self.machine_profile_problem},
+            "auto_z": {
+                "mode": self.z_mode,
+                "origin_set": self.z_origin_set,
+                "estimate_in": self.z_estimate_in,
+                "calibration": dict(self.z_calibration),
+                "fault": dict(self.z_fault),
+            },
             "grbl": {
                 "overrides": ({"feed": self.overrides[0], "rapid": self.overrides[1], "spindle": self.overrides[2]}
                               if self.overrides else None),
