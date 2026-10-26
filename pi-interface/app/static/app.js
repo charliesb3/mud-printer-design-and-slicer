@@ -988,6 +988,8 @@ function renderRemoteStop(s) {
 }
 
 // ---- Manual Z: one dead-man controller on the server (same as the remote's Z UP / Z DOWN)
+let zSpeedSliderDirty = false;
+
 function renderZ(s) {
   const z = (s.hardware || {}).z;
   const warn = document.getElementById("z-warning");
@@ -997,12 +999,64 @@ function renderZ(s) {
   warn.classList.toggle("visible", !!reason && !(z && z.blocked));
   const usable = !!(z && z.available && !z.refusal);
   document.querySelectorAll(".z-btn").forEach(b => { b.disabled = !usable && !zActive; });
+
+  // Z speed slider (operator-adjustable PWM duty). The slider sends
+  // percent-of-max to the server; the server clamps + persists and
+  // reports back in `z.duty_config`.
+  const dutyPct = z && typeof z.duty_config === "number" ? Math.round(z.duty_config * 100) : null;
+  const label = document.getElementById("z-speed-value");
+  const slider = document.getElementById("z-speed-slider");
+  const minus = document.getElementById("z-speed-minus");
+  const plus = document.getElementById("z-speed-plus");
+  if (label && slider && minus && plus) {
+    const canChange = usable && (!z || z.command === "STOP");
+    slider.disabled = !canChange;
+    minus.disabled  = !canChange;
+    plus.disabled   = !canChange;
+    if (dutyPct == null) {
+      label.textContent = "—";
+    } else {
+      label.textContent = String(dutyPct);
+      if (!zSpeedSliderDirty) slider.value = String(dutyPct);
+    }
+  }
+
   if (!z) { status.textContent = "—"; status.className = "z-status"; return; }
   const moving = z.command !== "STOP";
   status.className = "z-status" + (moving ? " moving" : "");
   status.textContent = moving
     ? `Z ${z.command} — ${z.source} · duty ${Math.round(z.duty_config * 100)} %`
     : (z.blocked ? z.blocked : `Z STOP · fixed duty ${z.duty_config > 0 ? Math.round(z.duty_config * 100) + " %" : "not set"}`);
+}
+
+function sendZDuty(pct) {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct / 5) * 5));
+  send({ type: "set_z_duty", duty: clamped / 100 });
+}
+
+function attachZSpeedSlider() {
+  const slider = document.getElementById("z-speed-slider");
+  if (!slider) return;
+  slider.addEventListener("input", () => {
+    zSpeedSliderDirty = true;
+    const label = document.getElementById("z-speed-value");
+    if (label) label.textContent = slider.value;
+  });
+  slider.addEventListener("change", () => {
+    sendZDuty(parseInt(slider.value, 10));
+    setTimeout(() => { zSpeedSliderDirty = false; }, 300);
+  });
+  slider.addEventListener("pointercancel", () => { zSpeedSliderDirty = false; });
+
+  const minus = document.getElementById("z-speed-minus");
+  const plus  = document.getElementById("z-speed-plus");
+  const step = (delta) => () => {
+    const z = (lastState && lastState.hardware && lastState.hardware.z) || null;
+    const current = z && typeof z.duty_config === "number" ? Math.round(z.duty_config * 100) : 50;
+    sendZDuty(current + delta);
+  };
+  if (minus) minus.addEventListener("click", step(-5));
+  if (plus)  plus.addEventListener("click",  step(5));
 }
 
 // ---- Hardware / commissioning panel
@@ -1780,6 +1834,7 @@ document.addEventListener("DOMContentLoaded", () => {
   attachPrinter();
   attachJogSpeedSlider();
   attachPrintSpeedSlider();
+  attachZSpeedSlider();
   attachTouchScrollbar();
 
   // Attach other controls

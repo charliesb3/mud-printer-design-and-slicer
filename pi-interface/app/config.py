@@ -72,6 +72,10 @@ GRBL_UNRESPONSIVE_S: float = float(os.getenv("GRBL_UNRESPONSIVE_S", "5.0"))
 # project — .mudjob files only report what they were prepared for.
 MACHINE_PROFILE_PATH: Path = Path(os.getenv("MACHINE_PROFILE_PATH", "machine_profile.json"))
 
+# Operator-adjustable Z manual-mode PWM duty, persisted across restarts.
+# `.env` Z_PWM_DUTY is the FACTORY default; the file is the live value.
+Z_SETTING_PATH: Path = Path(os.getenv("Z_SETTING_PATH", "z_setting.json"))
+
 # Job storage directory (relative to pi-interface/ when running locally)
 JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", "jobs"))
 

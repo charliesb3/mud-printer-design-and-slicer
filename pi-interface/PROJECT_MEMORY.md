@@ -1044,6 +1044,67 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (tenth pass) — Operator-adjustable Z PWM duty + scrollbar
+media-detection fix.
+
+**Z speed slider:**
+- `ZController.set_duty(duty: float)` (in `app/hardware/z.py`): changes the
+  fixed configured duty used for every manual Z move. Refuses while Z is
+  commanded (`self.command != 0`), while in fault, or while an interlock
+  (REMOTE STOP) applies. Value clamped to `[0, 1]`.
+- Persistence module `app/z_setting.py`: atomic JSON load/save of the
+  operator-chosen duty. File default is `Z_SETTING_PATH=z_setting.json`
+  next to the Pi `.env`, gitignored. Startup in `app/main.py` loads the
+  persisted value (if any) and passes it to `hardware.build(z_duty=…)`,
+  overriding `config.Z_PWM_DUTY` from `.env`.
+- WS message `set_z_duty { duty: float 0..1 }` in `app/api/http.py`
+  validates, applies to the shared `ZController`, persists via
+  `z_setting.save()`, and broadcasts state. Added to `_STATE_CHANGING`.
+  Refusals are sent as `notice` messages.
+- UI (`app/static/`): Z speed slider lives in the Z section below the
+  Z UP / Z DOWN buttons. Range 0–100 % step 5 %, initialized at 50 %
+  by default (which matches the `.env` factory default). Shares styling
+  with the jog / print speed sliders. ± buttons apply ±5 % relative
+  to the live `z.duty_config`. Slider sends on `change` (release),
+  not on `input`, so a drag doesn't flood the server. Buttons disable
+  while Z is moving.
+- Behaviour matches the spec: value applies to the NEXT Z move,
+  persists across restarts, and is shared by remote and UI (they both
+  go through the same `ZController` instance). The dead-man heartbeat,
+  30 s run ceiling, UP+DOWN=STOP, REMOTE STOP, exception-fault, and
+  shutdown-force-LOW safety layers are unchanged.
+
+**Scrollbar media-detection fix:**
+- The ninth-pass scrollbar depended on `@media (pointer: coarse)`,
+  which Chromium on the Pi 7" DSI touchscreen sometimes reports as
+  `fine` depending on how input devices were enumerated at boot.
+  Added an inline `<script>` in `index.html` that sets
+  `document.documentElement.classList.add('touch')` based on actual
+  `ontouchstart` / `maxTouchPoints` / `any-pointer: coarse`. CSS now
+  activates the scrollbar via `html.touch …` AND the `@media
+  (any-pointer: coarse)` fallback. Either path is sufficient; the Pi
+  touchscreen hits both.
+- Added `?v=…` query strings to the `<link rel=stylesheet>` and
+  `<script src=…>` so Chromium's aggressive kiosk cache picks up new
+  CSS / JS on each release. Bump the version string on CSS or JS
+  changes.
+- Added `<meta Cache-Control / Pragma / Expires>` tags as a secondary
+  no-cache signal for the kiosk.
+
+**Tests:**
+- `test_hardware.py::TestRemoteZ::test_z_duty_set_updates_the_controller`
+- `test_hardware.py::TestRemoteZ::test_z_duty_refused_while_moving`
+- `test_hardware.py::TestRemoteZ::test_z_duty_clamps_and_rejects_bad_payloads`
+- `test_hardware.py::TestRemoteZ::test_z_duty_single_source_for_remote_and_ui`
+- `test_hardware.py::TestZDutyPersistence::*` (6 tests: save/load roundtrip,
+  missing-file -> None, malformed -> None, clamp, atomicity, build-time
+  override, build-time fallback).
+- `test_ui.py::TestHardwareUI::test_z_speed_slider_in_z_section`
+- `test_ui.py::TestHardwareUI::test_scrollbar_html_touch_class_fallback`
+- Updated `test_touch_scrollbar_structure_and_wiring` for the new media
+  query.
+- 406 passed + 1 skipped.
+
 2026-10-25 (ninth pass) — Industrial touchscreen scrollbar.
 
 The @media (pointer: coarse) tweak that merely widened the native

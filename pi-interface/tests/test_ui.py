@@ -168,6 +168,46 @@ class TestHardwareUI:
             assert _inside(tree, el, "col-mid"), el
         assert tree.order.index("jog-section") < tree.order.index("z-section")
 
+    def test_z_speed_slider_in_z_section(self, tree):
+        """Pin the tenth-pass Z speed slider: horizontal range, % readout,
+        + / - buttons, lives inside #z-section."""
+        for el in ("z-speed-slider", "z-speed-value", "z-speed-minus", "z-speed-plus"):
+            assert el in tree.where, el
+            assert _inside_id(tree, el, "z-section"), el
+        html = (STATIC / "index.html").read_text()
+        assert 'id="z-speed-slider" class="speed-slider"' in html
+        assert 'min="0" max="100" step="5" value="50"' in html
+        js = (STATIC / "app.js").read_text()
+        assert "attachZSpeedSlider" in js
+        assert '"set_z_duty"' in js
+        # ± increments are 5 % per step.
+        assert "step(-5)" in js and "step(5)" in js
+
+    def test_scrollbar_html_touch_class_fallback(self, tree):
+        """
+        Scrollbar must activate on BOTH `html.touch` (set by inline JS in
+        index.html based on ontouchstart / maxTouchPoints) AND
+        @media (any-pointer: coarse). Chromium on the Pi 7" DSI touchscreen
+        inconsistently reports pointer: coarse, so the JS class is the
+        primary trigger.
+        """
+        css = (STATIC / "style.css").read_text()
+        html = (STATIC / "index.html").read_text()
+        # JS class present and used by CSS.
+        assert "html.touch #touch-scrollbar" in css
+        assert "html.touch .ts-arrow" in css
+        assert "html.touch .ts-thumb" in css
+        assert "html.touch .ts-track" in css
+        assert "html.touch #main-content { padding-right: 98px; }" in css
+        # Media-query fallback still present.
+        assert "@media (any-pointer: coarse)" in css
+        # The inline detection script toggles the class.
+        assert "document.documentElement.classList.add('touch')" in html
+        assert "ontouchstart" in html and "maxTouchPoints" in html
+        # Cache-bust query strings on the two static assets.
+        assert '/style.css?v=' in html
+        assert '/app.js?v=' in html
+
     def test_touch_scrollbar_structure_and_wiring(self, tree):
         """
         Pin the ninth-pass industrial touchscreen scrollbar:
@@ -186,9 +226,10 @@ class TestHardwareUI:
         css = (STATIC / "style.css").read_text()
         js = (STATIC / "app.js").read_text()
 
-        # Scrollbar is hidden by default and shown only on pointer: coarse.
+        # Scrollbar is hidden by default and shown by either html.touch
+        # (JS-detected) or @media (any-pointer: coarse).
         assert "#touch-scrollbar { display: none; }" in css
-        assert "@media (pointer: coarse)" in css
+        assert "@media (any-pointer: coarse)" in css
         # Width ≈ 80–100 px per the spec.
         assert "width: 90px" in css
         # Native scrollbar hidden on touch so the custom one is the only

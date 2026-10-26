@@ -4,7 +4,29 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>Mud Printer</title>
-  <link rel="stylesheet" href="/style.css" />
+  <!-- Query string bumps on each release so Chromium kiosk reloads instead of
+       serving the cached old file. Change the value whenever CSS / JS change. -->
+  <link rel="stylesheet" href="/style.css?v=2026-10-25-10" />
+  <!-- No-cache fallback for the kiosk, which otherwise serves CSS/JS from
+       disk cache for days. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <!-- Early touch-device detection: Chrome on Pi 7" DSI touchscreens
+       inconsistently reports `pointer: coarse`; relying on a media query
+       alone leaves the touchscreen looking like a desktop. Set a class
+       based on actual input capability as early as possible so CSS can
+       target it. -->
+  <script>
+    (function () {
+      try {
+        var touch = ('ontouchstart' in window)
+                 || (navigator.maxTouchPoints > 0)
+                 || (window.matchMedia && window.matchMedia('(any-pointer: coarse)').matches);
+        if (touch) document.documentElement.classList.add('touch');
+      } catch (_) { /* keep default (desktop) on any detection error */ }
+    })();
+  </script>
 </head>
 <body>
 
@@ -259,6 +281,22 @@
           <button class="z-btn" id="z-down" data-zdir="down">Z DOWN</button>
         </div>
         <div class="z-status" id="z-status">—</div>
+        <div class="speed-control z-speed-control">
+          <div class="speed-primary">
+            <span class="speed-value-xl"><span id="z-speed-value">—</span></span>
+            <span class="speed-unit-xl">% PWM</span>
+          </div>
+          <div class="speed-slider-row">
+            <button class="step-btn speed-step-btn" id="z-speed-minus" title="−5 %">−</button>
+            <input type="range" id="z-speed-slider" class="speed-slider"
+                   min="0" max="100" step="5" value="50" />
+            <button class="step-btn speed-step-btn" id="z-speed-plus" title="+5 %">+</button>
+          </div>
+          <div class="speed-meta" id="z-speed-meta">
+            Z movement speed. Changes take effect on the next Z press and
+            persist across restarts.
+          </div>
+        </div>
         <p class="est-note">Open-loop: the Z height is not known to the controller. Z moves only while a button
           (here or on the remote) is held; UP and DOWN together stop it.</p>
       </div>
@@ -363,6 +401,6 @@
 
 </div><!-- #app -->
 
-<script src="/app.js"></script>
+<script src="/app.js?v=2026-10-25-10"></script>
 </body>
 </html>

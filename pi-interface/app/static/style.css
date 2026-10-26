@@ -917,27 +917,90 @@ html, body {
 /* Hidden by default (fine pointer / desktop). */
 #touch-scrollbar { display: none; }
 
-@media (pointer: coarse) {
-  /* Hide every native scrollbar on touch — our custom one is the
-     only scroll affordance. Users can still finger-swipe content. */
+/* The industrial scrollbar is enabled in TWO independent ways so it
+   turns on in every real-world Pi configuration:
+     1. `html.touch` — set by an inline <script> in index.html based on
+        actual `ontouchstart` / `maxTouchPoints`. Primary mechanism.
+     2. `@media (any-pointer: coarse)` — browsers honest about having a
+        touch pointer. Catches browsers that don't flag the Pi DSI
+        touchscreen for whatever reason.
+   On desktop (no touch, no coarse) neither selector applies and the
+   native scrollbar is unchanged. */
+
+html.touch * {
+  scrollbar-width: none;              /* Firefox */
+  -ms-overflow-style: none;
+}
+html.touch *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+html.touch #main-content { padding-right: 98px; }
+html.touch #touch-scrollbar {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 60px;
+  right: 0;
+  bottom: 0;
+  width: 90px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  z-index: 50;
+  user-select: none;
+  touch-action: none;
+}
+html.touch .ts-arrow {
+  flex: 0 0 90px;
+  background: var(--surface2);
+  color: var(--text);
+  border: none;
+  border-radius: 0;
+  font-size: 2em;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 0.08s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+html.touch .ts-arrow:active, html.touch .ts-arrow.pressing { background: var(--btn-active); }
+html.touch .ts-arrow-up { border-bottom: 1px solid var(--border); }
+html.touch .ts-arrow-down { border-top: 1px solid var(--border); }
+html.touch .ts-track {
+  flex: 1;
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+  touch-action: none;
+}
+html.touch .ts-thumb {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  min-height: 80px;
+  background: var(--blue);
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  touch-action: none;
+  transition: background 0.08s;
+}
+html.touch .ts-thumb:active, html.touch .ts-thumb.pressing { background: #90c0ff; cursor: grabbing; }
+html.touch .ts-thumb.disabled { opacity: 0.2; cursor: default; }
+
+/* Media-query fallback: identical rules, scoped to any-pointer: coarse. */
+@media (any-pointer: coarse) {
   * {
-    scrollbar-width: none;              /* Firefox */
-    -ms-overflow-style: none;           /* IE/Edge legacy */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
   *::-webkit-scrollbar { display: none; width: 0; height: 0; }
-
-  /* Reserve the right-side gutter inside the main scrolling area so
-     content never slides under the scrollbar. 90 px scrollbar + 8 px
-     breathing room. */
   #main-content { padding-right: 98px; }
-
-  /* The scrollbar itself. Anchored to the viewport right edge below
-     the status bar. */
   #touch-scrollbar {
     display: flex;
     flex-direction: column;
     position: fixed;
-    top: 60px;          /* clear the status bar */
+    top: 60px;
     right: 0;
     bottom: 0;
     width: 90px;
@@ -947,8 +1010,6 @@ html, body {
     user-select: none;
     touch-action: none;
   }
-
-  /* UP / DOWN arrow buttons */
   .ts-arrow {
     flex: 0 0 90px;
     background: var(--surface2);
@@ -965,10 +1026,8 @@ html, body {
     justify-content: center;
   }
   .ts-arrow:active, .ts-arrow.pressing { background: var(--btn-active); }
-  .ts-arrow-up    { border-bottom: 1px solid var(--border); }
-  .ts-arrow-down  { border-top:    1px solid var(--border); }
-
-  /* Track — the vertical rail between the arrow buttons. */
+  .ts-arrow-up { border-bottom: 1px solid var(--border); }
+  .ts-arrow-down { border-top: 1px solid var(--border); }
   .ts-track {
     flex: 1;
     position: relative;
@@ -976,8 +1035,6 @@ html, body {
     overflow: hidden;
     touch-action: none;
   }
-
-  /* Thumb — draggable indicator of the current scroll position. */
   .ts-thumb {
     position: absolute;
     left: 10px;

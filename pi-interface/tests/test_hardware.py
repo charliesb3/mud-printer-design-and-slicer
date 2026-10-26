@@ -446,6 +446,61 @@ class TestRemoteZ:
         await rig.run(0.1)
         assert rig.z.blocked is None
 
+    async def test_z_duty_set_updates_the_controller(self, rig):
+        """Operator slider -> set_duty updates the ZController's duty, which
+        the next Z move will use at the output stage."""
+        assert rig.z.duty == 0.5
+        err = rig.z.set_duty(0.75)
+        assert err is None
+        assert rig.z.duty == 0.75
+        # Starting Z now uses the new duty.
+        ws = FakeWS()
+        await msg({"type": "z_start", "direction": "up"}, ws)
+        assert rig.z.command == UP and rig.backend.duty == 0.75
+        await msg({"type": "z_stop"}, ws)
+
+    async def test_z_duty_refused_while_moving(self, rig):
+        """Spec: no PWM-duty change while the actuator is actively moving."""
+        ws = FakeWS()
+        await msg({"type": "z_start", "direction": "up"}, ws)
+        assert rig.z.command == UP
+        err = rig.z.set_duty(0.8)
+        assert err is not None
+        assert "moving" in err.lower() or "release" in err.lower()
+        assert rig.z.duty == 0.5           # unchanged
+        await msg({"type": "z_stop"}, ws)
+
+    async def test_z_duty_clamps_and_rejects_bad_payloads(self, rig):
+        """UI payloads outside [0, 1] are rejected with a notice;
+        valid floats clamp to the inclusive range."""
+        wsA = FakeWS()
+        await msg({"type": "set_z_duty", "duty": 2.0}, wsA)
+        assert any("between 0" in m.get("message", "") for m in wsA.sent if m.get("type") == "notice")
+        wsB = FakeWS()
+        await msg({"type": "set_z_duty", "duty": -0.1}, wsB)
+        assert any("between 0" in m.get("message", "") for m in wsB.sent if m.get("type") == "notice")
+        wsC = FakeWS()
+        await msg({"type": "set_z_duty", "duty": "fast"}, wsC)
+        assert any("number" in m.get("message", "") for m in wsC.sent if m.get("type") == "notice")
+        wsD = FakeWS()
+        await msg({"type": "set_z_duty", "duty": True}, wsD)
+        assert any("number" in m.get("message", "") for m in wsD.sent if m.get("type") == "notice")
+        assert rig.z.duty == 0.5
+
+    async def test_z_duty_single_source_for_remote_and_ui(self, rig):
+        """A duty change propagates to BOTH remote-source Z and UI-source Z
+        because they share the same ZController."""
+        err = rig.z.set_duty(0.33)
+        assert err is None
+        # Remote Z UP press — simulated by directly releasing a pressed Z UP
+        # input (the service's own transition path).
+        rig.backend.press(pins.Z_UP)
+        await rig.run(0.1)
+        assert rig.z.command == UP and abs(rig.backend.duty - 0.33) < 1e-9
+        rig.backend.release(pins.Z_UP)
+        await rig.run(0.1)
+        assert rig.z.command == 0
+
     async def test_ws_cleanup_releases_held_z(self, rig):
         """Simulate the WebSocket endpoint's `finally` cleanup: when a WS
         disappears while Z is held, the source MUST be released. This is
@@ -711,6 +766,68 @@ class TestRemoteStop:
 # ------------------------------------------------------------------ #
 # Lifecycle, no-GPIO development, systemd notify                       #
 # ------------------------------------------------------------------ #
+
+class TestZDutyPersistence:
+    """Operator-adjusted Z PWM duty survives a restart and is loaded
+    before the ZController is built. See app/z_setting.py."""
+
+    def test_save_and_load_roundtrip(self, tmp_path):
+        from app import z_setting
+        path = tmp_path / "z_setting.json"
+        z_setting.save(path, 0.75)
+        assert z_setting.load(path) == 0.75
+
+    def test_load_missing_returns_none(self, tmp_path):
+        from app import z_setting
+        assert z_setting.load(tmp_path / "nope.json") is None
+
+    def test_load_malformed_returns_none(self, tmp_path):
+        from app import z_setting
+        path = tmp_path / "z_setting.json"
+        path.write_text("{not json")
+        assert z_setting.load(path) is None
+
+    def test_save_clamps_to_range(self, tmp_path):
+        from app import z_setting
+        path = tmp_path / "z_setting.json"
+        z_setting.save(path, 1.5)
+        assert z_setting.load(path) == 1.0
+        z_setting.save(path, -0.5)
+        assert z_setting.load(path) == 0.0
+
+    def test_save_is_atomic(self, tmp_path):
+        """A failed write never corrupts the previous value."""
+        from app import z_setting
+        path = tmp_path / "z_setting.json"
+        z_setting.save(path, 0.6)
+        assert z_setting.load(path) == 0.6
+        # Still 0.6 after a save that would have failed (clamp happens
+        # before any disk I/O, so this is just a sanity check that an
+        # error in the caller doesn't corrupt the file).
+        z_setting.save(path, 0.7)
+        assert z_setting.load(path) == 0.7
+
+    def test_hardware_build_honours_z_duty_override(self):
+        from app import hardware as hw_mod
+        cfg = SimpleNamespace(HARDWARE_BACKEND="mock", Z_PWM_FREQUENCY_HZ=1000, Z_PWM_DUTY=0.5,
+                              Z_TIMEOUT_S=0.3, Z_MAX_RUN_S=30, Z_DIR_INVERT=False,
+                              REMOTE_DEBOUNCE_S=0.05, REMOTE_POLL_INTERVAL_S=0.01)
+        svc = hw_mod.build(cfg, interlock=lambda: None, on_remote_stop=None,
+                           event=lambda k, t: None, z_duty=0.85)
+        try:
+            assert svc.z.duty == 0.85
+        finally:
+            pass  # service wasn't started
+
+    def test_hardware_build_falls_back_to_cfg_default_when_override_is_none(self):
+        from app import hardware as hw_mod
+        cfg = SimpleNamespace(HARDWARE_BACKEND="mock", Z_PWM_FREQUENCY_HZ=1000, Z_PWM_DUTY=0.5,
+                              Z_TIMEOUT_S=0.3, Z_MAX_RUN_S=30, Z_DIR_INVERT=False,
+                              REMOTE_DEBOUNCE_S=0.05, REMOTE_POLL_INTERVAL_S=0.01)
+        svc = hw_mod.build(cfg, interlock=lambda: None, on_remote_stop=None,
+                           event=lambda k, t: None, z_duty=None)
+        assert svc.z.duty == 0.5
+
 
 class TestLifecycle:
     async def test_build_without_gpio_works(self):

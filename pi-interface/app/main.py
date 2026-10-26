@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import config, hardware, sdnotify
+from . import config, hardware, sdnotify, z_setting
 from .api import http as http_module
 from .api.ws import ConnectionManager
 from .grbl.communicator import GRBLCommunicator
@@ -42,11 +42,18 @@ async def lifespan(app: FastAPI):
     # Startup — hardware FIRST: Z outputs driven to STOP and remote inputs
     # configured (pull-ups) before any machine action is possible.
     http_module.init(app_state, communicator, ws_manager)
+    # Load the operator-adjusted Z duty, if persisted; fall back to .env.
+    persisted_duty = z_setting.load(config.Z_SETTING_PATH)
+    if persisted_duty is not None:
+        log.info("Z duty loaded from %s: %.2f (overriding Z_PWM_DUTY=%.2f)",
+                 config.Z_SETTING_PATH, persisted_duty, config.Z_PWM_DUTY)
+    effective_z_duty = persisted_duty if persisted_duty is not None else config.Z_PWM_DUTY
     app_state.hardware = hardware.build(
         config,
         interlock=app_state.remote_stop.refusal,
         on_remote_stop=http_module.remote_stop,
         event=app_state.add_hw_event,
+        z_duty=effective_z_duty,
     )
     app_state.hardware.start()
     log.info("Hardware backend: %s (manual Z %s)", app_state.hardware.backend.name,

@@ -776,6 +776,34 @@ def _z_source(ws) -> str:
     return f"ui:{id(ws):x}"
 
 
+def _set_z_duty(raw) -> Optional[str]:
+    """Operator-adjustable Z duty via the UI slider.
+
+    Validates, applies to the shared `ZController`, and persists to
+    `config.Z_SETTING_PATH` so a restart keeps the operator's choice.
+    Shared across all WS clients + the RF remote because the ZController
+    is one instance.
+    """
+    if _state is None or _state.hardware is None:
+        return "No Z hardware."
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return "Z duty must be a number between 0 and 1."
+    duty = float(raw)
+    if duty < 0.0 or duty > 1.0:
+        return "Z duty must be between 0 (STOP) and 1 (100 %)."
+    refusal = _state.hardware.z.set_duty(duty)
+    if refusal:
+        return refusal
+    # Only persist on a successful set — never save a value we refused.
+    try:
+        from .. import z_setting
+        z_setting.save(config.Z_SETTING_PATH, duty)
+    except OSError as exc:
+        return f"Z duty applied but could not be saved to {config.Z_SETTING_PATH}: {exc}"
+    log.info("Z duty set and persisted: %.2f", duty)
+    return None
+
+
 def _z_start(direction, ws) -> Optional[str]:
     hw = _state.hardware if _state else None
     if hw is None:
@@ -833,7 +861,8 @@ def _set_machine_profile(profile) -> Optional[str]:
     return None
 
 
-_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "z_start", "z_stop", "remote_stop_clear", "confirm_reposition", "set_machine_profile",
+_STATE_CHANGING = {"hold", "resume", "stop", "job_start", "z_start", "z_stop", "set_z_duty",
+                   "remote_stop_clear", "confirm_reposition", "set_machine_profile",
                    "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
                    "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
                    "apply_lift_parameters"}
@@ -917,6 +946,11 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
     elif msg_type == "z_stop":
         if _state and _state.hardware:
             _state.hardware.z.release(_z_source(ws))
+
+    elif msg_type == "set_z_duty":
+        refusal = _set_z_duty(data.get("duty"))
+        if refusal:
+            await _notify(ws, refusal)
 
     elif msg_type == "remote_stop_clear":
         refusal = _clear_remote_stop()

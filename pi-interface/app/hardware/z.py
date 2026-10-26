@@ -113,6 +113,39 @@ class ZController:
         self._requests.clear()
         self._resolve(self._clock(), reason=reason)
 
+    def set_duty(self, duty: float) -> Optional[str]:
+        """
+        Change the FIXED configured duty used for every manual Z move.
+
+        Returns a refusal string if the change was rejected, else None.
+
+        Deliberately conservative:
+        - Z must be at STOP (`command == 0`): the operator never changes
+          the drive strength under power. If Z is moving the operator must
+          release the button first.
+        - A fault latch rejects it: Z is unusable until a service restart.
+        - A latched REMOTE STOP rejects it via the normal interlock.
+        - `duty` is clamped to [0, 1]. The caller is responsible for
+          enforcing any additional ceiling.
+
+        No change is made to any output pin here — the new duty is used on
+        the NEXT `_set(direction, …)`. The current `pwm_duty` reported in
+        state remains at 0 until the operator starts a Z move again.
+        """
+        if self.command != 0:
+            return (f"Z is moving ({_NAMES[self.command]}) — release the "
+                    f"button, then try again.")
+        if self.fault:
+            return (f"Z output fault: {self.fault} — restart the printer "
+                    f"service after checking the wiring.")
+        interlock = self._interlock()
+        if interlock:
+            return interlock
+        self.duty = max(0.0, min(1.0, float(duty)))
+        self._event("z", f"Z duty set to {self.duty:.0%}")
+        log.info("Z duty set to %.2f", self.duty)
+        return None
+
     def tick(self) -> None:
         """Expire stale requests and enforce the run limit (called by the watchdog loop)."""
         self._resolve(self._clock())

@@ -27,3 +27,6 @@ scripts/deploy.config
 
 # this controller's machine profile (local configuration, not source)
 machine_profile.json
+
+# operator-adjusted Z PWM duty, persisted at runtime (operator setting, not source)
+z_setting.json
