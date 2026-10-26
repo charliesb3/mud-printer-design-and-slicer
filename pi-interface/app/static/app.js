@@ -320,6 +320,14 @@ function renderControls(s) {
   document.getElementById("btn-hold").disabled = !inRun;
   document.getElementById("btn-resume").disabled = !inHold || latched(s);
   document.getElementById("btn-stop").disabled = !s.connected;
+  // Restart buttons: enabled only when a job is loaded, not currently
+  // running / held / awaiting_reposition. The backend also refuses.
+  const job = s.job;
+  const active = job && ["running", "held", "awaiting_reposition"].includes(job.state);
+  for (const id of ["btn-restart-lift", "btn-restart-job"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !job || active || latched(s);
+  }
 }
 
 function renderJobSection(s) {
@@ -444,6 +452,7 @@ function renderLifts(s) {
   document.getElementById("lift-details").hidden = !isBuilding;
   renderNotExecutable(isBuilding && job.executable === false ? job : null);
   if (isBuilding) renderLiftList(job);
+  renderLiftSelection(isBuilding ? job : null);
   const awaiting = isBuilding && job.state === "awaiting_reposition" && job.awaiting_lift != null;
   panel.hidden = !awaiting;
   if (!awaiting) cancelConfirmHold();
@@ -596,6 +605,71 @@ function renderNotExecutable(job) {
 
 function fmtNum(v) {
   return typeof v === "number" ? String(Math.round(v * 1000) / 1000) : "";
+}
+
+// Seventeenth-pass: lift selection panel. One clickable row per lift
+// with a status badge. Click → send `select_lift` (no motion). The
+// backend's `job.selected_lift` is the single source of truth.
+function renderLiftSelection(job) {
+  const panel = document.getElementById("lift-selection");
+  if (!panel) return;
+  if (!job || !job.total_lifts) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const sel = (job.selected_lift != null) ? job.selected_lift : 0;
+  const statuses = job.lift_statuses || [];
+  const active = job.state && !["ready", "stopped", "error", "completed"].includes(job.state);
+  document.getElementById("lift-selection-count").textContent =
+    `${sel + 1} of ${job.total_lifts} selected · current execution: ${(job.current_lift || 0) + 1}`;
+  const rows = document.getElementById("lift-rows");
+  rows.innerHTML = "";
+  for (let i = 0; i < job.total_lifts; i++) {
+    const row = document.createElement("button");
+    const status = statuses[i] || "not_started";
+    row.className = "lift-row " + status;
+    if (i === sel) row.classList.add("selected");
+    row.setAttribute("type", "button");
+    row.setAttribute("data-lift", String(i));
+    row.disabled = active;                     // no changing the selection mid-run
+    const label = document.createElement("span");
+    label.className = "lift-row-label";
+    label.textContent = `Lift ${i + 1}`;
+    const badge = document.createElement("span");
+    badge.className = "lift-row-badge";
+    badge.textContent = status.replace(/_/g, " ");
+    row.appendChild(label);
+    row.appendChild(badge);
+    row.addEventListener("click", () => send({ type: "select_lift", index: i }));
+    rows.appendChild(row);
+  }
+}
+
+// Two-click confirm pattern for Restart Lift / Restart Job.
+// First click: button flips to data-stage="confirm" (styled red + "Confirm ..." prefix).
+// Second click within the timeout: sends the restart with confirm:true.
+// Timeout or any other interaction: reverts to idle.
+function attachRestartButtons() {
+  const CONFIRM_WINDOW_MS = 4000;
+  const wire = (id, type) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    let timer = null;
+    const toIdle = () => {
+      btn.dataset.stage = "idle";
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+    btn.addEventListener("click", () => {
+      if (btn.dataset.stage === "idle") {
+        btn.dataset.stage = "confirm";
+        timer = setTimeout(toIdle, CONFIRM_WINDOW_MS);
+      } else {
+        send({ type, confirm: true });
+        toIdle();
+      }
+    });
+    btn.addEventListener("blur", toIdle);
+  };
+  wire("btn-restart-lift", "restart_lift");
+  wire("btn-restart-job", "restart_job");
 }
 
 // One row per lift, exactly as the job file defines it (display only)
@@ -2154,6 +2228,7 @@ document.addEventListener("DOMContentLoaded", () => {
   attachStopButton();
   attachConfirmButton();
   attachSetupButtons();
+  attachRestartButtons();
   attachFeatureControls();
   document.querySelectorAll(".z-btn").forEach(attachZButton);
   attachRemoteStopClear();

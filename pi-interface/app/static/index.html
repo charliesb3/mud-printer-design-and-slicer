@@ -194,6 +194,20 @@
           <summary>Lift details</summary>
           <div class="lift-list" id="lift-list"></div>
         </details>
+        <!-- Seventeenth-pass: lift selection. Shows every lift with a
+             clear status badge; clicking a row selects it (the backend
+             `select_lift` message is the ONLY effect — no motion is
+             initiated). START reads this selection. -->
+        <div class="lift-selection" id="lift-selection" hidden>
+          <div class="lift-selection-title">
+            Lift selection
+            <span class="lift-selection-count" id="lift-selection-count">—</span>
+          </div>
+          <div class="lift-rows" id="lift-rows"></div>
+          <div class="lift-selection-note">
+            Selecting a lift does not move the printer. START begins at the selected lift.
+          </div>
+        </div>
         <div class="job-actions-row">
           <label class="upload-label">
             Upload job
@@ -297,6 +311,22 @@
           <button class="ctrl-btn btn-stop" id="btn-stop"
                   title="Immediate STOP. Single tap or click. Physical E-STOP remains the only safety stop.">
             <span>STOP</span>
+          </button>
+        </div>
+        <!-- Seventeenth-pass: Restart Lift / Restart Job. Each is a
+             two-click confirm button to avoid accidental restarts of
+             partially-complete work (which is exactly the state the
+             operator was trying to protect by stopping). -->
+        <div class="controls-row restart-row">
+          <button class="ctrl-btn btn-setup" id="btn-restart-lift"
+                  data-stage="idle"
+                  title="Discard progress in the selected lift and restart it from Layer 1 of that lift">
+            Restart lift
+          </button>
+          <button class="ctrl-btn btn-setup" id="btn-restart-job"
+                  data-stage="idle"
+                  title="Begin at Lift 1, Layer 1">
+            Restart job
           </button>
         </div>
         <div class="setup-status">

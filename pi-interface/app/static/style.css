@@ -793,6 +793,36 @@ html, body {
 .hw-subsection { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
                  margin: 6px 0 14px; background: var(--surface2); }
 
+/* --- Seventeenth-pass: lift selection panel inside Current Job --- */
+.lift-selection { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+                  margin: 6px 0; background: var(--surface2); font-size: 0.9em; }
+.lift-selection-title { font-weight: 700; margin-bottom: 6px;
+                        display: flex; justify-content: space-between; align-items: baseline; }
+.lift-selection-count { font-weight: 400; color: var(--text-muted); font-size: 0.86em; }
+.lift-rows { display: flex; flex-direction: column; gap: 4px; }
+.lift-row { display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px;
+            background: var(--surface); cursor: pointer; min-height: 42px; }
+.lift-row:hover { background: #182233; }
+.lift-row.selected { border-color: var(--amber); background: #231d08; }
+.lift-row.running  { border-color: var(--green); background: #0d2214; }
+.lift-row.held, .lift-row.awaiting_reposition { border-color: var(--amber); }
+.lift-row.completed { opacity: 0.75; }
+.lift-row.interrupted { border-color: var(--red); }
+.lift-row-label { font-weight: 600; }
+.lift-row-badge { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em;
+                  padding: 2px 8px; border-radius: 10px; background: #1a2432; color: var(--text-muted); }
+.lift-row.selected .lift-row-badge { background: #3a2e08; color: var(--amber); }
+.lift-row.running  .lift-row-badge { background: #0d3b1e; color: var(--green); }
+.lift-row.completed .lift-row-badge { background: #1a2432; color: var(--green); }
+.lift-row.interrupted .lift-row-badge { background: #3a0d0d; color: var(--red); }
+.lift-selection-note { font-size: 0.82em; color: var(--text-muted); margin-top: 6px; }
+
+/* --- Restart buttons (two-click confirm) --- */
+.restart-row { margin-top: 4px; }
+.ctrl-btn[data-stage="confirm"] { background: #3a0d0d; border-color: var(--red); color: var(--text); }
+.ctrl-btn[data-stage="confirm"]::before { content: "Confirm "; }
+
 /* --- Sixteenth-pass: automatic Z between layers (status panel) --- */
 .auto-z-panel { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
                 margin: 6px 0; font-size: 0.86em; background: var(--surface2); }

@@ -111,6 +111,14 @@ class CurrentJob:
     current_line: int = 0         # lines acknowledged, across the whole job
     current_lift: int = 0         # the EFFECTIVE lift being (or last) streamed
     awaiting_lift: Optional[int] = None   # the effective lift waiting for reposition confirmation
+    # Seventeenth-pass: operator-selected lift to start / restart at. 0-indexed.
+    # Default 0 = first lift. Selection NEVER initiates motion; it only tells
+    # Start which lift to begin at (see _start_job).
+    selected_lift_index: int = 0
+    # Which lifts have been fully executed in THIS session, by index. Used
+    # for the per-lift status badges and preserved across stops/restarts
+    # within the current CurrentJob instance; a fresh upload resets it.
+    completed_lift_indices: list = field(default_factory=list)
     started_at: Optional[float] = None
     error: Optional[str] = None
     # MACHINE (2026-10-15): what the job SAYS (reported, never trusted over the
@@ -155,15 +163,58 @@ class CurrentJob:
         """Global line offset of the first line of an effective lift."""
         return self.layout.range_of(lift_index)[0]
 
-    def reset_progress(self) -> None:
+    def reset_progress(self, start_lift_index: int = 0) -> None:
+        """
+        Reset progress so a job runner can begin streaming at
+        `start_lift_index`. `start_lift_index=0` is the historical
+        "run from the top." Non-zero: start at that lift's first line;
+        used by the seventeenth-pass "start at selected lift" flow for
+        multi-day prints.
+        """
+        if start_lift_index < 0 or start_lift_index >= self.total_lifts:
+            raise ValueError(f"start_lift_index {start_lift_index} out of range "
+                              f"(0..{self.total_lifts - 1}).")
         self.phase = None
         self.state = "ready"
-        self.current_line = 0
-        self.current_lift = 0
+        self.current_line = self.lift_start_line(start_lift_index)
+        self.current_lift = start_lift_index
         self.awaiting_lift = None
         self.error = None
         self.waiting_s = 0.0
         self.awaiting_since = None
+
+    def lift_status(self, lift_index: int) -> str:
+        """
+        Status string for the per-lift UI badge:
+          * "running"       — this lift is the active one in a running job
+          * "held"          — this lift is the active one, feed held
+          * "awaiting_reposition" — frame reposition pending
+          * "completed"     — fully executed in this session
+          * "interrupted"   — partially executed then stopped
+          * "selected"      — operator's selected lift (and nothing else applies)
+          * "not_started"   — default
+        """
+        if self.is_active or self.state in ("stopped", "error"):
+            start = self.lift_start_line(lift_index)
+            end = start + self.layout.range_of(lift_index)[1] - start if False else None
+            # The active lift (if any).
+            if self.is_active and self.current_lift == lift_index:
+                if self.state == "held":
+                    return "held"
+                if self.state == "awaiting_reposition":
+                    return "awaiting_reposition"
+                return "running"
+            if self.state in ("stopped", "error") and self.current_lift == lift_index:
+                # Interrupted mid-lift when current_line hasn't crossed the end.
+                return "interrupted"
+        if lift_index in self.completed_lift_indices:
+            return "completed"
+        if self.state == "completed" and lift_index <= self.current_lift:
+            # Only valid for a full execution from lift 0.
+            return "completed"
+        if lift_index == self.selected_lift_index:
+            return "selected"
+        return "not_started"
 
     # --- frame-reposition waits (excluded from motion time) ---
 
@@ -481,6 +532,8 @@ class CurrentJob:
             "total_lifts": self.total_lifts,
             "current_lift": self.current_lift,
             "awaiting_lift": self.awaiting_lift,
+            "selected_lift": self.selected_lift_index,
+            "lift_statuses": [self.lift_status(i) for i in range(self.total_lifts)],
             "lift_line": min(lift_line, end - start),
             "lift_total_lines": end - start,
             "lifts": [L.describe(i) for i in range(L.count)],

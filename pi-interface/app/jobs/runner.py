@@ -68,32 +68,44 @@ def origin_return_line(feed_in_min: float) -> str:
 class JobRunner:
     def __init__(self, communicator: GRBLCommunicator, job: CurrentJob,
                  origin_feed_in_min: float | None = None,
-                 on_layer_boundary=None) -> None:
+                 on_layer_boundary=None,
+                 start_lift_index: int = 0) -> None:
         """
-        * `on_layer_boundary(prev_layer_idx, next_layer_idx, next_layer_z_in)`
+        * `on_layer_boundary(prev_layer_idx, next_layer_idx, next_layer_z_in,
+                             prev_layer_z_in)`
           — sixteenth-pass hook, awaited AFTER draining GRBL at every
           within-lift layer-mark crossing. Returns True to continue, False
           to abort. If None (default — "manual" Z mode), no pause is
           inserted and the runner streams through layer marks unchanged.
           Lift boundaries continue to use `_finish_lift` and are NOT
           surfaced through this hook (frame reposition is a different
-          operator-step from an in-frame Z advance).
+          operator-step from an in-frame Z advance). The hook now gets
+          `prev_layer_z_in` so it can compute the LIFT-LOCAL delta
+          (seventeenth-pass).
+        * `start_lift_index` (seventeenth-pass) — begin streaming at the
+          global line that is the start of this lift. Default 0 (the
+          historical "run from the top"). The lift's `lift_start_line`
+          is used; the usual XY return-to-origin still happens first.
         """
         self._comm = communicator
         self._job = job
         self._origin_feed = origin_feed_in_min
         self._on_layer_boundary = on_layer_boundary
+        self._start_lift_index = start_lift_index
 
     async def run(self) -> None:
         """Stream the job. Designed to be run as an asyncio Task."""
         job = self._job
         job.state = "running"
         job.started_at = time.time()
-        job.current_line = 0
-        job.current_lift = 0
+        start_line = job.lift_start_line(self._start_lift_index)
+        job.current_line = start_line
+        job.current_lift = self._start_lift_index
         job.awaiting_lift = None
 
-        log.info("Job started: %s (%d lines, %d lifts)", job.filename, job.total_lines, job.total_lifts)
+        log.info("Job started: %s (%d lines, %d lifts) at lift %d (line %d)",
+                  job.filename, job.total_lines, job.total_lifts,
+                  self._start_lift_index + 1, start_line)
 
         try:
             if self._origin_feed is not None:
@@ -108,6 +120,10 @@ class JobRunner:
             # Only mark completed if we didn't already set an error/stopped state
             if job.state == "running":
                 job.state = "completed"
+                # Final lift completed as well.
+                last_lift = job.total_lifts - 1
+                if last_lift not in job.completed_lift_indices:
+                    job.completed_lift_indices.append(last_lift)
                 log.info("Job completed: %s", job.filename)
 
     # ------------------------------------------------------------------ #
@@ -143,7 +159,16 @@ class JobRunner:
         job = self._job
         lines = job.lines
         paused_at: set = set()
-        i = 0
+        # Seventeenth-pass: start at the operator-selected lift (default 0).
+        # The runner skips directly to that lift's first global line; the
+        # XY return-to-origin already happened before _stream was invoked
+        # (see run() + _return_to_origin). Lift boundaries BEFORE this
+        # starting line are added to `paused_at` so the runner does not
+        # pause-for-reposition at a lift the operator deliberately skipped.
+        i = job.lift_start_line(self._start_lift_index)
+        start_line = i
+        for lb in range(1, self._start_lift_index + 1):
+            paused_at.add(job.lift_start_line(lb))
         while i < len(lines):
             if i > 0 and job.layout.is_boundary(i) and i not in paused_at:
                 paused_at.add(i)
@@ -157,8 +182,9 @@ class JobRunner:
             # Sixteenth-pass auto-Z: WITHIN-LIFT layer boundary. Fires only
             # when the layer index at `i` differs from the layer index at
             # `i - 1` AND we're not sitting on a lift boundary (lifts own
-            # the reposition flow). The hook is NOT invoked at i == 0.
-            if self._on_layer_boundary is not None and i > 0:
+            # the reposition flow). The hook is NOT invoked at `i ==
+            # start_line` (the first line of the starting lift).
+            if self._on_layer_boundary is not None and i > start_line:
                 prev_seg = job.layout.segment_at(i - 1)
                 next_seg = job.layout.segment_at(i)
                 if (prev_seg and next_seg
@@ -167,7 +193,7 @@ class JobRunner:
                     if not await self._drain(job.layout.lift_of(i) - 1):
                         return
                     cont = await self._on_layer_boundary(
-                        prev_seg[1], next_seg[1], next_seg[2])
+                        prev_seg[1], next_seg[1], next_seg[2], prev_seg[2])
                     if not cont:
                         log.info("Layer-boundary hook aborted the job at line %d", i)
                         return
@@ -218,6 +244,9 @@ class JobRunner:
 
         if not await self._drain(li):
             return False
+        # Seventeenth-pass: track completed lifts for the UI badge list.
+        if li not in job.completed_lift_indices:
+            job.completed_lift_indices.append(li)
 
         # A hold pressed while draining: wait for resume (or stop) first.
         while job.state == "held":

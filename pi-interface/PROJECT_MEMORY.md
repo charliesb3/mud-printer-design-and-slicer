@@ -1044,6 +1044,84 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-26 (seventeenth pass) — Lift selection, Restart Lift / Job,
+multi-day workflow, auto-Z lift-local references.
+
+**Rationale.** The printer is intended to build structures across
+multiple days with ~18 in of nozzle Z per lift and manual gantry
+repositioning between lifts. The operator must be able to resume on
+Day N at Lift N without replaying Lifts 1..N-1 and without having
+auto-Z try to climb a cumulative building-height into a lift that
+has only ~18 in of travel.
+
+**Data model.**
+- `CurrentJob.selected_lift_index` (default 0). Operator-only; never
+  initiates motion. Updated by WS `select_lift { index }`.
+- `CurrentJob.completed_lift_indices` — populated by the runner at
+  each lift boundary and at job completion.
+- `CurrentJob.lift_status(i)` — one of
+  `running | held | awaiting_reposition | completed | interrupted |
+  selected | not_started`. Surfaced in `to_dict().lift_statuses`.
+- `CurrentJob.reset_progress(start_lift_index=N)` — resets to begin at
+  lift N's first line (replaces the historical hard-coded 0).
+
+**Runner.**
+- `JobRunner(..., start_lift_index=N)` begins streaming at
+  `lift_start_line(N)`. Lift boundaries BEFORE N are added to
+  `paused_at` so the runner never tries to pause-for-reposition at a
+  lift the operator deliberately skipped.
+- The auto-Z layer-boundary hook now receives `prev_layer_z_in` AND
+  `next_layer_z_in`; the hook computes LIFT-LOCAL `delta =
+  next_z - prev_z` and plans a move against the current estimate.
+  This replaces the previous absolute-from-origin targeting and makes
+  starting at any lift work correctly — the first layer of the lift
+  uses `z = 0` as the local reference the operator just set.
+
+**WS handlers** (new):
+- `select_lift { index }` — pure state update; no motion.
+- `restart_lift { confirm: true }` — discards progress in the SELECTED
+  lift and restarts at its first layer; requires explicit `confirm`
+  (UI uses a two-click pattern).
+- `restart_job { confirm: true }` — selects lift 0, clears
+  `completed_lift_indices`, starts at Lift 1 Layer 1.
+- `job_start { lift_index?: int }` — accepts optional lift index;
+  default is the selected lift.
+
+**Auto-Z gating at start.** `_start_job` refuses in auto / auto_confirm
+mode if the Z origin isn't set OR if `|z_estimate_in| > 0.01` (drifted
+from origin — the operator must re-establish for THIS lift). Manual
+mode is unchanged.
+
+**UI** (sub-panels in Current Job):
+- `#lift-selection` — one clickable row per lift with a status badge.
+  Disabled during an active job. Click → `select_lift` only.
+- `#btn-restart-lift`, `#btn-restart-job` in controls — two-click
+  confirm (first click shows "Confirm Restart ..."), auto-cancel after
+  4 s or on blur.
+
+**Preserved.**
+- STOP / HOLD / REMOTE STOP / dead-man / Z faults / stop_fault latch
+  / `_latched()` on every motion-initiating action.
+- Existing frame-reposition flow (`awaiting_reposition` + manual
+  gantry repositioning between lifts).
+- Preflight (envelope check, prepared-for mismatch).
+- Jog-speed floor (0.25 in/s).
+- Kaleinavi remote remap.
+- STOP timeout latch (no auto 0x18).
+
+**Tests** (496 passed, 1 skipped). New file
+`tests/test_lift_selection.py` — 18 tests covering:
+- selected_lift default + reset_progress to arbitrary lift,
+- per-lift status badges (not_started / selected / running /
+  interrupted / completed),
+- runner start_lift_index skips lifts 0..N-1,
+- WS select_lift (no motion / out-of-range / refused while running),
+- WS restart_lift and restart_job require confirm,
+- restart_job clears completed_lift_indices,
+- restart refused when GRBL not Idle,
+- auto-Z requires fresh origin at lift start (drift blocks),
+- multi-day workflow: load → select Lift N → start begins at N.
+
 2026-10-26 (sixteenth pass, part 4) — XY jog-speed floor 0.25 in/s.
 
 **Physical observation (operator).** Below 0.25 in/s the XY gantry

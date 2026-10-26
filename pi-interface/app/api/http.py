@@ -425,8 +425,16 @@ async def _stop_jog() -> None:
 # Job management                                                       #
 # ------------------------------------------------------------------ #
 
-async def _start_job() -> Optional[str]:
-    """Start the current job. Returns a refusal reason, or None when started."""
+async def _start_job(lift_index: Optional[int] = None) -> Optional[str]:
+    """
+    Start the current job, optionally beginning at a specific lift
+    (seventeenth-pass). Returns a refusal reason, or None when started.
+
+    `lift_index` — operator's chosen starting lift. `None` falls back to
+    `_current_job.selected_lift_index`, which defaults to 0. Starting at
+    a non-zero lift is the multi-day workflow: load the .mudjob, select
+    the next lift to print, re-establish origins, press START.
+    """
     global _current_job, _runner_task
 
     if _current_job is None:
@@ -465,8 +473,29 @@ async def _start_job() -> Optional[str]:
             return ("Moves to the origin use the jog speed, and jogging is disabled "
                     "(JOG_SPEED_MM_MIN not set).")
 
+    # Seventeenth-pass: resolve the starting lift. Default = operator-
+    # selected (which itself defaults to 0 for a fresh load).
+    start_at = lift_index if lift_index is not None else _current_job.selected_lift_index
+    if start_at < 0 or start_at >= _current_job.total_lifts:
+        return (f"Lift {start_at + 1} is out of range "
+                f"(1..{_current_job.total_lifts}).")
+
+    # Auto-Z guard (seventeenth-pass + sixteenth-pass): auto modes require
+    # a fresh Z origin for THIS lift. The operator sets the Z origin at
+    # the current nozzle position; we treat it as the lift-local reference
+    # and reset the estimate to 0 at job start.
+    if _state is not None and _state.z_mode != "manual":
+        if not _state.z_origin_set:
+            return ("Auto-Z is enabled but the Z origin is not set. Jog to the "
+                    "nozzle's reference height for this lift and press 'Set Z origin here'.")
+        if _state.z_estimate_in is None or abs(_state.z_estimate_in) > 0.01:
+            return ("Auto-Z is enabled but the Z estimate has drifted from the "
+                    "origin. Re-establish the Z origin at the current nozzle "
+                    "height before starting this lift.")
+
     assert _comm is not None
-    _current_job.reset_progress()
+    _current_job.selected_lift_index = start_at
+    _current_job.reset_progress(start_lift_index=start_at)
     # Sixteenth-pass: inject the auto-Z layer-boundary hook ONLY in auto
     # modes. In "manual" (the default), the runner behaves exactly as
     # before — layer marks stream through without interruption. The hook
@@ -474,8 +503,26 @@ async def _start_job() -> Optional[str]:
     # unsafe.
     hook = _on_layer_boundary_hook if _state and _state.z_mode != "manual" else None
     runner = JobRunner(_comm, _current_job, origin_feed_in_min=origin_feed,
-                       on_layer_boundary=hook)
+                       on_layer_boundary=hook, start_lift_index=start_at)
     _runner_task = asyncio.create_task(runner.run(), name="job-runner")
+    log.info("Job started at lift %d (of %d)", start_at + 1, _current_job.total_lifts)
+    return None
+
+
+def _select_lift(index) -> Optional[str]:
+    """Operator-only selection. NEVER initiates motion."""
+    if _current_job is None:
+        return "No job loaded."
+    if _current_job.is_active:
+        return "Cannot change the selected lift while a job is running."
+    try:
+        idx = int(index)
+    except (TypeError, ValueError):
+        return "Lift index must be a number."
+    if idx < 0 or idx >= _current_job.total_lifts:
+        return f"Lift {idx + 1} is out of range (1..{_current_job.total_lifts})."
+    _current_job.selected_lift_index = idx
+    log.info("Selected lift set to %d", idx + 1)
     return None
 
 
@@ -1302,20 +1349,23 @@ async def _execute_auto_z_move(plan: auto_z.AutoZPlan) -> bool:
 
 
 async def _on_layer_boundary_hook(prev_layer_idx: int, next_layer_idx: int,
-                                   next_layer_z_in) -> bool:
+                                   next_layer_z_in, prev_layer_z_in) -> bool:
     """
     Sixteenth-pass auto-Z layer-boundary hook, injected into `JobRunner`
     when `z_mode != "manual"`. See JobRunner for the contract.
 
-    * Computes the plan from the ABSOLUTE next-layer target (not an
-      incremental "+ layer thickness"). The target may come from
-      layout.layer_bottom (preferred — the start of the next layer) or
-      from the number of layers printed so far × operator-set thickness.
+    Seventeenth-pass change: Z references are LIFT-LOCAL. The target is
+    `estimate + (next_layer_z - prev_layer_z)` — i.e. move by the
+    Designer's intended layer thickness between THESE two layers,
+    starting from wherever Z actually is. The lift's own origin, set
+    by the operator before `_start_job`, is `estimate = 0`. This way:
+    - starting at any lift works (no cumulative building-height),
+    - a changing layer thickness mid-print applies to subsequent layers
+      without rewriting completed heights.
+
     * In `auto_confirm` mode: sets `job.state = "awaiting_reposition"`
       and waits. Operator confirms via the existing confirm_reposition
-      message (we reuse that flow). Lift reposition is NOT ambiguous
-      because this path only fires INSIDE a lift (lift boundaries are
-      handled by `_finish_lift`).
+      message (we reuse that flow).
     * In `auto` mode: executes the plan.
     * Any failed plan (negative delta, missing calibration, Z fault)
       pauses the job with a Z fault.
@@ -1323,10 +1373,18 @@ async def _on_layer_boundary_hook(prev_layer_idx: int, next_layer_idx: int,
     if _state is None:
         return False
     duty = _state.hardware.z.duty if _state.hardware else 0.0
-    plan = auto_z.plan_z_move(_state.z_estimate_in, next_layer_z_in,
+    # Lift-local target: wherever Z currently is, plus the Designer's
+    # layer-thickness between prev and next layer. For a monotonic layer
+    # sequence this is positive. Reversals would surface as a negative
+    # delta — plan_z_move's "never lower Z automatically" rule catches
+    # that and requires operator intervention.
+    delta = float(next_layer_z_in) - float(prev_layer_z_in)
+    target = (_state.z_estimate_in or 0.0) + delta
+    plan = auto_z.plan_z_move(_state.z_estimate_in, target,
                               _state.z_calibration, duty)
-    log.info("Auto-Z layer-boundary: prev=%s next=%s target_z=%s plan=%s",
-             prev_layer_idx, next_layer_idx, next_layer_z_in, plan.to_dict())
+    log.info("Auto-Z layer-boundary (lift-local): prev=%s next=%s delta=%.4f "
+             "target=%.4f plan=%s",
+             prev_layer_idx, next_layer_idx, delta, target, plan.to_dict())
     if not plan.valid:
         _latch_z_fault(plan.reason)
         return False
@@ -1407,6 +1465,7 @@ _STATE_CHANGING = {"hold", "resume", "stop", "job_start", "z_start", "z_stop", "
                    "remote_stop_clear", "stop_fault_clear",
                    "set_z_calibration", "set_z_origin", "clear_z_origin",
                    "set_z_mode", "correct_z_estimate", "clear_z_fault",
+                   "select_lift", "restart_lift", "restart_job",
                    "confirm_reposition", "set_machine_profile",
                    "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
                    "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
@@ -1541,9 +1600,45 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
                        level="warn" if refusal else "info")
 
     elif msg_type == "job_start":
-        refusal = await _start_job()
+        # Seventeenth-pass: `job_start` without `lift_index` uses the
+        # operator-selected lift (default 0). An explicit `lift_index`
+        # starts at that specific lift and auto-selects it.
+        refusal = await _start_job(lift_index=data.get("lift_index"))
         if refusal:
             await _notify(ws, refusal)
+
+    elif msg_type == "select_lift":
+        refusal = _select_lift(data.get("index"))
+        if refusal:
+            await _notify(ws, refusal)
+
+    elif msg_type == "restart_lift":
+        # Seventeenth-pass: discard progress in the SELECTED lift and
+        # start again at its first layer. Requires explicit `confirm`
+        # from the UI (two-click pattern).
+        if not data.get("confirm"):
+            await _notify(ws, "Confirm the restart — press 'Confirm restart lift' to begin.",
+                           level="warn")
+        elif _current_job is None:
+            await _notify(ws, "No job loaded.")
+        else:
+            refusal = await _start_job(lift_index=_current_job.selected_lift_index)
+            if refusal:
+                await _notify(ws, refusal)
+
+    elif msg_type == "restart_job":
+        # Seventeenth-pass: start at Lift 1, Layer 1. Requires confirm.
+        if not data.get("confirm"):
+            await _notify(ws, "Confirm the restart — press 'Confirm restart job' to begin.",
+                           level="warn")
+        elif _current_job is None:
+            await _notify(ws, "No job loaded.")
+        else:
+            _current_job.selected_lift_index = 0
+            _current_job.completed_lift_indices.clear()
+            refusal = await _start_job(lift_index=0)
+            if refusal:
+                await _notify(ws, refusal)
 
     elif msg_type == "feed_override":
         refusal = await _feed_override(data.get("step"))
