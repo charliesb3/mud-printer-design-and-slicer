@@ -487,6 +487,54 @@ class TestRemoteZ:
         assert any("number" in m.get("message", "") for m in wsD.sent if m.get("type") == "notice")
         assert rig.z.duty == 0.5
 
+    async def test_z_press_works_before_and_after_duty_change(self, rig):
+        """Operator-reported eleventh-pass symptom: after dragging the
+        Z-speed slider, touchscreen Z stopped working while remote Z
+        kept working. Pin the invariant that a UI Z press works
+        before AND after a Z duty change, and the second press is NOT
+        blocked by any residual state in the controller or the WS
+        source bookkeeping."""
+        ws = FakeWS()
+
+        # 1. Press works at the initial duty.
+        await msg({"type": "z_start", "direction": "up"}, ws)
+        assert rig.z.command == UP and rig.backend.duty == 0.5
+        await msg({"type": "z_stop"}, ws)
+        await rig.run(0.01)
+        assert rig.z.command == 0
+
+        # 2. Change duty via WS and persist to a tmp file so the test is
+        #    independent of the shipped z_setting.json.
+        import tempfile, pathlib
+        from app import config
+        tmp = pathlib.Path(tempfile.mkdtemp()) / "z_setting.json"
+        orig = config.Z_SETTING_PATH
+        config.Z_SETTING_PATH = tmp
+        try:
+            await msg({"type": "set_z_duty", "duty": 1.0}, ws)
+            assert rig.z.duty == 1.0
+            # 3. Press works at the new duty, from the same WS source.
+            await msg({"type": "z_start", "direction": "up"}, ws)
+            assert rig.z.command == UP and rig.backend.duty == 1.0, (
+                f"Z press after duty change produced command={rig.z.command} "
+                f"backend duty={rig.backend.duty}")
+            await msg({"type": "z_stop"}, ws)
+            await rig.run(0.01)
+            assert rig.z.command == 0
+
+            # 4. Change back down to 0.25 and press again.
+            await msg({"type": "set_z_duty", "duty": 0.25}, ws)
+            assert rig.z.duty == 0.25
+            await msg({"type": "z_start", "direction": "down"}, ws)
+            assert rig.z.command == DOWN and rig.backend.duty == 0.25
+            await msg({"type": "z_stop"}, ws)
+            await rig.run(0.01)
+        finally:
+            config.Z_SETTING_PATH = orig
+            if tmp.exists():
+                tmp.unlink()
+            tmp.parent.rmdir()
+
     async def test_z_duty_single_source_for_remote_and_ui(self, rig):
         """A duty change propagates to BOTH remote-source Z and UI-source Z
         because they share the same ZController."""

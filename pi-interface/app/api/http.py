@@ -87,6 +87,18 @@ from typing import Optional
 
 from fastapi import APIRouter, File, UploadFile, WebSocket, WebSocketDisconnect
 
+# Starlette raises TWO distinct exception classes on disconnect:
+#   - WebSocketDisconnect: client sent close message mid-receive. Routine.
+#   - WebSocketDisconnected: receive_json / receive_text / receive_bytes
+#     was called when application_state wasn't CONNECTED. ALSO routine
+#     after a client-initiated close — but the message is "Need to call
+#     accept first", which is misleading. Catch both quietly.
+try:
+    from starlette.websockets import WebSocketDisconnected as _StarletteWSDisconnected
+except ImportError:          # older starlette versions don't expose it
+    class _StarletteWSDisconnected(Exception):   # pragma: no cover - stub
+        pass
+
 from .. import config
 from ..grbl.communicator import GRBLCommunicator
 from ..jobs.current_job import CurrentJob, JobFormatError, load_job_from_file
@@ -1070,7 +1082,10 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     await _notify(ws, f"Internal error handling {msg_type!r} — see Pi logs.")
                 except Exception:
                     log.exception("Could not notify client of handler error")
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, _StarletteWSDisconnected):
+        # Routine client-initiated close. The `receive_json` version with
+        # the misleading "Need to call accept first" message also lands
+        # here; both just mean "client is gone, clean up and move on."
         pass
     except Exception:
         log.exception("WebSocket receive/transport error")

@@ -1044,6 +1044,80 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (eleventh pass) — WS-reconnect UI reset, Z remote diagnostic,
+Z direction invert, and quieter WS-disconnect logs.
+
+**Operator report:** after dragging the Z-speed slider to 100 %, the
+touchscreen Z controls stopped responding; remote Z controls kept
+working. Separately: Z UP / Z DOWN direction was reversed, and the
+handheld's Z DOWN button did nothing.
+
+**Root cause of "touchscreen Z stops after speed change":**
+The server-side Pi journal shows a `WebSocketDisconnected` exception
+inside `websocket_endpoint.receive_json` immediately after a
+`set_z_duty 1.0` was processed. The server set the duty, persisted it,
+broadcast state, and on the next `receive_json` the WS was already
+closed — the browser (Chromium kiosk on the Pi 7") closed its end of
+the socket right after that state message landed. A Python probe
+sending the same `set_z_duty 1.0` from another host does NOT trigger a
+close: the issue is browser-specific. Whatever Chrome-side quirk is at
+play (slider at max value interacting with a touch sequence, specific
+JSON size, etc.), the ROBUST fix is to make the UI recover cleanly
+after any WS reconnect.
+
+Before the fix the UI did NOT recover: `attachHeldButton` kept a
+`pointerId` local closure variable per button; a WS-death-while-held
+left `pointerId` non-null (the pointerup event may not fire from the
+affected pointer sequence), so the next deliberate press hit the
+`if (pointerId !== null) return;` guard in `begin()` and did nothing.
+Remote Z was unaffected because it bypasses the WS and the browser DOM
+entirely — the service's RF-poll path drives the same `ZController`
+directly.
+
+**Fix (`app/static/app.js`):**
+- `attachHeldButton` now registers a `forceReset()` function in a
+  module-level `_heldButtonResetters` list. `forceReset()` clears
+  `pointerId`, releases pointer capture, and removes `.pressing`
+  without re-sending a stop (the server-side `finally` already
+  released any held source when the socket died).
+- Added `forceReleaseAllHeldButtons()`; called from `ws.onclose` AND
+  `ws.onopen`. The UI goes through a clean "no held input" state on
+  every WS death/revival regardless of cause.
+- `stopAllHeldInputs()` is now also called from `ws.onclose` so a
+  running heartbeat `setInterval` is halted — the setInterval was
+  otherwise harmless (the dead `ws.send` is a no-op), but it kept
+  `zActive` / `jogActive` set to `true`, blocking the first press
+  after reconnect at `startZ`'s `if (zActive) stopZ()` reset.
+
+**Fix (`app/api/http.py`):**
+- Catch Starlette's `WebSocketDisconnected` alongside FastAPI's
+  `WebSocketDisconnect` so routine client-initiated disconnects log
+  nothing instead of a traceback with the misleading "Need to call
+  accept first" message. Fallback stub for older Starlette versions.
+
+**Remote Z DOWN diagnostic:**
+- `renderZ` now surfaces a prominent `.jog-warning` under the Z
+  section when `z_up` or `z_down` channels are `armed=false` and
+  `held_at_startup=true`. Text: "Handheld remote: CHn Z DOWN
+  (handheld button looks stuck pressed — release it to arm)". The
+  operator no longer needs to open the Hardware / Commissioning
+  panel to find out why remote Z DOWN is silent — this is also the
+  current state of CH3 Z DOWN on the installed Kaleinavi (contact
+  reads closed at service startup, service refuses to act on it).
+
+**Z direction correction:**
+- `Z_DIR_INVERT=true` set in the Pi's `.env` via the autonomous
+  deploy workflow. Shared `ZController` picks it up at startup. Both
+  touchscreen and remote use the corrected direction automatically.
+  No code change; no GPIO assignment change; no wiring change.
+
+**New regression test** (`test_hardware.py::TestRemoteZ::
+test_z_press_works_before_and_after_duty_change`): opens a WS source,
+presses Z up, releases, changes duty to 1.0, presses Z up again,
+confirms the second press commands UP at the new duty, releases,
+changes duty back to 0.25, presses Z down, confirms. 407 passed +
+1 skipped.
+
 2026-10-25 (tenth pass) — Operator-adjustable Z PWM duty + scrollbar
 media-detection fix.
 

@@ -50,6 +50,12 @@ function connectWS() {
     wsAlive = true;
     setWsStatus("connected");
     clearTimeout(reconnectTimer);
+    // On reconnect, release any button that was "pressing" when the WS
+    // died. The server-side cleanup already dropped any held Z / jog
+    // source when the socket closed; this clears the UI's local
+    // pointer state so the next deliberate press is accepted. See
+    // tenth-pass "Z duty = 1.0 WS close" root-cause note.
+    forceReleaseAllHeldButtons();
   };
 
   ws.onmessage = (ev) => {
@@ -67,6 +73,13 @@ function connectWS() {
     wsAlive = false;
     ws = null;
     setWsStatus("reconnecting");
+    // Release every held input and reset every held-button's local
+    // pointer state. Without this, a WS-death-while-held leaves the
+    // button with pointerId !== null; begin() then returns early on
+    // the next press and the UI goes unresponsive even though the
+    // WS reconnects cleanly. See tenth-pass memory.
+    stopAllHeldInputs();
+    forceReleaseAllHeldButtons();
     reconnectTimer = setTimeout(connectWS, 1500);
   };
 
@@ -993,10 +1006,35 @@ let zSpeedSliderDirty = false;
 function renderZ(s) {
   const z = (s.hardware || {}).z;
   const warn = document.getElementById("z-warning");
+  const remoteWarn = document.getElementById("z-remote-warning");
   const status = document.getElementById("z-status");
   const reason = !z ? "No Z hardware." : (z.blocked || z.refusal);
   warn.textContent = reason || "";
   warn.classList.toggle("visible", !!reason && !(z && z.blocked));
+
+  // Diagnostic: if the handheld's Z UP or Z DOWN channel is not armed
+  // (closed-at-startup — the service refuses to act on a channel first
+  // seen pressed), say so prominently near the Z controls. The operator
+  // likely won't open the Hardware / Commissioning panel to diagnose a
+  // dead remote button.
+  if (remoteWarn) {
+    const remote = (s.hardware || {}).remote || [];
+    const zUp   = remote.find(c => c.key === "z_up");
+    const zDown = remote.find(c => c.key === "z_down");
+    const unarmed = [];
+    if (zUp && !zUp.armed && zUp.held_at_startup)
+      unarmed.push(`CH${zUp.channel} Z UP (handheld button looks stuck pressed — release it to arm)`);
+    if (zDown && !zDown.armed && zDown.held_at_startup)
+      unarmed.push(`CH${zDown.channel} Z DOWN (handheld button looks stuck pressed — release it to arm)`);
+    if (unarmed.length) {
+      remoteWarn.textContent = "Handheld remote: " + unarmed.join("; ");
+      remoteWarn.classList.add("visible");
+    } else {
+      remoteWarn.textContent = "";
+      remoteWarn.classList.remove("visible");
+    }
+  }
+
   const usable = !!(z && z.available && !z.refusal);
   document.querySelectorAll(".z-btn").forEach(b => { b.disabled = !usable && !zActive; });
 
@@ -1362,6 +1400,17 @@ function attachGlobalReleaseHandlers() {
 // re-render / capture released), pointerleave (cursor exits while
 // not captured — rare fallback). Also calls `onStop()` if the
 // button becomes disabled while pressed.
+
+// Module-level list of every held button's force-release function. On
+// WS disconnect / reconnect, call `forceReleaseAllHeldButtons()` so no
+// stale pointerId / "pressing" state can block the next deliberate press.
+const _heldButtonResetters = [];
+function forceReleaseAllHeldButtons() {
+  for (const r of _heldButtonResetters) {
+    try { r(); } catch (_) {}
+  }
+}
+
 function attachHeldButton(btn, onStart, onStop, {skipFn} = {}) {
   let pointerId = null;
 
@@ -1384,6 +1433,19 @@ function attachHeldButton(btn, onStart, onStop, {skipFn} = {}) {
     btn.classList.remove("pressing");
     onStop();
   };
+
+  // Force-release path for the WS disconnect / reconnect handler.
+  // Resets local pointer state WITHOUT re-sending a stop (the server-
+  // side cleanup already released any held source when the WS died;
+  // we just need the UI to be clean so the next press works).
+  const forceReset = () => {
+    if (pointerId !== null) {
+      try { btn.releasePointerCapture(pointerId); } catch (_) {}
+      pointerId = null;
+    }
+    btn.classList.remove("pressing");
+  };
+  _heldButtonResetters.push(forceReset);
 
   btn.addEventListener("pointerdown", begin);
   btn.addEventListener("pointerup", end);
