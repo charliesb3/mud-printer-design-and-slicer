@@ -122,6 +122,27 @@
           <div class="preflight-title" id="preflight-title"></div>
           <ul class="preflight-list" id="preflight-list"></ul>
         </div>
+        <!-- Fourteenth-pass: prominent prepared-for mismatch panel (shown
+             when the job was designed for a different printer envelope).
+             Rendered separately so it's visible even when the preflight
+             fits otherwise. -->
+        <div class="envelope-mismatch" id="envelope-mismatch" hidden>
+          <div class="envelope-mismatch-title">Job prepared for a different printer</div>
+          <div class="envelope-mismatch-body">
+            <div class="envelope-mismatch-row">
+              <span class="envelope-mismatch-label">Designer target</span>
+              <span id="em-designer">—</span>
+            </div>
+            <div class="envelope-mismatch-row">
+              <span class="envelope-mismatch-label">This controller</span>
+              <span id="em-controller">—</span>
+            </div>
+            <div class="envelope-mismatch-note">The controller does <strong>not</strong> auto-resize the printer or the
+              toolpath. Review the dimensions above and either (a) edit this controller's envelope in Hardware /
+              Commissioning so it matches the job's assumption, or (b) proceed if the job still fits this controller's
+              envelope. The actual toolpath is checked against this controller's envelope regardless.</div>
+          </div>
+        </div>
         <details class="lift-details" id="lift-details" hidden>
           <summary>Lift details</summary>
           <div class="lift-list" id="lift-list"></div>
@@ -331,31 +352,37 @@
       </div>
     </div><!-- .col-view -->
 
-    <!-- Machine / Printer settings: THIS controller's profile of the physical printer -->
-    <div class="section span-all" id="printer-section" hidden>
-      <div class="section-title">Machine / Printer settings
-        <button class="small-btn" id="printer-close" style="margin-left:auto">Close</button></div>
-      <p class="est-note">This printer's own profile — authoritative for every job's preflight. Jobs only report
-        the machine they were prepared for; they never change these values. Envelope: X × Y from the print origin.
-        Empty = not set (not checked).</p>
-      <div class="printer-grid">
-        <label for="pp-name">Printer name</label><input id="pp-name" type="text" maxlength="80" />
-        <label for="pp-x">Printable X (in)</label><input id="pp-x" type="number" min="1" step="1" inputmode="decimal" />
-        <label for="pp-y">Printable Y (in)</label><input id="pp-y" type="number" min="1" step="1" inputmode="decimal" />
-        <label for="pp-zmax">Max building Z (in)</label><input id="pp-zmax" type="number" min="1" step="1" inputmode="decimal" />
-        <label for="pp-zframe">Z travel per frame (in)</label><input id="pp-zframe" type="number" min="1" step="0.5" inputmode="decimal" />
-        <label>Units</label><span>inches</span>
-      </div>
-      <div class="controls-row compact">
-        <button class="ctrl-btn btn-setup" id="printer-save">Save printer profile</button>
-      </div>
-      <div class="est-note" id="printer-note"></div>
-    </div>
-
-    <!-- Hardware / commissioning: remote inputs, Z outputs, GPIO (collapsed by default) -->
+    <!-- Hardware / commissioning: remote inputs, Z outputs, GPIO, printer settings -->
     <div class="section span-all" id="hw-section">
       <button class="console-toggle" id="hw-toggle">Hardware / Commissioning ▾</button>
       <div class="console-body" id="hw-body" style="display:none">
+        <!-- Printer settings sub-panel (THIS controller's profile — the
+             authoritative envelope used by every job's preflight). Edits
+             persist to disk and survive restarts. GRBL $130 / $131 travel
+             limits are NOT touched (deliberately — editing the display
+             envelope does not promise a physical limit). -->
+        <div class="hw-subsection" id="printer-section">
+          <div class="diag-title">Printer settings — physical envelope (configured)</div>
+          <p class="est-note">This controller's own profile of the physical printer — authoritative for every job's
+            preflight. Changes persist across restarts. Jobs only REPORT the machine they were prepared for; they
+            never overwrite these values. The envelope is X × Y from the print origin. Empty = not set (not checked).
+            <br><strong>Not a physical travel limit:</strong> these dimensions do not change GRBL $130 / $131 and
+            do not enable soft limits. They are the display envelope and preflight bound only.</p>
+          <div class="printer-grid">
+            <label for="pp-name">Printer name</label><input id="pp-name" type="text" maxlength="80" />
+            <label for="pp-x">Printable X / width (in)</label><input id="pp-x" type="number" min="1" step="1" inputmode="decimal" />
+            <label for="pp-y">Printable Y / depth (in)</label><input id="pp-y" type="number" min="1" step="1" inputmode="decimal" />
+            <label for="pp-zmax">Max building Z (in)</label><input id="pp-zmax" type="number" min="1" step="1" inputmode="decimal" />
+            <label for="pp-zframe">Z travel per frame (in)</label><input id="pp-zframe" type="number" min="1" step="0.5" inputmode="decimal" />
+            <label>Units</label><span>inches</span>
+            <label>Current envelope</label><span id="pp-envelope-current">—</span>
+          </div>
+          <div class="controls-row compact">
+            <button class="ctrl-btn btn-setup" id="printer-save">Save printer profile</button>
+          </div>
+          <div class="est-note" id="printer-note"></div>
+        </div>
+        <div class="diag-title">Status</div>
         <div class="diag-grid" id="hw-status"></div>
         <div class="diag-title">RF remote inputs (Kaleinavi → Pi GPIO, active low)</div>
         <table class="diag-table hw-table" id="hw-remote"></table>

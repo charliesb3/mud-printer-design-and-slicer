@@ -902,20 +902,35 @@ function renderParams(s) {
 }
 
 // ---- Machine / Printer: THIS controller's profile (authoritative) and job preflight
+// Fourteenth-pass: the editor now lives inside the Hardware/Commissioning
+// section. The status-bar chip opens that section and scrolls to the
+// editor; the WS backend is unchanged.
 function renderPrinter(s) {
   const m = s.machine || {}, p = m.profile || {};
   const chip = document.getElementById("printer-chip");
   const unset = !(p.x_extent && p.y_extent);
   chip.textContent = `Printer: ${p.name || "—"}${unset ? " (extents not set)" : ""}`;
   chip.className = "printer-chip" + (unset ? " unset" : "");
-  const sec = document.getElementById("printer-section");
-  if (sec.hidden) return;
-  const set = (id, v) => { const f = document.getElementById(id); if (document.activeElement !== f) f.value = v == null ? "" : v; };
+  // Fields are always rendered (the sub-panel inside hw-body is always
+  // present; it's hidden only when hw-body is collapsed, which doesn't
+  // need a special guard — update is cheap).
+  const set = (id, v) => {
+    const f = document.getElementById(id);
+    if (f && document.activeElement !== f) f.value = v == null ? "" : v;
+  };
   set("pp-name", p.name); set("pp-x", p.x_extent); set("pp-y", p.y_extent);
   set("pp-zmax", p.max_build_z); set("pp-zframe", p.z_travel_per_frame);
+  const env = document.getElementById("pp-envelope-current");
+  if (env) {
+    env.textContent = (p.x_extent && p.y_extent)
+      ? `${(+p.x_extent).toFixed(2)} × ${(+p.y_extent).toFixed(2)} in`
+      : "not set";
+  }
   const busy = !!(s.job && ["running", "held", "awaiting_reposition"].includes(s.job.state));
-  document.getElementById("printer-save").disabled = busy;
-  document.getElementById("printer-note").textContent = m.problem ||
+  const saveBtn = document.getElementById("printer-save");
+  if (saveBtn) saveBtn.disabled = busy;
+  const noteEl = document.getElementById("printer-note");
+  if (noteEl) noteEl.textContent = m.problem ||
     (busy ? "The printer profile cannot change while a job is running, held or awaiting a reposition." : "");
 }
 
@@ -923,6 +938,7 @@ function renderPreflight(s) {
   const job = s.job, box = document.getElementById("job-preflight");
   const pf = job && job.preflight;
   box.hidden = !pf || job.executable === false;
+  renderEnvelopeMismatch(pf);
   if (box.hidden) return;
   const fails = pf.checks.filter(c => c.status === "fail"), warns = pf.checks.filter(c => c.status === "warn");
   const unchecked = pf.checks.filter(c => c.status === "unchecked");
@@ -940,11 +956,46 @@ function renderPreflight(s) {
   pf.notes.forEach(n => add("note", n));
 }
 
+// Fourteenth-pass: prominent envelope-mismatch panel. Shown ONLY when
+// the job's `prepared_for` extents differ from this controller's own
+// extents by more than preflight.MISMATCH_IN (0.5 in). The actual
+// toolpath is still checked against the controller's envelope by
+// `preflight.checks`; this panel surfaces WHICH assumption the job
+// carried in from the Designer.
+function renderEnvelopeMismatch(pf) {
+  const panel = document.getElementById("envelope-mismatch");
+  if (!panel) return;
+  const m = pf && pf.prepared_for_mismatch;
+  if (!m || !m.diffs || !m.diffs.length) { panel.hidden = true; return; }
+  const fmt = (v) => v == null ? "—" : `${(+v).toFixed(2)} in`;
+  const dim = (which) => {
+    const d = m.diffs.map(d => `${d.label} ${fmt(d[which])}`).join(" · ");
+    return d || "—";
+  };
+  document.getElementById("em-designer").textContent =
+    `${m.designer_name || "(unnamed)"}  ·  ${dim("designer")}`;
+  document.getElementById("em-controller").textContent =
+    `${m.controller_name || "(unnamed)"}  ·  ${dim("controller")}`;
+  panel.hidden = false;
+}
+
 function attachPrinter() {
-  const sec = document.getElementById("printer-section");
-  const toggle = () => { sec.hidden = !sec.hidden; renderPrinter(lastState); };
-  document.getElementById("printer-chip").addEventListener("click", toggle);
-  document.getElementById("printer-close").addEventListener("click", toggle);
+  // Fourteenth-pass: the editor lives inside hw-section. The status-bar
+  // chip opens that section (if collapsed) and scrolls to the editor
+  // so operators can edit printer dimensions without hunting for them.
+  const chip = document.getElementById("printer-chip");
+  const sub  = document.getElementById("printer-section");
+  const body = document.getElementById("hw-body");
+  const btn  = document.getElementById("hw-toggle");
+  const openAndScroll = () => {
+    if (body && body.style.display === "none") {
+      body.style.display = "";
+      if (btn) btn.textContent = btn.textContent.replace("▾", "▴");
+    }
+    if (sub) sub.scrollIntoView({ behavior: "smooth", block: "center" });
+    renderPrinter(lastState);
+  };
+  chip.addEventListener("click", openAndScroll);
   document.getElementById("printer-save").addEventListener("click", () => {
     const num = (id) => { const v = document.getElementById(id).value.trim(); return v === "" ? null : parseFloat(v); };
     const cur = (lastState.machine && lastState.machine.profile) || {};

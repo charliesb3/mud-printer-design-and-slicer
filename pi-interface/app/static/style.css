@@ -779,6 +779,20 @@ html, body {
 .preflight-list li.fail { color: var(--red); } .preflight-list li.warn { color: var(--amber); }
 .preflight-list li.note { color: var(--text-muted); list-style: '— '; }
 
+/* --- Fourteenth-pass: prominent prepared-for envelope mismatch panel --- */
+.envelope-mismatch { border: 2px solid var(--amber); background: #2a1d05; border-radius: 6px;
+                     padding: 10px 12px; margin: 8px 0; font-size: 0.9em; }
+.envelope-mismatch-title { color: var(--amber); font-weight: 800; text-transform: uppercase;
+                           letter-spacing: 0.04em; margin-bottom: 6px; }
+.envelope-mismatch-body { display: flex; flex-direction: column; gap: 4px; }
+.envelope-mismatch-row { display: flex; gap: 10px; align-items: baseline; }
+.envelope-mismatch-label { min-width: 140px; color: var(--text-muted); }
+.envelope-mismatch-note { font-size: 0.86em; color: var(--text-muted); margin-top: 6px; }
+
+/* --- Printer settings sub-panel inside Hardware / Commissioning --- */
+.hw-subsection { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
+                 margin: 6px 0 14px; background: var(--surface2); }
+
 /* --- REMOTE STOP (operational stop, latched; never styled or named as an E-stop) --- */
 .rstop-panel { border: 3px solid var(--red); background: #2a0d0d; }
 .rstop-title { color: var(--red); font-size: 1.3em; font-weight: 800; letter-spacing: 0.04em;

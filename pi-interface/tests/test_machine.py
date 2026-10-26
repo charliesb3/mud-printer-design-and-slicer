@@ -141,6 +141,22 @@ class TestPreflight:
         p = profile(x_extent=120, y_extent=120, max_build_z=100)
         pf = job_preflight(loaded(PREPARED, p), p)
         assert not pf["notes"] and not pf["blocking"]
+        assert pf.get("prepared_for_mismatch") is None
+
+    def test_prepared_for_mismatch_is_structured(self):
+        """Fourteenth-pass: the preflight exposes a structured
+        prepared_for_mismatch so the UI can render a prominent panel
+        with both the Designer target and this controller side by
+        side (rather than only a plain text note)."""
+        p = profile(name="This controller", x_extent=30, y_extent=120, max_build_z=100)
+        pf = job_preflight(loaded(PREPARED, p), p)
+        m = pf.get("prepared_for_mismatch")
+        assert m is not None
+        assert m["designer_name"] == "Designer assumption"
+        assert m["controller_name"] == "This controller"
+        xd = next(d for d in m["diffs"] if d["key"] == "x_extent")
+        assert xd["label"] == "X" and xd["designer"] == 120.0 and xd["controller"] == 30.0
+        assert xd["units"] == "in"
 
     def test_older_jobs_without_machine_data(self):
         p = profile(x_extent=120, y_extent=120, max_build_z=100)

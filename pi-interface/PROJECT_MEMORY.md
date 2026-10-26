@@ -1044,6 +1044,37 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (fourteenth pass) — Printer-dimension editor relocated to
+Hardware/Commissioning + prominent envelope-mismatch panel.
+
+**Printer settings sub-panel inside Hardware/Commissioning.** The editor
+that was a span-all section (opened from the status-bar printer chip)
+now lives inline as a sub-panel inside `#hw-section` → `#hw-body`. The
+status-bar chip opens Hardware/Commissioning (if collapsed) and scrolls
+to the editor. Same WS backend (`set_machine_profile`); same persistence
+to `MACHINE_PROFILE_PATH`; same validation. Added a read-only
+"Current envelope" readout (e.g. `120.00 × 120.00 in`) alongside the
+inputs. Changes **do not** auto-apply to GRBL `$130` / `$131`; the sub-panel
+makes that distinction explicit on-screen.
+
+**Prominent envelope-mismatch panel.** `job_preflight` now emits a
+structured `prepared_for_mismatch` field (keyed `designer_name`,
+`controller_name`, `diffs=[{key,label,designer,controller,units}]`) in
+addition to the existing text note. The UI renders it as an amber panel
+inside the Current Job section with the Designer target and this
+controller shown side by side, explicit that the controller does **not**
+auto-resize the toolpath and will still reject jobs that exceed the
+configured envelope. Shows whenever any extent differs by >0.5 in
+(`preflight.MISMATCH_IN`).
+
+**No motion-control changes in this pass.** `$120` / `$121` acceleration
+analysis exists in the final report (operator approval pending).
+
+Tests: 419 passed, 1 skipped. New:
+- `test_prepared_for_mismatch_is_structured`
+- `test_printer_settings_live_in_hardware_commissioning`
+- `test_envelope_mismatch_panel_present`
+
 2026-10-25 (thirteenth pass) — X/Y steps-per-mm calibration (measured 2×
 error) + jog diagnostic logging.
 

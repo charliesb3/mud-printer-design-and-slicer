@@ -98,15 +98,22 @@ def job_preflight(job, profile: dict) -> dict:
     if isinstance(dp, dict) and dp.get("fits") is True and failing:
         notes.append("The Designer reported that this job fits — this printer's own check does NOT agree (this printer is authoritative).")
     pf = job.prepared_for
+    prepared_for_mismatch = None
     if isinstance(pf, dict):
-        diffs = []
+        diffs, structured = [], []
         for k, label in (("x_extent", "X"), ("y_extent", "Y"), ("max_build_z", "max building Z"),
                          ("z_travel_per_frame", "Z per frame")):
             a, mine = pf.get(k), profile.get(k)
             if isinstance(a, (int, float)) and isinstance(mine, (int, float)) and abs(a - mine) > MISMATCH_IN:
                 diffs.append(f"{label} {_f(a)} vs {_f(mine)} in")
+                structured.append({"key": k, "label": label, "designer": a, "controller": mine, "units": "in"})
         if diffs:
             notes.append(f"Prepared for a different machine (\"{pf.get('name') or '?'}\"): " + ", ".join(diffs) + ".")
+            prepared_for_mismatch = {
+                "designer_name": pf.get("name") or None,
+                "controller_name": profile.get("name") or None,
+                "diffs": structured,
+            }
     decl = job.declared_requirements
     if isinstance(decl, dict) and isinstance(decl.get("xy_bounds"), dict) and b:
         if any(abs(decl["xy_bounds"].get(k, 0) - b[k]) > 0.01 for k in ("min_x", "min_y", "max_x", "max_y")):
@@ -120,4 +127,5 @@ def job_preflight(job, profile: dict) -> dict:
         "profile_name": profile.get("name"),
         "requirements": req,
         "designer_fits": dp.get("fits") if isinstance(dp, dict) else None,
+        "prepared_for_mismatch": prepared_for_mismatch,
     }

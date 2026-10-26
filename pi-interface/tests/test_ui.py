@@ -158,6 +158,24 @@ class TestPrinterSettings:
             assert not _inside(tree, "printer-section", col)
         assert "printer-chip" in tree.where                        # opened from the status bar
 
+    def test_printer_settings_live_in_hardware_commissioning(self, tree):
+        """Fourteenth-pass: the printer-settings sub-panel sits inside
+        Hardware/Commissioning so the operator can edit dimensions from
+        the same place as remote / Z commissioning."""
+        assert _inside_id(tree, "printer-section", "hw-section")
+        assert _inside_id(tree, "printer-section", "hw-body")
+        for el in ("pp-name", "pp-x", "pp-y", "pp-zmax", "pp-zframe",
+                   "pp-envelope-current", "printer-save"):
+            assert _inside_id(tree, el, "printer-section"), el
+
+    def test_envelope_mismatch_panel_present(self, tree):
+        """Fourteenth-pass: the prominent envelope-mismatch panel sits
+        inside the Current Job section and surfaces the Designer target
+        vs this controller side by side."""
+        assert _inside_id(tree, "envelope-mismatch", "job-section")
+        for el in ("em-designer", "em-controller"):
+            assert _inside_id(tree, el, "envelope-mismatch"), el
+
     def test_preflight_is_shown_with_the_job(self, tree):
         assert _inside_id(tree, "job-preflight", "job-section")
 
