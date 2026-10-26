@@ -668,6 +668,72 @@ class TestTouchscreenStop:
             "not require a transition to Idle that GRBL never makes on its own"
         http_module._current_job = None
 
+    async def test_stop_timeout_latches_stop_fault_and_does_not_reset(self, rig):
+        """
+        Fifteenth-pass safety: if GRBL does not confirm motion-stopped
+        within the finalize window, we DO NOT send 0x18. Instead we
+        latch AppState.stop_fault so motion is inhibited until the
+        operator clears it.
+        """
+        from app import config as cfg
+        rig.transport.clear_sent()
+        # Short timeout so the test finishes quickly.
+        from app.api import http as mod
+        import app.api.http as http_module_mod
+        orig = http_module_mod._wait_for_grbl_motion_stopped
+        async def quick_wait(timeout_s=5.0):
+            # Simulate: motion never confirmed stopped.
+            await asyncio.sleep(0.1)
+            return False
+        http_module_mod._wait_for_grbl_motion_stopped = quick_wait
+        try:
+            http_module._current_job = SimpleNamespace(is_active=True, state="running")
+            await msg({"type": "stop"})
+            # Wait for the finalize task to run.
+            for _ in range(30):
+                await asyncio.sleep(0.05)
+                if rig.state.stop_fault.latched:
+                    break
+            assert rig.state.stop_fault.latched, "stop_fault should be latched on timeout"
+            # 0x18 MUST NOT appear in raw_sent (only 0x85 and ! from decel).
+            assert b"\x18" not in rig.transport.raw_sent, \
+                "soft reset must NOT fire automatically on timeout"
+            # Motion-initiating commands are refused while latched.
+            wsjog = await msg({"type": "jog_start", "axis": "X", "direction": 1})
+            assert any("motion inhibited" in n.lower() or "stop" in n.lower()
+                       for n in notices(wsjog)), notices(wsjog)
+            http_module._current_job = None
+        finally:
+            http_module_mod._wait_for_grbl_motion_stopped = orig
+            rig.state.stop_fault.clear()
+
+    async def test_stop_fault_clear_sends_reset_when_motion_stopped(self, rig):
+        """stop_fault_clear is the ONLY deferred path that fires 0x18
+        after a timeout. It refuses while GRBL is still in motion."""
+        rig.transport.clear_sent()
+        rig.state.stop_fault.latch("test")
+        rig.transport.status_reply = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>"
+        await asyncio.sleep(0.1)
+        ws = await msg({"type": "stop_fault_clear"})
+        # Refused while Run.
+        assert any("Run" in n or "Idle or Hold" in n for n in notices(ws)), notices(ws)
+        assert b"\x18" not in rig.transport.raw_sent
+        assert rig.state.stop_fault.latched
+        # Now GRBL settles.
+        rig.transport.status_reply = "<Idle|MPos:0.000,0.000,0.000|FS:0,0>"
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            if rig.state.grbl_state == "Idle":
+                break
+        ws2 = await msg({"type": "stop_fault_clear"})
+        # Accepted — 0x18 should fire; latch cleared.
+        for _ in range(10):
+            await asyncio.sleep(0.05)
+            if b"\x18" in rig.transport.raw_sent:
+                break
+        assert b"\x18" in rig.transport.raw_sent
+        assert not rig.state.stop_fault.latched
+
     async def test_hold_1_is_not_motion_stopped(self, rig):
         """
         Hold:1 (decelerating sub-state) must NOT be treated as

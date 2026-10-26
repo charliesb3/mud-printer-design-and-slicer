@@ -1044,6 +1044,37 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (sixteenth pass, part 1) — STOP timeout safety correction.
+
+**Change.** `_finalize_stop_after_decel` previously fell back to
+sending `0x18` on timeout. The sixteenth pass makes that path safe:
+on timeout we now LATCH `AppState.stop_fault` (new class, parallel
+to `RemoteStop`), inhibit all motion-initiating commands, and
+require deliberate operator recovery via `stop_fault_clear`. The
+withheld soft reset is sent by the operator action — only after
+confirming GRBL reports Idle or Hold:0 (verified in
+`_clear_stop_fault`).
+
+**Preserved:**
+- Touchscreen STOP and REMOTE STOP both initiate controlled decel
+  (`0x85` + `!`); no code change to the decel path.
+- Runner cancels synchronously; no job lines stream after STOP.
+- Z stops explicitly.
+- Job state="stopped" (not resumable).
+- HOLD remains `!` / `~` (resumable); REMOTE STOP remains latching
+  (resumable after clear).
+- Hardwired E-stop unchanged (physical interlock on the Arduino side).
+
+**UI** (`#stop-fault-panel` in index.html): prominent red banner,
+shown only while `stop_fault.latched`. The "Clear STOP fault"
+button is disabled unless GRBL reports Idle or Hold:0.
+
+**Tests** (426 passed, 1 skipped). New:
+- `test_stop_timeout_latches_stop_fault_and_does_not_reset`
+- `test_stop_fault_clear_sends_reset_when_motion_stopped`
+
+**Deployed.**
+
 2026-10-25 (fifteenth pass) — Controlled-decel STOP: fixed the
 Hold:0 handling bug the operator caught, then deployed.
 

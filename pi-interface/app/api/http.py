@@ -137,8 +137,19 @@ _position_task: Optional[asyncio.Task] = None
 
 
 def _latched() -> Optional[str]:
-    """The REMOTE STOP motion interlock (None: motion may be commanded)."""
-    return _state.remote_stop.refusal() if _state else None
+    """
+    All motion interlocks (None: motion may be commanded).
+
+    Latches checked, in order:
+    1. REMOTE STOP (operator-initiated, resumable-held).
+    2. STOP fault (fifteenth-pass): a touchscreen STOP whose
+       controlled decel did not confirm motion-stopped within the
+       timeout. Requires deliberate operator recovery via
+       `stop_fault_clear`.
+    """
+    if _state is None:
+        return None
+    return _state.remote_stop.refusal() or _state.stop_fault.refusal()
 
 
 def init(
@@ -574,23 +585,68 @@ async def _finalize_stop_after_decel() -> None:
     or `Idle`), then sends `0x18` (soft reset) to clear the Hold:0
     state. Separate task so the WS handler returns immediately.
 
-    If GRBL does not settle within the timeout (very long decel
-    distances before `$120` is raised), we send `0x18` anyway — the
-    worst case is one `ALARM:3` and the operator having to clear it,
-    which is strictly better than leaving GRBL stuck in Hold:0 with
-    an unresponsive UI.
+    Fifteenth-pass safety correction: if the motion-stopped
+    confirmation TIMES OUT, we DO NOT send `0x18` automatically. A
+    soft reset while GRBL could still be in motion raises ALARM:3
+    ("Reset while in motion") and invalidates the WCO / origin
+    (reproduced in the tenth-pass printtest incident). Instead we
+    latch `AppState.stop_fault`, which inhibits all new motion and
+    requires deliberate operator recovery via the `stop_fault_clear`
+    WS message. The operator action — issued only once they have
+    confirmed the gantry is at rest — is what finally sends the soft
+    reset.
     """
-    if _comm is None:
+    if _comm is None or _state is None:
         return
     stopped = await _wait_for_grbl_motion_stopped(timeout_s=5.0)
     if not stopped:
-        log.warning("STOP: GRBL did not reach a motion-stopped state "
-                    "(Hold:0 / Idle) within 5 s — sending soft reset "
-                    "anyway; expect ALARM:3.")
+        last_state = _state.grbl_state
+        cause = (f"GRBL did not reach a motion-stopped state (Hold:0 / Idle) "
+                 f"within 5 s; last reported state: {last_state}. Automatic "
+                 f"soft reset withheld to avoid ALARM:3 while in motion.")
+        if _state.stop_fault.latch(cause):
+            _state.add_event("stop", "STOP motion-stopped confirmation timed out", cause)
+            log.warning("STOP fault latched: %s", cause)
+        try:
+            asyncio.get_running_loop().create_task(broadcast_state())
+        except RuntimeError:
+            pass
+        return
     try:
         await _comm.send_realtime(b"\x18")
     except Exception:
         log.exception("STOP: soft reset failed")
+
+
+async def _clear_stop_fault() -> Optional[str]:
+    """
+    Deliberate operator recovery from a latched STOP fault.
+
+    Preconditions: GRBL must currently report a motion-stopped state
+    (Idle or Hold:0) — the operator has confirmed the gantry is at
+    rest. We then send the soft reset the finalize task deliberately
+    withheld, clear the latch, and broadcast.
+
+    This is the ONLY code path that fires `0x18` as part of the STOP
+    sequence after a timeout. Returns a refusal string on failure.
+    """
+    if _state is None:
+        return "Not ready."
+    sf = _state.stop_fault
+    if not sf.latched:
+        return "STOP fault is not latched."
+    if _state.grbl_state not in ("Idle", "Hold:0"):
+        return (f"GRBL is in {_state.grbl_state} — wait until it reports Idle or "
+                f"Hold:0 before clearing the STOP fault.")
+    if _comm:
+        try:
+            await _comm.send_realtime(b"\x18")      # the withheld soft reset
+        except Exception:
+            log.exception("STOP: soft reset on clear failed")
+    sf.clear()
+    _state.add_event("stop", "STOP fault cleared by the operator (soft reset sent)")
+    log.info("STOP fault cleared by the operator")
+    return None
 
 
 def _confirm_reposition(lift) -> Optional[str]:
@@ -1058,7 +1114,8 @@ def _set_machine_profile(profile) -> Optional[str]:
 
 
 _STATE_CHANGING = {"hold", "resume", "stop", "job_start", "z_start", "z_stop", "set_z_duty",
-                   "remote_stop_clear", "confirm_reposition", "set_machine_profile",
+                   "remote_stop_clear", "stop_fault_clear",
+                   "confirm_reposition", "set_machine_profile",
                    "set_origin", "set_prime", "prime", "outline", "feed_override", "read_grbl",
                    "adjust_lift_end", "set_observed_layer", "measure_lift_height", "restore_planned_lifts",
                    "apply_lift_parameters"}
@@ -1151,6 +1208,11 @@ async def _handle_message(data: dict, ws: WebSocket) -> None:
     elif msg_type == "remote_stop_clear":
         refusal = _clear_remote_stop()
         await _notify(ws, refusal or _remote_stop_cleared_note(), level="warn" if refusal else "info")
+
+    elif msg_type == "stop_fault_clear":
+        refusal = await _clear_stop_fault()
+        await _notify(ws, refusal or "STOP fault cleared. Soft reset sent; nothing has moved.",
+                       level="warn" if refusal else "info")
 
     elif msg_type == "job_start":
         refusal = await _start_job()

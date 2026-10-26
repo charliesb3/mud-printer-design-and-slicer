@@ -185,12 +185,14 @@ function handleState(s) {
   renderView(s);
   renderDiagnostics(s);
   renderRemoteStop(s);
+  renderStopFault(s);
   renderZ(s);
   renderHardware(s);
 }
 
 function latched(s) {
-  return !!(s.remote_stop && s.remote_stop.latched);
+  return !!((s.remote_stop && s.remote_stop.latched) ||
+            (s.stop_fault && s.stop_fault.latched));
 }
 
 function renderJogSection(s) {
@@ -1071,6 +1073,29 @@ function attachFeatureControls() {
   document.getElementById("btn-restore-lifts").addEventListener("click", () => send({ type: "restore_planned_lifts" }));
   document.querySelectorAll("[data-read]").forEach(b =>
     b.addEventListener("click", () => send({ type: "read_grbl", what: b.dataset.read })));
+}
+
+// ---- STOP fault (fifteenth-pass): motion-stopped confirmation timeout
+function renderStopFault(s) {
+  const sf = s.stop_fault || {};
+  const panel = document.getElementById("stop-fault-panel");
+  if (!panel) return;
+  panel.hidden = !sf.latched;
+  if (!sf.latched) return;
+  const when = sf.since ? new Date(sf.since * 1000).toLocaleTimeString() : "";
+  document.getElementById("stop-fault-text").textContent =
+    `Latched at ${when} — ${sf.cause || ""}`;
+  const btn = document.getElementById("btn-stop-fault-clear");
+  const idle = s.grbl_state === "Idle" || s.grbl_state === "Hold:0";
+  btn.disabled = !idle;
+  btn.title = idle
+    ? "Clear only once the gantry is at rest"
+    : `GRBL state is ${s.grbl_state} — wait until it reports Idle or Hold:0`;
+}
+
+function attachStopFault() {
+  const btn = document.getElementById("btn-stop-fault-clear");
+  if (btn) btn.addEventListener("click", () => send({ type: "stop_fault_clear" }));
 }
 
 // ---- REMOTE STOP (Kaleinavi CH1): latched operational stop — never called an E-stop
@@ -2025,6 +2050,7 @@ document.addEventListener("DOMContentLoaded", () => {
   attachFeatureControls();
   document.querySelectorAll(".z-btn").forEach(attachZButton);
   attachRemoteStopClear();
+  attachStopFault();
   attachHardwarePanel();
   attachExitKiosk();
   attachView();

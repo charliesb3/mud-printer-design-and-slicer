@@ -116,6 +116,49 @@ class RemoteStop:
                 "actions": list(self.actions)}
 
 
+class StopFault:
+    """
+    Fifteenth-pass safety correction. Latched when a touchscreen STOP's
+    controlled decel does NOT confirm a motion-stopped state (GRBL
+    Idle or Hold:0) within the finalize window. Previously the code
+    sent a soft reset (`0x18`) on timeout, which could race the decel
+    (ALARM:3 "Reset while in motion", WCO lost — exactly the tenth-pass
+    printtest incident). Now: on timeout we DO NOT reset, we latch, we
+    inhibit all motion, and we require a deliberate operator action to
+    recover.
+
+    This is distinct from REMOTE STOP (`RemoteStop`): REMOTE STOP is
+    operator-initiated and holds the job as resumable; this latch is a
+    *diagnostic* latch for an untrustworthy GRBL state after a STOP.
+    """
+
+    def __init__(self) -> None:
+        self.latched: bool = False
+        self.since: Optional[float] = None
+        self.cause: Optional[str] = None
+        self.count: int = 0
+
+    def latch(self, cause: str) -> bool:
+        """Latch; False if it already was."""
+        if self.latched:
+            return False
+        self.latched, self.since, self.cause = True, time.time(), cause
+        self.count += 1
+        return True
+
+    def clear(self) -> None:
+        self.latched, self.since, self.cause = False, None, None
+
+    def refusal(self) -> Optional[str]:
+        if self.latched:
+            return ("STOP motion-stopped confirmation timed out — motion inhibited "
+                    "until the operator clears the fault.")
+        return None
+
+    def to_dict(self) -> dict:
+        return {"latched": self.latched, "since": self.since, "cause": self.cause}
+
+
 class AppState:
     def __init__(self) -> None:
         self.connected: bool = False
@@ -152,6 +195,7 @@ class AppState:
         self.setup = MachineSetup()
         self.build_info: dict = {}                    # $I → [VER:…], [OPT:…]
         self.remote_stop = RemoteStop()
+        self.stop_fault = StopFault()
         # app/hardware HardwareService (GPIO, remote, Z) — attached at startup
         self.hardware = None
         self.hw_events: deque = deque(maxlen=60)      # remote / Z / GRBL link events
@@ -348,6 +392,7 @@ class AppState:
             "job": self.job.to_dict() if self.job else None,
             "setup": self._setup_dict(),
             "remote_stop": self.remote_stop.to_dict(),
+            "stop_fault": self.stop_fault.to_dict(),
             "hardware": self._hardware_dict(),
             "machine": {"profile": self.machine_profile, "envelope": _mp.envelope(self.machine_profile),
                         "problem": self.machine_profile_problem},

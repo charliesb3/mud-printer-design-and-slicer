@@ -63,6 +63,24 @@
 
   <div id="main-content">
 
+    <!-- STOP fault: controlled decel did not confirm motion-stopped within
+         the finalize window. Soft reset withheld; motion inhibited until
+         the operator confirms the gantry is at rest and clears the fault. -->
+    <div class="section rstop-panel span-all" id="stop-fault-panel" hidden>
+      <div class="rstop-title">STOP motion-stopped not confirmed</div>
+      <div class="rstop-text" id="stop-fault-text"></div>
+      <p class="rstop-note">
+        The automatic soft reset was WITHHELD to avoid an ALARM:3 (reset while in motion).
+        No new machine motion is accepted until this is cleared. Confirm visually that the
+        gantry is at rest, then press the button below. Clearing sends the withheld soft reset.
+        This is not the E-stop — the physical mushroom E-stop is the only safety stop.
+      </p>
+      <button class="ctrl-btn btn-rstop-clear" id="btn-stop-fault-clear"
+              title="Clear only once the gantry is at rest">
+        <span>Clear STOP fault (sends soft reset)</span>
+      </button>
+    </div>
+
     <!-- REMOTE STOP latched (Kaleinavi CH1) — an operational stop, NOT the E-stop -->
     <div class="section rstop-panel span-all" id="rstop-panel" hidden>
       <div class="rstop-title">Remote stop latched</div>
