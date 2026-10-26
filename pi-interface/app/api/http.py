@@ -459,15 +459,61 @@ async def _start_job() -> Optional[str]:
 
 
 async def _stop_job() -> None:
+    """
+    Touchscreen STOP — rapid controlled stop + cancel.
+
+    Fourteenth-pass change: the previous implementation sent `0x18`
+    (GRBL soft reset) directly. Soft reset halts motion essentially
+    instantaneously — it is the right byte for an abort of a hung
+    controller but, applied to a moving printer, it skips steps,
+    invalidates WCO (the tenth-pass printtest incident), and shocks
+    the gantry. Both the touchscreen and the REMOTE STOP buttons now
+    use the same decel path (`0x85` + `!`), which gives GRBL a
+    deterministic controlled stop at `$120` / `$121`. The difference
+    is only in what happens after decel: REMOTE STOP latches the job
+    as HELD (resumable after clearing the latch); touchscreen STOP
+    cancels the job (not resumable).
+
+    HOLD (`!` only, resume with `~`) remains a separate resumable
+    pause and is unchanged.
+
+    Sequence (idempotent; no partial states):
+    1. Mark the job stopped early — broadcasts reflect it and the
+       runner's next await observes the terminal state.
+    2. Cancel the jog loop (its finally sends 0x85 under the write lock).
+    3. Send 0x85 + ! — controlled decel at `$120` / `$121`.
+       Both bytes bypass the line queue and use
+       `SerialTransport._write_lock`; no interleaving with runner
+       writes or status polls.
+    4. Stop Z (dead-man already requires continuous heartbeats, but
+       STOP means STOP — be explicit).
+    5. Cancel the runner task so no further lines leave the Pi.
+    6. Cancel positioning (prime / outline).
+    7. In a background task, wait for GRBL to settle (Idle, bounded
+       at 5 s) then send `0x18` to clear the Hold:0 state. Reset
+       while still moving raises ALARM:3 and invalidates the origin.
+       Fire-and-forget so the WS handler returns immediately; the
+       next operator action will see GRBL already Idle.
+    """
     global _runner_task
 
     if _state and _current_job and _current_job.is_active:
         _current_job.state = "stopped"
 
-    if _comm:
-        await _comm.send_realtime(b"\x18")  # GRBL soft reset
+    await _stop_jog()
 
-    await _cancel_positioning()
+    if _comm:
+        try:
+            await _comm.send_realtime(b"\x85")       # idempotent jog cancel
+            await _comm.send_realtime(b"!")          # feed hold — decel at $120 / $121
+        except Exception:
+            log.exception("STOP: controlled-decel send failed")
+
+    if _state and _state.hardware is not None:
+        try:
+            _state.hardware.z.stop_all("touchscreen STOP")
+        except Exception:
+            log.exception("STOP: z.stop_all failed")
 
     if _runner_task and not _runner_task.done():
         _runner_task.cancel()
@@ -476,6 +522,49 @@ async def _stop_job() -> None:
         except (asyncio.CancelledError, Exception):
             pass
     _runner_task = None
+
+    await _cancel_positioning()
+
+    # Soft reset AFTER decel completes. Done in a background task so
+    # the WS handler returns immediately; the operator sees "stopped"
+    # right away and the GRBL state transitions Hold:0 -> Idle -> Idle
+    # (post-reset) over the next few seconds.
+    if _comm:
+        try:
+            asyncio.create_task(_finalize_stop_after_decel(), name="stop-finalize")
+        except RuntimeError:                           # no loop (test teardown)
+            pass
+
+
+async def _wait_for_grbl_idle(timeout_s: float = 5.0) -> bool:
+    """True once GRBL reports Idle, False on timeout. Polls the
+    broadcast `_state.grbl_state` every 50 ms (status reports arrive
+    at `GRBL_STATUS_POLL_INTERVAL_S`)."""
+    if _state is None:
+        return False
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        if _state.grbl_state == "Idle":
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+async def _finalize_stop_after_decel() -> None:
+    """Spawned by `_stop_job` — waits for GRBL to settle, then sends
+    0x18 (soft reset) to clear the Hold:0 state. Separate task so the
+    WS handler returns immediately."""
+    if _comm is None:
+        return
+    idle = await _wait_for_grbl_idle(timeout_s=5.0)
+    if not idle:
+        log.warning("STOP: GRBL did not reach Idle within 5 s "
+                    "(decel at $120 may be too slow at the current feed) "
+                    "— sending soft reset anyway; expect ALARM:3.")
+    try:
+        await _comm.send_realtime(b"\x18")
+    except Exception:
+        log.exception("STOP: soft reset failed")
 
 
 def _confirm_reposition(lift) -> Optional[str]:

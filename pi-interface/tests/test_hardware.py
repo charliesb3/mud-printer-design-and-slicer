@@ -587,6 +587,67 @@ def running_job(n=40) -> CurrentJob:
                       lines=[f"G1 X{i} F100" for i in range(n)])
 
 
+class TestTouchscreenStop:
+    """
+    Fourteenth-pass: touchscreen STOP uses the same controlled-decel
+    path as REMOTE STOP (0x85 + !), then — after GRBL settles — sends
+    0x18 to clear state. Previously it sent 0x18 directly, which
+    halted motion abruptly (ALARM:3 risk, step skip, mechanical shock).
+    """
+    async def test_stop_sends_jog_cancel_then_feed_hold(self, rig):
+        rig.transport.clear_sent()
+        http_module._current_job = SimpleNamespace(
+            is_active=True, state="running",
+            __class__=SimpleNamespace,
+        )
+        # Minimal duck-typed job so _stop_job's `is_active` guard flips
+        # state="stopped" (we just need the attribute writable).
+        rig.state.hardware = rig.svc
+        await msg({"type": "stop"})
+        await asyncio.sleep(0.1)
+        raw = rig.transport.raw_sent
+        # First two realtime writes must be 0x85 then ! (idempotent jog
+        # cancel + feed hold). 0x18 may follow once GRBL hits Idle.
+        assert b"\x85" in raw and b"!" in raw
+        assert raw.index(b"\x85") < raw.index(b"!")
+        assert http_module._current_job.state == "stopped"
+        http_module._current_job = None
+
+    async def test_stop_does_not_send_soft_reset_while_moving(self, rig):
+        """0x18 must NOT be sent until the controlled decel completes
+        (GRBL reports Idle). While the mock reports Run, no soft reset
+        should land."""
+        rig.transport.clear_sent()
+        rig.transport.status_reply = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>"
+        await asyncio.sleep(0.1)                       # let one Run status land
+        http_module._current_job = SimpleNamespace(
+            is_active=True, state="running",
+        )
+        await msg({"type": "stop"})
+        await asyncio.sleep(0.3)
+        raw_during_run = rig.transport.raw_sent
+        assert b"\x18" not in raw_during_run
+        # Now GRBL settles — soft reset should land within 5 s.
+        rig.transport.status_reply = "<Idle|MPos:0.000,0.000,0.000|FS:0,0>"
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if b"\x18" in rig.transport.raw_sent:
+                break
+        assert b"\x18" in rig.transport.raw_sent
+        http_module._current_job = None
+
+    async def test_stop_z_too(self, rig):
+        """STOP from the touchscreen must drop Z (dead-man-plus-explicit).
+        ZController.command is 0 when stopped (STOP sentinel); UP = 1,
+        DOWN = -1."""
+        assert rig.z.request("test", UP) is None
+        await rig.run(0.05)
+        assert rig.z.command == UP
+        await msg({"type": "stop"})
+        await asyncio.sleep(0.05)
+        assert rig.z.command == 0                      # 0 == STOP sentinel
+
+
 class TestJogRelease:
     """
     Single-shot jog model (2026-10-25). Each press-and-hold session emits

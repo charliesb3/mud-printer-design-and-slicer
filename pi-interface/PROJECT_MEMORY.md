@@ -1044,6 +1044,51 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (fourteenth pass, part 2 — awaiting operator approval,
+NOT deployed) — Touchscreen STOP: controlled decel + deferred reset.
+
+**Problem.** Touchscreen STOP sent `0x18` (GRBL soft reset)
+synchronously. Soft reset halts motion essentially instantaneously:
+it skips steps, invalidates WCO (reproduced in the tenth-pass
+printtest incident as ALARM:3 "Reset while in motion"), and shocks
+the gantry. The REMOTE STOP button already used the proper decel
+path (`0x85` + `!`) with GRBL's feed-hold deceleration at `$120` /
+`$121`, but the two STOP paths were otherwise inconsistent.
+
+**Change (in `_stop_job`, `_wait_for_grbl_idle`, `_finalize_stop_after_decel`).**
+Touchscreen STOP now sends the same decel path as REMOTE STOP (`0x85`
++ `!`) synchronously, cancels the runner / jog loop / Z / positioning,
+and spawns a fire-and-forget task that waits for GRBL to reach Idle
+(bounded 5 s), then sends `0x18` to clear the Hold:0 state. The WS
+handler returns immediately. HOLD remains unchanged (`!` only,
+resumable with `~`); REMOTE STOP remains unchanged (same decel path,
+latches held + requires explicit clear).
+
+**Deceleration still bottlenecked by $120 / $121 = 5 mm/s².** At the
+current `$110` / `$111` = 3048 mm/min (= 50.8 mm/s), decel takes:
+- `$120 = 5`:  10.16 s and 258 mm (10.16 in) decel distance
+- `$120 = 25`:  2.03 s and 51.6 mm (2.03 in)
+- `$120 = 50`:  1.02 s and 25.8 mm (1.02 in)
+
+The 5 s wait inside `_finalize_stop_after_decel` is enough for every
+proposed decel value (25 and 50) but NOT for 5; at 5 the operator
+will see a logged warning ("GRBL did not reach Idle within 5 s") and
+one ALARM:3 on the soft reset. Fix path: raise `$120` / `$121` to
+25 (and later 50 after physical testing). **Not applied — pending
+operator approval.**
+
+**Deployment status.** Code committed and pushed to
+`origin/consolidate/trunk`; **NOT deployed to the Pi** per the
+operator's instruction (motion-control changes require explicit
+approval). Operator should review and either `git pull`+restart on
+the Pi themselves, or ask Claude to deploy.
+
+**Tests** (422 passed, 1 skipped): new
+`TestTouchscreenStop::test_stop_sends_jog_cancel_then_feed_hold`,
+`test_stop_does_not_send_soft_reset_while_moving`, `test_stop_z_too`.
+Also updated existing tests that asserted synchronous 0x18:
+`test_stop_cancels_a_prime_move`, `test_stop_while_awaiting_via_message`.
+
 2026-10-25 (fourteenth pass) — Printer-dimension editor relocated to
 Hardware/Commissioning + prominent envelope-mismatch panel.
 

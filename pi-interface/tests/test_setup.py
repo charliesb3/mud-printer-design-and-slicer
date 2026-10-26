@@ -218,7 +218,13 @@ class TestOriginAndPrime:
         await msg({"type": "prime"})
         await wait_for(lambda: any(l.startswith("G54 G20 G90 G1") for l in transport.sent_lines), timeout=2.0)
         await msg({"type": "stop"})
-        assert state.setup.moving is None and b"\x18" in transport.raw_sent
+        # Fourteenth-pass: controlled-decel STOP sends 0x85 + ! for the
+        # feed hold synchronously; 0x18 (soft reset) is deferred to a
+        # background task that waits for Idle (<= 5 s). The mock's
+        # status_reply still shows Idle here, so 0x18 lands quickly.
+        assert state.setup.moving is None
+        assert b"\x85" in transport.raw_sent and b"!" in transport.raw_sent
+        await wait_for(lambda: b"\x18" in transport.raw_sent, timeout=5.0)
 
     async def test_alarm_clears_the_origin_keeps_prime(self, env):
         comm, transport, state = env

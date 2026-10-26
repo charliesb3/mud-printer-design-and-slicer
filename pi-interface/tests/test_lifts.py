@@ -511,7 +511,10 @@ class TestHandlerRules:
         comm, transport, state, job = handler_env
         await http_module._handle_message({"type": "stop"}, FakeWS())
         assert job.state == "stopped"
-        assert b"\x18" in transport.raw_sent
+        # Fourteenth-pass: STOP sends 0x85 + ! synchronously (feed hold
+        # at $120 / $121); 0x18 lands after GRBL settles.
+        assert b"\x85" in transport.raw_sent and b"!" in transport.raw_sent
+        await wait_for(lambda: b"\x18" in transport.raw_sent, timeout=5.0)
         assert "G1 X2" not in transport.sent_lines
 
 
