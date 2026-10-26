@@ -308,12 +308,32 @@ class AppState:
             feed_ov_pct = int(self.overrides[0])
         planned_feed = self.feed_rate / (feed_ov_pct / 100.0) if feed_ov_pct > 0 else self.feed_rate
 
+        # Machine position (MPos) in INCHES for the UI. GRBL reports in mm by
+        # default (`$13=0`); the twelfth-pass incident started when the UI
+        # showed those raw mm values with no unit label and the operator read
+        # them as inches, panicked, and E-stopped. Always display inches here
+        # — the units of the loaded `.mudjob` are inches, so the status bar
+        # must match.
+        mpos_units = self.report_units                       # 'mm' / 'in' / None
+        if mpos_units == "in":
+            mpos_x_in = self.mpos_x
+            mpos_y_in = self.mpos_y
+        else:                                                # mm (or unknown — assume mm, GRBL default)
+            mpos_x_in = self.mpos_x / MM_PER_IN
+            mpos_y_in = self.mpos_y / MM_PER_IN
+
         return {
             "type": "state",
             "connected": self.connected,
             "grbl_state": self.grbl_state,
+            # Legacy fields kept for existing callers / tests; raw mm (as GRBL
+            # reports) with the units reported alongside in `grbl.report_units`.
             "x": round(self.mpos_x, 3),
             "y": round(self.mpos_y, 3),
+            # Inches, which is what the UI shows. Independent of the GRBL
+            # `$13` setting.
+            "x_in": round(mpos_x_in, 4),
+            "y_in": round(mpos_y_in, 4),
             "feed_rate": round(self.feed_rate, 1),
             "feed_rate_in_s": round(mm_min_to_in_s(self.feed_rate), 3),
             "planned_feed_rate": round(planned_feed, 1),

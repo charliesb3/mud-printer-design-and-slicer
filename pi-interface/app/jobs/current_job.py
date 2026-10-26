@@ -452,6 +452,20 @@ class CurrentJob:
                     "z_in_lift": round(seg[2] - base, 6) if base is not None and seg[2] is not None else None}
         elif orig.marks:
             mark = orig.mark_at(max(0, self.current_line - L.offsets[orig.index]))
+        # First commanded XY destination (inches, work coordinates) + whether
+        # it is a travel (G0) or feed (G1/G2/G3) move. Twelfth-pass incident:
+        # the operator didn't realize the first move was a 42-inch diagonal
+        # travel to the start of the toolpath. Exposing this + the expected
+        # distance from the current WPos lets the UI say "the next motion
+        # will travel 42 inches" before Start.
+        first_motion = None
+        if self.profile and len(self.profile.pt_x):
+            first_motion = {
+                "x_in": round(float(self.profile.pt_x[0]), 4),
+                "y_in": round(float(self.profile.pt_y[0]), 4),
+                "kind": "travel" if int(self.profile.pt_kind[0]) == 1 else "print",
+                "line": int(self.profile.pt_line[0]),
+            }
         d: dict = {
             "job_id": self.job_id,
             "filename": self.filename,
@@ -478,6 +492,7 @@ class CurrentJob:
             "current_mark": mark,
             "progress": self.progress(),
             "outline": self.outline(),
+            "first_motion": first_motion,
             "preflight": job_preflight(self, self.printer) if self.printer else None,
             "prepared_for": self.prepared_for,
             "adjust": {"lift": self.adjustable_lift(), "candidates": self.end_candidates()}

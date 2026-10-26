@@ -150,10 +150,15 @@ function handleState(s) {
       ? baseState : "other"
   );
 
-  // Position + feed rate
+  // Position + feed rate. ALWAYS display MPos in inches (converted
+  // server-side if GRBL reports mm). The status bar label is "in" so
+  // the operator cannot misread GRBL's raw mm as inches — the mistake
+  // behind the twelfth-pass incident.
   const connected = s.connected;
-  document.getElementById("pos-x").textContent = connected ? s.x.toFixed(3) : "—";
-  document.getElementById("pos-y").textContent = connected ? s.y.toFixed(3) : "—";
+  const posX = connected ? (typeof s.x_in === "number" ? s.x_in : s.x / 25.4) : null;
+  const posY = connected ? (typeof s.y_in === "number" ? s.y_in : s.y / 25.4) : null;
+  document.getElementById("pos-x").textContent = posX == null ? "—" : posX.toFixed(3);
+  document.getElementById("pos-y").textContent = posY == null ? "—" : posY.toFixed(3);
   document.getElementById("feed-rate").textContent = connected ? s.feed_rate.toFixed(0) : "—";
 
   // Jog buttons
@@ -372,6 +377,43 @@ function renderJobSection(s) {
   startBtn.disabled = !canStart;
   startBtn.textContent = building && job.executable !== false ? "START — returns to origin first" : "START JOB";
   document.getElementById("start-note").textContent = startWhy;
+
+  renderFirstMove(s, job);
+}
+
+// ---- Twelfth-pass preflight: show the first commanded XY destination and
+// the expected travel distance from the current work position. If > 6 in,
+// style amber so the operator sees it clearly before pressing Start.
+function renderFirstMove(s, job) {
+  const box = document.getElementById("first-move");
+  const destEl = document.getElementById("first-move-dest");
+  const travelEl = document.getElementById("first-move-travel");
+  if (!box || !destEl || !travelEl) return;
+  const fm = job && job.first_motion;
+  if (!fm || job.executable === false || job.kind !== "building") {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  destEl.textContent = `First ${fm.kind} move → X ${fm.x_in.toFixed(3)} in, Y ${fm.y_in.toFixed(3)} in`;
+  const setup = s.setup || {};
+  const wx = setup.work_x, wy = setup.work_y;
+  if (wx == null || wy == null || !setup.origin_set) {
+    travelEl.textContent = "Distance from current position: unavailable (origin not established).";
+    travelEl.className = "first-move-row warn";
+    return;
+  }
+  // Start of a building job sends `G54 G20 G90 G1 X0 Y0` first (return to
+  // the operator's origin), THEN the first job motion. Travel distance
+  // for the UI = origin -> first_motion.
+  const dx = fm.x_in - 0;
+  const dy = fm.y_in - 0;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  const parts = [];
+  parts.push(`Expected travel after return-to-origin: ${d.toFixed(2)} in`);
+  parts.push(`(ΔX ${dx >= 0 ? "+" : ""}${dx.toFixed(2)}, ΔY ${dy >= 0 ? "+" : ""}${dy.toFixed(2)})`);
+  travelEl.textContent = parts.join("  ·  ");
+  travelEl.className = "first-move-row" + (d > 6 ? " warn" : "");
 }
 
 function liftLabel(i, total) {
@@ -1101,11 +1143,21 @@ function attachZSpeedSlider() {
 function renderHardware(s) {
   if (document.getElementById("hw-body").style.display === "none") return;
   const hw = s.hardware || {};
+  const lastRemoteT = hw.remote_last_activity_wall_t;
+  let lastRemoteText = "never since this boot — the handheld transmitter may be asleep";
+  if (lastRemoteT) {
+    const nowSec = Date.now() / 1000;
+    const dt = Math.max(0, nowSec - lastRemoteT);
+    if (dt < 60) lastRemoteText = `${Math.round(dt)} s ago`;
+    else if (dt < 3600) lastRemoteText = `${Math.round(dt / 60)} min ago`;
+    else lastRemoteText = `${(dt / 3600).toFixed(1)} h ago — handheld may be asleep (press any handheld button to wake)`;
+  }
   kvGrid(document.getElementById("hw-status"), [
     ["GPIO backend", hw.backend + (hw.gpio ? "" : " (no GPIO: remote inputs not read)")
                      + (hw.backend_error ? " — " + hw.backend_error : "")],
     ["Poll loop", hw.loop_error ? "ERROR: " + hw.loop_error : "running"],
     ["Debounce", hw.debounce_ms != null ? hw.debounce_ms + " ms" : "—"],
+    ["Handheld last activity", lastRemoteText],
     ["GRBL", s.connected ? `connected · ${s.grbl_version || "version not yet reported"} · ${s.grbl_state}`
                          : "disconnected"],
     ["GRBL build ($I)", (s.diag && s.diag.build_info && s.diag.build_info.VER) || "not read (Advanced → Build info)"],
@@ -1234,9 +1286,25 @@ function renderView(s, force) {
       ctx.fillText("JOB OUTSIDE THE PRINTER ENVELOPE", X(jb.min_x) + 4, Y(jb.max_y) - 8);
     }
   }
-  // work origin
+  // work origin — blue crosshair
   ctx.strokeStyle = "#60a5fa"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(X(0) - 8, Y(0)); ctx.lineTo(X(0) + 8, Y(0)); ctx.moveTo(X(0), Y(0) - 8); ctx.lineTo(X(0), Y(0) + 8); ctx.stroke();
+  ctx.fillStyle = "#60a5fa"; ctx.font = "11px monospace";
+  ctx.fillText("origin (0, 0)", X(0) + 10, Y(0) + 4);
+
+  // Start point of the toolpath (first commanded motion). Amber ringed
+  // marker + label. Added after the twelfth-pass incident so the operator
+  // can see where the first move will go BEFORE pressing Start.
+  const fm = job.first_motion;
+  if (fm && typeof fm.x_in === "number" && typeof fm.y_in === "number") {
+    const sx = X(fm.x_in), sy = Y(fm.y_in);
+    ctx.strokeStyle = "#fbbf24"; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(sx, sy, 10, 0, 2 * Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 2 * Math.PI); ctx.fillStyle = "#fbbf24"; ctx.fill();
+    ctx.fillStyle = "#fbbf24"; ctx.font = "bold 11px monospace";
+    ctx.fillText(`start (${fm.x_in.toFixed(2)}, ${fm.y_in.toFixed(2)})`, sx + 14, sy + 4);
+  }
+
   // nozzle (work coordinates, inches) — only when the origin is established
   const st = s.setup || {};
   if (st.work_x != null) {
@@ -1566,9 +1634,25 @@ function attachSetupButtons() {
 
 let cancelConfirmHold = () => {};
 
+// STOP button: SINGLE-TAP, IMMEDIATE. No hold-to-confirm, no dialog.
+// Fires on `pointerdown` (not `click`) so the operator doesn't have to
+// wait for pointerup → click synthesis on touchscreens. The physical
+// hardwired E-stop remains the primary emergency device.
 function attachStopButton() {
-  attachHoldButton(document.getElementById("btn-stop"), STOP_HOLD_MS,
-    () => send({ type: "stop" }));
+  const btn = document.getElementById("btn-stop");
+  if (!btn) return;
+  const fire = (e) => {
+    if (e) e.preventDefault();
+    if (btn.disabled) return;
+    btn.classList.add("pressing");
+    setTimeout(() => btn.classList.remove("pressing"), 150);
+    send({ type: "stop" });
+  };
+  btn.addEventListener("pointerdown", fire);
+  // Keyboard accessibility (Space / Enter when focused) also fires once.
+  btn.addEventListener("keydown", (e) => {
+    if ((e.key === " " || e.key === "Enter") && !e.repeat) fire(e);
+  });
 }
 
 const RSTOP_CLEAR_HOLD_MS = 2000;

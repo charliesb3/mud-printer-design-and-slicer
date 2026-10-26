@@ -96,6 +96,13 @@ html, body {
   margin-left: 6px;
 }
 
+.status-right .pos-unit {
+  font-size: 0.72em;
+  color: var(--text-muted);
+  margin-left: 2px;
+  font-family: var(--font-mono);
+}
+
 .badge {
   display: inline-block;
   padding: 3px 10px;
@@ -1050,4 +1057,31 @@ html.touch .ts-thumb.disabled { opacity: 0.2; cursor: default; }
   }
   .ts-thumb:active, .ts-thumb.pressing { background: #90c0ff; cursor: grabbing; }
   .ts-thumb.disabled { opacity: 0.2; cursor: default; }
+}
+
+/* First-move preflight block (shown above the Start button when a
+   building job is loaded). Amber if the expected first travel > 6 in,
+   which is the sign the toolpath isn't where the operator thinks it is. */
+.first-move {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+.first-move-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.first-move-row {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.first-move-row.warn {
+  color: var(--amber);
+  font-weight: 600;
 }

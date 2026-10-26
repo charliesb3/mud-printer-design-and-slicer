@@ -183,6 +183,62 @@ class TestHardwareUI:
         # ± increments are 5 % per step.
         assert "step(-5)" in js and "step(5)" in js
 
+    def test_mpos_status_bar_shows_unit_in(self, tree):
+        """Twelfth-pass: operator saw GRBL raw mm (213.265, 881.178) and
+        interpreted them as inches. Status bar now carries an explicit
+        'in' unit label next to each position."""
+        html = (STATIC / "index.html").read_text()
+        # Each position number has an immediate 'in' pos-unit sibling.
+        assert '<span class="pos-val" id="pos-x">—</span>\n      <span class="pos-unit">in</span>' in html
+        assert '<span class="pos-val" id="pos-y">—</span>\n      <span class="pos-unit">in</span>' in html
+        # app.js uses the server-converted x_in / y_in fields.
+        js = (STATIC / "app.js").read_text()
+        assert "s.x_in" in js and "s.y_in" in js
+
+    def test_first_move_preflight_block(self, tree):
+        """First-motion destination + travel distance appears next to
+        the Start button, with amber styling > 6 in."""
+        for el in ("first-move", "first-move-dest", "first-move-travel"):
+            assert el in tree.where, el
+            assert _inside_id(tree, el, "controls-section"), el
+        js = (STATIC / "app.js").read_text()
+        assert "renderFirstMove" in js
+        assert "job.first_motion" in js
+        css = (STATIC / "style.css").read_text()
+        assert ".first-move-row.warn" in css
+
+    def test_stop_button_is_immediate_single_tap(self, tree):
+        """STOP must respond to a single tap/click. No hold-to-confirm."""
+        html = (STATIC / "index.html").read_text()
+        # The hold-fill div is removed from the STOP button.
+        start = html.index('id="btn-stop"')
+        end = html.index("</button>", start)
+        stop_block = html[start:end]
+        assert "hold-fill" not in stop_block, "STOP must not carry a hold-fill animation"
+        assert "Immediate STOP" in stop_block
+        js = (STATIC / "app.js").read_text()
+        # app.js uses pointerdown on STOP, not attachHoldButton.
+        assert "function attachStopButton" in js
+        func_start = js.index("function attachStopButton")
+        func_end = js.index("\n}\n", func_start)
+        stop_fn = js[func_start:func_end]
+        assert "pointerdown" in stop_fn
+        assert "attachHoldButton" not in stop_fn
+        assert "STOP_HOLD_MS" not in stop_fn
+
+    def test_toolpath_start_marker_is_drawn(self, tree):
+        js = (STATIC / "app.js").read_text()
+        # The amber start-marker code uses the first_motion fields.
+        assert "job.first_motion" in js
+        # Explicit ring + label at the start point.
+        assert "ctx.arc(sx, sy, 10" in js and 'fillText(`start (' in js
+
+    def test_remote_last_activity_shown(self, tree):
+        js = (STATIC / "app.js").read_text()
+        assert "remote_last_activity_wall_t" in js
+        assert "Handheld last activity" in js
+        assert "may be asleep" in js
+
     def test_scrollbar_html_touch_class_fallback(self, tree):
         """
         Scrollbar must activate on BOTH `html.touch` (set by inline JS in

@@ -14,12 +14,15 @@ Never act on an uninitialised / transient state:
 """
 from __future__ import annotations
 
-import time
+import time as _time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from . import pins
 from .backend import HardwareBackend
+
+# Shortcut so tests can monkeypatch
+time = _time
 
 
 @dataclass
@@ -43,12 +46,21 @@ class Transition:
 
 class RemoteInputs:
     def __init__(self, backend: HardwareBackend, *, debounce_s: float, settle_s: float = 0.2,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = _time.monotonic,
+                 wall_clock: Callable[[], float] = _time.time) -> None:
         self._backend = backend
         self.debounce_s = debounce_s
         self.settle_s = max(settle_s, debounce_s)
         self._clock = clock
+        self._wall_clock = wall_clock
         self._started = clock()
+        # Wall-clock timestamp of the last ARMED remote-channel transition.
+        # Used by the UI to show "handheld last activity Xm ago", a hint
+        # that the handheld may have gone to sleep. The Kaleinavi receiver
+        # has no "RF link lost" output, so this is the best signal we can
+        # offer the operator; a long silence may just mean the operator
+        # hasn't touched the remote. See PROJECT_MEMORY twelfth-pass.
+        self.last_activity_wall_t: Optional[float] = None
         self.channels = {c.key: ChannelState(c) for c in pins.REMOTE_CHANNELS}
 
     @staticmethod
@@ -90,6 +102,7 @@ class RemoteInputs:
                         continue           # arming release: not an operator action
                 if st.armed:
                     out.append(Transition(st.channel, raw))
+                    self.last_activity_wall_t = self._wall_clock()
         return out
 
     def is_pressed(self, key: str) -> bool:

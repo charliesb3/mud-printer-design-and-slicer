@@ -1044,6 +1044,103 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (twelfth pass) — Immediate STOP, inches-everywhere position
+display, first-motion preflight, remote-activity diagnostic.
+
+**Incident:** During a physical print test of `printtest.mudjob`, the
+operator E-stopped after seeing the actuator travel diagonally far from
+the origin and the UI display "X 213.265, Y 881.178" — numbers they
+interpreted as inches. In reality GRBL reports MPos in **mm** (`$13=0`),
+and 213 / 881 mm are 8.4 and 34.7 inches — well inside the 120 × 120 in
+envelope. The physical motion was the correct execution of a toolpath
+that starts at WPos `(42.66, 42.63) in` — the first commanded motion is
+a ~42 in diagonal travel from the operator-set origin to the toolpath
+start. The operator did not know this before pressing Start.
+
+**Root cause (not a bug — a mismatch of layers):**
+- GRBL executed the exported G-code faithfully.
+- The exported G-code uses the Designer's canvas XY, so the square's
+  bottom-left is at WORK coordinates `(42.66, 42.63) in`.
+- The printer runs Return-to-Origin → the first toolpath line, which is
+  a 42 in diagonal travel.
+- The Pi UI showed GRBL's raw mm MPos with NO unit label. The operator
+  read `213.265` as inches, judged the position implausible, and
+  E-stopped.
+- The journal confirms: at `20:56:35`, "Print origin set at machine XY
+  (-870.186, -1096.29)" — the operator jogged in the negative direction
+  before setting origin, so their physical "front-left" is at MPos
+  `(-870, -1096) mm`. The G54 WCO stored this. From that origin the
+  first job motion goes to `(1083, 1083) mm` relative to MPos (-870,
+  -1096), landing at MPos `(213, -13) mm`. The second move goes to MPos
+  `(213, 881) mm`, which is where the operator E-stopped.
+
+**Safety software changes (NOT YET DEPLOYED — awaiting operator approval):**
+
+1. **Position in inches everywhere** (`app/state.py`, `app/static/`):
+   `/api/state` now exposes `x_in` and `y_in` (converted from GRBL's
+   raw mm). Status bar carries explicit `in` unit labels after each
+   X / Y value. Legacy `x` / `y` (raw mm) are kept for existing callers.
+
+2. **First-motion preflight** (`app/jobs/current_job.py`,
+   `app/static/`): `job.first_motion = {x_in, y_in, kind, line}` is
+   exposed in state (first XY commanded move, in inches, from the
+   motion-profile analysis). The Controls panel shows a dedicated
+   "Next motion on Start" block above START with:
+   - `First travel/print move → X … in, Y … in`
+   - `Expected travel after return-to-origin: N in  ·  (ΔX, ΔY)`
+   Amber styling when the distance exceeds 6 in. Shown only when a
+   building job is loaded.
+
+3. **Start-point marker in the toolpath view** (`app/static/app.js`):
+   Amber ringed marker + text `start (x, y)` at the first XY. The
+   blue work-origin crosshair also gets a text label `origin (0, 0)`
+   so the operator can see both at a glance.
+
+4. **STOP is single-tap, immediate** (`app/static/`): removed the 2.5 s
+   `attachHoldButton` wrapper. STOP now fires on `pointerdown` (not
+   `click`) so touchscreens don't wait for pointerup → click synthesis.
+   Keyboard-accessible: Space / Enter when focused also fires. HOLD
+   remains a separate control (unchanged). The physical hardwired
+   E-stop remains the primary emergency device, documented in the
+   button's `title`.
+
+5. **Remote-handheld activity timestamp** (`app/hardware/remote.py`,
+   `app/hardware/service.py`, `app/static/app.js`): `RemoteInputs`
+   records `last_activity_wall_t` on every armed debounced transition.
+   State exposes `hardware.remote_last_activity_wall_t`. Hardware/
+   Commissioning panel shows "Handheld last activity: X ago". After
+   > 1 hour the UI explicitly suggests the handheld may be asleep and
+   recommends pressing any button to wake. The Kaleinavi receiver has
+   **no "RF link lost" output**, so this is the best signal the Pi
+   can provide. The remote is a convenience, **not a safety-rated
+   E-stop** (unchanged from earlier passes).
+
+**Already in place (not changed, but verified by the diagnosis):**
+- Start is refused when GRBL is not `Idle` (alarm → cannot start).
+- `MachineSetup.invalidate()` clears `origin_set` on alarm / disconnect
+  — operator must deliberately re-establish origin before Start.
+- `machine_profile.preflight` rejects jobs whose XY extent exceeds the
+  configured envelope.
+
+**NOT addressed (noted for future work):**
+- A client-side `window.requestAnimationFrame` tick could refresh the
+  "handheld last activity" countdown without needing a server broadcast.
+  Current implementation displays accurately on each 200 ms broadcast,
+  which is adequate.
+- A "warn if first-motion kind is PRINT" (not travel) would catch jobs
+  where the first move extrudes material far from the origin. The
+  twelfth-pass incident's job began with a travel move, so this hasn't
+  been needed yet.
+- GRBL's `$13` is still 0 (report in mm). We could set `$13=1` to make
+  GRBL report inches natively and simplify the client. Deferred until
+  the operator confirms they're happy with the inches-conversion fix.
+
+**Regression tests** (`test_api.py::TestPositionDisplayInches`,
+`test_ui.py::TestHardwareUI::test_mpos_status_bar_shows_unit_in` /
+`_first_move_preflight_block` / `_stop_button_is_immediate_single_tap`
+/ `_toolpath_start_marker_is_drawn` / `_remote_last_activity_shown`).
+415 passed + 1 skipped (+8 new).
+
 2026-10-25 (eleventh pass) — WS-reconnect UI reset, Z remote diagnostic,
 Z direction invert, and quieter WS-disconnect logs.
 

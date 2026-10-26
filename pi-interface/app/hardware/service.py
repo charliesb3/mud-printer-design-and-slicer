@@ -115,6 +115,12 @@ class HardwareService:
             "gpio": self.backend.has_gpio,
             "remote": self.remote.to_list(),
             "debounce_ms": round(self.remote.debounce_s * 1000),
+            # Wall-clock seconds since the last ARMED remote-channel
+            # transition; None if nothing has been seen since boot. UI
+            # uses this to warn "handheld may be asleep" after a long
+            # silence. The Kaleinavi receiver has no "RF link lost"
+            # output, so this is the best proxy the Pi has.
+            "remote_last_activity_wall_t": self.remote.last_activity_wall_t,
             "z": self.z.to_dict(),
             "z_pins": {"pwm_bcm": pins.Z_PWM_BCM, "pwm_physical": pins.Z_PWM_PHYSICAL,
                        "dir_bcm": pins.Z_DIR_BCM, "dir_physical": pins.Z_DIR_PHYSICAL},

@@ -473,6 +473,42 @@ class TestInchConversion:
             assert abs(in_s_to_mm_min(mm_min_to_in_s(mm_min)) - mm_min) < 1e-9
 
 
+class TestPositionDisplayInches:
+    """Pin the twelfth-pass invariant: /api/state ALWAYS exposes MPos in
+    inches (`x_in`, `y_in`), regardless of GRBL's `$13` report-units
+    setting. The incident started because the UI showed GRBL's raw mm
+    output with no unit label and the operator read it as inches."""
+
+    def test_state_exposes_x_in_and_y_in(self, client):
+        data = client.get("/api/state").json()
+        for field in ("x_in", "y_in"):
+            assert field in data, f"missing {field}"
+            assert isinstance(data[field], (int, float))
+
+    def test_mm_mpos_is_converted_to_inches(self, client):
+        from app.api import http as http_mod
+        from app.state import MM_PER_IN
+        # Simulate a status report in mm (GRBL default $13=0).
+        http_mod._state.mpos_x = 254.0           # 10.0 in
+        http_mod._state.mpos_y = 127.0           # 5.0 in
+        http_mod._state.grbl_settings[13] = "0"
+        data = client.get("/api/state").json()
+        assert abs(data["x_in"] - 10.0) < 1e-6
+        assert abs(data["y_in"] - 5.0) < 1e-6
+        # Legacy raw mm fields preserved
+        assert abs(data["x"] - 254.0) < 1e-6
+        assert abs(data["y"] - 127.0) < 1e-6
+
+    def test_inch_mpos_pass_through_unchanged(self, client):
+        from app.api import http as http_mod
+        http_mod._state.mpos_x = 10.0
+        http_mod._state.mpos_y = 5.0
+        http_mod._state.grbl_settings[13] = "1"
+        data = client.get("/api/state").json()
+        assert abs(data["x_in"] - 10.0) < 1e-6
+        assert abs(data["y_in"] - 5.0) < 1e-6
+
+
 class TestExitKiosk:
     """POST /api/exit_kiosk signals the Chromium PID written by launch-kiosk.sh.
     Backend is unaffected. Covers: missing PID file, stale PID, successful signal."""
