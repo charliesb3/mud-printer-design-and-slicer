@@ -1044,6 +1044,63 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (thirteenth pass) — X/Y steps-per-mm calibration (measured 2×
+error) + jog diagnostic logging.
+
+**Calibration — measured and applied.** Operator physically measured
+two 10-inch commanded jogs:
+
+| axis | start MPos | end MPos | reported travel | **measured travel** | ratio |
+|---|---|---|---|---|---|
+| X | -507.969 mm | -253.975 mm | 253.994 mm (9.9998 in) | **20.25 in** | 2.0251 |
+| Y | -685.420 mm | -431.426 mm | 253.994 mm (9.9998 in) | **20.75 in** | 2.0751 |
+
+Both axes travelled approximately twice the GRBL-reported distance —
+consistent with a factor-of-2 microstepping / gearbox discrepancy. New
+calibration applied via the controller WS (`console_send`), captures
+on disk:
+
+| setting | before (`$`) | after (`$`) | formula |
+|---|---|---|---|
+| `$100` X steps/mm | **52.493** | **25.921** | `52.493 × (253.994 / (20.25 × 25.4))` |
+| `$101` Y steps/mm | **52.493** | **25.297** | `52.493 × (253.994 / (20.75 × 25.4))` |
+
+Captures: `arduino-grbl/captures/grbl-pre-calibration-2026-10-25_194733.txt`
+and `grbl-post-calibration-2026-10-25_194854.txt`. Every other GRBL
+setting unchanged (verified by diff of the two capture files).
+
+**The corrected values still require physical verification** by a short
+manual calibration test — the operator should jog a known 10 in and
+measure. If the new error is < 1 %, calibration is good; otherwise
+scale again by `measured / reported`.
+
+**Jog diagnostic logging** (`app/api/http.py` `_jog_loop` +
+`_log_jog_motion`): every jog session now emits two INFO log lines
+in `journalctl -u mudprinter`:
+
+```
+Jog start: X 254.0 mm @ 1722.1 mm/min (single-shot)  MPos=(X0, Y0) mm
+JOG DIAG: axis=X dir=+  MPos (mm): start=(X0, Y0) -> end=(X1, Y1)
+         reported travel: ΔX=+10.0000 in, ΔY=+0.0000 in
+```
+
+The `JOG DIAG` line is written by a fire-and-forget task that waits
+for GRBL to settle (status report shows Idle for ≥ 300 ms, bounded
+at 5 s), then logs reported start / end MPos and reported travel in
+inches. One extra INFO line per jog session; the journal doesn't flood.
+To use for future calibration:
+
+```
+ssh dirtworks@192.168.1.144 'journalctl -u mudprinter --since "5 min ago" | grep "JOG DIAG"'
+```
+
+**Diagnostic is non-motion:** it only READS `_state.mpos_x/y`, does
+not command motion. Dead-man, max-run ceiling, REMOTE STOP, and
+every other safety interlock are unchanged.
+
+Tests: 416 passed + 1 skipped (+1 new
+`test_jog_diagnostic_logs_mpos_start_end_delta`).
+
 2026-10-25 (twelfth pass) — Immediate STOP, inches-everywhere position
 display, first-motion preflight, remote-activity diagnostic.
 

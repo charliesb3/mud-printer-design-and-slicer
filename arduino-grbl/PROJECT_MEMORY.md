@@ -196,6 +196,47 @@ No new firmware work has yet been completed for this project.
 
 ## Last Updated
 
+2026-10-25 — X/Y steps-per-mm calibration (measured 2× error)
+
+The 2026-10-23 first-motion values `$100 = $101 = 52.493` (theoretical,
+drivetrain at M=1 microstep) were WRONG by a factor of ~2. Operator
+physically measured two 10-inch commanded jogs:
+
+| axis | reported travel | measured travel | ratio |
+|---|---|---|---|
+| X | 253.994 mm (9.9998 in) | 20.25 in | 2.0251 |
+| Y | 253.994 mm (9.9998 in) | 20.75 in | 2.0751 |
+
+Both axes moved approximately twice the reported distance. New values
+applied 2026-10-25 via the controller's WS console:
+
+| setting | before | after | formula |
+|---|---|---|---|
+| `$100` | 52.493 | **25.921** | `52.493 × (253.994 / (20.25 × 25.4))` |
+| `$101` | 52.493 | **25.297** | `52.493 × (253.994 / (20.75 × 25.4))` |
+
+The 2× ratio is consistent with the DM556T running at half the assumed
+microstep (M = 0.5 effective), or a 10:1 gearbox where 20:1 was
+assumed. Physical investigation of DIP switches or gearbox labels is
+NOT yet done; the empirical correction is what we're going with.
+
+Captures (both read-only, via WS):
+- `arduino-grbl/captures/grbl-pre-calibration-2026-10-25_194733.txt`
+- `arduino-grbl/captures/grbl-post-calibration-2026-10-25_194854.txt`
+
+Every other GRBL setting unchanged (confirmed by diff). `$130 = $131
+= 3048 mm` nominal travel kept.
+
+**Still to verify physically:** short jog test (10 in commanded, measure
+actual). Expect ≤ 1 % error with the new values; if the error is still
+~2×, the measured ratio was wrong and we need to re-measure. Record of
+chosen value section updated:
+
+| Date | `$100` (X) | `$101` (Y) | Microstep M | Verified by |
+|---|---|---|---|---|
+| 2026-10-23 | 52.493 | 52.493 | assumed 1 | theoretical only (physically WRONG by ~2x) |
+| 2026-10-25 | **25.921** | **25.297** | — (empirical) | operator measurement at 20.25 in / 20.75 in over 10 in commanded; still awaiting post-change verification jog |
+
 2026-10-23 — first-motion GRBL configuration applied
 
 Pre-change capture committed at

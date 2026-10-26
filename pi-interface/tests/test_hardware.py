@@ -601,6 +601,49 @@ class TestJogRelease:
     other half of the second-burst root cause).
     """
 
+    async def test_jog_diagnostic_logs_mpos_start_end_delta(self, rig, monkeypatch, caplog):
+        """
+        Thirteenth-pass calibration diagnostic: every jog session must log
+        ONE INFO line with the axis + direction + start MPos + end MPos +
+        reported travel in inches. The operator uses `journalctl ... |
+        grep "JOG DIAG"` for future calibration verification.
+        """
+        import logging
+        monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
+        monkeypatch.setattr(config, "JOG_TIMEOUT_S", 0.1)
+
+        # Starting MPos — set via the mock transport's status reply so the
+        # status-poll loop in the rig doesn't overwrite it.
+        rig.transport.status_reply = "<Idle|MPos:100.000,200.000,0.000|FS:0,0>"
+        rig.state.grbl_settings[13] = "0"       # mm
+        # Let one status poll land to populate state.mpos_x / mpos_y.
+        await asyncio.sleep(0.2)
+        assert abs(rig.state.mpos_x - 100.0) < 1e-6
+        assert abs(rig.state.mpos_y - 200.0) < 1e-6
+
+        caplog.set_level(logging.INFO, logger="app.api.http")
+
+        ws = FakeWS()
+        await msg({"type": "jog_start", "axis": "X", "direction": 1}, ws)
+        await wait_until_sent(rig.transport, 1)
+        # Simulate motion ending: switch the status reply to a FINAL Idle
+        # position that is 254 mm further in X. The diag task waits for
+        # Idle + 300 ms stable, so this value stays after the switch.
+        rig.transport.status_reply = "<Idle|MPos:354.000,200.000,0.000|FS:0,0>"
+        await msg({"type": "jog_stop"}, ws)
+        # Give the fire-and-forget diag task time (300 ms stable Idle
+        # window + loop overhead).
+        await asyncio.sleep(1.2)
+
+        diag = [r for r in caplog.records if "JOG DIAG" in r.getMessage()]
+        assert diag, "No JOG DIAG log line emitted"
+        msg_text = diag[-1].getMessage()
+        assert "axis=X" in msg_text
+        assert "dir=+" in msg_text
+        assert "100.000" in msg_text              # start mpos_x
+        assert "354.000" in msg_text              # end mpos_x
+        assert "ΔX=+10.0000" in msg_text         # 254 mm = 10.0000 in
+
     async def test_jog_start_writes_exactly_one_long_distance_line(self, rig, monkeypatch):
         monkeypatch.setattr(config, "JOG_SINGLE_DISTANCE_IN", 10.0)
         ws = FakeWS()

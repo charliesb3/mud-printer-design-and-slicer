@@ -221,8 +221,18 @@ async def _jog_loop(axis: str, direction: int) -> None:
     # One long jog line — distance in mm, feed in mm/min.
     distance_mm = direction * (config.JOG_SINGLE_DISTANCE_IN * 25.4)
     cmd = f"$J=G21 G91 {axis}{distance_mm:.3f} F{speed:.0f}"
-    log.info("Jog start: %s %.1f mm @ %.1f mm/min (single-shot)",
-             axis, distance_mm, speed)
+    # DIAGNOSTIC (thirteenth pass): capture MPos BEFORE the $J= write so a
+    # follow-up task can log reported travel after the jog settles. These
+    # two logs per session are the whole of the "lets you calibrate from
+    # the journal" feature; cheap to leave in.
+    start_mpos = (_state.mpos_x, _state.mpos_y) if _state else (None, None)
+    start_units = _state.report_units if _state else None
+    log.info("Jog start: %s %.1f mm @ %.1f mm/min (single-shot)  "
+             "MPos=(%.3f, %.3f) %s",
+             axis, distance_mm, speed,
+             start_mpos[0] if start_mpos[0] is not None else float("nan"),
+             start_mpos[1] if start_mpos[1] is not None else float("nan"),
+             start_units or "mm")
 
     try:
         # Guard: a stop that arrived before the task scheduled must prevent
@@ -266,7 +276,66 @@ async def _jog_loop(axis: str, direction: int) -> None:
                 await _comm.send_realtime(b"\x85")
             except Exception as exc:
                 log.debug("send_realtime(0x85) on jog end failed: %s", exc)
+        # DIAGNOSTIC (thirteenth pass): fire-and-forget task that waits for
+        # GRBL to report Idle then logs reported travel. Non-blocking; one
+        # extra INFO line per jog session; perfect for calibration passes
+        # (`journalctl -u mudprinter --since ... | grep "JOG DIAG"`).
+        try:
+            asyncio.create_task(
+                _log_jog_motion(axis, direction, start_mpos, start_units),
+                name="jog-diag",
+            )
+        except RuntimeError:
+            # No running loop (test teardown); skip silently.
+            pass
         _jog_axis = None
+
+
+async def _log_jog_motion(axis: str, direction: int,
+                          start_mpos: tuple, start_units) -> None:
+    """
+    Thirteenth-pass calibration diagnostic.
+
+    Spawned from `_jog_loop`'s finally. Waits up to 5 s for GRBL to settle
+    (status report shows Idle), then logs the reported travel in inches
+    alongside the start and end machine positions. Non-blocking and bounded;
+    does not interfere with subsequent jogs or state broadcasts.
+    """
+    if _state is None or start_mpos[0] is None:
+        return
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + 5.0
+    # Wait for a FRESH status report AFTER an Idle state. GRBL's decel
+    # continues for several status-poll intervals after 0x85; this gives
+    # the planner time to finish before we snapshot the end position.
+    seen_idle_at: float = 0.0
+    while loop.time() < deadline:
+        if _state.grbl_state == "Idle":
+            if not seen_idle_at:
+                seen_idle_at = loop.time()
+            elif loop.time() - seen_idle_at >= 0.3:
+                break
+        else:
+            seen_idle_at = 0.0
+        await asyncio.sleep(0.1)
+
+    end_mpos = (_state.mpos_x, _state.mpos_y)
+    units = _state.report_units or start_units or "mm"
+    dx = end_mpos[0] - start_mpos[0]
+    dy = end_mpos[1] - start_mpos[1]
+    if units == "mm":
+        dx_in, dy_in = dx / 25.4, dy / 25.4
+    else:                                                # already inches
+        dx_in, dy_in = dx, dy
+    sign = "+" if direction > 0 else "-"
+    log.info(
+        "JOG DIAG: axis=%s dir=%s  MPos (%s): start=(%.3f, %.3f) -> end=(%.3f, %.3f)  "
+        "reported travel: ΔX=%+.4f in, ΔY=%+.4f in",
+        axis, sign, units,
+        start_mpos[0], start_mpos[1],
+        end_mpos[0], end_mpos[1],
+        dx_in, dy_in,
+    )
 
 
 async def _start_jog(axis: str, direction: int) -> Optional[str]:
