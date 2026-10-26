@@ -168,6 +168,50 @@ class TestHardwareUI:
             assert _inside(tree, el, "col-mid"), el
         assert tree.order.index("jog-section") < tree.order.index("z-section")
 
+    def test_touch_scrollbar_structure_and_wiring(self, tree):
+        """
+        Pin the ninth-pass industrial touchscreen scrollbar:
+          * The three DOM nodes (ts-up / ts-track / ts-thumb / ts-down)
+            exist at the #app level, outside #main-content.
+          * CSS hides it on fine pointer and reveals it on coarse pointer
+            with a 90-px width, large arrows, and a draggable thumb.
+          * JS wires up drag, arrow press-and-hold, and track-tap paging.
+        """
+        for el in ("touch-scrollbar", "ts-up", "ts-down", "ts-track", "ts-thumb"):
+            assert el in tree.where, el
+        # Must NOT be inside #main-content (would be clipped by its overflow).
+        assert not _inside_id(tree, "touch-scrollbar", "main-content")
+
+        html = (STATIC / "index.html").read_text()
+        css = (STATIC / "style.css").read_text()
+        js = (STATIC / "app.js").read_text()
+
+        # Scrollbar is hidden by default and shown only on pointer: coarse.
+        assert "#touch-scrollbar { display: none; }" in css
+        assert "@media (pointer: coarse)" in css
+        # Width ≈ 80–100 px per the spec.
+        assert "width: 90px" in css
+        # Native scrollbar hidden on touch so the custom one is the only
+        # scroll affordance.
+        assert "scrollbar-width: none" in css
+        # The main content area is padded so content doesn't slide under
+        # the fixed scrollbar.
+        assert "#main-content { padding-right: 98px; }" in css
+
+        # JS wires every requirement.
+        assert "attachTouchScrollbar" in js
+        # Drag via Pointer Events + capture.
+        assert 'thumb.addEventListener("pointerdown"' in js
+        assert "setPointerCapture" in js
+        # Thumb follows scroll.
+        assert 'main.addEventListener("scroll"' in js
+        # Resync when DOM changes.
+        assert "MutationObserver" in js
+        # Arrow press-and-hold with release.
+        assert "arrowHold" in js and "setInterval" in js and "clearInterval" in js
+        # Track tap scroll (page up / down).
+        assert 'track.addEventListener("pointerdown"' in js and 'scrollBy' in js
+
     def test_held_input_release_safety_handlers_present(self):
         """Pin the eighth-pass hardening — the client must have:
           * global visibilitychange / blur / pagehide / beforeunload stops

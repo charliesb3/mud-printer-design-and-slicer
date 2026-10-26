@@ -1044,6 +1044,63 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (ninth pass) — Industrial touchscreen scrollbar.
+
+The @media (pointer: coarse) tweak that merely widened the native
+webkit scrollbar to 22 px was not comfortable on the 7" touchscreen.
+Replaced with a 90-px custom overlay scrollbar for touch devices.
+Native scrollbar on desktop is unchanged.
+
+**Structure** (`app/static/index.html`, at the `#app` level, outside
+`#main-content` so `position: fixed` anchors to the viewport):
+- `#touch-scrollbar` container
+  - `.ts-arrow-up` button (▲)
+  - `.ts-track` with `.ts-thumb`
+  - `.ts-arrow-down` button (▼)
+
+**Styling** (`app/static/style.css`):
+- `#touch-scrollbar { display: none; }` at the file level — invisible
+  on desktop.
+- `@media (pointer: coarse)` block:
+  - `*::-webkit-scrollbar { display: none; }` + `scrollbar-width: none`
+    on `*` to hide every native scrollbar on touch.
+  - `#main-content { padding-right: 98px; }` so content never slides
+    under the fixed scrollbar.
+  - `#touch-scrollbar` sized 90 px wide, `position: fixed`, right-
+    anchored, top offset 60 px to clear the status bar.
+  - Arrow buttons 90 × 90, large arrow glyphs, pressed state via
+    `.pressing` class.
+  - Thumb has 10 px side margin, 80 px min-height, blue fill, grab
+    cursor, visibly distinct from the black track.
+  - Disabled-when-fits state (`.ts-thumb.disabled { opacity: 0.2 }`)
+    keeps the control present but visibly inert.
+
+**Behaviour** (`app/static/app.js` `attachTouchScrollbar`):
+- `sync()` updates thumb height + top from
+  `main.scrollHeight` / `main.clientHeight` / `main.scrollTop` on
+  every scroll, every resize, and every DOM mutation inside
+  `#main-content` (so collapsing / opening panels keeps the thumb
+  size right).
+- Thumb drag uses Pointer Events with `setPointerCapture` on
+  pointerdown, so pointerup / cancel / lostpointercapture always
+  return to the thumb and release the drag — same safety pattern as
+  the Z + jog buttons.
+- Track taps page up (85 % of viewport, smooth) when above the
+  thumb, page down when below.
+- Arrow buttons implement press-and-hold: first step is immediate,
+  then 40-px / 50-ms interval; release / cancel stops at once.
+- Finger-swipe scrolling of `#main-content` itself is untouched —
+  the custom scrollbar is a convenience, not the only input.
+
+**UI structure test:**
+`tests/test_ui.py::TestHardwareUI::test_touch_scrollbar_structure_
+and_wiring` pins the DOM nodes, the CSS visibility rules, and the
+JS hooks (`attachTouchScrollbar`, pointer events, mutation observer,
+`arrowHold`, scroll handler, track-tap scrollBy). Regressing any of
+these fails CI.
+
+Tests: 393 passed, 1 skipped on Mac (+1 new).
+
 2026-10-25 (eighth pass) — Held-input release handling hardened.
 
 **Why:** Operator reported hitting `Z_MAX_RUN_S=30` (server-side ceiling)

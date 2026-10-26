@@ -346,6 +346,21 @@
     </div>
 
   </div><!-- #main-content -->
+
+  <!-- Industrial touchscreen scrollbar — only visible on pointer: coarse
+       devices (the Pi 7" touchscreen). Native scrollbar is hidden on touch;
+       this one is wired up in app.js attachTouchScrollbar(). Placed at the
+       #app level so position: fixed anchors to the viewport cleanly. -->
+  <div id="touch-scrollbar" aria-hidden="true">
+    <button class="ts-arrow ts-arrow-up" id="ts-up" aria-label="Scroll up"
+            type="button">▲</button>
+    <div class="ts-track" id="ts-track">
+      <div class="ts-thumb" id="ts-thumb"></div>
+    </div>
+    <button class="ts-arrow ts-arrow-down" id="ts-down" aria-label="Scroll down"
+            type="button">▼</button>
+  </div>
+
 </div><!-- #app -->
 
 <script src="/app.js"></script>

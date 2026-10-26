@@ -903,35 +903,94 @@ html, body {
 .speed-secondary .ovr-changed { color: var(--amber); font-weight: 500; }
 
 /* ============================================================
-   Wider scrollbar for the Pi 7" touchscreen (pointer: coarse)
-   Desktop browsers with a fine pointer keep the default narrow bar.
+   Industrial touchscreen scrollbar
+   --------------------------------------------------------------
+   On the Pi 7" touchscreen (pointer: coarse) the native browser
+   scrollbar is hidden and a 90-px custom scrollbar is shown on the
+   right of #main-content. The scrollbar has large UP / DOWN arrow
+   buttons, a draggable thumb with a visible track, and supports
+   track-tap paging. All wired up in app.js attachTouchScrollbar().
+   Desktop browsers (pointer: fine) see nothing of this — the
+   native scrollbar behaves exactly as before.
    ============================================================ */
+
+/* Hidden by default (fine pointer / desktop). */
+#touch-scrollbar { display: none; }
+
 @media (pointer: coarse) {
+  /* Hide every native scrollbar on touch — our custom one is the
+     only scroll affordance. Users can still finger-swipe content. */
   * {
-    scrollbar-width: thick;         /* Firefox */
-    scrollbar-color: #666 var(--bg);
+    scrollbar-width: none;              /* Firefox */
+    -ms-overflow-style: none;           /* IE/Edge legacy */
   }
-  ::-webkit-scrollbar {
-    width: 22px;
-    height: 22px;
+  *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  /* Reserve the right-side gutter inside the main scrolling area so
+     content never slides under the scrollbar. 90 px scrollbar + 8 px
+     breathing room. */
+  #main-content { padding-right: 98px; }
+
+  /* The scrollbar itself. Anchored to the viewport right edge below
+     the status bar. */
+  #touch-scrollbar {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 60px;          /* clear the status bar */
+    right: 0;
+    bottom: 0;
+    width: 90px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    z-index: 50;
+    user-select: none;
+    touch-action: none;
   }
-  ::-webkit-scrollbar-track {
+
+  /* UP / DOWN arrow buttons */
+  .ts-arrow {
+    flex: 0 0 90px;
+    background: var(--surface2);
+    color: var(--text);
+    border: none;
+    border-radius: 0;
+    font-size: 2em;
+    line-height: 1;
+    cursor: pointer;
+    touch-action: none;
+    transition: background 0.08s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ts-arrow:active, .ts-arrow.pressing { background: var(--btn-active); }
+  .ts-arrow-up    { border-bottom: 1px solid var(--border); }
+  .ts-arrow-down  { border-top:    1px solid var(--border); }
+
+  /* Track — the vertical rail between the arrow buttons. */
+  .ts-track {
+    flex: 1;
+    position: relative;
     background: var(--bg);
+    overflow: hidden;
+    touch-action: none;
   }
-  ::-webkit-scrollbar-thumb {
-    background: #555;
-    border-radius: 11px;
-    border: 3px solid var(--bg);
-    min-height: 48px;
+
+  /* Thumb — draggable indicator of the current scroll position. */
+  .ts-thumb {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 0;
+    min-height: 80px;
+    background: var(--blue);
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    cursor: grab;
+    touch-action: none;
+    transition: background 0.08s;
   }
-  ::-webkit-scrollbar-thumb:hover,
-  ::-webkit-scrollbar-thumb:active {
-    background: #888;
-  }
-  ::-webkit-scrollbar-corner {
-    background: var(--bg);
-  }
-  /* Keep the top view canvas, console input, and other interactive
-     elements from being clipped by the wider scrollbar — the main
-     scrollable area is the document itself. */
+  .ts-thumb:active, .ts-thumb.pressing { background: #90c0ff; cursor: grabbing; }
+  .ts-thumb.disabled { opacity: 0.2; cursor: default; }
 }

@@ -1465,6 +1465,148 @@ function attachRemoteStopClear() {
 // ---- Exit kiosk (hold 1.5 s) — closes Chromium kiosk; backend keeps running
 const EXIT_KIOSK_HOLD_MS = 1500;
 
+// ------------------------------------------------------------------ //
+// Industrial touchscreen scrollbar — only wires up when the custom     //
+// scrollbar DOM is present (it's CSS-hidden on desktop; the elements   //
+// exist but their event handlers are harmless there).                  //
+// ------------------------------------------------------------------ //
+
+function attachTouchScrollbar() {
+  const main  = document.getElementById("main-content");
+  const bar   = document.getElementById("touch-scrollbar");
+  const track = document.getElementById("ts-track");
+  const thumb = document.getElementById("ts-thumb");
+  const up    = document.getElementById("ts-up");
+  const down  = document.getElementById("ts-down");
+  if (!main || !bar || !track || !thumb || !up || !down) return;
+
+  // The minimum thumb height so a finger can always grab it, even on a
+  // page with very long content. Must match the CSS min-height.
+  const MIN_THUMB_PX = 80;
+
+  // Sync the thumb's size + position to the current scroll state. Called on
+  // scroll, resize, and any DOM mutation inside #main-content.
+  function sync() {
+    const trackH = track.clientHeight;
+    const scrollH = main.scrollHeight;
+    const clientH = main.clientHeight;
+    if (scrollH <= clientH || trackH <= 0) {
+      // Content fits — no scrolling needed. Show a disabled full-height thumb
+      // so the control still reads as "scrollbar" rather than vanishing.
+      thumb.style.height = trackH + "px";
+      thumb.style.top = "0";
+      thumb.classList.add("disabled");
+      return;
+    }
+    thumb.classList.remove("disabled");
+    const rawThumbH = trackH * (clientH / scrollH);
+    const thumbH = Math.max(MIN_THUMB_PX, Math.round(rawThumbH));
+    const maxThumbTop = Math.max(0, trackH - thumbH);
+    const scrollRatio = main.scrollTop / (scrollH - clientH);
+    const thumbTop = Math.round(scrollRatio * maxThumbTop);
+    thumb.style.height = thumbH + "px";
+    thumb.style.top = thumbTop + "px";
+  }
+
+  main.addEventListener("scroll", sync, { passive: true });
+  window.addEventListener("resize", sync);
+  // Sections appear / disappear (printer settings, hw panel, console) —
+  // observe mutations so the thumb size tracks the real content height.
+  try {
+    const mo = new MutationObserver(sync);
+    mo.observe(main, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ["hidden", "style", "class"],
+    });
+  } catch (_) { /* no MutationObserver (very old browser): sync on scroll only */ }
+  // Initial sync when fonts / layout settle.
+  requestAnimationFrame(sync);
+
+  // ---- Thumb drag ---------------------------------------------------
+  let dragPointerId = null;
+  let dragStartClientY = 0;
+  let dragStartScrollTop = 0;
+  let dragTrackH = 0;
+  let dragThumbH = 0;
+  let dragMaxScrollTop = 0;
+
+  thumb.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    dragPointerId = e.pointerId;
+    dragStartClientY = e.clientY;
+    dragStartScrollTop = main.scrollTop;
+    dragTrackH = track.clientHeight;
+    dragThumbH = thumb.offsetHeight;
+    dragMaxScrollTop = Math.max(1, main.scrollHeight - main.clientHeight);
+    try { thumb.setPointerCapture(e.pointerId); } catch (_) {}
+    thumb.classList.add("pressing");
+  });
+  thumb.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== dragPointerId) return;
+    const dy = e.clientY - dragStartClientY;
+    const maxThumbTop = Math.max(1, dragTrackH - dragThumbH);
+    const trackRatio = dy / maxThumbTop;
+    main.scrollTop = dragStartScrollTop + trackRatio * dragMaxScrollTop;
+  });
+  const dragEnd = (e) => {
+    if (e && e.pointerId != null && dragPointerId != null && e.pointerId !== dragPointerId) return;
+    if (dragPointerId !== null) {
+      try { thumb.releasePointerCapture(dragPointerId); } catch (_) {}
+    }
+    dragPointerId = null;
+    thumb.classList.remove("pressing");
+  };
+  thumb.addEventListener("pointerup", dragEnd);
+  thumb.addEventListener("pointercancel", dragEnd);
+  thumb.addEventListener("lostpointercapture", dragEnd);
+
+  // ---- Track tap: page up / down ------------------------------------
+  // Tap above the thumb → page up; below → page down. 85 % of a viewport
+  // per tap, smooth-scrolled, matches native pager behaviour.
+  track.addEventListener("pointerdown", (e) => {
+    if (e.target === thumb || e.target.closest(".ts-thumb")) return;
+    const trackRect = track.getBoundingClientRect();
+    const thumbRect = thumb.getBoundingClientRect();
+    const clickY = e.clientY;
+    const pageAmount = Math.max(60, Math.round(main.clientHeight * 0.85));
+    const dir = clickY < thumbRect.top ? -1 : 1;
+    main.scrollBy({ top: dir * pageAmount, behavior: "smooth" });
+  });
+
+  // ---- Arrow buttons: press-and-hold continuous scroll --------------
+  // The first step fires immediately; a setInterval then repeats every
+  // 50 ms while held. Release stops scrolling at once.
+  function arrowHold(button, pxPerStep) {
+    let pointerId = null;
+    let timer = null;
+    const start = (e) => {
+      if (pointerId !== null) return;
+      pointerId = e.pointerId;
+      try { button.setPointerCapture(e.pointerId); } catch (_) {}
+      button.classList.add("pressing");
+      main.scrollBy({ top: pxPerStep });
+      timer = setInterval(() => {
+        main.scrollBy({ top: pxPerStep });
+      }, 50);
+    };
+    const stop = (e) => {
+      if (e && e.pointerId != null && pointerId != null && e.pointerId !== pointerId) return;
+      if (pointerId !== null) {
+        try { button.releasePointerCapture(pointerId); } catch (_) {}
+      }
+      pointerId = null;
+      if (timer !== null) { clearInterval(timer); timer = null; }
+      button.classList.remove("pressing");
+    };
+    button.addEventListener("pointerdown", start);
+    button.addEventListener("pointerup", stop);
+    button.addEventListener("pointercancel", stop);
+    button.addEventListener("lostpointercapture", stop);
+  }
+  arrowHold(up,   -40);
+  arrowHold(down,  40);
+}
+
 function attachExitKiosk() {
   const btn = document.getElementById("btn-exit-kiosk");
   if (!btn) return;
@@ -1638,6 +1780,7 @@ document.addEventListener("DOMContentLoaded", () => {
   attachPrinter();
   attachJogSpeedSlider();
   attachPrintSpeedSlider();
+  attachTouchScrollbar();
 
   // Attach other controls
   attachControls();
