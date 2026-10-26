@@ -1044,6 +1044,34 @@ of the new panels.
 
 ## Last Updated
 
+2026-10-25 (follow-up, no code change) — Operator re-requested
+"editable printer dimensions" + "faster accel / smoother cornering."
+
+**Task 2 (editable printer dimensions) is already satisfied** by the
+fourteenth-pass commit `58c654a` (deployed, Pi HEAD confirmed). All
+requirements map 1:1 to shipped behavior: editor inside
+Hardware/Commissioning (`#printer-section` → `#hw-section` →
+`#hw-body`); X / Y in inches persisted to `MACHINE_PROFILE_PATH`
+atomically; read-only envelope readout; preflight uses the configured
+envelope; profile independent from the Designer (no auto-sync);
+prominent amber envelope-mismatch panel when `prepared_for` differs;
+imported toolpaths never resized / translated; `job_preflight.blocking`
+refuses Start on out-of-envelope native jobs; `$130 / $131` are not
+touched (deliberate, documented on-screen).
+
+**Task 1 (acceleration + junction deviation)** proposed in
+`arduino-grbl/PROJECT_MEMORY.md`. Values: `$120 = $121 = 50 mm/s²`,
+`$11 = 0.020 mm` (step 1, modest); optional step 2 `$11 = 0.050 mm`.
+**Not applied — pending operator approval.** No code change this
+turn.
+
+**Still pending from last turn:** commit `14ea18e`
+(controlled-decel touchscreen STOP) pushed to
+`origin/consolidate/trunk` but NOT deployed to the Pi. Note: once the
+accel raise lands, that commit's 5 s "wait for Idle before soft reset"
+budget comfortably exceeds the ~1 s decel time at 50 mm/s² — so the
+accel approval and the STOP-code approval reinforce each other.
+
 2026-10-25 (fourteenth pass, part 2 — awaiting operator approval,
 NOT deployed) — Touchscreen STOP: controlled decel + deferred reset.
 

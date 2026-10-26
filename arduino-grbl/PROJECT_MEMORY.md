@@ -196,6 +196,69 @@ No new firmware work has yet been completed for this project.
 
 ## Last Updated
 
+2026-10-25 (proposal, awaiting operator approval, NOT applied) —
+Acceleration raise + modest junction-deviation bump for smoother
+cornering.
+
+**Current (verified live via WS `read_grbl` 2026-10-25):**
+- `$120 = $121 = 5.000 mm/s²` (acceleration)
+- `$11  = 0.010 mm` (junction deviation — GRBL default)
+- `$110 = $111 = 3048.000 mm/min` (max feed, = 50.8 mm/s)
+
+**Proposed step 1 (initial, modest):**
+- `$120 = $121 = 50 mm/s²` (10× current)
+- `$11  = 0.020 mm` (2× default)
+
+**Proposed step 2 (follow-up, if step 1 is clean and the operator
+wants visibly tighter cornering):** `$11 = 0.050 mm` (5× default,
+still only 0.002 in — invisible for the mud nozzle). `$120 / $121`
+stays at 50.
+
+**Rationale.** Decel from max feed at 5 mm/s² is 10.16 s / 258 mm;
+at 50 mm/s² it is 1.02 s / 25.8 mm — a 10× improvement for every
+acceleration ramp (start, stop, direction reversal, corner slowdown).
+Junction deviation 0.010 → 0.020 mm raises the corner-speed limit by
+√2 ≈ 1.41× for every corner angle; 0.050 raises it by √5 ≈ 2.24×.
+Geometric error at the corner is ≤ the JD value, i.e. ≤ 20 µm
+(step 1) or ≤ 50 µm = 2 mils (step 2) — invisible for a 10+ mm clay
+nozzle.
+
+**Expected corner speeds under the proposal** (GRBL's junction-speed
+formula `vmax = sqrt(a × JD × sin(θ/2) / (1 − sin(θ/2)))`, where θ
+is the included angle; π = straight through, 0 = reversal):
+
+| angle | current (5, 0.010) | step 1 (50, 0.020) | step 2 (50, 0.050) |
+|---|---|---|---|
+| 90° (sharp)   | 0.35 mm/s | 1.55 mm/s | 2.46 mm/s |
+| 135°          | 0.82 mm/s | 3.65 mm/s | 5.77 mm/s |
+| 170° (shallow)| 3.61 mm/s | 16.2 mm/s | 25.6 mm/s |
+
+At the shallow-corner column + step 2, the planner approaches the
+max-feed limit — most printing cornering becomes continuous-blend
+(no decel at the corner at all), which is the "Approach B" behavior
+the operator asked for.
+
+**Application path** — operator approves → applied live via UI
+console (no restart, no .env change; EEPROM persists across
+power-cycles):
+```
+$120=50
+$121=50
+$11=0.020     # or 0.050 for step 2
+```
+
+**No other GRBL settings proposed to change.** `$130 / $131` travel
+limits, `$100 / $101` steps/mm (post-calibration 25.921 / 25.297),
+`$110 / $111` max feed, all remain.
+
+Record of accel / JD history (write once applied):
+
+| Date | `$120` | `$121` | `$11` | Verified by |
+|---|---|---|---|---|
+| 2026-10-25 (current) | 5.000 | 5.000 | 0.010 | WS read-back; both axes equal |
+
+---
+
 2026-10-25 — X/Y steps-per-mm calibration (measured 2× error)
 
 The 2026-10-23 first-motion values `$100 = $101 = 52.493` (theoretical,
